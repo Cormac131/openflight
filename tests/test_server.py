@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from openflight import server as server_module
+from openflight.iwr6843 import Calibration
 from openflight.kld7.types import KLD7Angle
 from openflight.launch_monitor import ClubType, Shot
 from openflight.server import (
@@ -37,6 +38,7 @@ class TestShutdownCleanup:
 
         monkeypatch.setattr(server_module, "kld7_vertical", FailingKLD7())
         monkeypatch.setattr(server_module, "kld7_horizontal", GoodKLD7())
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         monkeypatch.setattr(server_module, "shutdown_cleanup_started", False)
         monkeypatch.setattr(
             server_module, "stop_camera_thread", lambda: calls.append("camera_thread")
@@ -59,6 +61,7 @@ class TestShutdownCleanup:
 
         monkeypatch.setattr(server_module, "kld7_vertical", None)
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         monkeypatch.setattr(server_module, "shutdown_cleanup_started", False)
         monkeypatch.setattr(server_module, "stop_camera_thread", lambda: calls.append("camera"))
         monkeypatch.setattr(server_module, "camera", None)
@@ -68,6 +71,210 @@ class TestShutdownCleanup:
         server_module._cleanup_hardware_for_shutdown()
 
         assert calls == ["camera", "monitor"]
+
+    def test_shutdown_stops_iwr6843_before_ops_monitor(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(
+            server_module,
+            "iwr6843_runtime",
+            SimpleNamespace(stop=lambda: calls.append("iwr6843")),
+        )
+        monkeypatch.setattr(server_module, "shutdown_cleanup_started", False)
+        monkeypatch.setattr(server_module, "camera", None)
+        monkeypatch.setattr(server_module, "stop_camera_thread", lambda: None)
+        monkeypatch.setattr(server_module, "stop_monitor", lambda: calls.append("ops243"))
+
+        server_module._cleanup_hardware_for_shutdown()
+
+        assert calls == ["iwr6843", "ops243"]
+
+
+class TestIWR6843ShotIntegration:
+    """TI angle processing must enrich, never suppress, an OPS shot."""
+
+    def test_init_iwr6843_has_no_host_freeze_delay(self, monkeypatch, tmp_path):
+        """Production capture must always request the firmware-frozen boundary ring immediately."""
+        captured = {}
+        calibration = Calibration.identity()
+
+        class FakeCaptureMonitor:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+                self.port = "/dev/ttyUSB0"
+
+            def start(self, *, armed=True):
+                captured["armed"] = armed
+                return None
+
+            def stop(self):
+                return None
+
+        monkeypatch.setattr(Calibration, "load", lambda _path: calibration)
+        monkeypatch.setattr(
+            "openflight.iwr6843.monitor.IWR6843CaptureMonitor",
+            FakeCaptureMonitor,
+        )
+        monkeypatch.setattr(
+            "openflight.iwr6843.monitor.tx_order_from_config",
+            lambda _path: "normal",
+        )
+
+        assert server_module.init_iwr6843(
+            port="/dev/ttyUSB0",
+            config_path="snapshot.cfg",
+            calibration_path="cal.json",
+            output_dir=tmp_path,
+            trigger_pin=17,
+            tee_range_m=1.575,
+            net_range_m=4.6,
+            tx_order="auto",
+            capture_timeout_s=12.0,
+        )
+
+        assert "freeze_delay_s" not in captured
+        assert captured["armed"] is False
+        server_module.iwr6843_runtime = None
+
+    def test_accepted_lcmf_angle_is_applied_to_existing_shot_contract(self, monkeypatch):
+        measurement = SimpleNamespace(
+            accepted=True,
+            angle_deg=17.42,
+            n_snapshots=20,
+            n_frames=6,
+            component_std_deg=1.1,
+            to_dict=lambda: {"estimator": "lcmf_v1", "launch_angle_deg": 17.42},
+        )
+        capture = SimpleNamespace(
+            trigger_timestamp=100.01,
+            path=Path("/tmp/test.l3dump"),
+            raw=b"raw",
+            dump_duration_s=7.5,
+            error=None,
+            valid=True,
+            sequence=1,
+        )
+        runtime = SimpleNamespace(
+            process_shot=lambda **kwargs: SimpleNamespace(
+                capture=capture,
+                measurement=measurement,
+            )
+        )
+        logged = []
+        session = SimpleNamespace(
+            stats={"shots_detected": 2},
+            log_iwr6843_capture=lambda **kwargs: logged.append(kwargs),
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: session)
+
+        shot = Shot(
+            ball_speed_mph=100.0,
+            club_speed_mph=80.0,
+            timestamp=datetime.now(),
+            impact_timestamp=100.0,
+            club=ClubType.IRON_9,
+        )
+        elapsed = server_module._process_iwr6843_angle(shot)
+
+        assert elapsed is not None
+        assert shot.launch_angle_vertical == pytest.approx(17.42)
+        assert shot.launch_angle_vertical_source == "radar"
+        assert shot.angle_source == "radar"
+        assert shot.launch_angle_horizontal is None
+        assert logged[0]["shot_number"] == 3
+        assert logged[0]["ball_speed_mph"] == 100.0
+        assert logged[0]["measurement"]["estimator"] == "lcmf_v1"
+
+    def test_iwr6843_horizontal_forces_high_confidence_for_field_testing(self, monkeypatch):
+        measurement = SimpleNamespace(
+            accepted=True,
+            angle_deg=18.5,
+            horizontal_deg=2.25,
+            horizontal_confidence=0.63,
+            horizontal_status="hlcmf_v0_accepted",
+            n_snapshots=18,
+            n_frames=5,
+            component_std_deg=1.4,
+            to_dict=lambda: {
+                "estimator": "lcmf_v1",
+                "launch_angle_deg": 18.5,
+                "horizontal_deg": 2.25,
+                "horizontal_confidence": 0.63,
+            },
+        )
+        capture = SimpleNamespace(
+            trigger_timestamp=100.01,
+            path=Path("/tmp/test.l3dump"),
+            raw=b"raw",
+            dump_duration_s=4.5,
+            error=None,
+            valid=True,
+            sequence=1,
+        )
+        runtime = SimpleNamespace(
+            process_shot=lambda **kwargs: SimpleNamespace(
+                capture=capture,
+                measurement=measurement,
+            )
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+
+        shot = Shot(
+            ball_speed_mph=100.0,
+            club_speed_mph=80.0,
+            timestamp=datetime.now(),
+            impact_timestamp=100.0,
+            club=ClubType.IRON_9,
+        )
+
+        server_module._process_iwr6843_angle(shot)
+
+        assert shot.launch_angle_vertical == pytest.approx(18.5)
+        assert shot.launch_angle_vertical_source == "radar"
+        assert shot.launch_angle_horizontal == pytest.approx(2.25)
+        assert shot.launch_angle_horizontal_source == "radar"
+        assert shot.launch_angle_horizontal_confidence == pytest.approx(0.95)
+
+    def test_horizontal_fallback_does_not_invent_confidence_for_lcmf_angle(self):
+        shot = Shot(
+            ball_speed_mph=100.0,
+            club_speed_mph=80.0,
+            timestamp=datetime.now(),
+            club=ClubType.IRON_9,
+            launch_angle_vertical=17.42,
+            launch_angle_vertical_source="radar",
+            angle_source="radar",
+        )
+
+        server_module._ensure_user_facing_launch_angles(shot)
+
+        assert shot.launch_angle_vertical == pytest.approx(17.42)
+        assert shot.launch_angle_vertical_source == "radar"
+        assert shot.launch_angle_confidence is None
+        assert shot.launch_angle_vertical_confidence is None
+        assert shot.launch_angle_horizontal == 0.0
+        assert shot.launch_angle_horizontal_source == "estimated"
+        assert shot.launch_angle_horizontal_confidence == pytest.approx(0.35)
+
+    def test_missing_ti_capture_preserves_ops_shot(self, monkeypatch):
+        runtime = SimpleNamespace(
+            process_shot=lambda **kwargs: SimpleNamespace(capture=None, measurement=None)
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        shot = Shot(
+            ball_speed_mph=100.0,
+            timestamp=datetime.now(),
+            club=ClubType.IRON_9,
+        )
+
+        server_module._process_iwr6843_angle(shot)
+
+        assert shot.ball_speed_mph == 100.0
+        assert shot.launch_angle_vertical is None
 
 
 class TestSessionErrorLogging:
@@ -2011,6 +2218,7 @@ class TestCarryComputation:
         captured = {}
 
         from openflight import ballistics as ballistics_module
+
         real_simulate = ballistics_module.simulate
 
         def spying_simulate(conditions, *args, **kwargs):
