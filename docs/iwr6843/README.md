@@ -84,11 +84,11 @@ Pi UART header for power and data.
 | Connection | Wiring | Purpose |
 |---|---|---|
 | IWR6843 | USB to Pi or stable powered hub | Power, CLI commands, and binary L3 dump transfer |
-| OPS power | Pi 5V pin to OPS `VIN` / `5V` | Powers the OPS without sharing the TI USB path |
-| OPS ground | Pi GND to OPS `GND` | Establishes the shared electrical reference |
-| OPS data to Pi | OPS `TX` to Pi GPIO15 / physical pin 10 | OPS transmits readings into Pi RX |
-| Pi commands to OPS | Pi GPIO14 / physical pin 8 to OPS `RX` | Pi transmits commands into OPS RX |
-| Sound trigger | Detector `GATE` to OPS `HOST_INT` and Pi BCM17 / physical pin 11 | Freezes OPS and notifies the Pi of the same impact |
+| OPS power | Pi 5V physical pin 2 or 4 to OPS J3 pin 9 (`5V`) | Powers the OPS without sharing the TI USB path |
+| OPS ground | Pi GND to OPS J3 pin 10 (`GND`) | Establishes the shared electrical reference |
+| OPS data to Pi | OPS J3 pin 7 (`TxD`) to Pi GPIO15 / physical pin 10 (`RXD0`) | OPS transmits readings into Pi RX |
+| Pi commands to OPS | Pi GPIO14 / physical pin 8 (`TXD0`) to OPS J3 pin 6 (`RxD`) | Pi transmits commands into OPS RX |
+| Sound trigger | Detector `GATE` to OPS J3 pin 3 (`HOST_INT`) and Pi BCM17 / physical pin 11 | Freezes OPS and notifies the Pi of the same impact |
 | Trigger power | Pi 3.3V and GND to detector `VCC` and `GND` | Keeps the trigger at Pi-safe logic levels |
 
 #### Option B: OPS Through USB
@@ -112,21 +112,43 @@ sound-trigger GATE connection to OPS `HOST_INT` and Pi BCM17 is still required.
 | Pin 10 | GPIO15 / RXD0 | Pi RX from OPS TX |
 | Pin 11 | GPIO17 | Sound-trigger GATE input |
 
+#### OPS243-A J3 Header Reference
+
+Use the 10-pin header labeled `J3` on the OPS243-A. Confirm the pin-1 marker or
+board silkscreen before connecting wires; do not infer pin numbering from which
+side of the board is closest.
+
+| J3 pin | OPS signal | Connect to |
+|---|---|---|
+| Pin 3 | `HOST_INT` / rolling-buffer trigger | Sound detector `GATE` and Pi BCM17 / physical pin 11 |
+| Pin 6 | `RxD` (input to OPS) | Pi GPIO14 / `TXD0` / physical pin 8 |
+| Pin 7 | `TxD` (output from OPS) | Pi GPIO15 / `RXD0` / physical pin 10 |
+| Pin 9 | `5V` | Pi 5V physical pin 2 or 4 |
+| Pin 10 | `GND` | Any Pi GND pin used by the shared ground |
+
+UART transmit and receive are intentionally crossed: the OPS `TxD` output goes
+to the Pi `RXD0` input, and the Pi `TXD0` output goes to the OPS `RxD` input.
+The pin assignments come from the
+[OPS243 datasheet](https://omnipresense.com/wp-content/uploads/2019/03/OPS-DS-003-0.1_OPS243.pdf);
+the use of J3 pin 3 as a trigger is defined by
+[AN-027 OPS243-A Rolling Buffer](https://omnipresense.com/wp-content/uploads/2025/06/AN-027-A_Rolling-Buffer.pdf).
+
 The GATE signal is a three-way electrical connection. Splice three jumper wires
 together at one junction: one from the sound detector `GATE`, one to the OPS243
-`HOST_INT`, and one to Pi BCM17 / physical pin 11. Use a soldered and insulated
-splice or a secure three-way connector; do not rely on loosely twisted wires.
+J3 pin 3 (`HOST_INT`), and one to Pi BCM17 / physical pin 11. Use a soldered and
+insulated splice or a secure three-way connector; do not rely on loosely
+twisted wires.
 
 ```text
 Sound detector GATE
-  +-- OPS243 HOST_INT
+  +-- OPS243 J3 pin 3 (HOST_INT)
   +-- Pi BCM17 / physical pin 11
 
 Sound detector VCC
   +-- Pi 3.3V
 
 Sound detector GND
-  +-- Pi GND, shared with OPS GND
+  +-- Pi GND, shared with OPS J3 pin 10 (GND)
 ```
 
 Important electrical rules:
