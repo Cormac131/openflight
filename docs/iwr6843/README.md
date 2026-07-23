@@ -73,13 +73,20 @@ Power the system off before changing GPIO wiring.
 
 ### Power And Data Layout
 
-Both connection layouts below are supported. Do not power both radars from an
-unpowered, bus-powered USB hub.
+The supported connection depends on the OPS243-A variant. Do not power both
+radars from an unpowered, bus-powered USB hub.
 
-#### Option A: OPS Through The Pi GPIO UART
+#### Option A: OPS Through The Pi GPIO UART (Non-WiFi OPS Only)
 
 The validated layout keeps the TI board on USB and connects the OPS243 to the
 Pi UART header for power and data.
+
+> [!WARNING]
+> Do not use this option with a WiFi-equipped OPS243-A. The onboard WiFi module
+> already drives the radar processor's UART receive line, so J3 pin 6 cannot
+> accept API commands from the Pi. J3 pin 7 can expose transmit data, but
+> receive-only UART is not sufficient for OpenFlight because the server must
+> configure and rearm the OPS after every capture. Use Option B instead.
 
 | Connection | Wiring | Purpose |
 |---|---|---|
@@ -97,6 +104,7 @@ The OPS243 can remain connected over USB, but the hub must have its own external
 power input and must be powered separately instead of drawing all radar power
 from the Pi. One option is the
 [Acer four-port powered USB hub](https://www.amazon.com/dp/B0CN3F9Y1Z).
+This is the recommended connection for a WiFi-equipped OPS243-A.
 
 With this layout, connect both radar USB cables to the externally powered hub.
 Do not also connect the OPS 5V, RX, or TX pins to the Pi GPIO header. The shared
@@ -121,13 +129,15 @@ side of the board is closest.
 | J3 pin | OPS signal | Connect to |
 |---|---|---|
 | Pin 3 | `HOST_INT` / rolling-buffer trigger | Sound detector `GATE` and Pi BCM17 / physical pin 11 |
-| Pin 6 | `RxD` (input to OPS) | Pi GPIO14 / `TXD0` / physical pin 8 |
+| Pin 6 | `RxD` (input to non-WiFi OPS only) | Pi GPIO14 / `TXD0` / physical pin 8 |
 | Pin 7 | `TxD` (output from OPS) | Pi GPIO15 / `RXD0` / physical pin 10 |
 | Pin 9 | `5V` | Pi 5V physical pin 2 or 4 |
 | Pin 10 | `GND` | Any Pi GND pin used by the shared ground |
 
 UART transmit and receive are intentionally crossed: the OPS `TxD` output goes
 to the Pi `RXD0` input, and the Pi `TXD0` output goes to the OPS `RxD` input.
+This bidirectional mapping applies only when the OPS does not contain the WiFi
+module described above.
 The pin assignments come from the
 [OPS243 datasheet](https://omnipresense.com/wp-content/uploads/2019/03/OPS-DS-003-0.1_OPS243.pdf);
 the use of J3 pin 3 as a trigger is defined by
@@ -181,16 +191,18 @@ Choose `Interface Options` -> `Serial Port`, then answer:
 2. Enable the serial-port hardware.
 3. Reboot the Pi.
 
-After reboot, verify the stable GPIO UART alias:
+On Raspberry Pi 5, physical pins 8 and 10 use UART0 at `/dev/ttyAMA0`. Verify
+that device:
 
 ```bash
-ls -l /dev/serial0
+ls -l /dev/ttyAMA0
 ```
 
-It normally points to `/dev/ttyAMA0` or `/dev/ttyS0`. Use `/dev/serial0`
-instead of hard-coding the underlying device name.
+Do not use `/dev/serial0` for this wiring on Raspberry Pi 5: it normally points
+to `/dev/ttyAMA10`, which is the separate debug-header UART rather than the
+40-pin GPIO header.
 
-If `/dev/serial0` is missing, confirm that UART is enabled:
+If `/dev/ttyAMA0` is missing, confirm that UART0 is enabled:
 
 ```bash
 grep enable_uart /boot/firmware/config.txt /boot/config.txt 2>/dev/null
@@ -357,6 +369,12 @@ typically around 10 degrees, when both antenna faces are mounted parallel. Treat
 Measure the IWR6843 antenna-face tilt independently and enter that measured
 value in OpenFlight.
 
+Start with the IWR6843 antenna center approximately 6 inches (`0.1524 m`) above
+the floor surface under the radar. Measure vertically from that surface to the
+center of the antenna array, not to the enclosure bottom or mounting feet. This
+is the validated starting height, not a substitute for entering the actual
+measured height.
+
 Mounting requirements:
 
 - Aim the antenna face toward the intended start line, not diagonally across
@@ -388,7 +406,8 @@ Measurement guidance:
 - Measure from the antenna center, not the enclosure edge or mounting feet.
 - Use radar-to-ball slant range for `tee-m`.
 - Keep `net-m` honest so late net reflections can be excluded.
-- Measure radar and ball height from the same floor reference.
+- Measure radar and ball height from the same floor reference. If the radar and
+  ball sit on different surfaces, extend a common level reference between them.
 - Add an elevated mat to ball height. A 1 inch mat adds approximately `0.0254 m`.
 - A typical iron ball center is around `0.040 m`; a driver tee is higher.
 - Do not reuse a tilt value after moving the rig unless you verify it again.
@@ -409,7 +428,7 @@ example geometry with your measurements:
 
 ```bash
 scripts/start-kiosk.sh --debug \
-  --radar-port /dev/serial0 \
+  --radar-port /dev/ttyAMA0 \
   --iwr6843 \
   --iwr6843-port /dev/ttyUSB0 \
   --iwr6843-config config/iwr6843_l3dump_vTX2_window53_12l18f.cfg \
@@ -421,14 +440,14 @@ scripts/start-kiosk.sh --debug \
   --session-location home
 ```
 
-For Option B, replace `/dev/serial0` after `--radar-port` with the OPS USB serial
+For Option B, replace `/dev/ttyAMA0` after `--radar-port` with the OPS USB serial
 device, preferably its stable `/dev/serial/by-id/...` path.
 
 The production config and reference calibration above are the server defaults.
 Passing `--iwr6843-config` explicitly is still useful when diagnosing a setup
 because the selected file is visible in the launch command and session log.
 
-The OPS port can also be supplied as `--ops-port /dev/serial0`. `--port` means
+The OPS port can also be supplied as `--ops-port /dev/ttyAMA0`. `--port` means
 the web-server port, so do not use it for the OPS serial device.
 
 The TI port can be omitted after the custom firmware is running; OpenFlight
@@ -487,7 +506,7 @@ GPIOZERO_PIN_FACTORY=lgpio uv run \
   python scripts/iwr6843/calibrate.py \
   --shots 20 \
   --club 7i \
-  --ops-port /dev/serial0 \
+  --ops-port /dev/ttyAMA0 \
   --iwr6843-port /dev/ttyUSB0 \
   --cfg config/iwr6843_l3dump_vTX2_window53_12l18f.cfg \
   --tee-m 1.575 \
@@ -574,7 +593,7 @@ until power, ports, firmware, config, and geometry are verified.
 | `rejected_track_quality` | A ball-like track was found but it was too thin, noisy, inconsistent, or net-contaminated | Verify geometry and aim; inspect the debug dump before relaxing acceptance gates |
 | `rejected_missing_tdm_sign` | The ball track was usable, but the TX timing evidence did not resolve a trustworthy correction sign | Keep the estimated UI angle, inspect the debug dump, and verify signal quality before changing gates |
 | All UI angles are estimated | TI captures are absent, unmatched to OPS, or rejected by LCMF | Run with `--debug`, inspect `iwr6843_capture`, and check the reported rejection reason |
-| OPS reports no data | Wrong OPS port, missing power, or Option A UART is disabled or wired incorrectly | Verify `--radar-port`; for Option A check UART and crossed TX/RX, and for Option B check the externally powered hub and USB serial path |
+| OPS reports no data | Wrong OPS port, missing power, WiFi OPS connected through unsupported receive-only J3 UART, or non-WiFi UART wired incorrectly | For a WiFi OPS use the externally powered USB hub; otherwise verify `/dev/ttyAMA0`, power, shared ground, and crossed TX/RX |
 | Either radar disconnects when both run | Insufficient USB power or unstable cabling | Use OPS GPIO power or a hub with its own external supply; verify the hub supply is connected and sized for both radars |
 | Angles are consistently shifted | Tilt, antenna orientation, radar height, ball height, or tee distance is wrong | Re-measure all geometry from the antenna center and common floor reference |
 | Dump file is missing from the session | OpenFlight was not launched with `--debug` | Re-run in debug mode when raw capture retention is required |
