@@ -312,7 +312,9 @@ class SessionLogger:
         readings: Optional[List[Dict]] = None,
         spin_rpm: Optional[float] = None,
         spin_confidence: Optional[float] = None,
+        spin_method: Optional[str] = None,
         spin_quality: Optional[str] = None,
+        spin_multipath_fade_hz: Optional[float] = None,
         spin_snr: Optional[float] = None,
         spin_modulation_depth: Optional[float] = None,
         spin_peak_freq_hz: Optional[float] = None,
@@ -356,7 +358,9 @@ class SessionLogger:
             readings: Optional list of individual readings that comprised the shot
             spin_rpm: Spin rate in RPM (rolling buffer mode only)
             spin_confidence: Confidence of spin detection (rolling buffer mode only)
-            spin_quality: Quality assessment ("high", "medium", "low")
+            spin_method: Estimator that produced the spin candidate
+            spin_quality: Quality assessment ("high", "medium", "low", "experimental")
+            spin_multipath_fade_hz: Fitted two-ray fade frequency
             spin_snr: Signal-to-noise ratio of spin detection
             spin_modulation_depth: Envelope std/mean ratio
             spin_peak_freq_hz: Frequency of the picked envelope-FFT peak
@@ -391,7 +395,9 @@ class SessionLogger:
             "readings": readings,
             "spin_rpm": spin_rpm,
             "spin_confidence": spin_confidence,
+            "spin_method": spin_method,
             "spin_quality": spin_quality,
+            "spin_multipath_fade_hz": spin_multipath_fade_hz,
             "spin_snr": spin_snr,
             "spin_modulation_depth": spin_modulation_depth,
             "spin_peak_freq_hz": spin_peak_freq_hz,
@@ -843,7 +849,9 @@ class SessionLogger:
         smash_factor: Optional[float] = None,
         spin_rpm: Optional[float] = None,
         spin_confidence: Optional[float] = None,
+        spin_method: Optional[str] = None,
         spin_quality: Optional[str] = None,
+        spin_multipath_fade_hz: Optional[float] = None,
         spin_snr: Optional[float] = None,
         spin_modulation_depth: Optional[float] = None,
         spin_peak_freq_hz: Optional[float] = None,
@@ -892,7 +900,9 @@ class SessionLogger:
             smash_factor: Ball speed / club speed ratio
             spin_rpm: Detected spin rate in RPM
             spin_confidence: Confidence of spin detection (0-1)
-            spin_quality: Quality assessment ("high", "medium", "low")
+            spin_method: Estimator that produced the spin candidate
+            spin_quality: Quality assessment ("high", "medium", "low", "experimental")
+            spin_multipath_fade_hz: Fitted two-ray fade frequency
             spin_snr: Signal-to-noise ratio of spin detection
             spin_modulation_depth: Envelope std/mean ratio (1-5% real seam,
                 <0.5% noise floor, 0.5-1% suspicious)
@@ -974,7 +984,9 @@ class SessionLogger:
                 "smash_factor": smash_factor,
                 "spin_rpm": spin_rpm,
                 "spin_confidence": spin_confidence,
+                "spin_method": spin_method,
                 "spin_quality": spin_quality,
+                "spin_multipath_fade_hz": spin_multipath_fade_hz,
                 "spin_snr": spin_snr,
                 "spin_modulation_depth": spin_modulation_depth,
                 "spin_peak_freq_hz": spin_peak_freq_hz,

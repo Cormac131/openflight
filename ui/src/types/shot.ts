@@ -1,3 +1,5 @@
+export type SpinQuality = 'high' | 'medium' | 'low' | 'experimental';
+
 export interface Shot {
   ball_speed_mph: number;
   club_speed_mph: number | null;
@@ -18,8 +20,10 @@ export interface Shot {
   // Rolling buffer mode spin data
   spin_rpm: number | null;
   spin_confidence: number | null;
-  spin_quality: 'high' | 'medium' | 'low' | null;
+  spin_quality: SpinQuality | null;
   spin_source: 'measured' | 'calculated' | null;
+  spin_method?: string | null;
+  spin_multipath_fade_hz?: number | null;
   carry_spin_adjusted: number | null;
 }
 
