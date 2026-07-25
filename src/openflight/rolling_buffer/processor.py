@@ -13,6 +13,7 @@ import numpy as np
 from scipy.signal import butter, find_peaks, sosfiltfilt
 
 from ..launch_monitor import SPIN_CONFIDENCE_HIGH
+from .multitaper import estimate_multitaper_spin, repair_clipped_iq
 from .types import (
     ImpactEstimate,
     IQCapture,
@@ -74,18 +75,18 @@ class RollingBufferProcessor:
     DC_MASK_BINS = 150
 
     # Spin detection via amplitude envelope demodulation.
-    # The ball seam modulates the radar return at 2x spin rate.
-    SPIN_BANDPASS_BW_HZ = 700       # ±700 Hz around ball Doppler (must cover max seam freq)
-    SPIN_BANDPASS_ORDER = 4          # Butterworth filter order
-    SPIN_ENVELOPE_FFT_SIZE = 8192   # Zero-padded FFT for envelope
-    SPIN_MIN_SEAM_HZ = 33.0         # ~2000 RPM min (seam = 1x spin)
-    SPIN_MAX_SEAM_HZ = 200.0        # 12000 RPM max
-    SPIN_MIN_SAMPLES = 600           # ~20ms minimum ball signal
-    SPIN_SNR_HIGH = 8.0              # High confidence threshold
-    SPIN_SNR_MEDIUM = 5.0            # Medium confidence threshold
-    SPIN_SNR_MIN = 2.5               # Minimum to report
-    SPIN_AUTOCORR_MIN = 0.3          # Minimum normalized correlation
-    SPIN_MIN_CYCLES = 2              # Minimum seam cycles to report
+    # The ball seam modulates the radar return at 1x spin rate.
+    SPIN_BANDPASS_BW_HZ = 700  # ±700 Hz around ball Doppler (must cover max seam freq)
+    SPIN_BANDPASS_ORDER = 4  # Butterworth filter order
+    SPIN_ENVELOPE_FFT_SIZE = 8192  # Zero-padded FFT for envelope
+    SPIN_MIN_SEAM_HZ = 33.0  # ~2000 RPM min (seam = 1x spin)
+    SPIN_MAX_SEAM_HZ = 200.0  # 12000 RPM max
+    SPIN_MIN_SAMPLES = 600  # ~20ms minimum ball signal
+    SPIN_SNR_HIGH = 8.0  # High confidence threshold
+    SPIN_SNR_MEDIUM = 5.0  # Medium confidence threshold
+    SPIN_SNR_MIN = 2.5  # Minimum to report
+    SPIN_AUTOCORR_MIN = 0.3  # Minimum normalized correlation
+    SPIN_MIN_CYCLES = 2  # Minimum seam cycles to report
     # Rail-rejection guards. The envelope FFT has two pathological
     # regions where the peak picker hunts for noise rather than a real
     # seam tone:
@@ -99,7 +100,7 @@ class RollingBufferProcessor:
     #     prefilter. Even a moderate noise spike there reads as
     #     ~12000 RPM. Reject the pick when the peak lands there
     #     and SNR isn't strong enough to override.
-    SPIN_DC_LEAKAGE_BINS = 1         # Zero this many low bins of valid range
+    SPIN_DC_LEAKAGE_BINS = 1  # Zero this many low bins of valid range
     # Picks at or below this RPM are reported but capped to low quality:
     # red envelope noise produces sustained narrowband mimics in this
     # band that a single ~136 ms capture cannot distinguish from a real
@@ -116,11 +117,11 @@ class RollingBufferProcessor:
     # FFT. Signal is "lost" when the smoothed envelope stays below
     # SPIN_SIGNAL_LOSS_THRESHOLD x (early-window median) for
     # SPIN_SIGNAL_LOSS_HOLD_SAMPLES.
-    SPIN_SIGNAL_LOSS_SMOOTH_SAMPLES = 90   # ~3 ms moving average
-    SPIN_SIGNAL_LOSS_REF_SAMPLES = 450     # first ~15 ms sets reference level
-    SPIN_SIGNAL_LOSS_THRESHOLD = 0.15      # fraction of reference level
-    SPIN_SIGNAL_LOSS_HOLD_SAMPLES = 150    # ~5 ms sustained loss
-    SPIN_UPPER_RAIL_BINS = 2         # Top N bins of valid range = "upper rail"
+    SPIN_SIGNAL_LOSS_SMOOTH_SAMPLES = 90  # ~3 ms moving average
+    SPIN_SIGNAL_LOSS_REF_SAMPLES = 450  # first ~15 ms sets reference level
+    SPIN_SIGNAL_LOSS_THRESHOLD = 0.15  # fraction of reference level
+    SPIN_SIGNAL_LOSS_HOLD_SAMPLES = 150  # ~5 ms sustained loss
+    SPIN_UPPER_RAIL_BINS = 2  # Top N bins of valid range = "upper rail"
     SPIN_PRIOR_MIN_RELATIVE_MAG = 0.40  # Candidate must be this strong to displace argmax
     SPIN_PRIOR_MAX_RELATIVE_ERROR = 0.55  # Candidate must be within this fraction of expected
     SPIN_PRIOR_STRONGEST_FAR_ERROR = 0.45  # Strongest peak is "far" above this error
@@ -128,10 +129,13 @@ class RollingBufferProcessor:
     SPIN_IMPLAUSIBLE_LOWER_RAIL_FRACTION = 0.60  # Rail below this fraction is artifact-like
     SPIN_LOWER_RAIL_RECOVERY_MIN_RELATIVE_MAG = 0.20
     SPIN_LOWER_RAIL_RECOVERY_MAX_RELATIVE_ERROR = 0.35
-    SPIN_CANDIDATE_COUNT = 5       # Ranked diagnostic peaks to persist in logs
-    SPIN_PHASE_ENV_SNR_MIN = 1.75   # Envelope floor for phase-confirmed recovery
-    SPIN_PHASE_SNR_MIN = 2.5        # Phase witness floor
+    SPIN_CANDIDATE_COUNT = 5  # Ranked diagnostic peaks to persist in logs
+    SPIN_PHASE_ENV_SNR_MIN = 1.75  # Envelope floor for phase-confirmed recovery
+    SPIN_PHASE_SNR_MIN = 2.5  # Phase witness floor
     SPIN_PHASE_AGREEMENT_PCT = 10.0  # Max envelope/phase candidate difference
+    MULTITAPER_SPIN_RPM_BAND = (1500.0, 11_000.0)
+    MULTITAPER_RAIL_MARGIN_RPM = 250.0
+    MULTITAPER_MIN_SAMPLES = 128
 
     BALL_SPEED_MATCH_TOLERANCE_MPH = 3.0
     IMPACT_TRANSITION_MIN_DELTA_MPH = 15.0
@@ -473,9 +477,7 @@ class RollingBufferProcessor:
                 side_floors.append(float(np.median(live)))
         return max(side_floors) if side_floors else 0.0
 
-    def _spin_peak_is_persistent(
-        self, ball_envelope: np.ndarray, peak_freq_hz: float
-    ) -> bool:
+    def _spin_peak_is_persistent(self, ball_envelope: np.ndarray, peak_freq_hz: float) -> bool:
         """Whether the picked seam tone is present in both halves of the window.
 
         A real seam tone persists for the whole ball flight; an envelope-noise
@@ -545,6 +547,119 @@ class RollingBufferProcessor:
             len(envelope) / self.SAMPLE_RATE * 1000,
         )
         return start_sample + loss_offset
+
+    def detect_spin_multitaper(
+        self,
+        capture: IQCapture,
+        ball_speed_mph: float,
+        ball_timestamp_ms: float,
+        expected_spin_rpm: Optional[float] = None,
+    ) -> SpinResult:
+        """Return an ungated multipath-aware multitaper spin candidate.
+
+        This is the live version of the best-performing TrackMan-scored
+        offline track. Evidence is logged as confidence, but never used to
+        suppress a bounded candidate. The result remains ``experimental`` so
+        it cannot drive spin-adjusted carry.
+        """
+        del expected_spin_rpm  # The evaluated estimator intentionally has no spin prior.
+        iq, clipped_fraction = repair_clipped_iq(
+            np.asarray(capture.i_samples),
+            np.asarray(capture.q_samples),
+        )
+        if clipped_fraction > 0:
+            logger.info(
+                "[PROCESSOR] Multitaper repaired %.2f%% clipped I/Q samples",
+                clipped_fraction * 100.0,
+            )
+
+        ball_speed_mps = ball_speed_mph / self.MPS_TO_MPH
+        ball_doppler_hz = 2 * ball_speed_mps / self.WAVELENGTH_M
+        nyquist = self.SAMPLE_RATE / 2
+        low = max((ball_doppler_hz - self.SPIN_BANDPASS_BW_HZ) / nyquist, 0.001)
+        high = min((ball_doppler_hz + self.SPIN_BANDPASS_BW_HZ) / nyquist, 0.999)
+        if low >= high:
+            return SpinResult.no_spin_detected(
+                "Ball Doppler outside filter range",
+                method="multitaper_ungated",
+            )
+
+        try:
+            sos = butter(self.SPIN_BANDPASS_ORDER, [low, high], btype="band", output="sos")
+            envelope = np.abs(sosfiltfilt(sos, iq))
+        except Exception as exc:
+            return SpinResult.no_spin_detected(
+                f"Bandpass filter failed: {exc}",
+                method="multitaper_ungated",
+            )
+
+        start_sample = max(0, int(ball_timestamp_ms * self.SAMPLE_RATE / 1000))
+        end_sample = self._ball_signal_end_sample(envelope, start_sample)
+        ball_envelope = envelope[start_sample:end_sample]
+        transient_samples = int(self.SAMPLE_RATE / self.SPIN_BANDPASS_BW_HZ)
+        if len(ball_envelope) > 2 * transient_samples + self.SPIN_MIN_SAMPLES:
+            ball_envelope = ball_envelope[transient_samples:-transient_samples]
+        if len(ball_envelope) < self.MULTITAPER_MIN_SAMPLES:
+            return SpinResult.no_spin_detected(
+                f"Ball signal too short ({len(ball_envelope)} samples, "
+                f"need {self.MULTITAPER_MIN_SAMPLES})",
+                method="multitaper_ungated",
+            )
+
+        envelope_mean = float(np.mean(ball_envelope))
+        modulation_depth = (
+            float(np.std(ball_envelope) / envelope_mean) if envelope_mean > 0 else None
+        )
+        try:
+            estimate = estimate_multitaper_spin(
+                ball_envelope,
+                self.SAMPLE_RATE,
+                spin_rpm_band=self.MULTITAPER_SPIN_RPM_BAND,
+            )
+        except (ValueError, np.linalg.LinAlgError) as exc:
+            return SpinResult.no_spin_detected(
+                f"Multitaper estimation failed: {exc}",
+                modulation_depth=modulation_depth,
+                method="multitaper_ungated",
+            )
+
+        min_rpm, max_rpm = self.MULTITAPER_SPIN_RPM_BAND
+        at_lower_rail = estimate.spin_rpm <= min_rpm + self.MULTITAPER_RAIL_MARGIN_RPM
+        at_upper_rail = estimate.spin_rpm >= max_rpm - self.MULTITAPER_RAIL_MARGIN_RPM
+        window_seconds = len(ball_envelope) / self.SAMPLE_RATE
+        confidence = min(0.59, estimate.peak_to_floor / (estimate.peak_to_floor + 5.0))
+        candidate = SpinCandidate(
+            rank=1,
+            rpm=estimate.spin_rpm,
+            freq_hz=estimate.spin_hz,
+            relative_magnitude=1.0,
+            snr=estimate.peak_to_floor,
+            at_lower_rail=at_lower_rail,
+            at_upper_rail=at_upper_rail,
+            selected=True,
+        )
+        logger.info(
+            "[PROCESSOR] Ungated multitaper spin: %.0f RPM, evidence=%.2f, "
+            "fade=%.2f Hz, window=%.1fms",
+            estimate.spin_rpm,
+            estimate.peak_to_floor,
+            estimate.fade_hz,
+            window_seconds * 1000.0,
+        )
+        return SpinResult(
+            spin_rpm=estimate.spin_rpm,
+            confidence=confidence,
+            snr=estimate.peak_to_floor,
+            quality="experimental",
+            method="multitaper_ungated",
+            multipath_fade_hz=estimate.fade_hz,
+            modulation_depth=modulation_depth,
+            peak_freq_hz=estimate.spin_hz,
+            seam_cycles=estimate.spin_hz * window_seconds,
+            at_lower_rail=at_lower_rail,
+            at_upper_rail=at_upper_rail,
+            candidates=[candidate],
+        )
 
     def detect_spin(
         self,
@@ -616,7 +731,8 @@ class RollingBufferProcessor:
 
         if len(ball_envelope) < self.SPIN_MIN_SAMPLES:
             return SpinResult.no_spin_detected(
-                f"Ball signal too short ({len(ball_envelope)} samples, need {self.SPIN_MIN_SAMPLES})"
+                f"Ball signal too short ({len(ball_envelope)} samples, "
+                f"need {self.SPIN_MIN_SAMPLES})"
             )
 
         # Check modulation depth before proceeding. Real seam modulation
@@ -744,10 +860,15 @@ class RollingBufferProcessor:
             "[PROCESSOR] Spin envelope: peak=%.1f Hz (%.0f RPM), SNR=%.1f, "
             "cycles=%.1f, mod=%.4f, window=%.0fms, samples=%d, "
             "rail_lo=%s, rail_hi=%s",
-            peak_freq, spin_rpm, fft_snr, seam_cycles,
+            peak_freq,
+            spin_rpm,
+            fft_snr,
+            seam_cycles,
             modulation_depth if modulation_depth is not None else float("nan"),
-            window_seconds * 1000, len(ball_envelope),
-            at_lower_rail, at_upper_rail,
+            window_seconds * 1000,
+            len(ball_envelope),
+            at_lower_rail,
+            at_upper_rail,
         )
 
         # Reject upper-rail picks unless SNR is genuinely high. A peak
@@ -759,7 +880,9 @@ class RollingBufferProcessor:
             logger.warning(
                 "[PROCESSOR] Spin rejected: upper-rail peak at %.0f RPM "
                 "(SNR %.1f < %.1f, bandpass-shoulder noise)",
-                spin_rpm, fft_snr, self.SPIN_SNR_HIGH,
+                spin_rpm,
+                fft_snr,
+                self.SPIN_SNR_HIGH,
             )
             return SpinResult.no_spin_detected(
                 f"Upper-rail peak at {spin_rpm:.0f} RPM "
@@ -778,9 +901,7 @@ class RollingBufferProcessor:
         # SNR (a real low-spin driver tone is strong; noise picks in
         # this zone hover just above the report floor).
         if at_lower_rail and (
-            modulation_depth is None
-            or modulation_depth < 0.012
-            or fft_snr < self.SPIN_SNR_MEDIUM
+            modulation_depth is None or modulation_depth < 0.012 or fft_snr < self.SPIN_SNR_MEDIUM
         ):
             logger.warning(
                 "[PROCESSOR] Spin rejected: lower-rail peak at %.0f RPM "
@@ -805,7 +926,7 @@ class RollingBufferProcessor:
         autocorr_confirmed = False
         if fft_snr < self.SPIN_SNR_MEDIUM and fft_snr >= self.SPIN_SNR_MIN:
             norm = np.correlate(windowed, windowed, mode="full")
-            norm = norm[len(norm) // 2:]  # positive lags only
+            norm = norm[len(norm) // 2 :]  # positive lags only
             if norm[0] > 0:
                 norm = norm / norm[0]
 
@@ -816,8 +937,7 @@ class RollingBufferProcessor:
             # upper rail.
             leakage_floor_hz = (
                 self.SPIN_MIN_SEAM_HZ
-                + self.SPIN_DC_LEAKAGE_BINS * self.SAMPLE_RATE
-                / self.SPIN_ENVELOPE_FFT_SIZE
+                + self.SPIN_DC_LEAKAGE_BINS * self.SAMPLE_RATE / self.SPIN_ENVELOPE_FFT_SIZE
             )
             min_lag = int(self.SAMPLE_RATE / self.SPIN_MAX_SEAM_HZ)
             max_lag = int(self.SAMPLE_RATE / leakage_floor_hz)
@@ -838,7 +958,8 @@ class RollingBufferProcessor:
                             autocorr_confirmed = True
                             logger.info(
                                 "[PROCESSOR] Spin autocorrelation confirms: %.0f RPM (corr=%.2f)",
-                                acorr_rpm, acorr_peak_val,
+                                acorr_rpm,
+                                acorr_peak_val,
                             )
                         else:
                             # Autocorr peak disagrees with FFT peak. The
@@ -851,7 +972,9 @@ class RollingBufferProcessor:
                                 "[PROCESSOR] Spin autocorrelation disagrees: "
                                 "FFT=%.0f RPM, autocorr=%.0f RPM (corr=%.2f); "
                                 "keeping FFT pick",
-                                spin_rpm, acorr_rpm, acorr_peak_val,
+                                spin_rpm,
+                                acorr_rpm,
+                                acorr_peak_val,
                             )
 
         # --- Quality assessment ---
@@ -869,11 +992,7 @@ class RollingBufferProcessor:
 
         if fft_snr < self.SPIN_SNR_MIN and not autocorr_confirmed:
             phase_confirmation = None
-            if (
-                fft_snr >= self.SPIN_PHASE_ENV_SNR_MIN
-                and not at_lower_rail
-                and not at_upper_rail
-            ):
+            if fft_snr >= self.SPIN_PHASE_ENV_SNR_MIN and not at_lower_rail and not at_upper_rail:
                 phase_confirmation = self._phase_spin_confirmation(
                     filtered[spin_window_start_sample:spin_window_end_sample],
                     envelope_spin_rpm=spin_rpm,
@@ -905,17 +1024,19 @@ class RollingBufferProcessor:
                         phase_method=phase_confirmation["method"],
                         phase_rpm=round(phase_confirmation["rpm"]),
                         phase_snr=round(phase_confirmation["snr"], 2),
-                        phase_agreement_pct=round(
-                            phase_confirmation["agreement_pct"], 1
-                        ),
+                        phase_agreement_pct=round(phase_confirmation["agreement_pct"], 1),
                         phase_confirmed=True,
                     )
 
             logger.info(
                 "[PROCESSOR] Spin rejected: SNR %.2f below %.1f "
                 "(peak=%.0f RPM, cycles=%.1f, rail_lo=%s, rail_hi=%s)",
-                fft_snr, self.SPIN_SNR_MIN, spin_rpm, seam_cycles,
-                at_lower_rail, at_upper_rail,
+                fft_snr,
+                self.SPIN_SNR_MIN,
+                spin_rpm,
+                seam_cycles,
+                at_lower_rail,
+                at_upper_rail,
             )
             return SpinResult.no_spin_detected(
                 f"SNR too low ({fft_snr:.2f}, need {self.SPIN_SNR_MIN:.1f})",
@@ -926,21 +1047,17 @@ class RollingBufferProcessor:
                 at_lower_rail=at_lower_rail,
                 at_upper_rail=at_upper_rail,
                 candidates=spin_candidates,
-                phase_method=(
-                    phase_confirmation["method"] if phase_confirmation else None
-                ),
+                phase_method=(phase_confirmation["method"] if phase_confirmation else None),
                 phase_rpm=(
                     round(phase_confirmation["rpm"])
-                    if phase_confirmation and phase_confirmation["rpm"] else None
+                    if phase_confirmation and phase_confirmation["rpm"]
+                    else None
                 ),
-                phase_snr=(
-                    round(phase_confirmation["snr"], 2)
-                    if phase_confirmation else None
-                ),
+                phase_snr=(round(phase_confirmation["snr"], 2) if phase_confirmation else None),
                 phase_agreement_pct=(
                     round(phase_confirmation["agreement_pct"], 1)
-                    if phase_confirmation
-                    and phase_confirmation["agreement_pct"] is not None else None
+                    if phase_confirmation and phase_confirmation["agreement_pct"] is not None
+                    else None
                 ),
                 phase_confirmed=False,
             )
@@ -969,8 +1086,7 @@ class RollingBufferProcessor:
         # fluctuation, however sharp its spectral peak looks.
         if not self._spin_peak_is_persistent(ball_envelope, peak_freq):
             logger.info(
-                "[PROCESSOR] Spin demoted: %.0f RPM peak not persistent "
-                "across both window halves",
+                "[PROCESSOR] Spin demoted: %.0f RPM peak not persistent across both window halves",
                 spin_rpm,
             )
             confidence = min(confidence, 0.3)
@@ -1041,7 +1157,7 @@ class RollingBufferProcessor:
 
         # Keep the top-N by magnitude, but always include the selected
         # candidate so rejected shots explain what the algorithm actually chose.
-        kept = sorted_indices[:self.SPIN_CANDIDATE_COUNT]
+        kept = sorted_indices[: self.SPIN_CANDIDATE_COUNT]
         if selected_idx is not None and selected_idx not in kept:
             kept.append(int(selected_idx))
 
@@ -1112,11 +1228,13 @@ class RollingBufferProcessor:
         if not valid:
             return None
 
-        valid.sort(key=lambda witness: (
-            not witness["confirmed"],
-            witness["agreement_pct"],
-            -witness["snr"],
-        ))
+        valid.sort(
+            key=lambda witness: (
+                not witness["confirmed"],
+                witness["agreement_pct"],
+                -witness["snr"],
+            )
+        )
         return valid[0]
 
     def _phase_spin_candidate(
@@ -1224,8 +1342,7 @@ class RollingBufferProcessor:
         strongest_is_implausible_lower_rail = (
             strongest_is_lower_rail
             and expected_spin_rpm >= self.SPIN_HIGH_PRIOR_MIN_RPM
-            and strongest_rpm
-            < expected_spin_rpm * self.SPIN_IMPLAUSIBLE_LOWER_RAIL_FRACTION
+            and strongest_rpm < expected_spin_rpm * self.SPIN_IMPLAUSIBLE_LOWER_RAIL_FRACTION
         )
 
         candidates = []
@@ -1356,32 +1473,21 @@ class RollingBufferProcessor:
             transition_gap_ms: Optional[float] = None,
         ) -> ImpactEstimate:
             first_ball_center_ms = (
-                self._reading_center_ms(first_ball)
-                if first_ball is not None else None
+                self._reading_center_ms(first_ball) if first_ball is not None else None
             )
             last_club_center_ms = (
-                self._reading_center_ms(last_club)
-                if last_club is not None else None
+                self._reading_center_ms(last_club) if last_club is not None else None
             )
             return ImpactEstimate(
                 timestamp_ms=sound_trigger_ms,
-                source=(
-                    "sound_trigger"
-                    if sound_trigger_ms is not None else "unavailable"
-                ),
+                source=("sound_trigger" if sound_trigger_ms is not None else "unavailable"),
                 reason=reason,
                 speed_delta_mph=speed_delta_mph,
                 transition_gap_ms=transition_gap_ms,
-                last_club_speed_mph=(
-                    last_club.speed_mph if last_club is not None else None
-                ),
-                last_club_timestamp_ms=(
-                    last_club.timestamp_ms if last_club is not None else None
-                ),
+                last_club_speed_mph=(last_club.speed_mph if last_club is not None else None),
+                last_club_timestamp_ms=(last_club.timestamp_ms if last_club is not None else None),
                 last_club_center_ms=last_club_center_ms,
-                first_ball_speed_mph=(
-                    first_ball.speed_mph if first_ball is not None else None
-                ),
+                first_ball_speed_mph=(first_ball.speed_mph if first_ball is not None else None),
                 first_ball_timestamp_ms=(
                     first_ball.timestamp_ms if first_ball is not None else None
                 ),
@@ -1394,7 +1500,8 @@ class RollingBufferProcessor:
             key=lambda r: (r.timestamp_ms, -r.magnitude),
         )
         ball_candidates = [
-            r for r in outbound
+            r
+            for r in outbound
             if abs(r.speed_mph - ball_speed_mph) <= self.BALL_SPEED_MATCH_TOLERANCE_MPH
         ]
         if not ball_candidates:
@@ -1423,8 +1530,7 @@ class RollingBufferProcessor:
 
         if club_speed_mph is not None:
             club_nearby = [
-                r for r in transition_candidates
-                if abs(r.speed_mph - club_speed_mph) <= 5.0
+                r for r in transition_candidates if abs(r.speed_mph - club_speed_mph) <= 5.0
             ]
             if club_nearby:
                 transition_candidates = club_nearby
@@ -1481,6 +1587,7 @@ class RollingBufferProcessor:
 
         # Bin to 1-mph buckets, find the mode
         from collections import Counter
+
         binned = Counter(round(s) for s in speeds)
 
         # The ball is the highest-speed cluster with significant repetition.
@@ -1499,7 +1606,12 @@ class RollingBufferProcessor:
         # Log if max speed differs significantly from mode (outlier rejected)
         max_speed = max(speeds)
         if max_speed > ball_bin + 10:
-            logger.info("[PROCESSOR] Ball speed outlier rejected: max=%.1f, mode=%.1f mph (%d occurrences)", max_speed, float(ball_bin), frequent[0][1])
+            logger.info(
+                "[PROCESSOR] Ball speed outlier rejected: max=%.1f, mode=%.1f mph (%d occurrences)",
+                max_speed,
+                float(ball_bin),
+                frequent[0][1],
+            )
 
         # Return the actual max speed within ±2 mph of the mode bin
         # for sub-mph precision
@@ -1537,7 +1649,11 @@ class RollingBufferProcessor:
             return None
 
         ball_speed_mph = self._find_consistent_ball_speed(std_outbound)
-        logger.info("[PROCESSOR] Ball speed: %.1f mph (mode-based, %d outbound readings)", ball_speed_mph, len(std_outbound))
+        logger.info(
+            "[PROCESSOR] Ball speed: %.1f mph (mode-based, %d outbound readings)",
+            ball_speed_mph,
+            len(std_outbound),
+        )
 
         # Process with overlapping FFT for high-resolution timeline (needed for spin)
         timeline = self.process_overlapping(capture)
@@ -1550,7 +1666,8 @@ class RollingBufferProcessor:
         # (within tolerance) to get the precise timestamp for spin analysis
         outbound = [r for r in timeline.readings if r.is_outbound]
         ball_candidates = [
-            r for r in outbound
+            r
+            for r in outbound
             if abs(r.speed_mph - ball_speed_mph) <= self.BALL_SPEED_MATCH_TOLERANCE_MPH
         ]
         if ball_candidates:
@@ -1571,7 +1688,11 @@ class RollingBufferProcessor:
             timeline, ball_speed_mph, ball_timestamp_ms
         )
         if club_speed_mph is not None:
-            logger.info("[PROCESSOR] Club speed: %.1f mph at %.1fms before ball", club_speed_mph, ball_timestamp_ms - club_timestamp_ms)
+            logger.info(
+                "[PROCESSOR] Club speed: %.1f mph at %.1fms before ball",
+                club_speed_mph,
+                ball_timestamp_ms - club_timestamp_ms,
+            )
         else:
             logger.debug("[PROCESSOR] No club speed found (ball=%.1f mph)", ball_speed_mph)
 
@@ -1605,7 +1726,7 @@ class RollingBufferProcessor:
             expected_spin_rpm = expected_spin_for_ball_speed(ball_speed_mph)
 
         # Spin detection via amplitude envelope demodulation on raw I/Q
-        spin = self.detect_spin(
+        spin = self.detect_spin_multitaper(
             capture,
             ball_speed_mph,
             ball_timestamp_ms,
@@ -1614,7 +1735,9 @@ class RollingBufferProcessor:
 
         logger.info(
             "[PROCESSOR] Spin result: %.0f RPM, SNR=%.2f, quality=%s",
-            spin.spin_rpm, spin.snr, spin.quality,
+            spin.spin_rpm,
+            spin.snr,
+            spin.quality,
         )
 
         return ProcessedCapture(

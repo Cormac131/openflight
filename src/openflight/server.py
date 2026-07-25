@@ -852,8 +852,14 @@ def shot_to_dict(shot: Shot) -> dict:
             round(shot.spin_rpm_measured) if shot.spin_rpm_measured else None
         ),
         "spin_source": shot.spin_source,
+        "spin_method": shot.spin_method,
         "spin_confidence": round(shot.spin_confidence, 2) if shot.spin_confidence else None,
         "spin_quality": shot.spin_quality,
+        "spin_multipath_fade_hz": (
+            round(shot.spin_multipath_fade_hz, 2)
+            if shot.spin_multipath_fade_hz is not None
+            else None
+        ),
         "spin_snr": round(shot.spin_snr, 2) if shot.spin_snr is not None else None,
         "spin_modulation_depth": (
             round(shot.spin_modulation_depth, 4) if shot.spin_modulation_depth is not None else None
@@ -2125,7 +2131,9 @@ def on_shot_detected(shot: Shot):
                 readings=shot.readings_data,
                 spin_rpm=shot.spin_rpm,
                 spin_confidence=shot.spin_confidence,
+                spin_method=shot.spin_method,
                 spin_quality=shot.spin_quality,
+                spin_multipath_fade_hz=shot.spin_multipath_fade_hz,
                 spin_snr=shot.spin_snr,
                 spin_modulation_depth=shot.spin_modulation_depth,
                 spin_peak_freq_hz=shot.spin_peak_freq_hz,

@@ -223,7 +223,9 @@ class Shot:
         launch_angle_horizontal_source: Source for horizontal launch angle
         spin_rpm: Spin rate in RPM (from rolling buffer mode)
         spin_confidence: Confidence in spin measurement (0-1)
+        spin_method: Estimator that produced the spin candidate
         spin_result_quality: Processor quality label for the spin detection
+        spin_multipath_fade_hz: Fitted two-ray fade frequency, when available
         spin_snr: Signal-to-noise ratio of the spin envelope peak
         spin_modulation_depth: Envelope std/mean inside the spin window
         spin_peak_freq_hz: Frequency of the detected spin candidate
@@ -266,7 +268,9 @@ class Shot:
     # spin_rpm with the kinematic estimate (for offline scoring)
     spin_rpm_measured: Optional[float] = None
     spin_source: Optional[str] = None  # "measured", "calculated", or None
+    spin_method: Optional[str] = None
     spin_result_quality: Optional[str] = None
+    spin_multipath_fade_hz: Optional[float] = None
     spin_snr: Optional[float] = None
     spin_modulation_depth: Optional[float] = None
     spin_peak_freq_hz: Optional[float] = None

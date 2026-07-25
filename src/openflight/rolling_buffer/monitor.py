@@ -564,7 +564,11 @@ class RollingBufferMonitor:
                             smash_factor=processed.smash_factor,
                             spin_rpm=processed.spin.spin_rpm if processed.spin else None,
                             spin_confidence=processed.spin.confidence if processed.spin else None,
+                            spin_method=processed.spin.method if processed.spin else None,
                             spin_quality=processed.spin.quality if processed.spin else None,
+                            spin_multipath_fade_hz=(
+                                processed.spin.multipath_fade_hz if processed.spin else None
+                            ),
                             spin_snr=processed.spin.snr if processed.spin else None,
                             spin_modulation_depth=(
                                 processed.spin.modulation_depth if processed.spin else None
@@ -752,7 +756,10 @@ class RollingBufferMonitor:
 
         spin = processed.spin
         spin_rejection_reason = spin.rejection_reason if spin else None
-        club_spin_rejection_reason = self._club_spin_rejection_reason(processed)
+        is_ungated_multitaper = bool(spin is not None and spin.method == "multitaper_ungated")
+        club_spin_rejection_reason = (
+            None if is_ungated_multitaper else self._club_spin_rejection_reason(processed)
+        )
         if club_spin_rejection_reason:
             spin_rejection_reason = club_spin_rejection_reason
             logger.warning(
@@ -776,14 +783,20 @@ class RollingBufferMonitor:
         has_reportable_spin = bool(
             spin is not None
             and spin.spin_rpm > 0
-            and club_spin_rejection_reason is None
-            and not spin.at_lower_rail
-            and not spin.at_upper_rail
+            and (
+                is_ungated_multitaper
+                or (
+                    club_spin_rejection_reason is None
+                    and not spin.at_lower_rail
+                    and not spin.at_upper_rail
+                )
+            )
         )
         if (
             spin is not None
             and spin.spin_rpm > 0
             and club_spin_rejection_reason is None
+            and not is_ungated_multitaper
             and not has_reportable_spin
         ):
             if spin.at_lower_rail:
@@ -835,7 +848,9 @@ class RollingBufferMonitor:
             club=self._current_club,
             spin_rpm=spin_rpm,
             spin_confidence=spin_confidence,
+            spin_method=spin.method if spin else None,
             spin_result_quality=spin_result_quality,
+            spin_multipath_fade_hz=spin.multipath_fade_hz if spin else None,
             spin_snr=spin.snr if spin else None,
             spin_modulation_depth=spin.modulation_depth if spin else None,
             spin_peak_freq_hz=spin.peak_freq_hz if spin else None,

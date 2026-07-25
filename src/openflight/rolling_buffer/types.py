@@ -234,6 +234,9 @@ class SpinResult:
         confidence: Quality score from 0-1 (high SNR, valid range = high confidence)
         snr: Signal-to-noise ratio of the spin peak
         quality: Human-readable quality assessment
+        method: Estimator that produced the result.
+        multipath_fade_hz: Fitted two-ray fade frequency removed before
+            estimating spin, when applicable.
         modulation_depth: Envelope std/mean inside the ball window. <0.005
             usually means quantization noise; <0.01 means the FFT peak
             may not be a real seam tone.
@@ -261,6 +264,8 @@ class SpinResult:
     confidence: float
     snr: float
     quality: str  # "high", "medium", "low", or reason for rejection
+    method: str = "envelope_fft"
+    multipath_fade_hz: Optional[float] = None
     modulation_depth: Optional[float] = None
     peak_freq_hz: Optional[float] = None
     seam_cycles: Optional[float] = None
@@ -295,6 +300,8 @@ class SpinResult:
         phase_snr: Optional[float] = None,
         phase_agreement_pct: Optional[float] = None,
         phase_confirmed: bool = False,
+        method: str = "envelope_fft",
+        multipath_fade_hz: Optional[float] = None,
     ) -> "SpinResult":
         """Factory for when spin detection fails. Diagnostic fields are
         carried through so we can see *why* it failed in the JSONL.
@@ -304,6 +311,8 @@ class SpinResult:
             confidence=0,
             snr=round(snr, 2),
             quality=reason,
+            method=method,
+            multipath_fade_hz=multipath_fade_hz,
             modulation_depth=modulation_depth,
             peak_freq_hz=peak_freq_hz,
             seam_cycles=seam_cycles,
