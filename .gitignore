@@ -74,3 +74,5 @@ ui/dist/autoresearch-results.tsv
 config/sim.json
 ui/playwright-report/
 ui/test-results/
+
+.superpowers/
