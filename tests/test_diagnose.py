@@ -438,6 +438,8 @@ class TestParseArgs:
         args = diagnose.parse_args([])
         assert args.require_all is False
         assert args.no_interactive is False
+        assert args.ops_port is None
+        assert args.ops_baud is None
 
     def test_require_all_flag(self):
         args = diagnose.parse_args(["--require-all"])
@@ -446,3 +448,118 @@ class TestParseArgs:
     def test_no_interactive_flag(self):
         args = diagnose.parse_args(["--no-interactive"])
         assert args.no_interactive is True
+
+    def test_ops_port_and_baud(self):
+        args = diagnose.parse_args(["--ops-port", "/dev/ttyAMA0", "--ops-baud", "115200"])
+        assert args.ops_port == "/dev/ttyAMA0"
+        assert args.ops_baud == 115200
+
+
+class TestUartPreflight:
+    """The three UART-only failures that all look like "radar not responding"."""
+
+    def test_skipped_on_usb(self):
+        state = diagnose.DiagnosticState(ops243_port="/dev/ttyACM0")
+        result = diagnose.check_uart_preflight(state)
+        assert result.status == "skip"
+        assert "USB" in result.detail
+
+    def test_skipped_when_no_port_given(self):
+        result = diagnose.check_uart_preflight(diagnose.DiagnosticState())
+        assert result.status == "skip"
+
+    def test_passes_when_environment_is_clean(self):
+        state = diagnose.DiagnosticState(ops243_port="/dev/ttyAMA0")
+        with patch.object(diagnose.os.path, "exists", return_value=True), \
+             patch.object(diagnose, "_serial_console_units", return_value=[]), \
+             patch.object(diagnose, "detect_ops243_port", return_value=None):
+            result = diagnose.check_uart_preflight(state)
+        assert result.status == "pass"
+
+    def test_fails_when_device_node_missing(self):
+        state = diagnose.DiagnosticState(ops243_port="/dev/ttyAMA0")
+        with patch.object(diagnose.os.path, "exists", return_value=False), \
+             patch.object(diagnose, "_serial_console_units", return_value=[]), \
+             patch.object(diagnose, "detect_ops243_port", return_value=None):
+            result = diagnose.check_uart_preflight(state)
+        assert result.status == "fail"
+        assert "does not exist" in result.detail
+        assert "enable_uart=1" in result.hint
+
+    def test_fails_when_serial_console_holds_the_port(self):
+        """Console chatter is transmitted into the radar's RxD pin."""
+        state = diagnose.DiagnosticState(ops243_port="/dev/ttyAMA0")
+        with patch.object(diagnose.os.path, "exists", return_value=True), \
+             patch.object(
+                 diagnose, "_serial_console_units",
+                 return_value=["serial-getty@ttyAMA0.service"],
+             ), \
+             patch.object(diagnose, "detect_ops243_port", return_value=None):
+            result = diagnose.check_uart_preflight(state)
+        assert result.status == "fail"
+        assert "console" in result.detail
+        assert "systemctl disable" in result.hint
+
+    def test_fails_when_ops_usb_is_also_enumerated(self):
+        """Enumerating USB silences the UART entirely (AN-010-AD)."""
+        state = diagnose.DiagnosticState(ops243_port="/dev/ttyAMA0")
+        with patch.object(diagnose.os.path, "exists", return_value=True), \
+             patch.object(diagnose, "_serial_console_units", return_value=[]), \
+             patch.object(diagnose, "detect_ops243_port", return_value="/dev/ttyACM0"):
+            result = diagnose.check_uart_preflight(state)
+        assert result.status == "fail"
+        assert "USB" in result.detail
+        assert "Unplug" in result.hint
+
+
+class TestConnectivityReportsBaud:
+    """Over UART, a low negotiated baud is a failure, not a footnote."""
+
+    def _radar(self, baud):
+        radar = MagicMock()
+        radar.baud = baud
+        radar.DUMP_BYTES = 45000
+        radar.bytes_per_second = baud / 10.0
+        radar.get_firmware_version.return_value = "1.5.2"
+        return radar
+
+    def test_pass_at_target_baud_reports_it(self):
+        state = diagnose.DiagnosticState(ops243_port="/dev/ttyAMA0")
+        with patch.object(diagnose, "OPS243Radar", return_value=self._radar(230400)):
+            result = diagnose.check_ops243_connectivity(state)
+        assert result.status == "pass"
+        assert "230400 baud" in result.detail
+
+    def test_fail_when_negotiation_settled_low(self):
+        state = diagnose.DiagnosticState(ops243_port="/dev/ttyAMA0")
+        with patch.object(diagnose, "OPS243Radar", return_value=self._radar(19200)):
+            result = diagnose.check_ops243_connectivity(state)
+        assert result.status == "fail"
+        assert "19200" in result.detail
+        assert "pin 6" in result.hint, "hint should point at the Pi TX -> OPS RX wire"
+
+    def test_usb_detail_omits_baud(self):
+        state = diagnose.DiagnosticState(ops243_port="/dev/ttyACM0")
+        with patch.object(diagnose, "OPS243Radar", return_value=self._radar(57600)):
+            result = diagnose.check_ops243_connectivity(state)
+        assert result.status == "pass"
+        assert "baud" not in result.detail
+
+    def test_explicit_port_overrides_autodetect(self):
+        state = diagnose.DiagnosticState(ops243_port="/dev/ttyAMA0")
+        with patch.object(diagnose, "OPS243Radar", return_value=self._radar(230400)) as radar_cls, \
+             patch.object(diagnose, "detect_ops243_port", return_value="/dev/ttyACM0"):
+            diagnose.check_ops243_connectivity(state)
+        assert radar_cls.call_args.kwargs["port"] == "/dev/ttyAMA0"
+
+    def test_baud_override_is_passed_to_the_driver(self):
+        state = diagnose.DiagnosticState(ops243_port="/dev/ttyAMA0", ops243_baud=115200)
+        with patch.object(diagnose, "OPS243Radar", return_value=self._radar(115200)) as radar_cls:
+            diagnose.check_ops243_connectivity(state)
+        assert radar_cls.call_args.kwargs["uart_baud"] == 115200
+
+    def test_skip_hint_points_at_the_uart_flag(self):
+        with patch.object(diagnose, "detect_ops243_port", return_value=None):
+            result = diagnose.check_ops243_connectivity(diagnose.DiagnosticState())
+        assert result.status == "skip"
+        assert "--ops-port" in result.hint

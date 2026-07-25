@@ -33,11 +33,43 @@ import time
 
 sys.path.insert(0, "src")
 
-from openflight.ops243 import OPS243Radar
+from openflight.ops243 import OPS243Radar, is_uart_port
 from openflight.rolling_buffer.processor import RollingBufferProcessor
 
 
-def phase_setup(port: str, pre_trigger: int, sample_rate: int):
+def _connect(port: str, baud: int) -> OPS243Radar:
+    """Connect, reporting the transport so UART runs are unambiguous."""
+    radar = OPS243Radar(port=port if port else None, **({"uart_baud": baud} if baud else {}))
+    radar.connect()
+    print(f"  Connected on: {radar.port}")
+    if is_uart_port(radar.port):
+        dump_s = radar.DUMP_BYTES / radar.bytes_per_second
+        print(f"  Transport: UART at {radar.baud} baud (dump ~{dump_s:.1f}s)")
+    else:
+        print("  Transport: USB")
+
+    info = radar.get_info()
+    print(f"  Firmware: {info.get('Version', 'unknown')}")
+    print()
+    return radar
+
+
+def _power_cycle_instructions(radar: OPS243Radar) -> str:
+    """Power-cycle wording for the transport actually in use.
+
+    On the GPIO header there is no USB cable to pull, and no reset line is
+    wired, so the 5V jumper is the only way to restart the board.
+    """
+    if is_uart_port(radar.port):
+        return (
+            "  Disconnect 5V from OPS J3 pin 9, wait 3 seconds, reconnect it.\n"
+            "  (No USB cable and no reset line on this wiring — the 5V jumper\n"
+            "  is the power cycle. Leave TX/RX and ground connected.)"
+        )
+    return "  Unplug the USB cable, wait 3 seconds, plug it back in."
+
+
+def phase_setup(port: str, pre_trigger: int, sample_rate: int, baud: int):
     """Phase 1: Configure rolling buffer mode and save to persistent memory."""
     print("=" * 60)
     print("  Phase 1: Configure & Persist Rolling Buffer Mode")
@@ -45,44 +77,20 @@ def phase_setup(port: str, pre_trigger: int, sample_rate: int):
     print()
 
     print("Connecting to radar...")
-    radar = OPS243Radar(port=port if port else None)
-    radar.connect()
-    print(f"  Connected on: {radar.port}")
+    radar = _connect(port, baud)
 
-    info = radar.get_info()
-    print(f"  Firmware: {info.get('Version', 'unknown')}")
-    print()
-
-    # Step 1: Enter rolling buffer mode
-    print(f"[1/4] Entering rolling buffer mode (GC)...")
-    radar.serial.write(b"PI")
-    time.sleep(0.2)
-    radar.serial.write(b"GC")
-    time.sleep(0.1)
-    print("  Done")
-
-    # Step 2: Activate and configure
-    print(f"[2/4] Configuring sample rate (S={sample_rate}) and trigger split (S#{pre_trigger})...")
-    radar.serial.write(b"PA")
-    time.sleep(0.1)
-    radar.serial.write(f"S={sample_rate}\r".encode())
-    radar.serial.flush()
-    time.sleep(0.15)
-    radar.serial.write(f"S#{pre_trigger}\r".encode())
-    radar.serial.flush()
-    time.sleep(0.15)
-    radar.serial.write(b"PA")
-    time.sleep(0.1)
-    print("  Done")
-
-    # Step 3: Save to persistent memory
-    print("[3/4] Saving to persistent memory (A!)...")
-    radar.serial.write(b"A!")
-    time.sleep(0.5)
+    # The driver owns this sequence (GC/PA/S=/S#/PA then A!) so the saved
+    # configuration cannot drift from what the server sends at runtime.
+    # Over UART the negotiated baud is already active here, so A! captures
+    # it too if the firmware persists baud.
+    print(f"[1/2] Entering rolling buffer mode and saving (S#{pre_trigger}, S={sample_rate})...")
+    radar.persist_rolling_buffer_mode(
+        pre_trigger_segments=pre_trigger, sample_rate_ksps=sample_rate
+    )
     print("  Done — settings saved")
 
-    # Step 4: Disconnect
-    print("[4/4] Disconnecting...")
+    print("[2/2] Disconnecting...")
+    cycle_text = _power_cycle_instructions(radar)
     radar.disconnect()
     print("  Done")
 
@@ -90,16 +98,16 @@ def phase_setup(port: str, pre_trigger: int, sample_rate: int):
     print("=" * 60)
     print("  ACTION REQUIRED: Power cycle the radar board now!")
     print()
-    print("  Unplug the USB cable, wait 3 seconds, plug it back in.")
+    print(cycle_text)
     print("  The LED should come on in rolling buffer mode.")
     print()
     print("  Then run:")
-    print(f"    uv run python scripts/test_rolling_buffer_persist.py --test")
+    print("    uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test")
     print("=" * 60)
     print()
 
 
-def phase_test(port: str, pre_trigger: int, timeout: float):
+def phase_test(port: str, pre_trigger: int, timeout: float, baud: int):
     """Phase 2: Test hardware trigger after power cycle."""
     SEGMENT_DURATION_MS = 128 / 30000 * 1000  # ~4.27ms per segment at 30ksps
     pre_ms = pre_trigger * SEGMENT_DURATION_MS
@@ -114,13 +122,7 @@ def phase_test(port: str, pre_trigger: int, timeout: float):
     print()
 
     print("Connecting to radar...")
-    radar = OPS243Radar(port=port if port else None)
-    radar.connect()
-    print(f"  Connected on: {radar.port}")
-
-    info = radar.get_info()
-    print(f"  Firmware: {info.get('Version', 'unknown')}")
-    print()
+    radar = _connect(port, baud)
 
     # Don't send GC/GS — the board should already be in rolling buffer mode
     # Activate sampling and set trigger split
@@ -154,6 +156,11 @@ def phase_test(port: str, pre_trigger: int, timeout: float):
             print(f"[{trigger_count + 1}] Waiting for trigger (timeout={timeout}s)...")
 
             response = radar.wait_for_hardware_trigger(timeout=timeout)
+            # Transfer time is measured from the first byte, not from when we
+            # started waiting, so it reflects wire rate rather than how long
+            # it took you to make a noise.
+            first_byte_ts = radar.last_hardware_trigger_first_byte_timestamp
+            transfer_s = (time.time() - first_byte_ts) if first_byte_ts else None
 
             if not response:
                 print("  Timeout — no trigger received")
@@ -169,6 +176,12 @@ def phase_test(port: str, pre_trigger: int, timeout: float):
                 capture = processor.parse_capture(response)
                 if capture:
                     print(f"  I/Q samples: {len(capture.i_samples)} I, {len(capture.q_samples)} Q")
+                    if transfer_s:
+                        kbps = len(response) / transfer_s / 1000.0
+                        print(
+                            f"  Dump transfer: {len(response)} bytes in "
+                            f"{transfer_s:.2f}s ({kbps:.1f} KB/s)"
+                        )
 
                     timeline = processor.process_standard(capture)
                     outbound = [r for r in timeline.readings if r.is_outbound]
@@ -248,7 +261,14 @@ Examples:
         help="Phase 2 only: test hardware trigger (run after power cycle)"
     )
     parser.add_argument(
-        "--port", help="Serial port for radar (auto-detect if not specified)"
+        "--port",
+        help="Serial port for radar (auto-detect USB if not specified; "
+             "pass /dev/ttyAMA0 for the GPIO UART wiring)",
+    )
+    parser.add_argument(
+        "--baud", type=int, default=None,
+        help=f"Target UART baud (default {OPS243Radar.DEFAULT_UART_BAUD}). "
+             "Ignored over USB.",
     )
     parser.add_argument(
         "--pre-trigger", "-p", type=int, default=12,
@@ -266,15 +286,15 @@ Examples:
     args = parser.parse_args()
 
     if args.setup:
-        phase_setup(args.port, args.pre_trigger, args.sample_rate)
+        phase_setup(args.port, args.pre_trigger, args.sample_rate, args.baud)
     elif args.test:
-        phase_test(args.port, args.pre_trigger, args.timeout)
+        phase_test(args.port, args.pre_trigger, args.timeout, args.baud)
     else:
         # Interactive: run both phases
-        phase_setup(args.port, args.pre_trigger, args.sample_rate)
+        phase_setup(args.port, args.pre_trigger, args.sample_rate, args.baud)
         input("Press Enter after power cycling the radar...")
         print()
-        phase_test(args.port, args.pre_trigger, args.timeout)
+        phase_test(args.port, args.pre_trigger, args.timeout, args.baud)
 
 
 if __name__ == "__main__":

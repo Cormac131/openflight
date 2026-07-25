@@ -182,3 +182,26 @@ def test_radc_tuning_values_are_forwarded_with_experimental_gate():
     assert "--experimental-kld7-speed-tolerance 6" in command
     assert "--experimental-kld7-spectrum-source sum12" in command
     assert "--experimental-kld7-horizontal-angle-limit 30" in command
+
+
+def test_ops_uart_port_and_baud_are_forwarded():
+    """The GPIO-UART wiring needs both the device and the target rate."""
+    result = _dry_run("--radar-port", "/dev/ttyAMA0", "--ops-baud", "230400")
+    command = result.stdout.strip()
+
+    assert "--port /dev/ttyAMA0" in command
+    assert "--ops-baud 230400" in command
+
+
+def test_ops_baud_is_omitted_by_default():
+    """No flag means the driver picks its own target; don't pin it here."""
+    command = _dry_run().stdout.strip()
+    assert "--ops-baud" not in command
+
+
+def test_ops_port_alias_matches_radar_port():
+    """--ops-port and --radar-port must behave identically (docs use both)."""
+    via_ops = _dry_run("--ops-port", "/dev/ttyAMA0").stdout.strip()
+    via_radar = _dry_run("--radar-port", "/dev/ttyAMA0").stdout.strip()
+    assert via_ops == via_radar
+    assert "--port /dev/ttyAMA0" in via_ops

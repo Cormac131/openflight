@@ -196,6 +196,22 @@ class RollingBufferProcessor:
                     continue
 
             if all(v is not None for v in [sample_time, trigger_time, i_samples, q_samples]):
+                # Both arrays must be the same length: the FFT pipeline pairs
+                # them index-wise. Over USB CDC a short array was impossible,
+                # but the J3 UART has no flow control, so a stalled reader can
+                # drop bytes mid-dump. Truncation usually breaks the JSON and
+                # is caught below; a mismatch that still parses must not reach
+                # the processing stage as silently bad data.
+                if len(i_samples) != len(q_samples) or not i_samples:
+                    logger.warning(
+                        "[PROCESSOR] I/Q length mismatch (I=%d, Q=%d) in a %d-byte "
+                        "response — dropped bytes on the wire?",
+                        len(i_samples),
+                        len(q_samples),
+                        len(response),
+                    )
+                    return None
+
                 return IQCapture(
                     sample_time=sample_time,
                     trigger_time=trigger_time,

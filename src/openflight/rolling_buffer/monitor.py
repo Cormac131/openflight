@@ -237,13 +237,19 @@ class RollingBufferMonitor:
         port: Optional[str] = None,
         trigger_type: str = "speed",
         sample_rate_ksps: int = 30,
+        ops_baud: Optional[int] = None,
         **trigger_kwargs,
     ):
         """
         Initialize rolling buffer monitor.
 
         Args:
-            port: Serial port for radar. Auto-detect if None.
+            port: Serial port for radar. Auto-detect if None. Pass the UART
+                device (e.g. /dev/ttyAMA0) when the OPS243 is wired to the
+                Pi GPIO header instead of USB.
+            ops_baud: Target UART baud to negotiate to. None uses the
+                driver default (230400). Ignored over USB, where the rate
+                is nominal.
             trigger_type: Trigger strategy:
                 - "speed" (default, recommended): Fast speed trigger per manufacturer
                 - "polling": Continuous capture polling (slower, simpler)
@@ -251,7 +257,8 @@ class RollingBufferMonitor:
                 - "manual": External trigger for testing
             **trigger_kwargs: Arguments for trigger strategy
         """
-        self.radar = OPS243Radar(port=port)
+        radar_kwargs = {} if ops_baud is None else {"uart_baud": ops_baud}
+        self.radar = OPS243Radar(port=port, **radar_kwargs)
         self.processor = RollingBufferProcessor(sample_rate=sample_rate_ksps * 1000)
         self.trigger_type = trigger_type
         self.sample_rate_ksps = sample_rate_ksps

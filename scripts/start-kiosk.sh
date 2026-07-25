@@ -11,6 +11,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PORT=8080
 HOST="localhost"
 RADAR_PORT=""
+OPS_BAUD=""
 MOCK_MODE=false
 RADAR_LOG=false
 DEBUG_MODE=false
@@ -283,6 +284,10 @@ while [[ $# -gt 0 ]]; do
             RADAR_PORT="$2"
             shift 2
             ;;
+        --ops-baud)
+            OPS_BAUD="$2"
+            shift 2
+            ;;
         --port|-p)
             PORT="$2"
             shift 2
@@ -393,6 +398,10 @@ SERVER_CMD="openflight-server --web-port $PORT"
 
 if [ -n "$RADAR_PORT" ]; then
     SERVER_CMD="$SERVER_CMD --port $RADAR_PORT"
+fi
+
+if [ -n "$OPS_BAUD" ]; then
+    SERVER_CMD="$SERVER_CMD --ops-baud $OPS_BAUD"
 fi
 
 if [ "$MOCK_MODE" = true ]; then

@@ -81,6 +81,11 @@ radars from an unpowered, bus-powered USB hub.
 The validated layout keeps the TI board on USB and connects the OPS243 to the
 Pi UART header for power and data.
 
+If the OPS243 is currently on USB, migrate and validate it on its own before
+adding the TI board — see
+[Moving the OPS243 from USB to the Pi GPIO UART](../ops243-uart-migration.md).
+Doing both at once makes any failure ambiguous.
+
 > [!WARNING]
 > Do not use this option with a WiFi-equipped OPS243-A. The onboard WiFi module
 > already drives the radar processor's UART receive line, so J3 pin 6 cannot

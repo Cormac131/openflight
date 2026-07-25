@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **OPS243 over the Raspberry Pi GPIO UART.** The radar can now run on the J3
+  header instead of USB, which frees the Pi's USB power budget for the TI angle
+  radar. Baud is the real wire rate on that transport and the factory default of
+  19,200 would stretch a 40.6KB dump to 21 seconds, so the driver probes for the
+  rate the board is actually using and raises it to 230,400 (`I5`), bringing a
+  dump down to ~1.8 seconds. Every dump timeout now scales with the negotiated
+  rate, so a link that settles low runs slowly instead of truncating captures.
+  Pass `--radar-port /dev/ttyAMA0` (and optionally `--ops-baud`); USB behaviour
+  is unchanged. `diagnose.py --ops-port` adds a preflight for the three
+  UART-only failures that all look like an unresponsive radar — missing device
+  node, a login console holding the port, and the OPS USB cable still plugged in
+  (which silences the UART). See
+  [Moving the OPS243 from USB to the Pi GPIO UART](ops243-uart-migration.md).
 - **Flash IWR6843 firmware directly from a Raspberry Pi.** Contributors no
   longer need an Intel Mac, UniFlash, or TI Cloud Agent for routine firmware
   updates. The guided terminal workflow verifies the image hash, offers a

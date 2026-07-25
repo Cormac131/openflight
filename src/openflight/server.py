@@ -23,7 +23,7 @@ from flask_socketio import SocketIO
 
 from .ballistics import resolve_launch, simulate
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, ClubType, Shot
-from .ops243 import Direction, SpeedReading, set_show_raw_readings
+from .ops243 import Direction, OPS243Radar, SpeedReading, set_show_raw_readings
 from .rolling_buffer.monitor import estimate_carry_with_spin, get_optimal_spin_for_ball_speed
 from .session_logger import get_session_logger, init_session_logger, log_session_error
 from .sim import (
@@ -2418,6 +2418,7 @@ def start_monitor(
     debug: bool = False,
     trigger_kwargs: Optional[dict] = None,
     sample_rate_ksps: int = 30,
+    ops_baud: Optional[int] = None,
 ):
     """
     Start the launch monitor in rolling buffer mode.
@@ -2427,6 +2428,7 @@ def start_monitor(
         mock: Run in mock mode without radar
         trigger_type: Trigger strategy (sound, speed, polling)
         debug: Enable verbose debug output
+        ops_baud: Target UART baud when the OPS243 is on the GPIO header
     """
     global monitor, mock_mode  # pylint: disable=global-statement
 
@@ -2446,6 +2448,7 @@ def start_monitor(
             port=port,
             trigger_type=trigger_type,
             sample_rate_ksps=sample_rate_ksps,
+            ops_baud=ops_baud,
             **(trigger_kwargs or {}),
         )
         print(
@@ -2762,6 +2765,17 @@ def main():
 
     parser = argparse.ArgumentParser(description="OpenFlight UI Server")
     parser.add_argument("--port", "-p", help="Serial port for radar")
+    parser.add_argument(
+        "--ops-baud",
+        type=int,
+        default=None,
+        help=(
+            "Target UART baud for the OPS243 on the GPIO header "
+            f"(default {OPS243Radar.DEFAULT_UART_BAUD}). Only meaningful when "
+            "--port is a UART device such as /dev/ttyAMA0; drop to 115200 if "
+            "230400 proves unreliable on your board."
+        ),
+    )
     parser.add_argument("--mock", "-m", action="store_true", help="Run in mock mode without radar")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
     parser.add_argument(
@@ -3315,6 +3329,7 @@ def main():
         debug=args.debug,
         trigger_kwargs=trigger_kwargs,
         sample_rate_ksps=args.sample_rate,
+        ops_baud=args.ops_baud,
     )
 
     # Simulator connectors (off unless --sim). Started after the monitor exists

@@ -4,6 +4,11 @@ Step-by-step instructions for wiring the sound trigger that enables spin detecti
 
 > **Parts needed:** See the [Parts List](PARTS.md#sound-trigger-for-rolling-buffer-mode) for what to buy.
 
+> **Running the OPS243 on the Pi GPIO UART instead of USB?** This trigger
+> wiring is unchanged — `GATE` still drives `HOST_INT` directly. See
+> [Moving the OPS243 from USB to the Pi GPIO UART](ops243-uart-migration.md)
+> for the data and power side.
+
 ## Overview
 
 The SparkFun SEN-14262 sound detector listens for club impact and triggers the OPS243-A radar to dump its I/Q buffer. That captured data is then analyzed for spin rate estimation.
