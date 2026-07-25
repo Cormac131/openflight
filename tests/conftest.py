@@ -5,10 +5,15 @@ drop the connection. Used by both GSPro and OpenGolfSim connector tests.
 """
 import json
 import socket
+import sys
 import threading
+from pathlib import Path
 from typing import List, Optional
 
 import pytest
+
+# Add tests directory to sys.path for importing test utilities like spin_synth
+sys.path.insert(0, str(Path(__file__).parent))
 
 
 class MockSimServer:
