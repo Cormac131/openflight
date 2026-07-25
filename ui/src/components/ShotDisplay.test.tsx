@@ -1,6 +1,5 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { UnitPreferenceProvider } from '../state/UnitPreferenceProvider';
 import type { Shot } from '../types/shot';
 import { ShotDisplay } from './ShotDisplay';
 
@@ -23,6 +22,7 @@ const experimentalShot: Shot = {
   spin_rpm: 8750,
   spin_confidence: 0.36,
   spin_quality: 'experimental',
+  spin_source: 'measured',
   spin_method: 'multitaper_ungated',
   spin_multipath_fade_hz: 48.2,
   carry_spin_adjusted: null,
@@ -30,11 +30,7 @@ const experimentalShot: Shot = {
 
 describe('ShotDisplay', () => {
   it('labels ungated spin as experimental without confidence dots', () => {
-    const html = renderToString(
-      <UnitPreferenceProvider>
-        <ShotDisplay shot={experimentalShot} />
-      </UnitPreferenceProvider>
-    );
+    const html = renderToString(<ShotDisplay shot={experimentalShot} />);
 
     expect(html).toContain('8,750');
     expect(html).toContain('metric-card__confidence--experimental');
