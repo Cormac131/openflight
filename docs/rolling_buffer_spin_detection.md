@@ -10,6 +10,28 @@ The OPS243-A radar can detect golf ball spin by analyzing micro-variations in th
 2. **Overlapping FFT Windows** - Increases temporal resolution to see spin "waviness"
 3. **Secondary FFT** - Extracts spin frequency from speed oscillations
 
+## Experimental Live Estimator
+
+The live rolling-buffer pipeline automatically runs the ungated multitaper
+estimator for every valid capture. No estimator flag or additional setup is
+required beyond the normal persistent rolling-buffer configuration.
+
+- The UI displays the candidate below Spin Rate with an **EXPERIMENTAL** label.
+- The result is logged with `spin_method: "multitaper_ungated"` and the detected
+  multipath fade frequency for later TrackMan comparison.
+- The estimator intentionally reports its best 1,500-11,000 RPM candidate
+  without a confidence, rail, or club-selection gate so evaluation sessions do
+  not silently discard difficult shots.
+- Experimental spin does not currently drive spin-adjusted carry. A candidate
+  can be useful for model evaluation without being reliable enough for flight
+  calculations.
+
+TrackMan-blind validation remains above the production target: July 14 had
+2,499 RPM MAE (1,682 RPM median absolute error), and the held-out July 17
+session had 3,073 RPM MAE (2,968 RPM median). Treat individual readings as
+evaluation data rather than ground truth until geometry and multipath rejection
+improve.
+
 ## Current vs Rolling Buffer Approach
 
 | Aspect | Current (Streaming) | Rolling Buffer |

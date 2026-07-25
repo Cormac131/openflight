@@ -263,7 +263,7 @@ class SpinResult:
     spin_rpm: float
     confidence: float
     snr: float
-    quality: str  # "high", "medium", "low", or reason for rejection
+    quality: str  # "high", "medium", "low", "experimental", or rejection reason
     method: str = "envelope_fft"
     multipath_fade_hz: Optional[float] = None
     modulation_depth: Optional[float] = None

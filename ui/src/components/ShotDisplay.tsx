@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { Shot } from '../types/shot';
+import type { Shot, SpinQuality } from '../types/shot';
 import { useUnitPreference } from '../state/useUnitPreference';
 import { formatCarryRange, formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
 import './ShotDisplay.css';
@@ -91,7 +91,7 @@ function MetricCard({
   label: string;
   subtext?: string;
   variant?: 'default' | 'primary' | 'secondary' | 'spin';
-  confidence?: 'high' | 'medium' | 'low' | null;
+  confidence?: SpinQuality | null;
 }) {
   return (
     <div className={`metric-card metric-card--${variant}`}>
@@ -103,11 +103,13 @@ function MetricCard({
       {subtext && <span className="metric-card__subtext">{subtext}</span>}
       {confidence && (
         <div className={`metric-card__confidence metric-card__confidence--${confidence}`}>
-          <span className="metric-card__confidence-dots">
-            <span className="dot filled" />
-            <span className={`dot ${confidence === 'medium' || confidence === 'high' ? 'filled' : ''}`} />
-            <span className={`dot ${confidence === 'high' ? 'filled' : ''}`} />
-          </span>
+          {confidence !== 'experimental' && (
+            <span className="metric-card__confidence-dots">
+              <span className="dot filled" />
+              <span className={`dot ${confidence === 'medium' || confidence === 'high' ? 'filled' : ''}`} />
+              <span className={`dot ${confidence === 'high' ? 'filled' : ''}`} />
+            </span>
+          )}
           <span className="metric-card__confidence-label">{confidence}</span>
         </div>
       )}

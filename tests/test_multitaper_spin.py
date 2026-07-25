@@ -122,6 +122,7 @@ def test_multitaper_candidate_is_reported_without_confidence_or_rail_gate():
             snr=1.2,
             quality="experimental",
             method="multitaper_ungated",
+            multipath_fade_hz=48.2,
             peak_freq_hz=182.5,
             at_upper_rail=True,
         ),
@@ -136,8 +137,17 @@ def test_multitaper_candidate_is_reported_without_confidence_or_rail_gate():
     assert shot.spin_rpm == pytest.approx(10_950.0)
     assert shot.spin_method == "multitaper_ungated"
     assert shot.spin_confidence == pytest.approx(0.1)
+    assert shot.spin_quality == "experimental"
     assert shot.spin_rejection_reason is None
     assert shot.carry_spin_adjusted is None
+
+    from openflight.server import shot_to_dict
+
+    payload = shot_to_dict(shot)
+    assert payload["spin_rpm"] == 10_950
+    assert payload["spin_method"] == "multitaper_ungated"
+    assert payload["spin_quality"] == "experimental"
+    assert payload["spin_multipath_fade_hz"] == pytest.approx(48.2)
 
 
 def test_shot_method_defaults_to_none():

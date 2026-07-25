@@ -359,7 +359,7 @@ class SessionLogger:
             spin_rpm: Spin rate in RPM (rolling buffer mode only)
             spin_confidence: Confidence of spin detection (rolling buffer mode only)
             spin_method: Estimator that produced the spin candidate
-            spin_quality: Quality assessment ("high", "medium", "low")
+            spin_quality: Quality assessment ("high", "medium", "low", "experimental")
             spin_multipath_fade_hz: Fitted two-ray fade frequency
             spin_snr: Signal-to-noise ratio of spin detection
             spin_modulation_depth: Envelope std/mean ratio
@@ -864,7 +864,7 @@ class SessionLogger:
             spin_rpm: Detected spin rate in RPM
             spin_confidence: Confidence of spin detection (0-1)
             spin_method: Estimator that produced the spin candidate
-            spin_quality: Quality assessment ("high", "medium", "low")
+            spin_quality: Quality assessment ("high", "medium", "low", "experimental")
             spin_multipath_fade_hz: Fitted two-ray fade frequency
             spin_snr: Signal-to-noise ratio of spin detection
             spin_modulation_depth: Envelope std/mean ratio (1-5% real seam,
