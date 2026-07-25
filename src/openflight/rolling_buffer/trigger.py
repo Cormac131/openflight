@@ -1035,8 +1035,14 @@ class SoundTrigger(TriggerStrategy):
             None,
         )
 
-        # Re-arm for next capture
-        radar.rearm_rolling_buffer(self.pre_trigger_segments)
+        # ORDERING MATTERS: after its dump the radar sits idle, where
+        # HOST_INT pulses are harmless. A real shot produces a second loud
+        # sound ~1s later (ball hitting the net); if we re-arm first, that
+        # sound starts a new dump exactly when the clock-sync exchange
+        # writes to the port — a two-way serial deadlock observed in the
+        # field (capture thread wedged in serial.write, radar frozen
+        # mid-dump). So: do all wire-talk (clock sync) while idle, and
+        # re-arm LAST, when we are about to go back to reading.
 
         capture = processor.parse_capture(
             response,
@@ -1044,6 +1050,7 @@ class SoundTrigger(TriggerStrategy):
         )
 
         if not capture:
+            radar.rearm_rolling_buffer(self.pre_trigger_segments)
             logger.warning("[TRIGGER] Sound trigger parse failed (%d bytes received)", response_len)
             self._append_diagnostic(
                 accepted=False,
@@ -1062,6 +1069,9 @@ class SoundTrigger(TriggerStrategy):
         summary = self._summarize_capture_activity(processor, capture)
 
         if not summary["valid_outbound_count"]:
+            # False trigger: re-arm immediately (no clock sync) so the
+            # next real swing isn't missed.
+            radar.rearm_rolling_buffer(self.pre_trigger_segments)
             logger.info(
                 "[TRIGGER] Sound trigger rejected — no outbound speed >= %.0f mph "
                 "(peak=%.1f mph, %d readings)",
@@ -1077,7 +1087,10 @@ class SoundTrigger(TriggerStrategy):
             )
             return None
 
+        # Accepted: talk on the wire while the radar is still idle, then
+        # re-arm as the last serial action before returning to the reader.
         self._select_clock_sync_for_capture(radar, capture)
+        radar.rearm_rolling_buffer(self.pre_trigger_segments)
 
         if capture.first_byte_timestamp is not None and capture.trigger_timestamp is None:
             capture.apply_trigger_timestamp_from_first_byte()
