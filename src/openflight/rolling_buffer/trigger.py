@@ -601,10 +601,21 @@ class GPIOSoundTrigger(TriggerStrategy):
 
         try:
             from gpiozero import Button  # pylint: disable=import-outside-toplevel
+
+            # Must precede the first gpiozero device: on a Pi 5 gpiozero's own
+            # pin-factory auto-detection fails outright. See gpio_factory.
+            from ..gpio_factory import (  # pylint: disable=import-outside-toplevel
+                ensure_lgpio_pin_factory,
+            )
+
+            ensure_lgpio_pin_factory()
         except ImportError:
             logger.error(
                 "[TRIGGER] gpiozero not available. Install with: uv pip install gpiozero lgpio"
             )
+            return False
+        except RuntimeError as exc:
+            logger.error("[TRIGGER] %s", exc)
             return False
 
         def on_trigger():

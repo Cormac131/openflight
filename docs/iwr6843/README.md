@@ -246,6 +246,18 @@ The launch command does not need `--iwr6843-trigger-pin` when the GATE splice is
 wired to BCM17. If startup reports `GPIO busy`, another OpenFlight, calibration,
 or shot-test process still owns the pin; stop that process before retrying.
 
+OpenFlight selects the `lgpio` pin factory itself and names the gpiochip
+explicitly, because gpiozero 2.0.1.post2 cannot auto-detect one on a Pi 5 — its
+`pins/lgpio.py` calls `os.path.exists` without importing `os`, so every backend
+falls back and startup dies with `BadPinFactory: Unable to load any default pin
+factory!`. Setting `GPIOZERO_PIN_FACTORY=lgpio` does not help; it forces the
+same broken call. If a kernel update moves the 40-pin header to a different
+chip, override it:
+
+```bash
+OPENFLIGHT_GPIO_CHIP=0 scripts/start-kiosk.sh ...
+```
+
 ## Identify The TI Serial Port
 
 Connect the IWR6843LEVM to the Pi over USB and inspect the serial devices:
@@ -505,7 +517,7 @@ ports. The calibration command uses the same OPS trigger, OPS processing, TI
 capture, and LCMF estimator as the server.
 
 ```bash
-GPIOZERO_PIN_FACTORY=lgpio uv run \
+uv run \
   --with gpiozero \
   --with lgpio \
   python scripts/iwr6843/calibrate.py \

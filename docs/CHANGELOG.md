@@ -72,6 +72,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--kld7-bypass-vertical-gate` renamed to `--kld7-vertical-raw`.
 
 ### Fixed
+- **GPIO startup on a Raspberry Pi 5.** Anything using the sound-trigger GPIO —
+  the IWR6843 capture monitor and the GPIO sound trigger — died with
+  `BadPinFactory: Unable to load any default pin factory!`. The cause is
+  upstream: gpiozero 2.0.1.post2 (the latest release) calls `os.path.exists`
+  in its lgpio chip auto-detection without importing `os`, and that code path
+  only runs on a Pi 5, so gpiozero swallows the `NameError` and every remaining
+  backend then fails for its own reason. OpenFlight now selects the lgpio
+  factory itself with an explicit gpiochip, which skips the broken branch.
+  `OPENFLIGHT_GPIO_CHIP` overrides the chip if a kernel update renumbers the
+  header. Note that `GPIOZERO_PIN_FACTORY=lgpio` was never a workaround — it
+  forces the same failing call.
 - IWR6843 range-snapshot capture now freezes only at a completed ring boundary
   and correctly rearms the HWA/EDMA chain, preventing partial or one-shot-only
   captures during repeated shots.

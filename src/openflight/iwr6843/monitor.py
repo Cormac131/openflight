@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from openflight.gpio_factory import ensure_lgpio_pin_factory
 from openflight.iwr6843.driver import IWR6843Radar
 from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
 
@@ -111,6 +112,10 @@ class IWR6843CaptureMonitor:
 
             button_factory = self._button_factory
             if button_factory is None:
+                # Must precede the first gpiozero device: on a Pi 5 gpiozero's
+                # own auto-detection fails outright. See gpio_factory.
+                ensure_lgpio_pin_factory()
+
                 from gpiozero import Button  # pylint: disable=import-error,import-outside-toplevel
 
                 button_factory = Button
