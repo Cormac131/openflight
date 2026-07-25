@@ -289,6 +289,18 @@
   color: var(--text-muted);
 }
 
+.metric-card__confidence--experimental {
+  width: fit-content;
+  padding: 2px 7px;
+  border: 1px solid rgba(244, 207, 71, 0.35);
+  border-radius: 999px;
+  background: rgba(244, 207, 71, 0.08);
+}
+
+.metric-card__confidence--experimental .metric-card__confidence-label {
+  color: var(--color-gold);
+}
+
 /* Empty State - Waiting */
 .shot-display--empty {
   display: flex;
