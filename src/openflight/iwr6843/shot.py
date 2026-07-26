@@ -15,13 +15,13 @@ import numpy as np
 
 from openflight.iwr6843 import doa, tracking, trajectory
 from openflight.iwr6843.calibration import Calibration
+from openflight.iwr6843.doa import TX2_VERTICAL_TDM_TAU_S  # noqa: F401 - re-exported
 from openflight.iwr6843.dump import is_range_snapshot, parse_dump, project_tx_pair
 from openflight.iwr6843.tracking import BallTrack, Geometry
 from openflight.iwr6843.trajectory import TrajectoryFit
 
 DEFAULT_FRAME_PERIOD_S = 0.012  # header field is 0 on pre-v3 firmware dumps
 TX2_LOOP_PERIOD_S = 3 * doa.TDM_TAU_S
-TX2_VERTICAL_TDM_TAU_S = 2 * doa.TDM_TAU_S
 
 # Two-ray configuration per club class, split-half TrackMan-scored on the
 # 2026-07-14 session (holdout MAE in comments). PROVISIONAL: one session of

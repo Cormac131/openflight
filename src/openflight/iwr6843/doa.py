@@ -29,6 +29,7 @@ from openflight.iwr6843.music import LAM, est_bartlett, est_music_fbss_high
 from openflight.iwr6843.tracking import BallTrack, Geometry
 
 TDM_TAU_S = 45e-6  # first -> second chirp offset inside one loop
+TX2_VERTICAL_TDM_TAU_S = 2 * TDM_TAU_S  # TX1 -> TX3 offset in the 3-TX loop
 TX_ORDERS = frozenset({"normal", "reversed"})
 TDM_SIGN_POLICIES = frozenset({"auto", "negative", "positive"})
 
@@ -239,3 +240,50 @@ def angle_points(
             AnglePoint(t_s=t_mid, range_m=rng_m, theta_rad=float(theta), snr=snr, n_summed=k)
         )
     return points
+
+
+def circular_median(values: list[float]) -> float:
+    """Median of angles, wrapping correctly across +/-pi."""
+    array = np.asarray(values, dtype=float)
+    scores = [
+        np.median(np.abs(np.angle(np.exp(1j * (array - candidate))))) for candidate in array
+    ]
+    return float(array[int(np.argmin(scores))])
+
+
+def tx2_phase_at(
+    tdm: np.ndarray,
+    frame: int,
+    loop: int,
+    local_bin: int,
+    *,
+    velocity_ms: float,
+    tdm_sign: int,
+    n_rx: int,
+) -> tuple[float, float] | None:
+    """TX2-vs-(TX1,TX3) phase at one (frame, loop, bin), motion corrected.
+
+    ``tdm`` is the TDM-split cube [frames, loops, n_tx, n_rx, bins]. Returns
+    (phase_rad, weight) or None when the bin carries no usable amplitude.
+    Weight is the mean power of the reference and TX2 vectors, for weighted
+    circular averaging by the caller.
+    """
+    tx1 = tdm[frame, loop, 0, :, local_bin]
+    tx2 = tdm[frame, loop, 1, :, local_bin] * np.exp(
+        -1j * tdm_sign * 4.0 * np.pi * velocity_ms * TDM_TAU_S / LAM
+    )
+    tx3 = tdm[frame, loop, 2, :, local_bin] * np.exp(
+        -1j * tdm_sign * 4.0 * np.pi * velocity_ms * TX2_VERTICAL_TDM_TAU_S / LAM
+    )
+    reference = 0.5 * (tx1 + tx3)
+    weight = float(np.mean(np.abs(reference) ** 2 + np.abs(tx2) ** 2))
+    if weight <= 0:
+        return None
+    phases = [
+        float(np.angle(np.conj(reference[rx]) * tx2[rx]))
+        for rx in range(n_rx)
+        if abs(reference[rx]) * abs(tx2[rx]) > 0
+    ]
+    if not phases:
+        return None
+    return circular_median(phases), weight

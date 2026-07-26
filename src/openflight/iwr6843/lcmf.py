@@ -469,15 +469,6 @@ def _weighted_circular_mean(phases: list[float], weights: list[float]) -> tuple[
     return float(np.angle(z)), float(abs(z) / weight_sum)
 
 
-def _circular_median(phases: list[float]) -> float:
-    """Small-sample circular median: observed phase with least median distance."""
-    values = np.asarray(phases)
-    distances = [
-        np.median(np.abs(np.angle(np.exp(1j * (values - candidate))))) for candidate in values
-    ]
-    return float(values[int(np.argmin(distances))])
-
-
 def _tx2_horizontal_proxy(
     raw: bytes,
     shot: ShotMeasurement,
@@ -513,24 +504,18 @@ def _tx2_horizontal_proxy(
             if not geometry.contains_bin(range_bin, margin=1, frame=frame):
                 continue
             velocity = shot.track.speed_ms_at(time_s, geometry.range_res_m)
-            tx1 = mti[frame, loop, 0, :, local_bin]
-            tx2 = mti[frame, loop, 1, :, local_bin] * np.exp(
-                -1j * tdm_sign * 4.0 * np.pi * velocity * doa.TDM_TAU_S / LAM
+            sample = doa.tx2_phase_at(
+                mti,
+                frame,
+                loop,
+                local_bin,
+                velocity_ms=velocity,
+                tdm_sign=tdm_sign,
+                n_rx=n_rx,
             )
-            tx3 = mti[frame, loop, 2, :, local_bin] * np.exp(
-                -1j * tdm_sign * 4.0 * np.pi * velocity * TX2_VERTICAL_TDM_TAU_S / LAM
-            )
-            reference = 0.5 * (tx1 + tx3)
-            weight = float(np.mean(np.abs(reference) ** 2 + np.abs(tx2) ** 2))
-            if weight <= 0:
-                continue
-            rx_phases = [
-                float(np.angle(np.conj(reference[rx]) * tx2[rx]))
-                for rx in range(n_rx)
-                if abs(reference[rx]) * abs(tx2[rx]) > 0
-            ]
-            if rx_phases:
-                snapshots.append((float(frame), _circular_median(rx_phases), weight))
+            if sample is not None:
+                phase, weight = sample
+                snapshots.append((float(frame), phase, weight))
     # A boundary-frozen HWA block can contain impact in any physical ring slot.
     # Follow the observed flight instead of assuming slots 9-11 are always late.
     observed_frames = sorted({frame for frame, _phase, _weight in snapshots})
