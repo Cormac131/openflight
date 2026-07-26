@@ -173,9 +173,13 @@ def loop_power(mti: np.ndarray) -> np.ndarray:
 
 
 def _detections(
-    power: np.ndarray, geo: Geometry, snr_min: float = 4.0, max_range_m: float | None = None
+    power: np.ndarray,
+    geo: Geometry,
+    snr_min: float = 4.0,
+    max_range_m: float | None = None,
+    gates_m: tuple[tuple[float, float], ...] = BALL_GATES_M,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Per-loop sub-bin peaks inside the ball gates, SNR-gated.
+    """Per-loop sub-bin peaks inside ``gates_m``, SNR-gated.
 
     ``max_range_m`` clamps the gates — set it just short of the NET so
     ball-riding-up-the-net motion never enters the track or angle fits.
@@ -189,7 +193,7 @@ def _detections(
         for row_index, row in enumerate(power):
             frame = row_index // n_loops
             frame_start = geo.frame_bin_start(frame)
-            for lo_m, hi_m in BALL_GATES_M:
+            for lo_m, hi_m in gates_m:
                 if max_range_m is not None:
                     hi_m = min(hi_m, max_range_m)
                 if hi_m <= lo_m:
@@ -216,7 +220,7 @@ def _detections(
                 bins.append(frame_start + peak_local)
         return np.asarray(loops_idx), np.asarray(bins)
 
-    for lo_m, hi_m in BALL_GATES_M:
+    for lo_m, hi_m in gates_m:
         if max_range_m is not None:
             hi_m = min(hi_m, max_range_m)
         if hi_m <= lo_m:
@@ -252,8 +256,12 @@ def find_ball(
     seed: int = 1,
     max_range_m: float | None = None,
     min_ball_ms: float = FAST_TRACK_MS,
+    gates_m: tuple[tuple[float, float], ...] = BALL_GATES_M,
+    speed_bounds_ms: tuple[float, float] = SPEED_BOUNDS_MS,
+    time_window_s: tuple[float, float] | None = None,
 ) -> BallTrack | None:
-    """RANSAC the ball's range walk; None when no plausible streak exists.
+    """RANSAC a range walk inside ``gates_m``/``speed_bounds_ms``; None when
+    no plausible streak exists.
 
     Selection is FASTEST-CREDIBLE, not most-inliers: the best fast
     (>= ``min_ball_ms``) candidate wins whenever it has at least
@@ -261,14 +269,25 @@ def find_ball(
     ``min_ball_ms`` is the slowest RADIAL speed a real ball can read for
     the club in play (see shot.CLUB_POLICY) — it must sit above the
     class's post-impact club/tee speeds or they steal the track.
+
+    Defaults reproduce the ball search. The club estimator passes its own
+    (closer, slower) ``gates_m``/``speed_bounds_ms``; because the club's
+    speed band overlaps the ball's, it must also pass ``time_window_s`` to
+    restrict the search to pre-impact frames — otherwise this fitter will
+    happily lock onto the ball instead of the club.
     """
     power = loop_power(mti)
-    loops_idx, bins = _detections(power, geo, max_range_m=max_range_m)
+    loops_idx, bins = _detections(power, geo, max_range_m=max_range_m, gates_m=gates_m)
     if loops_idx.size < 8:
         return None
     res = geo.range_res_m
     n_loops = geo.n_loops
     times = np.array([geo.loop_time(i // n_loops, i % n_loops) for i in loops_idx])
+    if time_window_s is not None:
+        keep = (times >= time_window_s[0]) & (times <= time_window_s[1])
+        if keep.sum() < 8:
+            return None
+        times, bins, loops_idx = times[keep], bins[keep], loops_idx[keep]
     tol = 1.2 if geo.n_samples >= 128 else 0.8
     rng = np.random.default_rng(seed)
     best = None  # most inliers at any speed
@@ -279,7 +298,7 @@ def find_ball(
         if abs(d_t) < 3e-3:
             continue
         slope = (bins[i] - bins[j]) / d_t
-        if not SPEED_BOUNDS_MS[0] <= slope * res <= SPEED_BOUNDS_MS[1]:
+        if not speed_bounds_ms[0] <= slope * res <= speed_bounds_ms[1]:
             continue
         icpt = bins[i] - slope * times[i]
         inliers = np.abs(bins - (slope * times + icpt)) < tol
@@ -292,7 +311,7 @@ def find_ball(
             continue
         design = np.vstack([times[inliers], np.ones(n_new)]).T
         (sl2, ic2), *_ = np.linalg.lstsq(design, bins[inliers], rcond=None)
-        if not SPEED_BOUNDS_MS[0] <= sl2 * res <= SPEED_BOUNDS_MS[1]:
+        if not speed_bounds_ms[0] <= sl2 * res <= speed_bounds_ms[1]:
             continue
         resid = bins[inliers] - (sl2 * times[inliers] + ic2)
         rms = float(np.sqrt((resid**2).mean()))
