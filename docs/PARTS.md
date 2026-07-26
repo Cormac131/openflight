@@ -44,6 +44,50 @@ SEN-14262               Raspberry Pi           OPS243
 
 See [sound-trigger-wiring.md](sound-trigger-wiring.md) for detailed instructions and troubleshooting.
 
+## Angle Radar (TI IWR6843) — CURRENT
+
+This is the supported angle radar. It measures vertical and horizontal launch
+angle, and supplies the pre-impact frames club path is derived from.
+
+| Part | Description | Link | ~Price |
+|------|-------------|------|--------|
+| **TI IWR6843LEVM** | 60 GHz mmWave evaluation board, 4 RX × 3 TX | [TI](https://www.ti.com/tool/IWR6843LEVM) | $150 |
+| **USB cable (data-capable)** | Connects the LEVM's CP2105 serial bridge to the Pi. Charge-only cables will not enumerate — check the connector on your board revision | Any | $5 |
+| **Jumper wire** | 1 wire: detector `GATE` → Pi BCM17 / physical pin 11, alongside the existing `GATE` → OPS `HOST_INT` | Any | $1 |
+
+The board needs **custom firmware** — it does not work out of the box. The
+stock TI demo does not expose the raw radar cube OpenFlight needs. A validated
+prebuilt image ships in `firmware/releases/`, so you do not need the TI
+toolchain to flash it.
+
+You also need physical access to the board's **boot-mode switch (S1.1)** and
+**RESET button** to flash. Both are on the LEVM itself; nothing to buy.
+
+### IWR6843 Setup
+
+Two connection layouts are supported, and which one you can use depends on your
+OPS243 variant:
+
+| Layout | OPS243 connection | Extra parts needed |
+|--------|-------------------|--------------------|
+| **A (validated)** | Pi GPIO UART header | 4 jumper wires (5V, GND, TX, RX) |
+| **B** | Powered USB hub | [Powered USB hub](https://www.amazon.com/dp/B0CN3F9Y1Z) (~$20) |
+
+Layout A keeps the TI board on USB and moves the OPS243 to the Pi's GPIO
+header, which is what the power budget requires — the Pi cannot supply both
+radars over USB.
+
+> [!WARNING]
+> Layout A does **not** work with a **WiFi-equipped OPS243-A**. Its onboard WiFi
+> module already drives the radar's UART receive line, so the Pi cannot send it
+> commands. WiFi OPS boards must use Layout B with a powered hub.
+
+Full instructions: **[IWR6843 Operator Guide](iwr6843/README.md)** for wiring,
+flashing, mounting, and geometry; **[Moving the OPS243 to the Pi GPIO
+UART](ops243-uart-migration.md)** for the OPS side of Layout A.
+
+---
+
 ## Angle Radar (K-LD7) — DEPRECATED
 
 > **⚠️ DEPRECATED — do not buy for new builds.** The K-LD7 angle radars have been superseded by a more capable radar chip. K-LD7 support remains in the software for existing builds but will not receive further development. The parts below are listed for reference only.
@@ -89,8 +133,17 @@ One unit is mounted vertically (launch angle), one horizontally (club path / aim
 |----------|--------|
 | Core (OPS243, Pi 5, Display) | $355 |
 | Sound Trigger (SEN-14262 + resistor + wires) | $18 |
-| Angle Radar (2× K-LD7 + FTDI adapters) — **deprecated** | $140 |
 | Power & Accessories | $27 |
-| **Total** | **~$540** |
+| **Subtotal, no angle radar** | **~$400** |
+| Angle Radar (IWR6843LEVM + cable + wire) — **current** | $156 |
+| **Total with angle radar** | **~$556** |
+| Angle Radar (2× K-LD7 + FTDI adapters) — **deprecated** | $140 |
 
-> The angle radar is the most expensive component. OpenFlight works without it — you'll get ball speed, club speed, smash factor, and estimated carry. The K-LD7s add measured launch angle and club path data, but they are **deprecated** — don't buy them for a new build.
+OpenFlight works without any angle radar: you get ball speed, club speed, smash
+factor, spin rate, and estimated carry. The angle radar adds measured launch
+angle (vertical and horizontal) and is what club path is derived from.
+
+If you are building new, buy the **IWR6843**, not the K-LD7s. It costs about the
+same as the two K-LD7s plus their FTDI adapters ($156 vs $140) and replaces both
+of them with one board. The K-LD7 path is **deprecated** and kept only so
+existing builds keep working.

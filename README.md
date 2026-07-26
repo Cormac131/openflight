@@ -34,11 +34,19 @@ OpenFlight is an open-source golf launch monitor that uses Doppler radar to meas
 | Raspberry Pi 5 | Runs everything | $60 |
 | 7" Touchscreen | Shows shot data | $46 |
 | SparkFun SEN-14262 | Impact sound trigger for shot capture | $18 |
-| K-LD7 (×2) + FTDI adapters | Launch angle + club path (**deprecated**) | $140 |
 | Power supply + accessories | | $27 |
-| **Total** | | **~$540** |
+| **Subtotal, no angle radar** | | **~$400** |
+| TI IWR6843LEVM + cable | Launch angle (vertical + horizontal), club path | $156 |
+| **Total with angle radar** | | **~$556** |
+| K-LD7 (×2) + FTDI adapters | Launch angle + club path (**deprecated**) | $140 |
 
-> **⚠️ The K-LD7 angle radars are deprecated** — OpenFlight has moved to a more capable radar chip for angle measurement. Don't buy K-LD7s for a new build; software support remains for existing builds only. Without angle radars you still get ball speed, club speed, smash factor, spin rate, and estimated carry. See the [full parts list](docs/PARTS.md) for details and links.
+Without an angle radar you still get ball speed, club speed, smash factor, spin
+rate, and estimated carry. The angle radar adds measured launch angle and is
+what club path is derived from.
+
+> **⚠️ The K-LD7 angle radars are deprecated.** The supported angle radar is now the **TI IWR6843**. Don't buy K-LD7s for a new build; their software support remains for existing builds only. See the [full parts list](docs/PARTS.md) for details and links.
+
+> **The IWR6843 needs custom firmware** — the stock TI demo doesn't expose the raw radar cube OpenFlight needs. A validated prebuilt image ships in `firmware/releases/`, so flashing it doesn't require the TI toolchain. See the [IWR6843 Operator Guide](docs/iwr6843/README.md).
 
 ## Getting Started
 
@@ -49,6 +57,18 @@ See the **[Parts List](docs/PARTS.md)** for everything you need with purchase li
 ### 2. Wire it up
 
 Follow the **[Sound Trigger Wiring Guide](docs/sound-trigger-wiring.md)** to connect the SEN-14262 to the OPS243-A. The (deprecated) K-LD7 modules connect via USB — no wiring needed.
+
+**Adding the IWR6843 angle radar?** The Pi cannot power both radars over USB, so
+the OPS243 moves to the Pi's GPIO UART header while the TI board takes the USB
+port. Do it in this order, validating each step before the next — doing both at
+once makes any failure ambiguous:
+
+1. **[Move the OPS243 from USB to the Pi GPIO UART](docs/ops243-uart-migration.md)** — rewire and confirm the OPS still triggers on its own.
+2. **[IWR6843 Operator Guide](docs/iwr6843/README.md)** — wire, flash the firmware, mount, aim, and measure geometry.
+
+If your OPS243-A has **WiFi**, you cannot use the GPIO UART — its WiFi module
+already drives the radar's UART receive line. Use a separately powered USB hub
+instead; see the operator guide's Option B.
 
 ### 3. Set up the Pi
 
@@ -72,12 +92,24 @@ details and troubleshooting.
 # Default: rolling buffer mode with sound trigger
 scripts/start-kiosk.sh
 
+# With the IWR6843 angle radar (OPS243 on the Pi GPIO UART).
+# Geometry values are examples — measure your own; see the operator guide.
+scripts/start-kiosk.sh --iwr6843 \
+  --ops-port /dev/ttyAMA0 \
+  --iwr6843-tee-m 1.372 --iwr6843-net-m 4.064 \
+  --iwr6843-tilt-deg 5.5 --iwr6843-radar-height-m 0.229 \
+  --iwr6843-ball-height-m 0.021
+
 # With K-LD7 launch-angle geometry defaults (deprecated hardware)
 scripts/start-kiosk.sh --kld7-geometry
 
 # Development mode (no hardware)
 scripts/start-kiosk.sh --mock
 ```
+
+The IWR6843 geometry flags are **not optional** — a wrong value silently biases
+the launch angle rather than failing. `--iwr6843-ball-height-m` is 0.021 off a
+mat and 0.040 off a tee, which is about 0.8° of launch angle.
 
 Then open http://localhost:8080 or use the touchscreen.
 
@@ -258,6 +290,9 @@ uv run pytest tests/ -v
 - **[Parts List](docs/PARTS.md)** — What to buy
 - **[Sound Trigger Wiring](docs/sound-trigger-wiring.md)** — How to wire the sound trigger
 - **[Raspberry Pi Setup](docs/raspberry-pi-setup.md)** — Full setup guide
+- **[IWR6843 Operator Guide](docs/iwr6843/README.md)** — Wire, flash, mount, aim, and calibrate the angle radar
+- **[OPS243 USB → GPIO UART Migration](docs/ops243-uart-migration.md)** — Required before adding the IWR6843
+- **[IWR6843 Firmware Developer Guide](firmware/README.md)** — Build the firmware from source (not needed to flash the prebuilt image)
 - **[Simulator Connectors](docs/simulator/README.md)** — Stream shots to GSPro, OpenGolfSim, and others
 - **[Cloud Sync](docs/cloud-sync.md)** — Push filtered sessions to FlightWeb
 - **[Rolling Buffer & Spin Detection](docs/rolling_buffer_spin_detection.md)** — Spin measurement details

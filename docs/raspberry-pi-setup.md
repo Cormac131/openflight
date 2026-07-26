@@ -92,13 +92,55 @@ hardware sound triggering, saved to flash so it boots correctly every time.
 # 1. Configure and save to flash
 uv run python scripts/hardware-test/test_rolling_buffer_persist.py --setup
 
-# 2. Power cycle: unplug the radar's USB cable, wait 3 seconds, plug back in
+# 2. Power cycle the radar, wait 3 seconds, reconnect (see note below)
 
 # 3. Verify — make a sound near the SEN-14262, you should see I/Q trigger data
 uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 ```
 
+How you power cycle depends on how the OPS243 is connected:
+
+| Connection | Power cycle by |
+|------------|----------------|
+| USB | Unplugging the USB cable |
+| Pi GPIO UART | Disconnecting 5V from OPS `J3` pin 9 — **not** by rebooting the Pi, which does not necessarily drop the header rail |
+
+If the OPS243 is on the GPIO UART, add `--port /dev/ttyAMA0` to both commands
+above.
+
 </details>
+
+### IWR6843 Angle Radar
+
+The setup script does not configure the IWR6843 — it needs custom firmware
+flashed over the ROM bootloader, which requires physically moving a switch on
+the board. That is covered end to end in the
+**[IWR6843 Operator Guide](iwr6843/README.md)**.
+
+Do it in this order, and confirm each step works before starting the next:
+
+1. **Move the OPS243 to the Pi GPIO UART** —
+   [migration guide](ops243-uart-migration.md). The Pi cannot power both radars
+   over USB, so the OPS243 has to vacate the USB port. Validate the OPS on its
+   own after rewiring, before the TI board is involved at all.
+2. **Flash the IWR6843** — operator guide, *Flash The IWR6843 Firmware*. A
+   validated prebuilt image is in `firmware/releases/`, so the TI toolchain is
+   not required. You only need the
+   [firmware developer guide](../firmware/README.md) to build from source.
+3. **Mount, aim, and measure geometry** — operator guide. The geometry values
+   are passed on the command line and a wrong one silently biases the launch
+   angle instead of erroring, so measure rather than estimate.
+
+Re-flashing is only needed if the image in `firmware/releases/` changes. A
+software update alone does not require it — compare the release filename against
+what you flashed.
+
+> [!WARNING]
+> A **WiFi-equipped OPS243-A cannot use the GPIO UART.** Its WiFi module already
+> drives the radar processor's UART receive line, so the Pi cannot send it
+> commands, and OpenFlight must be able to reconfigure and rearm the OPS after
+> every capture. Use a separately powered USB hub for both radars instead
+> (operator guide, Option B).
 
 ### K-LD7 Device Names (Deprecated Hardware)
 
