@@ -1,5 +1,6 @@
 """Tests for rolling_buffer module."""
 
+import json
 import math
 import time
 from datetime import datetime
@@ -426,6 +427,34 @@ class TestRollingBufferProcessor:
         """Parser should handle missing fields."""
         capture = processor.parse_capture('{"sample_time":0.136}')
         assert capture is None
+
+    def test_parse_capture_rejects_mismatched_iq_lengths(self, processor):
+        """Unequal I/Q arrays must be rejected, not paired index-wise.
+
+        The J3 UART has no flow control, so a stalled reader can drop bytes
+        mid-dump. Truncation usually breaks the JSON, but a short array that
+        still parses must not reach the FFT stage as silently bad data.
+        """
+        response = "\n".join(
+            [
+                '{"sample_time":"964.003"}',
+                '{"trigger_time":"964.105"}',
+                json.dumps({"I": [1, 2, 3, 4]}),
+                json.dumps({"Q": [1, 2]}),
+            ]
+        )
+        assert processor.parse_capture(response) is None
+
+    def test_parse_capture_rejects_empty_iq_arrays(self, processor):
+        response = "\n".join(
+            [
+                '{"sample_time":"964.003"}',
+                '{"trigger_time":"964.105"}',
+                '{"I":[]}',
+                '{"Q":[]}',
+            ]
+        )
+        assert processor.parse_capture(response) is None
 
     def test_process_standard_returns_timeline(self, processor):
         """Standard processing should return a SpeedTimeline."""

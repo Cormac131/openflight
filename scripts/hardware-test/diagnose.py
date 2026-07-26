@@ -9,11 +9,16 @@ Usage:
     uv run python scripts/hardware-test/diagnose.py
     uv run python scripts/hardware-test/diagnose.py --require-all
     uv run python scripts/hardware-test/diagnose.py --no-interactive
+
+    # OPS243 on the Pi GPIO UART (J3 header) instead of USB
+    uv run python scripts/hardware-test/diagnose.py --ops-port /dev/ttyAMA0
 """
 
 from __future__ import annotations
 
 import argparse
+import glob
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -25,7 +30,7 @@ sys.path.insert(0, "src")
 import serial.tools.list_ports
 
 from openflight.kld7.tracker import KLD7Tracker
-from openflight.ops243 import OPS243Radar
+from openflight.ops243 import OPS243Radar, is_uart_port
 from openflight.rolling_buffer.processor import RollingBufferProcessor
 
 # ANSI escape codes. When stdout is a TTY these render as color;
@@ -73,16 +78,106 @@ def print_check_result(index: int, total: int, result: CheckResult) -> None:
 def detect_ops243_port() -> Optional[str]:
     """Find the OPS243-A serial port.
 
-    The OPS243-A enumerates as a USB CDC ACM device on Linux
+    Over USB the OPS243-A enumerates as a CDC ACM device on Linux
     (/dev/ttyACM*) or a usbmodem on macOS. K-LD7 boards enumerate
     differently (FTDI/CP210x USB-serial bridges at /dev/ttyUSB* or
     /dev/cu.usbserial-*), so we identify OPS243 by device name.
+
+    Returns None when the radar is on the GPIO UART: a raw UART has no
+    USB descriptors, and guessing between /dev/ttyAMA0 (the 40-pin
+    header) and /dev/ttyAMA10 (the Pi 5 debug UART) would be wrong as
+    often as right. Pass --ops-port in that case.
     """
     for port in serial.tools.list_ports.comports():
         device = port.device or ""
         if "ACM" in device or "usbmodem" in device:
             return device
     return None
+
+
+def check_uart_preflight(state: DiagnosticState) -> CheckResult:
+    """Check 0 — environment sanity for the GPIO-UART wiring.
+
+    Skipped entirely on USB. These are the three UART-only ways the setup
+    fails silently, all of which look like "radar not responding":
+
+    1. The device node is missing (UART0 not enabled in config.txt).
+    2. A login console still owns the port, so its boot chatter is
+       transmitted into the OPS RxD pin and parsed as API commands —
+       'A' followed by '!' is a flash write.
+    3. The OPS USB cable is plugged in, which per AN-010-AD silences
+       the UART entirely.
+    """
+    start = time.time()
+    port = state.ops243_port
+    if not is_uart_port(port):
+        return CheckResult(
+            name="OPS243 UART preflight",
+            status="skip",
+            detail="OPS243 is on USB — UART checks not applicable",
+            elapsed_s=time.time() - start,
+        )
+
+    problems: list[str] = []
+    hints: list[str] = []
+
+    if not os.path.exists(port):
+        problems.append(f"{port} does not exist")
+        hints.append(
+            "Enable UART0: add enable_uart=1 to /boot/firmware/config.txt and reboot. "
+            "On a Pi 5 the 40-pin header is /dev/ttyAMA0, not /dev/serial0."
+        )
+
+    console_users = _serial_console_units(port)
+    if console_users:
+        problems.append(f"serial console active on {port} ({', '.join(console_users)})")
+        hints.append(
+            f"sudo systemctl disable --now {console_users[0]} — console output is "
+            "transmitted into the OPS RxD pin and parsed as API commands"
+        )
+
+    usb_ops = detect_ops243_port()
+    if usb_ops:
+        problems.append(f"an OPS243 is also enumerated on USB at {usb_ops}")
+        hints.append(
+            "Unplug the OPS243 micro-USB cable: per AN-010-AD, enumerating USB "
+            "shuts off UART reporting entirely"
+        )
+
+    if problems:
+        return CheckResult(
+            name="OPS243 UART preflight",
+            status="fail",
+            detail="; ".join(problems),
+            hint=hints[0],
+            elapsed_s=time.time() - start,
+        )
+
+    return CheckResult(
+        name="OPS243 UART preflight",
+        status="pass",
+        detail=f"{port} present, no serial console, OPS USB not enumerated",
+        elapsed_s=time.time() - start,
+    )
+
+
+def _serial_console_units(port: str) -> list[str]:
+    """Return systemd getty units holding ``port``, if any.
+
+    Checks for the unit's runtime symlink rather than shelling out to
+    systemctl, so this works the same when run without a TTY.
+    """
+    device = port.rsplit("/", 1)[-1]
+    units = []
+    for pattern in (
+        f"/etc/systemd/system/*.target.wants/serial-getty@{device}.service",
+        f"/run/systemd/generator/*.target.wants/serial-getty@{device}.service",
+    ):
+        for match in glob.glob(pattern):
+            unit = match.rsplit("/", 1)[-1]
+            if unit not in units:
+                units.append(unit)
+    return units
 
 
 def detect_kld7_ports() -> list[str]:
@@ -118,25 +213,32 @@ class CheckResult:
 class DiagnosticState:
     """Shared state across checks so later ones can skip cleanly."""
     ops243_port: Optional[str] = None
+    ops243_baud: Optional[int] = None
     ops243_radar: Optional[object] = None
     kld7_vertical_port: Optional[str] = None
     kld7_horizontal_port: Optional[str] = None
 
 
 def check_ops243_connectivity(state: DiagnosticState) -> CheckResult:
-    """Check 1 — verify OPS243 is detected and responds to queries."""
+    """Check 1 — verify OPS243 is detected and responds to queries.
+
+    Over UART, ``connect()`` also negotiates baud, so this check is what
+    proves the whole transport works: wiring, power, and rate agreement.
+    """
     start = time.time()
-    port = detect_ops243_port()
+    port = state.ops243_port or detect_ops243_port()
     if port is None:
         return CheckResult(
             name="OPS243 connectivity",
             status="skip",
             detail="no OPS243 detected on /dev/ttyACM* or usbmodem*",
+            hint="If the radar is on the GPIO UART, pass --ops-port /dev/ttyAMA0",
             elapsed_s=time.time() - start,
         )
 
+    radar_kwargs = {} if state.ops243_baud is None else {"uart_baud": state.ops243_baud}
     try:
-        radar = OPS243Radar(port=port)
+        radar = OPS243Radar(port=port, **radar_kwargs)
         radar.connect()
         version = radar.get_firmware_version()
     except OSError as e:
@@ -155,16 +257,38 @@ def check_ops243_connectivity(state: DiagnosticState) -> CheckResult:
             name="OPS243 connectivity",
             status="fail",
             detail=f"Unexpected error: {type(e).__name__}: {e}",
-            hint="Check USB connection and permissions (dialout group)",
+            hint="Check the cable and permissions (dialout group)",
             elapsed_s=time.time() - start,
         )
 
     state.ops243_port = port
     state.ops243_radar = radar
+
+    if is_uart_port(port):
+        dump_s = radar.DUMP_BYTES / radar.bytes_per_second
+        detail = f"{port} • firmware {version} • {radar.baud} baud • dump ~{dump_s:.1f}s"
+        # Anything below 115200 means negotiation fell back and every
+        # capture will crawl, so surface it as a failure rather than a
+        # passing check with an easy-to-miss number in it.
+        if radar.baud < 115200:
+            return CheckResult(
+                name="OPS243 connectivity",
+                status="fail",
+                detail=detail,
+                hint=(
+                    f"Negotiation settled at {radar.baud} baud — a dump takes "
+                    f"{dump_s:.0f}s. Check the Pi TXD0 -> J3 pin 6 wire (the radar "
+                    "cannot receive the I5 command without it)."
+                ),
+                elapsed_s=time.time() - start,
+            )
+    else:
+        detail = f"{port} • firmware {version}"
+
     return CheckResult(
         name="OPS243 connectivity",
         status="pass",
-        detail=f"{port} • firmware {version}",
+        detail=detail,
         elapsed_s=time.time() - start,
     )
 
@@ -230,7 +354,9 @@ def check_ops243_software_trigger(state: DiagnosticState) -> CheckResult:
         )
 
     try:
+        transfer_start = time.time()
         response = state.ops243_radar.trigger_capture(timeout=5.0)
+        transfer_s = time.time() - transfer_start
     except Exception as e:
         return CheckResult(
             name="OPS243 software trigger",
@@ -259,10 +385,14 @@ def check_ops243_software_trigger(state: DiagnosticState) -> CheckResult:
         )
 
     n = len(capture.i_samples)
+    kbps = len(response) / transfer_s / 1000.0 if transfer_s > 0 else 0.0
     return CheckResult(
         name="OPS243 software trigger",
         status="pass",
-        detail=f"Capture received: {n} I/Q samples",
+        detail=(
+            f"Capture received: {n} I/Q samples • {len(response)} bytes in "
+            f"{transfer_s:.2f}s ({kbps:.1f} KB/s)"
+        ),
         elapsed_s=time.time() - start,
     )
 
@@ -523,12 +653,27 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "--no-interactive", action="store_true",
         help="Skip checks that require user interaction (sound trigger)",
     )
+    parser.add_argument(
+        "--ops-port", default=None,
+        help=(
+            "OPS243 serial port. Required for the GPIO UART wiring "
+            "(e.g. /dev/ttyAMA0), which cannot be auto-detected. "
+            "Auto-detects USB when omitted."
+        ),
+    )
+    parser.add_argument(
+        "--ops-baud", type=int, default=None,
+        help=(
+            f"Target UART baud (default {OPS243Radar.DEFAULT_UART_BAUD}). "
+            "Only meaningful with a UART --ops-port."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
-    state = DiagnosticState()
+    state = DiagnosticState(ops243_port=args.ops_port, ops243_baud=args.ops_baud)
     results: list[CheckResult] = []
 
     print(_c("OpenFlight Hardware Diagnostic", _BOLD))
@@ -536,6 +681,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     print()
 
     CHECKS = [
+        check_uart_preflight,
         check_ops243_connectivity,
         check_ops243_rolling_buffer_persisted,
         check_ops243_software_trigger,
@@ -545,6 +691,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ]
 
     CHECK_NAMES = [
+        "OPS243 UART preflight",
         "OPS243 connectivity",
         "OPS243 rolling buffer persisted",
         "OPS243 software trigger",

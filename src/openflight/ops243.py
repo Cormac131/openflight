@@ -2,7 +2,17 @@
 OPS243-A Doppler Radar Driver for Golf Launch Monitor.
 
 This module provides a Python interface to the OmniPreSense OPS243-A
-short-range radar sensor via USB/serial connection.
+short-range radar sensor over either transport it offers:
+
+- USB CDC-ACM (``/dev/ttyACM*``). The host baud setting is nominal; the
+  link is not rate-limited by it.
+- The 3.3V UART on the J3 header (``/dev/ttyAMA0`` on a Pi 5). Here baud
+  is the real wire rate, the factory default is 19,200, and a 40.6KB I/Q
+  dump takes 21s at that rate — so the driver negotiates up to 230,400
+  (``I5``) on connect. See ``negotiate_uart_baud``.
+
+Only one transport is live at a time: per AN-010-AD, enumerating USB
+silences the UART.
 
 Key specs for golf application:
 - Speed accuracy: +/- 0.5%
@@ -39,6 +49,35 @@ from .serial_latency import log_usb_serial_latency_timer
 # Configure logging for raw radar data
 logger = logging.getLogger("ops243")
 raw_logger = logging.getLogger("ops243.raw")
+
+# UART baud rates and their API command (AN-010-AD p19). The datasheet's
+# claim of a 57,600 default topping out at 115,200 is stale; OmniPreSense
+# confirmed 19,200 default and I5=230,400 on the non-WiFi 10-pin header.
+UART_BAUD_COMMANDS = {
+    9600: "I1",
+    19200: "I2",
+    57600: "I3",
+    115200: "I4",
+    230400: "I5",
+}
+
+# Device-name fragments that mean "raw UART", not USB-serial. A raw UART
+# has no USB descriptors, so it can neither be auto-detected by VID nor
+# assumed to be at any particular baud.
+_UART_PORT_PREFIXES = ("ttyAMA", "ttyS", "serial0", "serial1")
+
+
+def is_uart_port(port: Optional[str]) -> bool:
+    """Return True when ``port`` names a raw UART rather than USB-serial.
+
+    Used to decide whether baud is a real wire rate that must be
+    negotiated (UART) or a nominal CDC-ACM setting (USB).
+    """
+    if not port:
+        return False
+    name = port.rsplit("/", 1)[-1]
+    return name.startswith(_UART_PORT_PREFIXES)
+
 
 # Global flag to control raw reading console output
 _show_raw_readings = False
@@ -122,6 +161,19 @@ class OPS243Radar:
     DEFAULT_BAUD = 57600
     DEFAULT_TIMEOUT = 1.0
 
+    # Target rate on the J3 UART. At 230,400 a dump moves in ~1.8s; the
+    # 19,200 factory default would take 21s and miss every shot.
+    DEFAULT_UART_BAUD = 230400
+
+    # Probe order when connecting over UART. The target comes first (an
+    # already-configured board is the common case), then the factory
+    # default, then the rest fastest-first.
+    BAUD_PROBE_ORDER = (230400, 19200, 115200, 57600, 9600)
+
+    # Measured size of one rolling-buffer dump: 40,556 bytes of JSON for
+    # 4096 I + 4096 Q samples, plus margin for whitespace and timing lines.
+    DUMP_BYTES = 45000
+
     # Bound every serial write. A radar that is mid-dump (e.g. HOST_INT
     # re-asserted by the ball hitting the net) stops servicing commands;
     # without a write timeout, serial.write() blocks the capture thread
@@ -138,16 +190,32 @@ class OPS243Radar:
     # Common USB identifiers for OPS243
     VENDOR_IDS = [0x0483]  # STMicroelectronics
 
-    def __init__(self, port: Optional[str] = None, baud: int = DEFAULT_BAUD):
+    def __init__(
+        self,
+        port: Optional[str] = None,
+        baud: int = DEFAULT_BAUD,
+        *,
+        uart_baud: int = DEFAULT_UART_BAUD,
+        negotiate_baud: Optional[bool] = None,
+    ):
         """
         Initialize radar driver.
 
         Args:
-            port: Serial port (e.g., '/dev/ttyACM0'). If None, auto-detect.
-            baud: Baud rate (default 57600 per datasheet)
+            port: Serial port ('/dev/ttyACM0' for USB, '/dev/ttyAMA0' for
+                the J3 UART). If None, auto-detect USB only — a raw UART
+                has no USB descriptors to auto-detect.
+            baud: Baud rate to open with (default 57600 per datasheet).
+                Over UART this is only the first probe candidate;
+                ``self.baud`` ends up at whatever rate was negotiated.
+            uart_baud: Target UART rate to negotiate to (default 230400).
+            negotiate_baud: Force baud negotiation on/off. Default None
+                means "negotiate iff the port is a raw UART".
         """
         self.port = port
         self.baud = baud
+        self.uart_baud = uart_baud
+        self._negotiate_baud = negotiate_baud
         self.serial: Optional[serial.Serial] = None
         self._unit = "mph"
         self._json_mode = False
@@ -178,6 +246,11 @@ class OPS243Radar:
         """
         Connect to the radar sensor.
 
+        Over USB this opens the port and drains any stale dump. Over the
+        J3 UART it also negotiates baud, because the board's actual rate is
+        unknown at connect time (19,200 from the factory, or whatever a
+        previous session left in flash).
+
         Args:
             timeout: Serial read timeout in seconds
 
@@ -188,21 +261,18 @@ class OPS243Radar:
             ports = self.find_radar_ports()
             if not ports:
                 raise ConnectionError(
-                    "No OPS243 radar found. Check USB connection and try specifying port manually."
+                    "No OPS243 radar found on USB. If it is wired to the Pi GPIO "
+                    "UART (J3 pins 6/7), pass the port explicitly — e.g. "
+                    "--radar-port /dev/ttyAMA0 — since a raw UART has no USB "
+                    "descriptors to auto-detect."
                 )
             self.port = ports[0]
 
         try:
-            self.serial = serial.Serial(
-                port=self.port,
-                baudrate=self.baud,
-                timeout=timeout,
-                write_timeout=self.SERIAL_WRITE_TIMEOUT_S,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-            )
-            log_usb_serial_latency_timer(logger, "OPS", self.port)
+            self._open_serial(self.baud, timeout)
+            if self._should_negotiate_baud():
+                self.negotiate_uart_baud(timeout=timeout)
+            self._log_transport()
             # Drain any in-progress dump (e.g. radar triggered while no software was running).
             # Opening the port unblocks the radar's UART TX, so we read until silence.
             self._drain_serial()
@@ -210,13 +280,175 @@ class OPS243Radar:
         except serial.SerialException as e:
             raise ConnectionError(f"Failed to connect to {self.port}: {e}") from e
 
+    def _open_serial(self, baud: int, timeout: float = DEFAULT_TIMEOUT):
+        """(Re)open ``self.port`` at ``baud``, closing any existing handle."""
+        if self.serial is not None and getattr(self.serial, "is_open", False):
+            self.serial.close()
+        self.serial = serial.Serial(
+            port=self.port,
+            baudrate=baud,
+            timeout=timeout,
+            write_timeout=self.SERIAL_WRITE_TIMEOUT_S,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+        )
+        self.baud = baud
+
+    def _should_negotiate_baud(self) -> bool:
+        """Whether to run baud negotiation for the current port."""
+        if self._negotiate_baud is not None:
+            return self._negotiate_baud
+        return is_uart_port(self.port)
+
+    def _log_transport(self):
+        """Log which transport we came up on, plus its timing-relevant facts."""
+        if is_uart_port(self.port):
+            logger.info(
+                "[OPS] Transport=uart port=%s baud=%d (dump ~%.1fs)",
+                self.port,
+                self.baud,
+                self.DUMP_BYTES / self.bytes_per_second,
+            )
+            return
+        logger.info("[OPS] Transport=usb port=%s baud=%d (nominal)", self.port, self.baud)
+        log_usb_serial_latency_timer(logger, "OPS", self.port)
+
+    @property
+    def bytes_per_second(self) -> float:
+        """Wire throughput at the current baud, 8N1 (10 bits per byte)."""
+        baud = getattr(self, "baud", None) or self.DEFAULT_BAUD
+        return max(1.0, baud / 10.0)
+
+    def transfer_budget_s(self, floor: float, safety: float = 1.5, overhead: float = 1.0) -> float:
+        """Seconds to allow for one dump, at least ``floor``.
+
+        Over UART a dump takes ``DUMP_BYTES / (baud / 10)`` seconds — 1.8s at
+        230,400, 21s at 19,200 — so the tuned constants become floors that
+        scale up when the negotiated rate is slow. Without this, a failed
+        negotiation would truncate every capture instead of merely running
+        slowly.
+
+        Over USB the host baud is nominal and the link is not rate-limited by
+        it (CDC-ACM moves a dump in ~4-5s regardless), so scaling from 57,600
+        would inflate every timeout for no reason. There the floor stands.
+        """
+        if not is_uart_port(getattr(self, "port", None)):
+            return floor
+        return max(floor, self.DUMP_BYTES / self.bytes_per_second * safety + overhead)
+
+    def query_uart_baud(self) -> str:
+        """Return the radar's raw ``I?`` reply (baud + oversampling setting).
+
+        Reported verbatim because AN-010-AD does not document the reply
+        format; it is for logs and diagnostics, not for control flow.
+        """
+        return self._send_command("I?")
+
+    def negotiate_uart_baud(self, timeout: float = DEFAULT_TIMEOUT) -> int:
+        """Find the rate the radar is actually talking at, then raise it.
+
+        Probes ``BAUD_PROBE_ORDER`` with ``?V`` — the one command whose
+        reply format is known — and accepts the first rate that answers with
+        a parseable ``{"Version": ...}``. Framing garbage from a wrong-rate
+        read cannot produce that, so a match is unambiguous.
+
+        Returns the negotiated baud, also left on ``self.baud``.
+        """
+        order = [self.uart_baud] + [b for b in self.BAUD_PROBE_ORDER if b != self.uart_baud]
+
+        found = None
+        for candidate in order:
+            self._open_serial(candidate, timeout)
+            version = self._probe_firmware_version()
+            if version is not None:
+                found = candidate
+                logger.info("[OPS] UART answered at %d baud (firmware %s)", candidate, version)
+                break
+            logger.debug("[OPS] No valid reply at %d baud", candidate)
+
+        if found is None:
+            raise ConnectionError(
+                f"No reply from OPS243 on {self.port} at any of "
+                f"{', '.join(str(b) for b in order)} baud. Check that TX/RX are "
+                "crossed (J3 pin 7 -> Pi RXD0, Pi TXD0 -> J3 pin 6), that 5V and "
+                "ground are connected (J3 pins 9/10), that the OPS USB cable is "
+                "UNPLUGGED (enumerating USB silences the UART), and that the Linux "
+                "serial console is disabled on this port."
+            )
+
+        if found != self.uart_baud:
+            self._raise_uart_baud(found, self.uart_baud, timeout)
+
+        return self.baud
+
+    def _raise_uart_baud(self, current: int, target: int, timeout: float):
+        """Switch the radar from ``current`` to ``target`` baud and verify.
+
+        On failure the port is reopened at ``current`` and a warning logged
+        rather than raising: a slow link still measures shots (the derived
+        timeouts absorb it), so degraded operation beats none.
+        """
+        command = UART_BAUD_COMMANDS.get(target)
+        if command is None:
+            logger.warning(
+                "[OPS] %d is not a supported UART baud (%s) — staying at %d",
+                target,
+                ", ".join(str(b) for b in sorted(UART_BAUD_COMMANDS)),
+                current,
+            )
+            return
+
+        logger.info("[OPS] Switching UART %d -> %d baud (%s)", current, target, command)
+        self.serial.write(command.encode("ascii"))
+        self.serial.flush()
+        time.sleep(0.2)
+
+        self._open_serial(target, timeout)
+        if self._probe_firmware_version() is not None:
+            return
+
+        logger.warning(
+            "[OPS] Radar did not answer at %d baud after %s — reverting to %d. "
+            "A dump will take ~%.0fs; expect slow shot-to-shot cadence.",
+            target,
+            command,
+            current,
+            self.DUMP_BYTES / (current / 10.0),
+        )
+        self._open_serial(current, timeout)
+
+    def _probe_firmware_version(self) -> Optional[str]:
+        """Return the firmware version if the radar answers ``?V``, else None.
+
+        The probe behind baud negotiation: at a wrong baud the reply is
+        framing garbage that will not parse as JSON containing "Version".
+        """
+        try:
+            response = self._send_command("?V")
+        except (serial.SerialException, OSError) as exc:
+            logger.debug("[OPS] Probe write failed at %d baud: %s", self.baud, exc)
+            return None
+
+        for line in response.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict) and "Version" in data:
+                return str(data["Version"])
+        return None
+
     def disconnect(self):
         """Disconnect from the radar sensor."""
         if self.serial and self.serial.is_open:
             self.serial.close()
             self.serial = None
 
-    def _drain_serial(self, quiet_period: float = 0.5, max_wait: float = 5.0):
+    def _drain_serial(self, quiet_period: float = 0.5, max_wait: Optional[float] = None):
         """
         Drain serial port until no data arrives for quiet_period seconds.
 
@@ -226,8 +458,12 @@ class OPS243Radar:
 
         Args:
             quiet_period: Seconds of silence before considering drain complete
-            max_wait: Maximum total seconds to wait before giving up
+            max_wait: Maximum total seconds to wait before giving up. None
+                derives it from baud (floor 5s) so a slow UART link gets
+                long enough to finish a straggling dump.
         """
+        if max_wait is None:
+            max_wait = self.transfer_budget_s(floor=5.0)
         start = time.monotonic()
         drained = 0
         old_timeout = self.serial.timeout
@@ -269,16 +505,59 @@ class OPS243Radar:
         if "=" in cmd or ">" in cmd or "<" in cmd or "#" in cmd:
             self.serial.write(b"\r")
 
-        # Wait for response
-        time.sleep(0.1)
+        return self._read_reply().strip()
 
-        # Read response
+    def _read_reply(
+        self,
+        first_byte_wait: float = 0.2,
+        quiet_period: float = 0.1,
+        max_wait: Optional[float] = None,
+    ) -> str:
+        """Read a command reply until the radar goes quiet.
+
+        Replaces a fixed post-write sleep followed by a drain that stopped at
+        the first empty ``in_waiting``. That stop condition made reply
+        completeness depend on the reader winning a race against the wire: any
+        gap longer than one poll cycle ended the read mid-reply, and a radar
+        that took longer than the sleep to start answering returned "".
+        Multi-line replies (``??``) and slow wire rates both widen those gaps,
+        so the end of a reply is now defined by sustained silence instead.
+
+        Costs about the same as the old fixed sleep in the common case, since
+        ``quiet_period`` matches what that sleep already spent.
+
+        Args:
+            first_byte_wait: Give up this early if the radar never answers
+                (many commands are silent).
+            quiet_period: Silence that marks the end of a reply.
+            max_wait: Hard ceiling; derived from baud when None.
+        """
+        if max_wait is None:
+            # A command reply is small; 1KB of headroom covers the longest
+            # (`??`) at any baud without stalling on silent commands.
+            max_wait = max(0.5, 1024.0 / self.bytes_per_second + 0.3)
+
         response = ""
-        while self.serial.in_waiting:
-            response += self.serial.read(self.serial.in_waiting).decode("ascii", errors="ignore")
-            time.sleep(0.05)
+        start = time.monotonic()
+        last_rx: Optional[float] = None
 
-        return response.strip()
+        while True:
+            now = time.monotonic()
+            if self.serial.in_waiting:
+                response += self.serial.read(self.serial.in_waiting).decode(
+                    "ascii", errors="ignore"
+                )
+                last_rx = now
+            elif last_rx is not None:
+                if now - last_rx >= quiet_period:
+                    break
+            elif now - start >= first_byte_wait:
+                break  # Silent command — nothing to read
+            if now - start >= max_wait:
+                break
+            time.sleep(0.005)
+
+        return response
 
     def read_clock_sync(
         self,
@@ -992,7 +1271,7 @@ class OPS243Radar:
         print("[RADAR] Settings saved to persistent memory.")
         print("[RADAR] Power cycle the board (unplug USB, wait 3s, replug).")
 
-    def trigger_capture(self, timeout: float = 10.0) -> str:
+    def trigger_capture(self, timeout: Optional[float] = None) -> str:
         """
         Trigger buffer capture and return raw I/Q data.
 
@@ -1003,17 +1282,21 @@ class OPS243Radar:
         - {"I": [4096 integers...]}
         - {"Q": [4096 integers...]}
 
-        Note: The I/Q data can be 20-30KB of JSON. At 57600 baud (~5.7KB/s),
-        this takes 4-5 seconds to transmit. Default timeout is 10 seconds.
+        Note: one dump is ~40.6KB of JSON — 1.8s over UART at 230,400 baud,
+        21s at the 19,200 factory default. The timeout is therefore a floor
+        that scales with the negotiated baud, not an absolute.
 
         Args:
-            timeout: Maximum time to wait for response (default 10s)
+            timeout: Minimum time to wait for the response (default 10s).
+                Scaled up when the current baud needs longer.
 
         Returns:
             Raw response string containing JSON lines
         """
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
+
+        timeout = self.transfer_budget_s(floor=10.0 if timeout is None else timeout)
 
         # Clear input buffer
         self.serial.reset_input_buffer()
@@ -1078,7 +1361,9 @@ class OPS243Radar:
 
         return full_response
 
-    def wait_for_hardware_trigger(self, timeout: float = 30.0, dump_grace: float = 8.0) -> str:
+    def wait_for_hardware_trigger(
+        self, timeout: float = 30.0, dump_grace: Optional[float] = None
+    ) -> str:
         """
         Wait for hardware trigger to fire and read the buffer dump.
 
@@ -1089,15 +1374,19 @@ class OPS243Radar:
         Args:
             timeout: Maximum time to wait for the trigger to fire
             dump_grace: Extra time allowed for the dump to finish once the
-                first byte has arrived. The ~46KB rolling-buffer dump takes
-                ~4-5s; a trigger firing near the end of the timeout window
-                must not have its dump cut off by the original deadline.
+                first byte has arrived. A trigger firing near the end of the
+                timeout window must not have its dump cut off by the original
+                deadline. None derives it from baud (floor 8s): the ~40.6KB
+                dump takes ~1.8s over UART at 230,400 but 21s at 19,200.
 
         Returns:
             Raw response string containing JSON lines, or empty string on timeout
         """
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
+
+        if dump_grace is None:
+            dump_grace = self.transfer_budget_s(floor=8.0)
 
         # Clear any stale data
         self.serial.reset_input_buffer()
@@ -1187,6 +1476,10 @@ class OPS243Radar:
         # monitor thread forever with nothing logged and the radar never
         # re-armed. Bail out loudly instead, keeping a tail sample of the
         # traffic so the log identifies WHAT the radar was sending.
+        # The budget is a floor scaled by baud: unchanged over USB and over
+        # UART at 230,400 (dump ~1.8s), but a 19,200 link needs ~21s just to
+        # finish one straggling dump and would otherwise trip this every time.
+        drain_budget = self.transfer_budget_s(floor=self.REARM_DRAIN_TIMEOUT_S)
         drain_start = time.time()
         total_drained = 0
         drain_tail = b""
@@ -1200,14 +1493,14 @@ class OPS243Radar:
             time.sleep(0.2)
             if self.serial.in_waiting == 0:
                 break
-            if time.time() - drain_start > self.REARM_DRAIN_TIMEOUT_S:
+            if time.time() - drain_start > drain_budget:
                 drain_timed_out = True
                 break
         if drain_timed_out:
             logger.warning(
                 "[OPS] Re-arm drain timed out after %.1fs (%d bytes and still "
                 "streaming) — radar is continuously sending. Last bytes: %r",
-                self.REARM_DRAIN_TIMEOUT_S,
+                drain_budget,
                 total_drained,
                 drain_tail.decode("ascii", errors="replace"),
             )

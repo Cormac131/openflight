@@ -6,6 +6,7 @@ Provides real-time shot data to the web frontend via Flask-SocketIO.
 
 import json
 import logging
+import math
 import os
 import random
 import statistics
@@ -22,7 +23,13 @@ from flask_socketio import SocketIO
 
 from .ballistics import resolve_launch, simulate
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, ClubType, Shot
-from .ops243 import Direction, SpeedReading, set_show_raw_readings
+from .ops243 import (
+    UART_BAUD_COMMANDS,
+    Direction,
+    OPS243Radar,
+    SpeedReading,
+    set_show_raw_readings,
+)
 from .rolling_buffer.monitor import estimate_carry_with_spin, get_optimal_spin_for_ball_speed
 from .session_logger import get_session_logger, init_session_logger, log_session_error
 from .sim import (
@@ -81,6 +88,10 @@ kld7_vertical = None
 kld7_horizontal = None
 experimental_kld7_radc_tuning: bool = False
 experimental_kld7_raw_radc_logging: bool = False
+
+# TI IWR6843 L3 rolling-buffer capture + LCMF-v1 launch angle.
+iwr6843_runtime = None
+iwr6843_runtime_config: dict = {"enabled": False}
 
 # Ballistic model toggle. When True, shot carry comes from the physics
 # simulator whenever a vertical launch angle is available. When False
@@ -151,6 +162,8 @@ def _cleanup_hardware_for_shutdown() -> None:
         _run_shutdown_step("K-LD7 vertical stop", kld7_vertical.stop)
     if kld7_horizontal:
         _run_shutdown_step("K-LD7 horizontal stop", kld7_horizontal.stop)
+    if iwr6843_runtime:
+        _run_shutdown_step("IWR6843 stop", iwr6843_runtime.stop)
 
     _run_shutdown_step("camera thread stop", stop_camera_thread)
     if camera:
@@ -562,15 +575,6 @@ def _ensure_user_facing_launch_angles(shot: Shot) -> None:
 
     if shot.launch_angle_horizontal is None:
         shot.launch_angle_horizontal = 0.0
-        if shot.launch_angle_confidence is None:
-            if estimated is None:
-                estimated = estimate_launch_angle(
-                    shot.club,
-                    shot.ball_speed_mph,
-                    club_speed_mph=shot.club_speed_mph,
-                    spin_rpm=shot.spin_rpm,
-                )
-            shot.launch_angle_confidence = estimated[1]
         if shot.launch_angle_horizontal_confidence is None:
             if estimated is None:
                 estimated = estimate_launch_angle(
@@ -808,6 +812,7 @@ def _session_start_config() -> dict:
         "radc_tuning_enabled": experimental_kld7_radc_tuning,
         "radc_tuning_params": dict(active_kld7_radc_tuning),
     }
+    config["iwr6843"] = dict(iwr6843_runtime_config)
     return config
 
 
@@ -848,9 +853,7 @@ def shot_to_dict(shot: Shot) -> dict:
         "spin_axis_deg": shot.spin_axis_deg,
         # Spin data from rolling buffer mode
         "spin_rpm": round(shot.spin_rpm) if shot.spin_rpm else None,
-        "spin_rpm_measured": (
-            round(shot.spin_rpm_measured) if shot.spin_rpm_measured else None
-        ),
+        "spin_rpm_measured": (round(shot.spin_rpm_measured) if shot.spin_rpm_measured else None),
         "spin_source": shot.spin_source,
         "spin_method": shot.spin_method,
         "spin_confidence": round(shot.spin_confidence, 2) if shot.spin_confidence else None,
@@ -988,6 +991,103 @@ def init_camera(
         print(f"Failed to initialize camera: {e}")
         camera = None
         camera_tracker = None
+        return False
+
+
+def init_iwr6843(
+    *,
+    port: str | None,
+    config_path: str,
+    calibration_path: str,
+    output_dir: str | Path,
+    trigger_pin: int,
+    tee_range_m: float,
+    net_range_m: float | None,
+    tx_order: str,
+    capture_timeout_s: float,
+    tilt_deg: float | None = None,
+    radar_height_m: float | None = None,
+    ball_height_m: float = 0.04,
+    azimuth_offset_deg: float = 0.0,
+    save_dumps: bool = False,
+) -> bool:
+    """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator."""
+    global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
+    try:
+        from .iwr6843 import Calibration
+        from .iwr6843.monitor import IWR6843CaptureMonitor, tx_order_from_config
+        from .iwr6843.runtime import IWR6843Runtime
+
+        configured_order = tx_order_from_config(config_path)
+        resolved_order = configured_order if tx_order == "auto" else tx_order
+        if resolved_order != configured_order:
+            raise ValueError(
+                f"--iwr6843-tx-order {resolved_order} conflicts with "
+                f"{Path(config_path).name} ({configured_order})"
+            )
+
+        calibration = Calibration.load(calibration_path)
+        calibration.tee_range_m = tee_range_m
+        calibration.tee_ball_height_m = ball_height_m
+        if tilt_deg is not None:
+            calibration.tilt_rad = math.radians(tilt_deg)
+        if radar_height_m is not None:
+            calibration.meta["radar_height_m"] = radar_height_m
+
+        capture_monitor = IWR6843CaptureMonitor(
+            config_path=config_path,
+            output_dir=output_dir,
+            port=port,
+            gpio_pin=trigger_pin,
+            save_dumps=save_dumps,
+        )
+        # OPS initialization can pulse the shared sound gate. Configure TI now,
+        # but do not accept edges until the OPS trigger path is fully running.
+        capture_monitor.start(armed=False)
+        iwr6843_runtime = IWR6843Runtime(
+            capture_monitor=capture_monitor,
+            calibration=calibration,
+            net_range_m=net_range_m,
+            tx_order=resolved_order,
+            capture_timeout_s=capture_timeout_s,
+            azimuth_offset_deg=azimuth_offset_deg,
+        )
+        iwr6843_runtime_config = {
+            "enabled": True,
+            "estimator": "lcmf_v1",
+            "port": capture_monitor.port,
+            "config": str(config_path),
+            "calibration": str(calibration_path),
+            "trigger_pin_bcm": trigger_pin,
+            "tee_slant_range_m": tee_range_m,
+            "net_range_m": net_range_m,
+            "tx_order": resolved_order,
+            "tilt_deg": math.degrees(calibration.tilt_rad),
+            "radar_height_m": calibration.radar_height_m,
+            "ball_height_m": calibration.tee_ball_height_m,
+            "azimuth_offset_deg": azimuth_offset_deg,
+            "capture_timeout_s": capture_timeout_s,
+            "freeze_delay_ms": 0.0,
+            "raw_dump_saved": save_dumps,
+            "output_dir": str(Path(output_dir).expanduser()),
+        }
+        logger.info(
+            "[SERVER] IWR6843 initialized "
+            "(port=%s, BCM%d, estimator=LCMF-v1, firmware boundary freeze)",
+            capture_monitor.port,
+            trigger_pin,
+        )
+        return True
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] IWR6843 initialization failed: %s", error, exc_info=True)
+        log_session_error(
+            "IWR6843 initialization failed",
+            component="iwr6843",
+            context={"config": config_path, "port": port or "auto"},
+            exc=error,
+        )
+        iwr6843_runtime = None
+        iwr6843_runtime_config = {"enabled": False, "error": str(error)}
         return False
 
 
@@ -1634,9 +1734,16 @@ def _forward_shot_to_simulators(shot: Shot) -> None:
             logger.info(
                 "[sim] → %s shot #%d: ball=%.1f vla=%.1f hla=%.1f spin=%.0f axis=%.1f "
                 "carry=%.1f (%dM/%dE)",
-                connector.name, resolved.shot_number, resolved.ball_speed_mph,
-                resolved.vla, resolved.hla, resolved.total_spin_rpm,
-                resolved.spin_axis_deg, resolved.carry_yards, measured, estimated,
+                connector.name,
+                resolved.shot_number,
+                resolved.ball_speed_mph,
+                resolved.vla,
+                resolved.hla,
+                resolved.total_spin_rpm,
+                resolved.spin_axis_deg,
+                resolved.carry_yards,
+                measured,
+                estimated,
             )
 
 
@@ -1648,7 +1755,9 @@ def _sim_on_status(target: str, event) -> None:
     elif state == "reconnecting":
         logger.info(
             "[sim] %s reconnecting — attempt %s, retry in %.0fs",
-            target, event.attempt, event.next_retry_in_s,
+            target,
+            event.attempt,
+            event.next_retry_in_s,
         )
     elif state == "error":
         logger.warning("[sim] %s error: %s", target, event.message)
@@ -1691,9 +1800,7 @@ def _sim_on_inbound(target: str, event) -> None:
         )
         sl = get_session_logger()
         if sl:
-            sl.log_sim_player(
-                target=target, handed=sim_player_state.handed, club=club_value
-            )
+            sl.log_sim_player(target=target, handed=sim_player_state.handed, club=club_value)
         # The monitor owns current-club state for shot tagging and carry/spin
         # model selection; keep it in sync with the sim's canonical club.
         if monitor is not None:
@@ -1744,12 +1851,183 @@ def _apply_calculated_spin(shot: Shot) -> bool:
     return True
 
 
+# Confidence floor/ceiling for measured angles. A measured angle always beats
+# the table fallback (0.5), but only a corroborated, tightly-agreeing estimate
+# earns the top of the range.
+ANGLE_CONFIDENCE_FLOOR = 0.55
+ANGLE_CONFIDENCE_CEILING = 0.95
+VERTICAL_SPREAD_FULL_CONFIDENCE_DEG = 2.0
+VERTICAL_SPREAD_ZERO_CONFIDENCE_DEG = 10.0
+
+# Spin axis is a difference of two experimental estimates (horizontal launch
+# minus club path); it should not appear the moment club path becomes
+# non-null, only once the weaker of the two legs (horizontal launch) clears
+# this bar.
+SPIN_AXIS_MIN_CONFIDENCE = 0.6
+
+
+def vertical_confidence(measurement) -> float:
+    """Vertical launch confidence from channel agreement and corroboration.
+
+    ``component_std_deg`` measures cross-channel disagreement, which only
+    means something when two channels were actually compared. When
+    ``single_channel`` is set, that comparison never happened: the value is
+    either ``None`` (no second component existed) or describes a
+    disagreement that was already resolved by discarding the bad channel --
+    reusing it as a spread penalty would double-count a fault this function
+    already derates via SINGLE_CHANNEL_CONFIDENCE_FACTOR, and np.std of the
+    one surviving value is spuriously 0.0 ("perfect agreement") in the
+    discarded-channel case. So single-channel results never derive their
+    agreement score from component_std_deg at all -- both single-channel
+    states (no second channel, or one caught and discarded) get the same
+    fixed "one channel, no corroboration" score before the derating factor
+    is applied, which is the honest answer: in both cases we have exactly
+    one channel's word for it.
+    """
+    single_channel = getattr(measurement, "single_channel", False)
+    spread = getattr(measurement, "component_std_deg", None)
+    if single_channel or spread is None:
+        # The `spread is None` half of this is defensive only: reachable
+        # today solely via single_channel (handled above), kept in case a
+        # future corroborated estimator omits component_std_deg.
+        score = 0.5
+    else:
+        span = VERTICAL_SPREAD_ZERO_CONFIDENCE_DEG - VERTICAL_SPREAD_FULL_CONFIDENCE_DEG
+        score = 1.0 - (float(spread) - VERTICAL_SPREAD_FULL_CONFIDENCE_DEG) / span
+        score = min(1.0, max(0.0, score))
+    if single_channel:
+        from .iwr6843.lcmf import (  # pylint: disable=import-outside-toplevel
+            SINGLE_CHANNEL_CONFIDENCE_FACTOR,
+        )
+
+        score *= SINGLE_CHANNEL_CONFIDENCE_FACTOR
+    span = ANGLE_CONFIDENCE_CEILING - ANGLE_CONFIDENCE_FLOOR
+    return round(ANGLE_CONFIDENCE_FLOOR + span * score, 3)
+
+
+def horizontal_confidence_from(coherence: float | None) -> float:
+    """Horizontal launch confidence from HLCMF-v0 coherence."""
+    if coherence is None:
+        return 0.0
+    return round(min(ANGLE_CONFIDENCE_CEILING, max(0.0, float(coherence))), 3)
+
+
+def _process_iwr6843_angle(shot: Shot) -> float | None:
+    """Apply a correlated LCMF-v1 result without risking the OPS shot."""
+    if iwr6843_runtime is None or shot.mode == "mock":
+        return None
+
+    started = time.time()
+    try:
+        shot_result = iwr6843_runtime.process_shot(
+            impact_timestamp=shot.impact_timestamp,
+            ball_speed_mph=shot.ball_speed_mph,
+            club=shot.club.value,
+            club_speed_mph=shot.club_speed_mph,
+        )
+        capture = shot_result.capture
+        measurement = shot_result.measurement
+        club_path = getattr(shot_result, "club_path", None)
+        session_log = get_session_logger()
+        if session_log:
+            session_log.log_iwr6843_capture(
+                shot_number=session_log.stats.get("shots_detected", 0) + 1,
+                shot_timestamp=shot.impact_timestamp,
+                trigger_timestamp=(capture.trigger_timestamp if capture is not None else None),
+                capture_path=(str(capture.path) if capture and capture.path else None),
+                capture_bytes=(len(capture.raw) if capture and capture.raw else 0),
+                dump_duration_s=(capture.dump_duration_s if capture is not None else None),
+                capture_error=(
+                    capture.error
+                    if capture is not None
+                    else "no capture matched the OPS impact timestamp"
+                ),
+                ball_speed_mph=shot.ball_speed_mph,
+                measurement=(measurement.to_dict() if measurement is not None else None),
+                club_path=(club_path.to_dict() if club_path is not None else None),
+            )
+
+        if capture is None:
+            logger.warning("[SERVER] IWR6843 capture timed out; preserving OPS shot")
+        elif not capture.valid:
+            logger.warning(
+                "[SERVER] IWR6843 capture #%d failed: %s; preserving OPS shot",
+                capture.sequence,
+                capture.error,
+            )
+        elif measurement is None:
+            logger.warning("[SERVER] IWR6843 capture had no LCMF measurement")
+        elif measurement.accepted:
+            shot.launch_angle_vertical = measurement.angle_deg
+            # Device-level provenance is retained in iwr6843_capture. The
+            # public Shot contract uses "radar" for all measured radar angles.
+            shot.launch_angle_vertical_source = "radar"
+            shot.launch_angle_vertical_confidence = vertical_confidence(measurement)
+            shot.launch_angle_confidence = shot.launch_angle_vertical_confidence
+            shot.angle_source = "radar"
+            horizontal_deg = getattr(measurement, "horizontal_deg", None)
+            horizontal_confidence = getattr(measurement, "horizontal_confidence", None)
+            horizontal_status = getattr(measurement, "horizontal_status", None)
+            if horizontal_deg is not None:
+                shot.launch_angle_horizontal = horizontal_deg
+                shot.launch_angle_horizontal_confidence = horizontal_confidence_from(
+                    horizontal_confidence
+                )
+                shot.launch_angle_horizontal_source = "radar"
+                logger.info(
+                    "[SERVER] IWR6843 TX2 horizontal proxy: %.2f° (coherence %.0f%%, status=%s)",
+                    horizontal_deg,
+                    (horizontal_confidence or 0.0) * 100,
+                    horizontal_status,
+                )
+            logger.info(
+                "[SERVER] IWR6843 LCMF-v1 launch: %.2f° "
+                "(%d snapshots/%d frames, component std %.2f°)",
+                measurement.angle_deg,
+                measurement.n_snapshots,
+                measurement.n_frames,
+                measurement.component_std_deg,
+            )
+        else:
+            logger.warning(
+                "[SERVER] IWR6843 LCMF-v1 withheld angle: %s",
+                measurement.status,
+            )
+
+        # Club path is independent of the ball measurement's acceptance --
+        # it is derived from the club track and OPS club speed, not from
+        # LCMF-v1's vertical angle -- so it is published whenever the
+        # runtime produced one, even if the ball angle above was withheld.
+        if club_path is not None and club_path.accepted:
+            shot.club_path_deg = round(club_path.path_deg, 1)
+            logger.info(
+                "[SERVER] IWR6843 club path: %.2f° (confidence %.2f, %d frames)",
+                club_path.path_deg,
+                club_path.confidence or 0.0,
+                club_path.n_frames,
+            )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] IWR6843 processing error: %s", error, exc_info=True)
+        log_session_error(
+            "IWR6843 shot processing failed",
+            component="server",
+            context={
+                "stage": "iwr6843",
+                "ball_speed_mph": shot.ball_speed_mph,
+                "club": shot.club.value,
+            },
+            exc=error,
+        )
+    return (time.time() - started) * 1000.0
+
+
 def on_shot_detected(shot: Shot):
     """Callback when a shot is detected - emit to all clients."""
     global ball_detected, ball_detection_confidence  # pylint: disable=global-statement
 
     logger.info("[SERVER] Shot callback: %.1f mph", shot.ball_speed_mph)
 
+    iwr6843_ms = _process_iwr6843_angle(shot)
     kld7_ms = None
     # Process K-LD7 angle radars (vertical = launch angle, horizontal = club path)
     try:
@@ -1961,8 +2239,18 @@ def on_shot_detected(shot: Shot):
 
                 kld7_horizontal.reset()
 
-            # Derive spin axis from face angle (H. launch) minus club path
-            if shot.launch_angle_horizontal is not None and shot.club_path_deg is not None:
+            # Derive spin axis from face angle (H. launch) minus club path.
+            # Both are experimental estimates; only trust the difference once
+            # the weaker leg (horizontal launch) clears a confidence floor,
+            # rather than emitting it the moment club path is non-null.
+            # club_path_deg can come from IWR6843 (_process_iwr6843_angle,
+            # above) rather than K-LD7, so a failure here is not necessarily
+            # a K-LD7 failure -- see the except block below.
+            if (
+                shot.launch_angle_horizontal is not None
+                and shot.club_path_deg is not None
+                and (shot.launch_angle_horizontal_confidence or 0.0) >= SPIN_AXIS_MIN_CONFIDENCE
+            ):
                 shot.spin_axis_deg = round(shot.launch_angle_horizontal - shot.club_path_deg, 1)
                 logger.info(
                     "[SERVER] Spin axis: %+.1f° (face=%+.1f° - path=%+.1f°)",
@@ -1975,12 +2263,15 @@ def on_shot_detected(shot: Shot):
                 kld7_ms = (time.time() - kld7_start) * 1000
                 logger.info("[SERVER] K-LD7 processing: %.1fms", kld7_ms)
     except Exception as e:
-        logger.warning("[SERVER] K-LD7 processing error: %s", e, exc_info=True)
+        # Covers K-LD7 processing AND the spin-axis derivation above, which
+        # reads club_path_deg regardless of whether it came from K-LD7 or
+        # IWR6843 -- so this is not necessarily a K-LD7-specific failure.
+        logger.warning("[SERVER] Angle/spin-axis post-processing error: %s", e, exc_info=True)
         log_session_error(
-            "K-LD7 shot processing failed",
+            "Angle/spin-axis post-processing failed",
             component="server",
             context={
-                "stage": "kld7",
+                "stage": "angle_postprocessing",
                 "ball_speed_mph": shot.ball_speed_mph,
                 "club": shot.club.value,
             },
@@ -2162,6 +2453,7 @@ def on_shot_detected(shot: Shot):
                 spin_axis_deg=shot.spin_axis_deg,
                 impact_timestamp=shot.impact_timestamp,
                 pipeline_ms={
+                    "iwr6843": (round(iwr6843_ms, 1) if iwr6843_ms is not None else None),
                     "kld7": round(kld7_ms, 1) if kld7_ms is not None else None,
                 },
             )
@@ -2235,6 +2527,7 @@ def start_monitor(
     debug: bool = False,
     trigger_kwargs: Optional[dict] = None,
     sample_rate_ksps: int = 30,
+    ops_baud: Optional[int] = None,
 ):
     """
     Start the launch monitor in rolling buffer mode.
@@ -2244,6 +2537,7 @@ def start_monitor(
         mock: Run in mock mode without radar
         trigger_type: Trigger strategy (sound, speed, polling)
         debug: Enable verbose debug output
+        ops_baud: Target UART baud when the OPS243 is on the GPIO header
     """
     global monitor, mock_mode  # pylint: disable=global-statement
 
@@ -2263,6 +2557,7 @@ def start_monitor(
             port=port,
             trigger_type=trigger_type,
             sample_rate_ksps=sample_rate_ksps,
+            ops_baud=ops_baud,
             **(trigger_kwargs or {}),
         )
         print(
@@ -2315,6 +2610,15 @@ def start_monitor(
                 except Exception:  # pylint: disable=broad-except
                     # Instrumentation must never break startup.
                     logger.warning("[SERVER] OPS clock sync read failed", exc_info=True)
+        if not mock and iwr6843_runtime is not None:
+            session_logger.log_connection(
+                device="iwr6843",
+                port=iwr6843_runtime.capture_monitor.port,
+                baud=getattr(iwr6843_runtime.capture_monitor.radar, "baud", 1_041_667),
+                firmware="custom-l3-dump",
+                estimator="lcmf_v1",
+                trigger_pin_bcm=iwr6843_runtime_config.get("trigger_pin_bcm"),
+            )
 
     if not mock:
 
@@ -2327,6 +2631,8 @@ def start_monitor(
             live_callback=on_live_reading,
             diagnostic_callback=on_trigger_diagnostic,
         )
+        if iwr6843_runtime is not None:
+            iwr6843_runtime.capture_monitor.arm()
     else:
         monitor.start(shot_callback=on_shot_detected, live_callback=on_live_reading)
 
@@ -2568,6 +2874,17 @@ def main():
 
     parser = argparse.ArgumentParser(description="OpenFlight UI Server")
     parser.add_argument("--port", "-p", help="Serial port for radar")
+    parser.add_argument(
+        "--ops-baud",
+        type=int,
+        default=None,
+        help=(
+            "Target UART baud for the OPS243 on the GPIO header "
+            f"(default {OPS243Radar.DEFAULT_UART_BAUD}). Only meaningful when "
+            "--port is a UART device such as /dev/ttyAMA0; drop to 115200 if "
+            "230400 proves unreliable on your board."
+        ),
+    )
     parser.add_argument("--mock", "-m", action="store_true", help="Run in mock mode without radar")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
     parser.add_argument(
@@ -2676,6 +2993,87 @@ def main():
             "Radar sample rate in ksps (default: 30). "
             "Lower = longer buffer but lower max speed. "
             "25=174mph/164ms, 27=187mph/152ms"
+        ),
+    )
+    parser.add_argument(
+        "--iwr6843",
+        action="store_true",
+        help="Enable TI IWR6843 L3 capture and LCMF-v1 vertical launch angle",
+    )
+    parser.add_argument(
+        "--iwr6843-port", default=None, help="TI serial port (auto-detect by default)"
+    )
+    parser.add_argument(
+        "--iwr6843-config",
+        default="config/iwr6843_l3dump_vTX2_window53_12l18f.cfg",
+        help="TI RF config matching the flashed L3 firmware",
+    )
+    parser.add_argument(
+        "--iwr6843-cal",
+        default="config/iwr6843_calibration_reference.json",
+        help="TI complex array/range calibration JSON",
+    )
+    parser.add_argument(
+        "--iwr6843-trigger-pin",
+        type=int,
+        default=17,
+        help="BCM GPIO receiving the shared sound-trigger edge (default: 17)",
+    )
+    parser.add_argument(
+        "--iwr6843-tee-m",
+        type=float,
+        default=1.575,
+        help="Antenna-center to tee slant range in metres (default: 1.575)",
+    )
+    parser.add_argument(
+        "--iwr6843-net-m",
+        type=float,
+        default=4.6,
+        help="Antenna-center to net range in metres (default: 4.6)",
+    )
+    parser.add_argument(
+        "--iwr6843-tilt-deg",
+        type=float,
+        default=None,
+        help="Override mount tilt from the TI calibration JSON",
+    )
+    parser.add_argument(
+        "--iwr6843-radar-height-m",
+        type=float,
+        default=None,
+        help="Override antenna-center height from the TI calibration JSON",
+    )
+    parser.add_argument(
+        "--iwr6843-ball-height-m",
+        type=float,
+        default=0.040,
+        help="Ball-center height above the floor/mat (default: 0.040)",
+    )
+    parser.add_argument(
+        "--iwr6843-tx-order",
+        choices=("auto", "normal", "reversed"),
+        default="auto",
+        help="TI TDM chirp order; auto reads the chirp masks from the cfg",
+    )
+    parser.add_argument(
+        "--iwr6843-capture-timeout",
+        type=float,
+        default=12.0,
+        help="Maximum seconds an OPS shot waits for its TI UART dump (default: 12)",
+    )
+    parser.add_argument(
+        "--iwr6843-output-dir",
+        default=None,
+        help=("Raw TI dump directory when --debug is enabled (default: <session-log-dir>/iwr6843)"),
+    )
+    parser.add_argument(
+        "--iwr6843-azimuth-offset-deg",
+        type=float,
+        default=0.0,
+        help=(
+            "Azimuth of the radar boresight relative to the target line, in degrees. "
+            "Positive means boresight points right of the target line. Added to the "
+            "measured club path; 0 reports club path relative to boresight."
         ),
     )
     parser.add_argument(
@@ -2853,7 +3251,23 @@ def main():
     # launch angle), so require it whenever the K-LD7 radars are enabled.
     if args.kld7 and args.kld7_mount_tilt is None:
         parser.error("--kld7-mount-tilt is required when --kld7 is passed")
-
+    if args.iwr6843 and args.kld7:
+        parser.error("--iwr6843 and vertical --kld7 cannot both own launch angle")
+    if args.iwr6843 and args.kld7_horizontal:
+        parser.error("--iwr6843 and horizontal --kld7 cannot both own club path")
+    if args.iwr6843 and args.mock:
+        parser.error("--iwr6843 cannot be used with --mock")
+    if args.iwr6843 and args.trigger == "sound-gpio":
+        parser.error("--iwr6843 already owns BCM GPIO; use the default --trigger sound")
+    if args.iwr6843 and (args.iwr6843_tee_m <= 0 or args.iwr6843_net_m <= 0):
+        parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
+    # The radar can only be moved to a rate it has an API command for, so an
+    # unsupported value is refused by the hardware and leaves the link at
+    # whatever answered -- a silent slow link, which presents as an
+    # unresponsive app rather than a bad flag. Fail at the CLI instead.
+    if args.ops_baud is not None and args.ops_baud not in UART_BAUD_COMMANDS:
+        supported = ", ".join(str(b) for b in sorted(UART_BAUD_COMMANDS))
+        parser.error(f"--ops-baud must be one of {supported} (got {args.ops_baud})")
     global experimental_kld7_radc_tuning
     global experimental_kld7_raw_radc_logging
     global active_kld7_radc_tuning
@@ -2863,10 +3277,9 @@ def main():
     global ball_speed_correction_enabled
     global ball_speed_correction_distance_ft
     global ball_speed_correction_ball_above_radar_ft
-    # The ball-speed cosine correction rides on --kld7: it needs a measured
-    # launch angle (from the vertical radar) to compute the radial->true
-    # correction, so there is no separate enable flag.
-    ball_speed_correction_enabled = args.kld7
+    # Cosine correction rides on whichever vertical radar supplies launch.
+    # LCMF itself always receives the original OPS radial speed first.
+    ball_speed_correction_enabled = args.kld7 or args.iwr6843
     ball_speed_correction_distance_ft = args.kld7_ball_distance
     ball_speed_correction_ball_above_radar_ft = -args.kld7_radar_height_inches / 12.0
     global _VERTICAL_RADAR_GATE_BYPASS
@@ -2894,8 +3307,6 @@ def main():
 
     # Initialize session logger (enabled for both real and mock modes)
     if not args.no_logging:
-        from pathlib import Path
-
         log_dir = Path(args.log_dir) if args.log_dir else None
         init_session_logger(log_dir=log_dir, location=args.session_location, enabled=True)
         print(f"Session logging enabled (location: {args.session_location})")
@@ -2956,6 +3367,48 @@ def main():
     if experimental_kld7_radc_tuning:
         print(f"Experimental K-LD7 RADC tuning enabled: {kld7_radc_tuning_kwargs}")
 
+    if args.iwr6843:
+        iwr_output_dir = (
+            Path(args.iwr6843_output_dir).expanduser()
+            if args.iwr6843_output_dir
+            else (
+                Path(args.log_dir).expanduser()
+                if args.log_dir
+                else Path.home() / "openflight_sessions"
+            )
+            / "iwr6843"
+        )
+        if init_iwr6843(
+            port=args.iwr6843_port,
+            config_path=args.iwr6843_config,
+            calibration_path=args.iwr6843_cal,
+            output_dir=iwr_output_dir,
+            trigger_pin=args.iwr6843_trigger_pin,
+            tee_range_m=args.iwr6843_tee_m,
+            net_range_m=args.iwr6843_net_m,
+            tx_order=args.iwr6843_tx_order,
+            capture_timeout_s=args.iwr6843_capture_timeout,
+            tilt_deg=args.iwr6843_tilt_deg,
+            radar_height_m=args.iwr6843_radar_height_m,
+            ball_height_m=args.iwr6843_ball_height_m,
+            azimuth_offset_deg=args.iwr6843_azimuth_offset_deg,
+            save_dumps=args.debug,
+        ):
+            calibration = iwr6843_runtime.calibration
+            ball_speed_correction_distance_ft = args.iwr6843_tee_m * 3.28084
+            ball_speed_correction_ball_above_radar_ft = (
+                calibration.tee_ball_height_m - calibration.radar_height_m
+            ) * 3.28084
+            print(
+                "IWR6843 enabled (LCMF-v1 launch angle, "
+                f"BCM{args.iwr6843_trigger_pin}, {iwr6843_runtime.tx_order} TX order)"
+            )
+            if args.debug:
+                print(f"IWR6843 raw dumps enabled: {iwr_output_dir}")
+        else:
+            print("ERROR: IWR6843 requested but failed to initialize. Exiting.")
+            sys.exit(1)
+
     # Initialize K-LD7 angle radars (if enabled)
     if args.kld7:
         if init_kld7(
@@ -3005,6 +3458,7 @@ def main():
         debug=args.debug,
         trigger_kwargs=trigger_kwargs,
         sample_rate_ksps=args.sample_rate,
+        ops_baud=args.ops_baud,
     )
 
     # Simulator connectors (off unless --sim). Started after the monitor exists
