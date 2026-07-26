@@ -36,3 +36,22 @@ def test_circular_median_wraps():
     values = [3.0, -3.0, 3.1]
     median = doa.circular_median(values)
     assert abs(abs(median) - 3.05) < 0.2, "median must wrap, not average through zero"
+
+
+def test_circular_median_does_not_degrade_to_a_linear_median():
+    """Pins the wrap handling against a regression to plain ``np.median``.
+
+    The test above uses [3.0, -3.0, 3.1], whose *linear* median is 3.0 -- well
+    inside its 0.2 tolerance of 3.05. So replacing the whole implementation
+    with ``np.median`` passes it, and the only real property being asserted
+    goes unguarded.
+
+    These values separate the two: they straddle +/-pi evenly, so the linear
+    median collapses to ~0.0 -- diametrically opposite the actual cluster --
+    while a circular median stays on the cluster near +/-pi.
+    """
+    values = [3.10, 3.13, -3.13, -3.10]
+    assert abs(float(np.median(values))) < 0.1, "fixture must separate the two definitions"
+    median = doa.circular_median(values)
+    assert abs(median) > 3.0, "collapsed toward zero, i.e. averaged through the wrap"
+    assert median in values, "a median returns one of its inputs, never a synthesised value"

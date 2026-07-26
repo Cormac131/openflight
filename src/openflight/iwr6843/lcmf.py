@@ -43,6 +43,16 @@ MAX_PER_FRAME = 4
 LATERAL_TEE_OFFSET_M = 0.064
 MPH_PER_MS = 2.23694
 
+# One collapsed channel must not drag the answer down. 8.0 sits in an observed
+# gap: agreeing channels spread 4.59 deg, collapsed ones 15.9-20.2 deg
+# (2026-07-25 session 140533).
+CHANNEL_SPREAD_MAX_DEG = 8.0
+
+# A single-channel estimate has no cross-check. 0.7 keeps it above the
+# fallback-estimate confidence of 0.5 while marking it weaker than a
+# corroborated one. Policy, not measurement.
+SINGLE_CHANNEL_CONFIDENCE_FACTOR = 0.7
+
 
 @dataclass
 class LCMFResult:
@@ -55,10 +65,13 @@ class LCMFResult:
     n_snapshots: int = 0
     n_frames: int = 0
     component_std_deg: float | None = None
+    channels_used: list[str] = field(default_factory=list)
+    single_channel: bool = False
     tracker_quality: str | None = None
     track_speed_mph: float | None = None
     track_rms_bins: float | None = None
     track_inliers: int | None = None
+    track_span_s: float | None = None
     tdm_sign_used: int | None = None
     horizontal_deg: float | None = None
     horizontal_confidence: float | None = None
@@ -83,10 +96,13 @@ class LCMFResult:
             "n_snapshots": self.n_snapshots,
             "n_frames": self.n_frames,
             "component_std_deg": self.component_std_deg,
+            "channels_used": list(self.channels_used),
+            "single_channel": self.single_channel,
             "tracker_quality": self.tracker_quality,
             "track_speed_mph": self.track_speed_mph,
             "track_rms_bins": self.track_rms_bins,
             "track_inliers": self.track_inliers,
+            "track_span_s": self.track_span_s,
             "tdm_sign_used": self.tdm_sign_used,
             "horizontal_deg": self.horizontal_deg,
             "horizontal_confidence": self.horizontal_confidence,
@@ -110,6 +126,7 @@ def _result_from_track(
         track_speed_mph=track.speed_mph if track is not None else None,
         track_rms_bins=track.rms_bins if track is not None else None,
         track_inliers=track.n_inliers if track is not None else None,
+        track_span_s=(track.t_last - track.t_first) if track is not None else None,
         tdm_sign_used=shot.tdm_sign_used,
         effective_tdm_tau_s=effective_tdm_tau_s,
         effective_loop_period_s=effective_loop_period_s,
@@ -264,18 +281,100 @@ def _refine_grid(grid_deg: np.ndarray, objective: np.ndarray) -> float:
     return float(grid_deg[index] + np.clip(offset, -1.0, 1.0) * np.diff(grid_deg)[0])
 
 
+def grid_curvature(objective: np.ndarray) -> float | None:
+    """Sharpness of the objective's minimum: y0 - 2*y1 + y2 at the argmin.
+
+    This is the channel's conditioning: a well-posed channel has a sharp
+    minimum, a degenerate one a shallow one.
+
+    Returns ``None`` when the argmin sits on a grid edge. That is a different
+    failure from a shallow minimum and must not be conflated with it: an edge
+    minimum means the true minimum lies outside the searched range -- a real
+    launch above the grid's 45 degree ceiling pins a perfectly healthy
+    channel to the last sample -- so the channel produced no measurement at
+    all rather than a poor one. Scoring both cases 0.0, as this used to, let
+    an edge-pinned channel tie with a collapsed one and lose on dict order.
+
+    For an interior argmin the result is always strictly positive, so the
+    ``max(0.0, ...)`` floor never fires: ``argmin`` reports the FIRST
+    occurrence of the minimum, hence ``y_0 > y_1`` strictly and
+    ``y_2 >= y_1``. ``combine_channels`` still treats 0.0 as "degenerate,
+    unusable" because a caller may supply its own scores.
+    """
+    index = int(np.argmin(objective))
+    if not 0 < index < len(objective) - 1:
+        return None
+    y_0, y_1, y_2 = objective[index - 1 : index + 2]
+    return float(max(0.0, y_0 - 2.0 * y_1 + y_2))
+
+
+def measured_channels(
+    components: dict[str, float],
+    evidence: dict[str, float | None],
+) -> dict[str, float]:
+    """The subset of ``components`` whose curvature is an actual measurement.
+
+    A channel with ``None`` evidence -- or none recorded at all -- searched a
+    grid that did not contain its own minimum, so its angle is not a
+    measurement of anything. Such a channel takes part in nothing: not in
+    selection candidacy, not in the spread comparison, and not in the
+    agreement metric reported to the caller.
+    """
+    return {
+        name: float(value)
+        for name, value in components.items()
+        if evidence.get(name) is not None
+    }
+
+
+def combine_channels(
+    components: dict[str, float],
+    evidence: dict[str, float | None],
+) -> tuple[float | None, list[str], bool]:
+    """Combine channel estimates, dropping an outlier rather than averaging it.
+
+    ``evidence`` is each channel's objective curvature from
+    ``grid_curvature`` (higher is better conditioned) and breaks the tie when
+    the channels disagree. Only channels that actually measured something
+    participate (see ``measured_channels``).
+
+    Returns the angle, the channels that contributed, and whether the result
+    rests on a single channel. The angle is ``None`` when no channel is
+    defensible: with the channels disagreeing beyond
+    ``CHANNEL_SPREAD_MAX_DEG``, selection needs strictly positive curvature
+    to name a winner, and when nothing has any -- every channel flat, off the
+    grid, or unscored -- picking one would be arbitrary. Rejecting is the
+    honest answer; ``channels_used`` is then empty.
+    """
+    candidates = measured_channels(components, evidence)
+    names = list(candidates)
+    if not names:
+        return None, [], False
+    values = list(candidates.values())
+    if len(names) == 1:
+        return values[0], names, True
+    if max(values) - min(values) <= CHANNEL_SPREAD_MAX_DEG:
+        return float(sum(values) / len(values)), names, False
+    conditioned = [name for name in names if float(evidence[name]) > 0.0]
+    if not conditioned:
+        return None, [], False
+    best = max(conditioned, key=lambda name: float(evidence[name]))
+    return candidates[best], [best], True
+
+
 def _channel_estimates(
     cache: dict[str, np.ndarray],
     indices: np.ndarray,
     geometry: dict,
     grid_deg: np.ndarray,
-) -> dict[str, float]:
+) -> tuple[dict[str, float], dict[str, float | None]]:
     frames = cache["frame"][indices]
     if len(indices) < 12 or len(np.unique(frames)) < 3:
         raise ValueError("insufficient channel snapshots")
     vectors = cache["vec"][indices]
     range_m = cache["r"][indices]
     estimates: dict[str, float] = {}
+    evidence: dict[str, float | None] = {}
     for model in CHANNEL_MODELS:
         objective = []
         for angle_deg in grid_deg:
@@ -284,8 +383,10 @@ def _channel_estimates(
             )
             errors = leave_one_channel_out_error(vectors, dictionary)
             objective.append(_frame_objective(errors, frames, 1e3))
-        estimates[f"channel_{model}_deg"] = _refine_grid(grid_deg, np.asarray(objective))
-    return estimates
+        objective = np.asarray(objective)
+        estimates[f"channel_{model}_deg"] = _refine_grid(grid_deg, objective)
+        evidence[f"channel_{model}_deg"] = grid_curvature(objective)
+    return estimates, evidence
 
 
 def _prepared_fft(
@@ -616,21 +717,30 @@ def estimate_lcmf_v1(
             "tdm_tau_s": tdm_tau_s,
         }
         grid_deg = np.arange(-5.0, 45.0 + grid_step_deg / 2.0, grid_step_deg)
-        components = _channel_estimates(cache, indices, model_geometry, grid_deg)
+        channel_components, channel_evidence = _channel_estimates(
+            cache, indices, model_geometry, grid_deg
+        )
+        # ``components`` is the diagnostic record for the session log;
+        # ``channel_components`` is what the answer is allowed to rest on. The
+        # fast-time models are unvalidated against curvature evidence and
+        # cannot be selected, so letting them into the agreement comparison
+        # would only ever be able to veto a real corroboration -- an outlier
+        # among them widens the spread past the gate, dropping two agreeing
+        # channels to one. They stay logged and stay out of the decision.
+        components = dict(channel_components)
         if not is_range_snapshot(meta):
-            components.update(
-                _fast_estimates(
-                    cube,
-                    radar_geometry,
-                    cache,
-                    indices,
-                    model_geometry,
-                    cal,
-                    grid_deg,
-                    tx_order,
-                    shot.tdm_sign_used,
-                )
+            fast = _fast_estimates(
+                cube,
+                radar_geometry,
+                cache,
+                indices,
+                model_geometry,
+                cal,
+                grid_deg,
+                tx_order,
+                shot.tdm_sign_used,
             )
+            components.update(fast)
     except (ValueError, IndexError, np.linalg.LinAlgError) as error:
         return _result_from_track(
             str(error).replace(" ", "_"),
@@ -639,8 +749,17 @@ def estimate_lcmf_v1(
             effective_loop_period_s=loop_period_s,
         )
 
-    component_values = np.asarray(list(components.values()), dtype=float)
-    raw_angle_deg = float(np.mean(component_values))
+    raw_angle_deg, channels_used, single_channel = combine_channels(
+        channel_components, channel_evidence
+    )
+    if raw_angle_deg is None:
+        return _result_from_track(
+            "rejected_no_conditioned_channel",
+            shot,
+            effective_tdm_tau_s=tdm_tau_s,
+            effective_loop_period_s=loop_period_s,
+        )
+    measured = measured_channels(channel_components, channel_evidence)
     result = _result_from_track(
         "accepted_track_quality_warning" if shot.quality == "reject" else "accepted",
         shot,
@@ -650,7 +769,12 @@ def estimate_lcmf_v1(
     result.components_deg = components
     result.n_snapshots = len(indices)
     result.n_frames = len(np.unique(cache["frame"][indices]))
-    result.component_std_deg = float(np.std(component_values))
+    # Agreement is between the channels that measured something and could have
+    # been selected -- the same set combine_channels compared. A diagnostic
+    # component must not be able to make a corroborated estimate look noisy.
+    result.component_std_deg = float(np.std(list(measured.values())))
+    result.channels_used = channels_used
+    result.single_channel = single_channel
     result.horizontal_deg = horizontal_deg
     result.horizontal_confidence = horizontal_conf
     result.horizontal_status = horizontal_status

@@ -73,7 +73,17 @@ def near_mti_notch(speed_ms: float, half_width_ms: float = NOTCH_HALF_WIDTH_MS) 
 # says "no read" instead (2026-07-14: 3 driver + 2 5i captures)
 REJECT_RMS_BINS = 0.50
 REJECT_MIN_INLIERS = 28
-REJECT_MIN_SPAN_S = 0.018
+REJECT_MIN_SPAN_S = 0.015
+
+
+def track_broken(trk: BallTrack | None) -> bool:
+    """Module-scope copy of the reject predicate, for direct testing."""
+    return (
+        trk is None
+        or trk.rms_bins >= REJECT_RMS_BINS
+        or trk.n_inliers < REJECT_MIN_INLIERS
+        or (trk.t_last - trk.t_first) < REJECT_MIN_SPAN_S
+    )
 
 
 def club_class(club: str | None) -> str:
@@ -249,14 +259,6 @@ def process_dump(
     klass = club_class(club)
     min_ms = CLUB_MIN_BALL_MS[klass]
     track = tracking.find_ball(mti, geo, max_range_m=max_r, min_ball_ms=min_ms)
-
-    def track_broken(trk: BallTrack | None) -> bool:
-        return (
-            trk is None
-            or trk.rms_bins >= REJECT_RMS_BINS
-            or trk.n_inliers < REJECT_MIN_INLIERS
-            or (trk.t_last - trk.t_first) < REJECT_MIN_SPAN_S
-        )
 
     notch_used = False
     if track_broken(track) or (track is not None and near_mti_notch(track.speed_ms)):

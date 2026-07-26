@@ -148,6 +148,28 @@ class TestBaudNegotiation:
             radar.negotiate_uart_baud()
         assert [f.baudrate for f in opened][:3] == [230400, 19200, 115200]
 
+    def test_a_non_default_target_baud_is_probed_first(self):
+        """Pins the "target first" prefix, which the test above cannot observe.
+
+        ``negotiate_uart_baud`` builds its order as ``[self.uart_baud] + the
+        rest of BAUD_PROBE_ORDER``. The test above uses the default target of
+        230,400, which is *already* ``BAUD_PROBE_ORDER[0]``, so the prefix is a
+        no-op there: deleting it leaves the probe sequence byte-identical and
+        every test in this file still passes.
+
+        A target that is not first in the factory order is the only way to see
+        the behaviour, and it is the case that matters in the field -- once
+        ``A!`` has persisted a rate, the radar answers on probe one instead of
+        after three failed opens, each of which costs a full read timeout.
+        """
+        radar, opened, factory = _radar_with_fake_ports(answers_at=57600, uart_baud=57600)
+        with patch("openflight.ops243.serial.Serial", side_effect=factory):
+            assert radar.negotiate_uart_baud() == 57600
+        assert [f.baudrate for f in opened] == [57600], (
+            "57,600 is BAUD_PROBE_ORDER[3]; opening it first only happens if the "
+            "configured target is moved to the front of the probe order"
+        )
+
     def test_no_reply_at_any_baud_raises_with_wiring_guidance(self):
         radar, _opened, factory = _radar_with_fake_ports(answers_at=None)
         with patch("openflight.ops243.serial.Serial", side_effect=factory):

@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from openflight.iwr6843 import Calibration, estimate_lcmf_v1, process_dump
+from openflight.iwr6843 import Calibration, estimate_lcmf_v1, lcmf, process_dump
 from openflight.iwr6843.dump import (
     HEADER,
     SAMPLE_RANGE_FFT_IQ16,
@@ -604,8 +604,15 @@ def test_club_class_mapping():
     assert club_class("putter") == "default"
 
 
-def test_lcmf_v1_fuses_five_frozen_components(cal):
-    """Production LCMF must expose its raw fusion without a global correction."""
+def test_lcmf_v1_logs_five_components_but_fuses_only_the_two_channels(cal):
+    """Production LCMF must expose its raw fusion without a global correction.
+
+    All five components stay in the log -- they are useful in session replay
+    -- but only the two channel models can be selected, so only they decide
+    the angle. Averaging all five let a ``fast_*`` outlier both shift the
+    answer and, once selection replaced averaging, widen the spread past
+    CHANNEL_SPREAD_MAX_DEG and force a corroborated pair down to one channel.
+    """
     raw = synth_shot(speed_ms=45.0, launch_deg=18.0, image_gain=0.35, noise=4.0)
 
     result = estimate_lcmf_v1(
@@ -616,14 +623,14 @@ def test_lcmf_v1_fuses_five_frozen_components(cal):
     )
 
     assert result.accepted
-    assert set(result.components_deg) == {
-        "channel_two8_deg",
-        "channel_four4_path_tdm_deg",
-        "fast_direct1_deg",
-        "fast_two2_deg",
-        "fast_four4_deg",
-    }
-    assert result.raw_angle_deg == pytest.approx(np.mean(list(result.components_deg.values())))
+    channels = {"channel_two8_deg", "channel_four4_path_tdm_deg"}
+    fast = {"fast_direct1_deg", "fast_two2_deg", "fast_four4_deg"}
+    assert set(result.components_deg) == channels | fast
+    channel_values = [result.components_deg[name] for name in channels]
+    assert result.raw_angle_deg == pytest.approx(np.mean(channel_values))
+    assert result.component_std_deg == pytest.approx(np.std(channel_values))
+    assert result.single_channel is False
+    assert set(result.channels_used) == channels
     assert ANGLE_CORRECTION_DEG == 0.0
     assert result.angle_deg == pytest.approx(result.raw_angle_deg + ANGLE_CORRECTION_DEG)
     assert result.n_snapshots <= 4 * result.n_frames
@@ -655,6 +662,82 @@ def test_lcmf_v1_fuses_range_snapshot_channel_components(cal):
     assert result.angle_deg == pytest.approx(result.raw_angle_deg + ANGLE_CORRECTION_DEG)
     assert result.n_snapshots <= 4 * result.n_frames
     assert result.n_frames >= 3
+
+
+def _range_snapshot_shot() -> bytes:
+    return range_snapshot_dump(
+        synth_shot(speed_ms=45.0, launch_deg=18.0, image_gain=0.35, noise=4.0, n_loops=10),
+        start_bin=20,
+        n_bins=80,
+    )
+
+
+def test_lcmf_v1_rejects_when_every_channel_is_off_the_grid(cal, monkeypatch):
+    """No channel measured anything, so there is no angle to report.
+
+    An argmin pinned to a grid edge means the true minimum lies outside the
+    searched range. When that is true of every channel the estimator knows
+    nothing about this shot, and inventing an answer from a set of
+    non-measurements is worse than admitting it.
+    """
+    monkeypatch.setattr(lcmf, "grid_curvature", lambda objective: None)
+
+    result = estimate_lcmf_v1(
+        _range_snapshot_shot(), cal, ball_speed_mph=45.0 * 2.23694, club="9i"
+    )
+
+    assert result.status == "rejected_no_conditioned_channel"
+    assert result.angle_deg is None
+    assert not result.accepted
+    assert result.track_speed_mph is not None, "a rejection must keep its track evidence"
+
+
+def test_lcmf_v1_rejects_disagreeing_channels_with_no_curvature_to_choose_on(
+    cal, monkeypatch
+):
+    """A tie on evidence is not a licence to return whichever channel is first.
+
+    ``max()`` yields the first key on a tie, and insertion order puts
+    ``channel_two8_deg`` -- the channel that collapses on real shots -- at
+    the front. Rejecting is the only defensible outcome when the channels
+    disagree and nothing distinguishes them.
+    """
+    monkeypatch.setattr(lcmf, "grid_curvature", lambda objective: 0.0)
+    monkeypatch.setattr(lcmf, "CHANNEL_SPREAD_MAX_DEG", 0.0)
+
+    result = estimate_lcmf_v1(
+        _range_snapshot_shot(), cal, ball_speed_mph=45.0 * 2.23694, club="9i"
+    )
+
+    assert result.status == "rejected_no_conditioned_channel"
+    assert result.angle_deg is None
+
+
+def test_lcmf_v1_rejects_a_grid_too_coarse_to_score_a_minimum(cal):
+    """A caller-supplied grid with no interior points scores nothing.
+
+    ``grid_step_deg`` is the caller's, and a large enough step leaves the
+    -5..45 deg search with fewer than three points -- every index is then an
+    edge, so no channel can be scored. Before selection required strictly
+    positive evidence this resolved to whichever channel came first in the
+    dict, which is ``channel_two8_deg``: a coarse grid silently produced the
+    collapsed channel's angle. Not reachable from current call sites
+    (``calibration_session`` passes 1.0), so this pins the protection rather
+    than a live path.
+    """
+    grid = np.arange(-5.0, 45.0 + 50.0 / 2.0, 50.0)
+    assert len(grid) < 3, "fixture assumes a grid with no interior point"
+
+    result = estimate_lcmf_v1(
+        _range_snapshot_shot(),
+        cal,
+        ball_speed_mph=45.0 * 2.23694,
+        club="9i",
+        grid_step_deg=50.0,
+    )
+
+    assert result.status == "rejected_no_conditioned_channel"
+    assert result.angle_deg is None
 
 
 def test_lcmf_v1_rejects_empty_capture_without_inventing_angle(cal):

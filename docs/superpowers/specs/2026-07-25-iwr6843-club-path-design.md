@@ -94,6 +94,40 @@ For a 3° club path at r ≈ 1.7 m and ṙ ≈ 22 m/s, the club moves ~2.3 cm la
 
 That is sufficient to separate deliberate in-to-out from out-to-in swings (8–15° apart) and insufficient for a degree-level accuracy claim. The validation plan is set accordingly. This estimate is analytical and must be confirmed or refuted by the separation test.
 
+> **Superseded by implementation (2026-07-25).** The polar formulation above
+> (fit the azimuth *rate*, `path_deg = atan2(r · θ̇, ṙ) + aim_offset_deg`) was
+> not what shipped, including the "Differential" bullet's rejection of the
+> Absolute/Cartesian option above — that option is what `club.py` actually
+> implements. This note records the divergence rather than rewriting the
+> sections above; see `club.py`'s module docstring for the full derivation.
+>
+> The shipped formulation is Cartesian, not polar: each sample converts to
+> `x = r · cos(az)`, `y = r · sin(az)`, weighted linear fits recover
+> `v_x`/`v_y` directly, and `path_deg = atan2(v_y, v_x) + aim_offset_deg`.
+> Both `x(t)` and `y(t)` are exactly linear in time for straight-line motion,
+> so this fit is unbiased in the continuous limit — the polar/rate form was
+> not (a fitted azimuth rate is a window-averaged rate through the fit's own
+> mean time, not the instantaneous rate at impact; see `club.py` for the
+> measured discrepancy on a synthetic fixture).
+>
+> Measured precision (first-principles fixture, `test_iwr6843_club_path.py`)
+> is **±0.3° across ±12°** — 0.034° at 4°, 0.092° at 8°, 0.297° at +12°,
+> 0.303° at −12°, growing with angle — not the "±1–2°" estimated above.
+>
+> The cancellation mechanism is also corrected here: absolute azimuth enters
+> **additively** (`+ aim_offset_deg`), so it is only the *rate*/velocity
+> terms that are immune to a constant per-element phase error, which is what
+> makes `--iwr6843-azimuth-offset-deg` load-bearing rather than a mount-aim
+> nicety. And the cancellation does not come from `elem_phase_rad` in
+> `iwr6843_calibration_reference.json` as implied above — `club.py` never
+> calls `cal.apply`. It comes from the TX2-vs-reference-antenna phase
+> *difference* computed in `doa.tx2_phase_at`, which is why a common
+> per-element error cancels regardless of which board it was measured on.
+>
+> The "azimuth-rate fit residual" named in the Failure Modes table below
+> (`rejected_azimuth_fit`) is, correspondingly, now a cross-range fit
+> residual (`club.py:277`), not a rate residual.
+
 ## Architecture
 
 One new module, `src/openflight/iwr6843/club.py`, owns the club measurement. It stays out of `lcmf.py` (683 lines, owns vertical launch) and `shot.py` (owns the ball) because club path has its own gates, failure modes, and confidence.
@@ -143,7 +177,7 @@ CLUB_SPEED_PROJECTION_RANGE = (0.4, 0.95)
 
 find_club(mti, geo, *, tee_range_m) -> BallTrack | None
 estimate_club_path(raw, cal, *, ops_club_speed_mph, aim_offset_deg,
-                   tdm_sign, tx_order) -> ClubPathResult
+                   tdm_sign) -> ClubPathResult
 ```
 
 Pipeline: parse and project the dump → MTI → `find_club` over the pre-impact window → per `(frame, loop)` TX2 phase from the shared `doa` helper → line fit of azimuth versus time → combine with the track's range rate → apply the aim offset and TrackMan sign.

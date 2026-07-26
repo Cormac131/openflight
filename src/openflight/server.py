@@ -23,7 +23,13 @@ from flask_socketio import SocketIO
 
 from .ballistics import resolve_launch, simulate
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, ClubType, Shot
-from .ops243 import Direction, OPS243Radar, SpeedReading, set_show_raw_readings
+from .ops243 import (
+    UART_BAUD_COMMANDS,
+    Direction,
+    OPS243Radar,
+    SpeedReading,
+    set_show_raw_readings,
+)
 from .rolling_buffer.monitor import estimate_carry_with_spin, get_optimal_spin_for_ball_speed
 from .session_logger import get_session_logger, init_session_logger, log_session_error
 from .sim import (
@@ -1002,6 +1008,7 @@ def init_iwr6843(
     tilt_deg: float | None = None,
     radar_height_m: float | None = None,
     ball_height_m: float = 0.04,
+    azimuth_offset_deg: float = 0.0,
     save_dumps: bool = False,
 ) -> bool:
     """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator."""
@@ -1043,6 +1050,7 @@ def init_iwr6843(
             net_range_m=net_range_m,
             tx_order=resolved_order,
             capture_timeout_s=capture_timeout_s,
+            azimuth_offset_deg=azimuth_offset_deg,
         )
         iwr6843_runtime_config = {
             "enabled": True,
@@ -1057,6 +1065,7 @@ def init_iwr6843(
             "tilt_deg": math.degrees(calibration.tilt_rad),
             "radar_height_m": calibration.radar_height_m,
             "ball_height_m": calibration.tee_ball_height_m,
+            "azimuth_offset_deg": azimuth_offset_deg,
             "capture_timeout_s": capture_timeout_s,
             "freeze_delay_ms": 0.0,
             "raw_dump_saved": save_dumps,
@@ -1842,6 +1851,67 @@ def _apply_calculated_spin(shot: Shot) -> bool:
     return True
 
 
+# Confidence floor/ceiling for measured angles. A measured angle always beats
+# the table fallback (0.5), but only a corroborated, tightly-agreeing estimate
+# earns the top of the range.
+ANGLE_CONFIDENCE_FLOOR = 0.55
+ANGLE_CONFIDENCE_CEILING = 0.95
+VERTICAL_SPREAD_FULL_CONFIDENCE_DEG = 2.0
+VERTICAL_SPREAD_ZERO_CONFIDENCE_DEG = 10.0
+
+# Spin axis is a difference of two experimental estimates (horizontal launch
+# minus club path); it should not appear the moment club path becomes
+# non-null, only once the weaker of the two legs (horizontal launch) clears
+# this bar.
+SPIN_AXIS_MIN_CONFIDENCE = 0.6
+
+
+def vertical_confidence(measurement) -> float:
+    """Vertical launch confidence from channel agreement and corroboration.
+
+    ``component_std_deg`` measures cross-channel disagreement, which only
+    means something when two channels were actually compared. When
+    ``single_channel`` is set, that comparison never happened: the value is
+    either ``None`` (no second component existed) or describes a
+    disagreement that was already resolved by discarding the bad channel --
+    reusing it as a spread penalty would double-count a fault this function
+    already derates via SINGLE_CHANNEL_CONFIDENCE_FACTOR, and np.std of the
+    one surviving value is spuriously 0.0 ("perfect agreement") in the
+    discarded-channel case. So single-channel results never derive their
+    agreement score from component_std_deg at all -- both single-channel
+    states (no second channel, or one caught and discarded) get the same
+    fixed "one channel, no corroboration" score before the derating factor
+    is applied, which is the honest answer: in both cases we have exactly
+    one channel's word for it.
+    """
+    single_channel = getattr(measurement, "single_channel", False)
+    spread = getattr(measurement, "component_std_deg", None)
+    if single_channel or spread is None:
+        # The `spread is None` half of this is defensive only: reachable
+        # today solely via single_channel (handled above), kept in case a
+        # future corroborated estimator omits component_std_deg.
+        score = 0.5
+    else:
+        span = VERTICAL_SPREAD_ZERO_CONFIDENCE_DEG - VERTICAL_SPREAD_FULL_CONFIDENCE_DEG
+        score = 1.0 - (float(spread) - VERTICAL_SPREAD_FULL_CONFIDENCE_DEG) / span
+        score = min(1.0, max(0.0, score))
+    if single_channel:
+        from .iwr6843.lcmf import (  # pylint: disable=import-outside-toplevel
+            SINGLE_CHANNEL_CONFIDENCE_FACTOR,
+        )
+
+        score *= SINGLE_CHANNEL_CONFIDENCE_FACTOR
+    span = ANGLE_CONFIDENCE_CEILING - ANGLE_CONFIDENCE_FLOOR
+    return round(ANGLE_CONFIDENCE_FLOOR + span * score, 3)
+
+
+def horizontal_confidence_from(coherence: float | None) -> float:
+    """Horizontal launch confidence from HLCMF-v0 coherence."""
+    if coherence is None:
+        return 0.0
+    return round(min(ANGLE_CONFIDENCE_CEILING, max(0.0, float(coherence))), 3)
+
+
 def _process_iwr6843_angle(shot: Shot) -> float | None:
     """Apply a correlated LCMF-v1 result without risking the OPS shot."""
     if iwr6843_runtime is None or shot.mode == "mock":
@@ -1853,9 +1923,11 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             impact_timestamp=shot.impact_timestamp,
             ball_speed_mph=shot.ball_speed_mph,
             club=shot.club.value,
+            club_speed_mph=shot.club_speed_mph,
         )
         capture = shot_result.capture
         measurement = shot_result.measurement
+        club_path = getattr(shot_result, "club_path", None)
         session_log = get_session_logger()
         if session_log:
             session_log.log_iwr6843_capture(
@@ -1872,6 +1944,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 ),
                 ball_speed_mph=shot.ball_speed_mph,
                 measurement=(measurement.to_dict() if measurement is not None else None),
+                club_path=(club_path.to_dict() if club_path is not None else None),
             )
 
         if capture is None:
@@ -1889,15 +1962,17 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             # Device-level provenance is retained in iwr6843_capture. The
             # public Shot contract uses "radar" for all measured radar angles.
             shot.launch_angle_vertical_source = "radar"
-            shot.launch_angle_vertical_confidence = 0.95
-            shot.launch_angle_confidence = 0.95
+            shot.launch_angle_vertical_confidence = vertical_confidence(measurement)
+            shot.launch_angle_confidence = shot.launch_angle_vertical_confidence
             shot.angle_source = "radar"
             horizontal_deg = getattr(measurement, "horizontal_deg", None)
             horizontal_confidence = getattr(measurement, "horizontal_confidence", None)
             horizontal_status = getattr(measurement, "horizontal_status", None)
             if horizontal_deg is not None:
                 shot.launch_angle_horizontal = horizontal_deg
-                shot.launch_angle_horizontal_confidence = 0.95
+                shot.launch_angle_horizontal_confidence = horizontal_confidence_from(
+                    horizontal_confidence
+                )
                 shot.launch_angle_horizontal_source = "radar"
                 logger.info(
                     "[SERVER] IWR6843 TX2 horizontal proxy: %.2f° (coherence %.0f%%, status=%s)",
@@ -1917,6 +1992,19 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             logger.warning(
                 "[SERVER] IWR6843 LCMF-v1 withheld angle: %s",
                 measurement.status,
+            )
+
+        # Club path is independent of the ball measurement's acceptance --
+        # it is derived from the club track and OPS club speed, not from
+        # LCMF-v1's vertical angle -- so it is published whenever the
+        # runtime produced one, even if the ball angle above was withheld.
+        if club_path is not None and club_path.accepted:
+            shot.club_path_deg = round(club_path.path_deg, 1)
+            logger.info(
+                "[SERVER] IWR6843 club path: %.2f° (confidence %.2f, %d frames)",
+                club_path.path_deg,
+                club_path.confidence or 0.0,
+                club_path.n_frames,
             )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning("[SERVER] IWR6843 processing error: %s", error, exc_info=True)
@@ -2151,8 +2239,18 @@ def on_shot_detected(shot: Shot):
 
                 kld7_horizontal.reset()
 
-            # Derive spin axis from face angle (H. launch) minus club path
-            if shot.launch_angle_horizontal is not None and shot.club_path_deg is not None:
+            # Derive spin axis from face angle (H. launch) minus club path.
+            # Both are experimental estimates; only trust the difference once
+            # the weaker leg (horizontal launch) clears a confidence floor,
+            # rather than emitting it the moment club path is non-null.
+            # club_path_deg can come from IWR6843 (_process_iwr6843_angle,
+            # above) rather than K-LD7, so a failure here is not necessarily
+            # a K-LD7 failure -- see the except block below.
+            if (
+                shot.launch_angle_horizontal is not None
+                and shot.club_path_deg is not None
+                and (shot.launch_angle_horizontal_confidence or 0.0) >= SPIN_AXIS_MIN_CONFIDENCE
+            ):
                 shot.spin_axis_deg = round(shot.launch_angle_horizontal - shot.club_path_deg, 1)
                 logger.info(
                     "[SERVER] Spin axis: %+.1f° (face=%+.1f° - path=%+.1f°)",
@@ -2165,12 +2263,15 @@ def on_shot_detected(shot: Shot):
                 kld7_ms = (time.time() - kld7_start) * 1000
                 logger.info("[SERVER] K-LD7 processing: %.1fms", kld7_ms)
     except Exception as e:
-        logger.warning("[SERVER] K-LD7 processing error: %s", e, exc_info=True)
+        # Covers K-LD7 processing AND the spin-axis derivation above, which
+        # reads club_path_deg regardless of whether it came from K-LD7 or
+        # IWR6843 -- so this is not necessarily a K-LD7-specific failure.
+        logger.warning("[SERVER] Angle/spin-axis post-processing error: %s", e, exc_info=True)
         log_session_error(
-            "K-LD7 shot processing failed",
+            "Angle/spin-axis post-processing failed",
             component="server",
             context={
-                "stage": "kld7",
+                "stage": "angle_postprocessing",
                 "ball_speed_mph": shot.ball_speed_mph,
                 "club": shot.club.value,
             },
@@ -2966,6 +3067,16 @@ def main():
         help=("Raw TI dump directory when --debug is enabled (default: <session-log-dir>/iwr6843)"),
     )
     parser.add_argument(
+        "--iwr6843-azimuth-offset-deg",
+        type=float,
+        default=0.0,
+        help=(
+            "Azimuth of the radar boresight relative to the target line, in degrees. "
+            "Positive means boresight points right of the target line. Added to the "
+            "measured club path; 0 reports club path relative to boresight."
+        ),
+    )
+    parser.add_argument(
         "--kld7",
         action="store_true",
         help="[DEPRECATED] Enable K-LD7 vertical angle radar (launch angle)",
@@ -3142,12 +3253,21 @@ def main():
         parser.error("--kld7-mount-tilt is required when --kld7 is passed")
     if args.iwr6843 and args.kld7:
         parser.error("--iwr6843 and vertical --kld7 cannot both own launch angle")
+    if args.iwr6843 and args.kld7_horizontal:
+        parser.error("--iwr6843 and horizontal --kld7 cannot both own club path")
     if args.iwr6843 and args.mock:
         parser.error("--iwr6843 cannot be used with --mock")
     if args.iwr6843 and args.trigger == "sound-gpio":
         parser.error("--iwr6843 already owns BCM GPIO; use the default --trigger sound")
     if args.iwr6843 and (args.iwr6843_tee_m <= 0 or args.iwr6843_net_m <= 0):
         parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
+    # The radar can only be moved to a rate it has an API command for, so an
+    # unsupported value is refused by the hardware and leaves the link at
+    # whatever answered -- a silent slow link, which presents as an
+    # unresponsive app rather than a bad flag. Fail at the CLI instead.
+    if args.ops_baud is not None and args.ops_baud not in UART_BAUD_COMMANDS:
+        supported = ", ".join(str(b) for b in sorted(UART_BAUD_COMMANDS))
+        parser.error(f"--ops-baud must be one of {supported} (got {args.ops_baud})")
     global experimental_kld7_radc_tuning
     global experimental_kld7_raw_radc_logging
     global active_kld7_radc_tuning
@@ -3271,6 +3391,7 @@ def main():
             tilt_deg=args.iwr6843_tilt_deg,
             radar_height_m=args.iwr6843_radar_height_m,
             ball_height_m=args.iwr6843_ball_height_m,
+            azimuth_offset_deg=args.iwr6843_azimuth_offset_deg,
             save_dumps=args.debug,
         ):
             calibration = iwr6843_runtime.calibration

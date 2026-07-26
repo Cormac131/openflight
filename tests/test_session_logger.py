@@ -494,6 +494,47 @@ class TestLogIWR6843Capture:
         assert entry["ball_speed_source"] == "ops243"
         assert entry["measurement"] == measurement
 
+    def test_iwr6843_capture_logs_club_path(self, tmp_path):
+        """Club path evidence must be replayable from the session log alone."""
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+
+        logger.log_iwr6843_capture(
+            shot_number=1,
+            shot_timestamp=100.0,
+            trigger_timestamp=100.002,
+            capture_path="/tmp/x.l3dump",
+            capture_bytes=549542,
+            dump_duration_s=5.33,
+            capture_error=None,
+            ball_speed_mph=94.5,
+            measurement={"status": "accepted", "track_span_s": 0.0334},
+            club_path={"status": "accepted", "path_deg": 2.4, "confidence": 0.8},
+        )
+
+        entry = json.loads(logger.session_path.read_text().strip().split("\n")[-1])
+        assert entry["type"] == "iwr6843_capture"
+        assert entry["club_path"]["path_deg"] == 2.4
+        assert entry["measurement"]["track_span_s"] == 0.0334
+
+    def test_iwr6843_capture_club_path_defaults_to_none(self, tmp_path):
+        logger = SessionLogger(log_dir=tmp_path, enabled=True)
+        logger.start_session(mode="rolling-buffer", trigger_type="sound")
+
+        logger.log_iwr6843_capture(
+            shot_number=1,
+            shot_timestamp=100.0,
+            trigger_timestamp=None,
+            capture_path=None,
+            capture_bytes=0,
+            dump_duration_s=None,
+            capture_error="no capture",
+            ball_speed_mph=94.5,
+        )
+
+        entry = json.loads(logger.session_path.read_text().strip().split("\n")[-1])
+        assert entry["club_path"] is None
+
 
 class TestLogClockSync:
     """Tests for OPS clock-sync logging (H1 timing instrumentation)."""

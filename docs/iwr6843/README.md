@@ -510,6 +510,112 @@ ball track does not meet the acceptance gates.
 In debug mode, verify that the session contains an `iwr6843_capture` entry and
 that its `capture_path` points to the saved `.l3dump` file.
 
+## Club Path
+
+Club path is the horizontal direction the club head travels through impact,
+measured from the six pre-impact frames the firmware retains. Positive is
+in-to-out, negative out-to-in, following TrackMan. **Right-handed only.**
+
+Measured on a first-principles fixture across ±12°, absolute error grows with
+angle rather than staying flat: 0.034° at 4°, 0.092° at 8°, and 0.297° at
+12°, worst at the largest angle measured (0.303° at −12°). The ±12° pair
+(0.297° vs. 0.303°) differs by only about 0.006°, so the residual is
+symmetric rather than sign-dependent. It is not, however, a fixed percentage
+of the angle — 0.034° at 4° is under 1%, while 0.297° at 12° is about
+2.5% — so quote it as ±0.3° working precision across the measured ±12° range
+rather than a percentage. Two explanations for the growth are on the table
+and neither is settled: it may be discretisation (range-bin quantisation,
+the tracker's 1.2-bin inlier tolerance, phase inversion at small angles), or
+it may be structural — the club's range comes from a *linear* fit against a
+genuinely nonlinear true range, which fits the observed growth pattern
+better. A future improvement may reduce the residual either way. It ships
+experimental.
+
+Do not extrapolate ±0.3° beyond ±12°: an out-of-band check during
+development read about 0.57° at ±16°, roughly double the 12° figure and
+consistent with the growth trend. That figure is indicative only — it is not
+covered by a test — but a strong out-to-in path can exceed 12°, and an
+operator trusting ±0.3° there would be relying on a number nobody measured.
+
+### Set the target-line reference
+
+Club path is relative to the target line, and the array calibration cannot
+supply where the radar's boresight points. Measure the angle between boresight
+and your target line, then pass it:
+
+```bash
+scripts/start-kiosk.sh --iwr6843 --iwr6843-azimuth-offset-deg 1.5
+```
+
+Positive means boresight points right of the target line. The value is added
+to the measured path. Left at 0, club path is reported relative to boresight
+rather than the target line, which is fine for separation testing but not for
+absolute numbers.
+
+This flag is not optional trim. The estimator fits `x(t)` and `y(t)` in
+Cartesian coordinates and reports `path = atan2(v_y, v_x)`, so absolute
+azimuth enters *additively* rather than cancelling out: a constant
+per-element phase error from the shipped array calibration (measured on a
+different board than the one it ships on) shifts the reported path by a
+constant. `--iwr6843-azimuth-offset-deg` is what absorbs that shift, not a
+convenience for aiming.
+
+### Why this can't be the ball
+
+Two independent checks keep a mis-tracked ball from being reported as club
+path, and both were verified. First, the pre-impact time window excludes the
+ball's flight — the club and ball share overlapping radial speed ranges, so
+without the window the tracker would lock onto the ball. Second, even inside
+that window the OPS club-speed cross-check rejects a ball track: a ball's
+radial speed against club-speed bounds produces a projection factor of about
+1.26, which falls outside the accepted 0.4–0.95 window.
+
+### Validate with a separation test
+
+Record three sessions of about 10 shots each, then compare them:
+
+```bash
+uv run python scripts/iwr6843/club_path_report.py \
+  --out-to-in session_A.jsonl \
+  --square     session_B.jsonl \
+  --in-to-out  session_C.jsonl
+```
+
+It passes when the group means are ordered correctly and each adjacent gap
+exceeds the within-group spread. Exit status is non-zero when they do not
+separate.
+
+A session can fail for three distinct reasons, and the report names which one
+fired because each needs a different fix from the operator:
+
+- **Groups out of order** — the swings themselves may not have been distinct
+  enough; swing more deliberately between blocks.
+- **A group has fewer than 5 accepted shots** — below that, a group's own
+  stdev is too noisy to support a separation claim; hit more shots.
+- **A gap falls below the 0.3° measurement floor** — grounded in the 0.303°
+  max residual measured on the fixture above; a gap this small is below
+  instrument precision at any sample size, so more shots won't fix it —
+  re-check the geometry (mount, tee range, azimuth offset) instead.
+
+The 0.3° floor sits at the measured residual, not comfortably above it —
+for the intended use (in-to-out vs. out-to-in, which typically differ by
+8–15°) that's irrelevant, but an operator chasing a marginal ~0.4° group
+separation should know the floor isn't a wide safety margin.
+
+### Reading `club_path.status` in the session log
+
+| Status | What it means |
+|---|---|
+| `accepted` | Club path measured; `confidence` reflects fit quality |
+| `rejected_requires_three_tx` | Capture wasn't a 3-TX dump; TX2 phase needs all three transmitters |
+| `rejected_no_pre_impact_frames` | The capture contains no pre-impact window |
+| `rejected_no_club_track` | No mover near the tee passed the club gates — check the tee range and that the radar sees the hitting area |
+| `rejected_club_speed_mismatch` | The tracked mover's speed does not match the OPS club speed, so it is probably hands or body, not the club |
+| `rejected_insufficient_snapshots` | Too few usable pre-impact samples |
+| `rejected_azimuth_fit` | The azimuth track was too noisy to fit |
+| `rejected_phase_wrap` | Phase swing far larger than physically possible; a broken track |
+| `..._tdm_sign_fallback` suffix | The ball estimate was rejected, so the TDM sign came from the configured policy rather than measurement |
+
 ## Run A Calibration Session
 
 Stop the kiosk before running calibration so it releases BCM17 and both serial
@@ -545,13 +651,51 @@ The terminal reports:
 - Estimated ball-start range.
 - A radar-consistency tilt candidate.
 
-The tilt candidate is not source-of-truth launch-angle calibration. It shows
-the mount tilt where the LCMF component models agree best and can flag a large
-setup error. Final geometry should still come from physical measurement and,
-when available, launch-monitor source-of-truth validation.
+The tilt candidate is not source-of-truth launch-angle calibration, and on
+current data it cannot recommend a tilt at all. It reports the tilt where the
+LCMF component models agree best — it minimises `component_std_deg` — but that
+score is monotonic in tilt across the swept window, so the minimum lands on
+whichever end of the window the trend runs toward rather than on the real
+mount angle. On the 2026-07-25 range session, with the mount physically set
+and measured at 5.5°, a ±3° sweep recommended 2.5° on shots 1 and 4 and 8.5°
+on shots 2 and 3: both edges of the window, never the truth, disagreeing with
+itself by the full 6° width across four shots of one session.
+
+**Set tilt by physical measurement.** Treat a candidate sitting on the edge of
+the sweep as no answer rather than a recommendation — which, on every shot
+checked so far, is what it returns.
 
 Use `--no-tilt-sweep` when you only need capture diagnostics and faster shot
 turnaround.
+
+## Launch-Angle Estimator Limitations
+
+The vertical launch angle comes from two channel models, `two8` and
+`four4_path_tdm`. When they agree within 8° the estimate is their mean; when
+they disagree the estimator selects the one whose objective has the sharper
+minimum (its curvature) and reports the result at reduced confidence. Three
+limits of that scheme are known and unresolved. They are deferred pending a
+session paired with a reference instrument, which this repo does not have.
+
+**The curvature criterion is not scale-normalised.** `four4_path_tdm`'s
+objective spans a range 2–4× larger than `two8`'s, so most of the reported
+"3.7–10.7× sharper" margin is model scale, not evidence quality — on one shot
+the true margin is 1.14×. It is validated as a *degeneracy detector*: it
+reliably catches the collapsed `two8` channel seen on the 2026-07-25 mount. It
+is not validated as an accuracy ranker, and it is one-sided — a collapsed
+`four4_path_tdm` would likely win the comparison anyway.
+
+**Selecting is worse than averaging when both channels are healthy but
+disagree.** Monte Carlo at 6° of noise: 4.26° RMS averaging against 5.79°
+selecting, and 7.93° on the disagreeing subset alone. Selection pays off only
+when one channel is genuinely broken, which is the case the 8° gate was cut
+for.
+
+**The 8° gate rests on one session.** Its justification is a gap between one
+shot whose channels agreed to 4.59° and six that spread 15.9–20.2°, all from a
+single session, club, geometry and mount tilt. Nothing establishes that the
+gap sits in the same place at another tilt, with another club, or on another
+board.
 
 ## Replay Saved Captures
 

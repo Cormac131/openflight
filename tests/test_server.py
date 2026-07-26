@@ -1,6 +1,7 @@
 """Tests for server module."""
 
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from openflight import server as server_module
 from openflight.iwr6843 import Calibration
 from openflight.kld7.types import KLD7Angle
 from openflight.launch_monitor import ClubType, Shot
+from openflight.ops243 import UART_BAUD_COMMANDS
 from openflight.server import (
     MockLaunchMonitor,
     estimate_launch_angle,
@@ -137,6 +139,51 @@ class TestIWR6843ShotIntegration:
         assert captured["armed"] is False
         server_module.iwr6843_runtime = None
 
+    def test_init_iwr6843_wires_azimuth_offset_into_runtime(self, monkeypatch, tmp_path):
+        """--iwr6843-azimuth-offset-deg must reach IWR6843Runtime, not just be parsed.
+
+        A flag that parses but never reaches the runtime silently reports every
+        club path relative to boresight instead of the target line.
+        """
+        calibration = Calibration.identity()
+
+        class FakeCaptureMonitor:
+            def __init__(self, **kwargs):
+                self.port = "/dev/ttyUSB0"
+
+            def start(self, *, armed=True):
+                return None
+
+            def stop(self):
+                return None
+
+        monkeypatch.setattr(Calibration, "load", lambda _path: calibration)
+        monkeypatch.setattr(
+            "openflight.iwr6843.monitor.IWR6843CaptureMonitor",
+            FakeCaptureMonitor,
+        )
+        monkeypatch.setattr(
+            "openflight.iwr6843.monitor.tx_order_from_config",
+            lambda _path: "normal",
+        )
+
+        assert server_module.init_iwr6843(
+            port="/dev/ttyUSB0",
+            config_path="snapshot.cfg",
+            calibration_path="cal.json",
+            output_dir=tmp_path,
+            trigger_pin=17,
+            tee_range_m=1.575,
+            net_range_m=4.6,
+            tx_order="auto",
+            capture_timeout_s=12.0,
+            azimuth_offset_deg=1.5,
+        )
+
+        assert server_module.iwr6843_runtime.azimuth_offset_deg == 1.5
+        assert server_module.iwr6843_runtime_config["azimuth_offset_deg"] == 1.5
+        server_module.iwr6843_runtime = None
+
     def test_accepted_lcmf_angle_is_applied_to_existing_shot_contract(self, monkeypatch):
         measurement = SimpleNamespace(
             accepted=True,
@@ -187,7 +234,7 @@ class TestIWR6843ShotIntegration:
         assert logged[0]["ball_speed_mph"] == 100.0
         assert logged[0]["measurement"]["estimator"] == "lcmf_v1"
 
-    def test_iwr6843_horizontal_forces_high_confidence_for_field_testing(self, monkeypatch):
+    def test_iwr6843_horizontal_confidence_derived_from_coherence(self, monkeypatch):
         measurement = SimpleNamespace(
             accepted=True,
             angle_deg=18.5,
@@ -236,7 +283,9 @@ class TestIWR6843ShotIntegration:
         assert shot.launch_angle_vertical_source == "radar"
         assert shot.launch_angle_horizontal == pytest.approx(2.25)
         assert shot.launch_angle_horizontal_source == "radar"
-        assert shot.launch_angle_horizontal_confidence == pytest.approx(0.95)
+        # Confidence is now derived from HLCMF-v0 coherence (0.63 here), not
+        # a hardcoded 0.95 -- see openflight.server.horizontal_confidence_from.
+        assert shot.launch_angle_horizontal_confidence == pytest.approx(0.63)
 
     def test_horizontal_fallback_does_not_invent_confidence_for_lcmf_angle(self):
         shot = Shot(
@@ -321,9 +370,9 @@ class TestSessionErrorLogging:
         on_shot_detected(shot)
 
         assert logged_errors
-        assert logged_errors[0][0] == "K-LD7 shot processing failed"
+        assert logged_errors[0][0] == "Angle/spin-axis post-processing failed"
         assert logged_errors[0][1]["component"] == "server"
-        assert logged_errors[0][1]["context"]["stage"] == "kld7"
+        assert logged_errors[0][1]["context"]["stage"] == "angle_postprocessing"
         assert logged_errors[0][1]["exc"].__class__.__name__ == "RuntimeError"
 
     def test_set_radar_config_logs_failure_to_session(self, monkeypatch):
@@ -2196,6 +2245,52 @@ class TestOnShotDetected:
         assert shot.launch_angle_vertical == pytest.approx(18.7)
         assert shot.launch_angle_horizontal == pytest.approx(0.0)
 
+    def _spin_axis_shot(self, *, horizontal_confidence):
+        """A shot with launch angle and club path already resolved, isolating
+        the spin-axis gate itself rather than whatever radar path fed it."""
+        return Shot(
+            ball_speed_mph=150.0,
+            club_speed_mph=100.0,
+            timestamp=datetime.now(),
+            impact_timestamp=1234.5,
+            club=ClubType.DRIVER,
+            launch_angle_horizontal=3.2,
+            launch_angle_horizontal_confidence=horizontal_confidence,
+            club_path_deg=-1.5,
+        )
+
+    def _run_with_no_radar_hardware(self, monkeypatch, shot):
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "camera_tracker", None)
+        monkeypatch.setattr(server_module, "camera_enabled", False)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+        on_shot_detected(shot)
+
+    def test_spin_axis_emitted_when_horizontal_confidence_clears_gate(self, monkeypatch):
+        shot = self._spin_axis_shot(
+            horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE
+        )
+
+        self._run_with_no_radar_hardware(monkeypatch, shot)
+
+        assert shot.spin_axis_deg == pytest.approx(3.2 - (-1.5))
+
+    def test_spin_axis_withheld_when_horizontal_confidence_below_gate(self, monkeypatch):
+        """Regression guard: spin axis must not appear the moment club path
+        is non-null -- only once the horizontal leg is trustworthy enough."""
+        shot = self._spin_axis_shot(
+            horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE - 0.01
+        )
+
+        self._run_with_no_radar_hardware(monkeypatch, shot)
+
+        assert shot.spin_axis_deg is None
+
 
 class TestCarryComputation:
     """Tests for the ballistic carry path in on_shot_detected."""
@@ -2385,3 +2480,77 @@ class TestVerticalGateBypass:
         assert server_module._select_vertical_radar_launch(None, self._shot())[0] is False
         no_angle = KLD7Angle(vertical_deg=None, confidence=0.9, num_frames=2)
         assert server_module._select_vertical_radar_launch(no_angle, self._shot())[0] is False
+
+
+class TestClubPathOwnershipGuard:
+    """Two producers can write shot.club_path_deg (IWR6843 and the deprecated
+    horizontal K-LD7). _process_iwr6843_angle runs first in on_shot_detected,
+    so if both hardware paths were allowed to start, the deprecated radar
+    would silently overwrite the IWR6843 value with no error and no log.
+    The CLI must make that combination impossible to start, matching the
+    existing --iwr6843/--kld7 (vertical) guard."""
+
+    def test_iwr6843_and_kld7_horizontal_cannot_both_own_club_path(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            sys, "argv", ["openflight-server", "--iwr6843", "--kld7-horizontal"]
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            server_module.main()
+
+        # code=2 pins this to argparse's parser.error(), not the unrelated
+        # SystemExit(1) that main() raises further down when IWR6843
+        # hardware init fails in a test environment -- that failure would
+        # otherwise make this test pass whether or not the guard exists.
+        # The message pins it to *this* guard, not one of the other
+        # parser.error() calls in the same validation block.
+        assert exc_info.value.code == 2
+        assert "cannot both own club path" in capsys.readouterr().err
+
+    def test_iwr6843_and_kld7_vertical_cannot_both_own_launch_angle(self, monkeypatch, capsys):
+        """Existing guard this one is modeled on -- pinned so a refactor of
+        the argparse validation block can't quietly drop either check."""
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["openflight-server", "--iwr6843", "--kld7", "--kld7-mount-tilt", "0"],
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            server_module.main()
+
+        assert exc_info.value.code == 2
+        assert "cannot both own launch angle" in capsys.readouterr().err
+
+
+class TestOpsBaudValidation:
+    """The radar can only move to a rate it has an ``In`` API command for, so an
+    unsupported --ops-baud is refused by the hardware and leaves the link at
+    whatever answered. That presents as an unresponsive app -- a 40KB dump takes
+    ~21s at 19,200 against ~1.8s at 230,400 -- rather than as a bad flag, and 0
+    or a negative value reaches pyserial directly. Its sibling geometry flags
+    already validate via parser.error; this one did not."""
+
+    @pytest.mark.parametrize("bad", ["0", "-1", "250000", "9601"])
+    def test_unsupported_ops_baud_is_refused_at_the_cli(self, monkeypatch, capsys, bad):
+        monkeypatch.setattr(sys, "argv", ["openflight-server", "--ops-baud", bad])
+
+        with pytest.raises(SystemExit) as exc_info:
+            server_module.main()
+
+        # code=2 pins this to parser.error() rather than a later SystemExit(1)
+        # from hardware init failing in a test environment, which would make
+        # this pass whether or not the guard exists.
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "--ops-baud must be one of" in err
+        # The message must name the valid rates; "invalid value" alone leaves
+        # the operator guessing which of five the radar accepts.
+        assert "230400" in err and "9600" in err
+
+    @pytest.mark.parametrize("good", [9600, 19200, 57600, 115200, 230400])
+    def test_every_api_supported_baud_is_accepted(self, good):
+        """The guard must admit exactly the rates the radar has a command for --
+        a stricter check would reject a legitimate fallback to 115200, which the
+        flag's own help text tells operators to use."""
+        assert good in UART_BAUD_COMMANDS

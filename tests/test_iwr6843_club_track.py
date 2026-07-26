@@ -8,7 +8,7 @@ already — it just needs pointing at one deliberately.
 import numpy as np
 import pytest
 
-from openflight.iwr6843 import tracking
+from openflight.iwr6843 import club, tracking
 from openflight.iwr6843.dump import parse_dump
 from openflight.iwr6843.shot import geometry_from_header
 
@@ -68,6 +68,37 @@ def test_club_gates_find_a_slow_close_mover():
     )
     assert with_club_gates is not None, "club gates failed to find the synthetic club"
     assert with_club_gates.speed_ms == pytest.approx(22.0, abs=2.0)
+
+
+def test_speed_bounds_are_the_callers_not_the_module_default():
+    """The caller's speed band must actually gate the fit.
+
+    ``speed_bounds_ms`` is layer 2 of the two-layer guard that stops the ball
+    being reported as club path (layer 1 is ``time_window_s``), so it needs a
+    test that fails when it is ignored. Every other fixture in this suite runs
+    at 22 m/s radial, which sits inside BOTH the ball band (20-90) and the club
+    band (10-45) -- so none of them can tell the two apart, and substituting
+    the module default for the argument passes them all.
+
+    12 m/s is inside the club band and below the ball band's 20 m/s floor, so
+    it separates them. Gates and ``min_ball_ms`` are held identical across the
+    two calls: ``speed_bounds_ms`` is the only thing that differs, so it is
+    the only thing that can explain the difference in outcome.
+    """
+    raw = _synth(1.6, 12.0)
+    shared = {"gates_m": ((1.0, 2.6),), "min_ball_ms": 10.0}
+
+    with_club_bounds = _track(raw, speed_bounds_ms=club.CLUB_SPEED_BOUNDS_MS, **shared)
+    assert with_club_bounds is not None, (
+        "12 m/s is inside the club band (10-45 m/s) and must be found"
+    )
+    assert with_club_bounds.speed_ms == pytest.approx(12.0, abs=2.0)
+
+    with_ball_bounds = _track(raw, speed_bounds_ms=tracking.SPEED_BOUNDS_MS, **shared)
+    assert with_ball_bounds is None, (
+        "12 m/s is below the ball band's 20 m/s floor and must be rejected; "
+        f"got {with_ball_bounds}"
+    )
 
 
 def test_ball_behaviour_unchanged_by_defaults():

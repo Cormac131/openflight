@@ -58,6 +58,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Offline `scripts/analysis/session_shot_report.py` per-shot HTML report, a
   visual explainer (`docs/kld7-launch-angle-explained.html`), and a
   setup/usage guide (`docs/kld7.md`).
+- **Club path from the IWR6843's pre-impact frames.** `Shot.club_path_deg` has
+  been wired end to end since the K-LD7 era but unpopulated since that radar
+  was deprecated. It now comes from the six pre-impact frames the L3-dump
+  firmware already retains. The estimator fits `x(t)` and `y(t)` in Cartesian
+  coordinates and reports `path = atan2(v_y, v_x)`; absolute azimuth enters
+  additively rather than cancelling out, so a constant per-element phase error
+  from the shipped array calibration (measured on a different board) shifts
+  the reported path by a constant rather than the estimator itself — which is
+  what `--iwr6843-azimuth-offset-deg` is for. Measured on a first-principles
+  fixture across ±12°, absolute error grows with angle (0.034° at 4° to
+  0.303° at −12°, roughly symmetric), so it separates deliberate in-to-out
+  from out-to-in swings but does not support degree-level claims. Ships
+  experimental; validate with `scripts/iwr6843/club_path_report.py` before
+  trusting it.
 
 ### Changed
 - The vertical estimator is now a fixed cascade (two_ray → geometry →
@@ -93,6 +107,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server's broad K-LD7 exception handler swallowed it, so the shot
   was reported without an angle and no error was visible. Buffer reads
   now copy under a lock; appends and resets take the same lock.
+- **One collapsed channel no longer drags the launch angle down.** The vertical
+  estimator averaged its two channel estimates unweighted. On a 0.229 m, 5.5°
+  mount the `two8` channel collapsed to about 0° on five of six shots while
+  `four4_path_tdm` read 15.3–22.0°, so five 7-irons that actually launched near
+  17° were reported at 7–9°, each stamped with 0.95 confidence while
+  `component_std_deg` sat at 8–10° in the log. Across a seven-shot session the
+  plain mean read 10.9° with one channel collapsed; channel selection recovers
+  18.3°. Channels that disagree beyond 8° now resolve to the better-supported
+  one with reduced confidence; channels that agree are still averaged.
+- **Launch-angle confidence is derived instead of hardcoded.** Both the vertical
+  and horizontal angles reported a constant 0.95. The horizontal case computed
+  HLCMF-v0 coherence, logged it, and then discarded it in favour of the
+  constant, so five estimates whose own channels disagreed by 8–10° were
+  presented as high confidence. Vertical confidence now follows channel
+  agreement and corroboration, horizontal follows coherence, and `spin_axis_deg`
+  gates on the horizontal leg rather than appearing the moment club path exists.
+- **Track-span floor relaxed from 18 ms to 15 ms, and the span is now logged.**
+  Recovers usable captures — one range session went from 6/7 accepted at a
+  10.9° mean to 7/7 at 18.3°, and the 18 ms → 15 ms change is what recovered
+  the seventh shot. The span is now recorded, since it was the gate rejecting
+  most shots and was invisible without an offline replay.
+- **A channel that measured nothing can no longer win the channel selection.**
+  Objective curvature scored 0 both when a channel's minimum was genuinely
+  flat and when its minimum sat on the edge of the −5° to 45° search grid —
+  two different things, since an edge minimum means the true angle lies
+  outside the searched range and a real launch above 45° pins a perfectly
+  healthy channel there. Curvature now returns "no measurement" for an edge
+  minimum, and such a channel takes no part in selection, in the spread
+  comparison, or in the reported `component_std_deg`. When the channels
+  disagree and none has positive curvature — all flat, all off-grid, or
+  unscored — the shot is rejected as `rejected_no_conditioned_channel`
+  instead of returning whichever channel came first in the dictionary, which
+  was `two8`, the one that collapses.
+- **The `fast_*` estimates no longer veto corroboration they cannot win.** All
+  five components fed the agreement comparison while only the two channel
+  models could be selected, so one `fast_*` outlier pushed the spread past
+  the 8° gate and cut two channels agreeing to 0.4° down to a single channel
+  flagged as uncorroborated and derated. They are diagnostic-only: still
+  logged in `components_deg`, now excluded from the selection decision and
+  from `component_std_deg`. Affects raw-ADC captures only — range-snapshot
+  captures never computed the fast-time models.
+
+### Known Limitations
+
+Deferred pending a session paired with a reference instrument. See
+[the IWR6843 operator guide](iwr6843/README.md#launch-angle-estimator-limitations).
+
+- **The calibration tilt sweep cannot recommend a tilt.** It minimises
+  `component_std_deg`, which is monotonic in tilt across the swept window, so
+  its minimum lands on a window edge instead of the mount angle: on the
+  2026-07-25 session, with the mount measured at 5.5°, a ±3° sweep returned
+  2.5° on two shots and 8.5° on two others. Set tilt by physical measurement.
+- **The curvature criterion is not scale-normalised.** `four4_path_tdm`'s
+  objective range is 2–4× larger than `two8`'s, so most of the "3.7–10.7×
+  sharper" margin is model scale — on one shot the true margin is 1.14×. It is
+  validated as a degeneracy detector, not an accuracy ranker, and it is
+  one-sided: a collapsed `four4_path_tdm` would likely still win.
+- **Selecting is worse than averaging when both channels are healthy but
+  disagree.** Monte Carlo at 6° of noise: 4.26° RMS averaging against 5.79°
+  selecting, 7.93° on the disagreeing subset. The 8° gate's justification is a
+  gap between one shot at 4.59° and six at 15.9–20.2°, from a single session,
+  club, geometry and tilt.
 
 ### Changed
 - Spin detection: drop the autocorrelation override branch. The autocorr

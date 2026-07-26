@@ -205,3 +205,14 @@ def test_ops_port_alias_matches_radar_port():
     via_radar = _dry_run("--radar-port", "/dev/ttyAMA0").stdout.strip()
     assert via_ops == via_radar
     assert "--port /dev/ttyAMA0" in via_ops
+
+
+def test_iwr6843_azimuth_offset_is_forwarded():
+    """Club path is relative to the target line, so the aim offset must reach the server."""
+    command = _dry_run("--iwr6843", "--iwr6843-azimuth-offset-deg", "1.5").stdout.strip()
+    assert "--iwr6843-azimuth-offset-deg 1.5" in command
+
+
+def test_iwr6843_azimuth_offset_omitted_by_default():
+    command = _dry_run("--iwr6843").stdout.strip()
+    assert "--iwr6843-azimuth-offset-deg" not in command

@@ -5,8 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from openflight.iwr6843.calibration import Calibration
+from openflight.iwr6843.club import ClubPathResult, estimate_club_path
 from openflight.iwr6843.lcmf import LCMFResult, estimate_lcmf_v1
 from openflight.iwr6843.monitor import IWR6843Capture, IWR6843CaptureMonitor
+
+# The ball estimate's measured tdm_sign_used takes priority; this only
+# resolves the TDM sign for the club-path fallback when it is unavailable.
+# "auto" has no fixed sign of its own, so it defaults to positive, same as
+# this module's own tdm_sign_policy default.
+_TDM_SIGN_BY_POLICY = {"positive": 1, "negative": -1, "auto": 1}
 
 
 @dataclass(frozen=True)
@@ -15,6 +22,7 @@ class IWR6843ShotResult:
 
     capture: IWR6843Capture | None
     measurement: LCMFResult | None
+    club_path: ClubPathResult | None = None
 
 
 @dataclass
@@ -26,6 +34,8 @@ class IWR6843Runtime:
     net_range_m: float | None
     tx_order: str = "normal"
     capture_timeout_s: float = 12.0
+    azimuth_offset_deg: float = 0.0
+    tdm_sign_policy: str = "positive"
 
     def process_shot(
         self,
@@ -33,6 +43,7 @@ class IWR6843Runtime:
         impact_timestamp: float | None,
         ball_speed_mph: float,
         club: str | None,
+        club_speed_mph: float | None = None,
     ) -> IWR6843ShotResult:
         """Match one OPS shot to TI data and run LCMF-v1."""
         capture = self.capture_monitor.capture_for_shot(
@@ -50,7 +61,27 @@ class IWR6843Runtime:
             tx_order=self.tx_order,
             tdm_sign_policy="positive",
         )
-        return IWR6843ShotResult(capture=capture, measurement=measurement)
+        club_path = None
+        # No OPS club speed means no identity gate to distinguish the club
+        # track from hands, body, or the ball itself, so an estimate here
+        # would be an unverifiable guess -- worse than no estimate at all.
+        if club_speed_mph:
+            ball_sign = getattr(measurement, "tdm_sign_used", None)
+            fallback = ball_sign not in (-1, 1)
+            policy_sign = _TDM_SIGN_BY_POLICY.get(self.tdm_sign_policy, 1)
+            club_path = estimate_club_path(
+                capture.raw,
+                self.calibration,
+                ops_club_speed_mph=club_speed_mph,
+                aim_offset_deg=self.azimuth_offset_deg,
+                tdm_sign=policy_sign if fallback else ball_sign,
+            )
+            if fallback:
+                # The ball measurement had no usable sign, so this is the
+                # configured policy's guess, not a measured value. Recorded
+                # in the status so a later replay can tell the two apart.
+                club_path.status = f"{club_path.status}_tdm_sign_fallback"
+        return IWR6843ShotResult(capture=capture, measurement=measurement, club_path=club_path)
 
     def stop(self) -> None:
         """Release TI hardware."""

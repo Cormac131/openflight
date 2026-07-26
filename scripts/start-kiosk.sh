@@ -36,6 +36,7 @@ IWR6843_BALL_HEIGHT_M=""
 IWR6843_TX_ORDER=""
 IWR6843_CAPTURE_TIMEOUT=""
 IWR6843_OUTPUT_DIR=""
+IWR6843_AZIMUTH_OFFSET=""
 KLD7=false
 KLD7_PORT=""
 KLD7_ANGLE_OFFSET=""
@@ -178,6 +179,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --iwr6843-output-dir)
             IWR6843_OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        --iwr6843-azimuth-offset-deg)
+            IWR6843_AZIMUTH_OFFSET="$2"
             shift 2
             ;;
         --kld7)
@@ -463,6 +468,7 @@ if [ "$IWR6843" = true ]; then
     [ -n "$IWR6843_TX_ORDER" ] && SERVER_CMD="$SERVER_CMD --iwr6843-tx-order $IWR6843_TX_ORDER"
     [ -n "$IWR6843_CAPTURE_TIMEOUT" ] && SERVER_CMD="$SERVER_CMD --iwr6843-capture-timeout $IWR6843_CAPTURE_TIMEOUT"
     [ -n "$IWR6843_OUTPUT_DIR" ] && SERVER_CMD="$SERVER_CMD --iwr6843-output-dir $IWR6843_OUTPUT_DIR"
+    [ -n "$IWR6843_AZIMUTH_OFFSET" ] && SERVER_CMD="$SERVER_CMD --iwr6843-azimuth-offset-deg $IWR6843_AZIMUTH_OFFSET"
 fi
 
 if [ "$EXPERIMENTAL_KLD7_RAW_RADC_LOGGING" = true ]; then

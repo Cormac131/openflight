@@ -530,6 +530,7 @@ class SessionLogger:
         capture_error: Optional[str],
         ball_speed_mph: float,
         measurement: Optional[Dict] = None,
+        club_path: Optional[Dict] = None,
     ):
         """Log the TI raw-dump reference and complete LCMF evidence."""
         if not self.enabled:
@@ -552,6 +553,7 @@ class SessionLogger:
                 "ball_speed_source": "ops243",
                 "ball_speed_mph": ball_speed_mph,
                 "measurement": measurement,
+                "club_path": club_path,
             },
         )
 

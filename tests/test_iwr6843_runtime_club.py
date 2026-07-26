@@ -1,0 +1,118 @@
+"""Runtime forwards the TDM sign from the ball estimate, or falls back."""
+
+from unittest.mock import patch
+
+from openflight.iwr6843.club import ClubPathResult
+from openflight.iwr6843.runtime import IWR6843Runtime
+
+
+class FakeCapture:
+    valid = True
+    raw = b"x" * 32
+    path = None
+    error = None
+    trigger_timestamp = 1.0
+    dump_duration_s = 5.3
+    sequence = 1
+
+
+class FakeMonitor:
+    def capture_for_shot(self, _ts, timeout_s):
+        return FakeCapture()
+
+    def stop(self):
+        pass
+
+
+def _runtime(**kwargs):
+    return IWR6843Runtime(
+        capture_monitor=FakeMonitor(),
+        calibration=object(),
+        net_range_m=4.064,
+        **kwargs,
+    )
+
+
+def test_club_path_receives_ball_tdm_sign():
+    seen = {}
+
+    def fake_club(raw, cal, **kw):
+        seen.update(kw)
+        return ClubPathResult(status="accepted", path_deg=2.0, confidence=0.8)
+
+    class Measurement:
+        tdm_sign_used = -1
+
+    with patch("openflight.iwr6843.runtime.estimate_lcmf_v1", return_value=Measurement()), \
+         patch("openflight.iwr6843.runtime.estimate_club_path", side_effect=fake_club):
+        result = _runtime().process_shot(
+            impact_timestamp=1.0, ball_speed_mph=100.0, club="7i", club_speed_mph=74.0
+        )
+
+    assert result.club_path.path_deg == 2.0
+    assert seen["tdm_sign"] == -1
+    assert seen["ops_club_speed_mph"] == 74.0
+
+
+def test_club_path_receives_the_configured_azimuth_offset():
+    """The aim offset must cross the runtime -> estimator boundary.
+
+    Club path is an absolute angle and the offset enters additively, so a
+    boresight that is not the target line shifts every reported path by that
+    amount. Coverage stopped one step short on each side: test_server.py
+    checks the CLI value reaches ``IWR6843Runtime.azimuth_offset_deg``, and the
+    tests around this one check that ``tdm_sign`` and ``ops_club_speed_mph``
+    reach ``estimate_club_path`` -- but nothing checked that *this* value
+    crosses *that* boundary. Replacing ``aim_offset_deg=self.azimuth_offset_deg``
+    with a literal ``0.0`` therefore left the entire suite green while silently
+    reporting club path relative to boresight instead of the target line, which
+    is precisely the error the flag exists to correct.
+
+    A non-zero offset is required here: with 0.0 the assertion would pass
+    against the hardcoded literal too.
+    """
+    seen = {}
+
+    def fake_club(raw, cal, **kw):
+        seen.update(kw)
+        return ClubPathResult(status="accepted", path_deg=2.0, confidence=0.8)
+
+    class Measurement:
+        tdm_sign_used = 1
+
+    with patch("openflight.iwr6843.runtime.estimate_lcmf_v1", return_value=Measurement()), \
+         patch("openflight.iwr6843.runtime.estimate_club_path", side_effect=fake_club):
+        _runtime(azimuth_offset_deg=1.5).process_shot(
+            impact_timestamp=1.0, ball_speed_mph=100.0, club="7i", club_speed_mph=74.0
+        )
+
+    assert seen["aim_offset_deg"] == 1.5
+
+
+def test_falls_back_to_policy_sign_when_ball_has_none():
+    seen = {}
+
+    def fake_club(raw, cal, **kw):
+        seen.update(kw)
+        return ClubPathResult(status="accepted", path_deg=1.0)
+
+    class Measurement:
+        tdm_sign_used = None
+
+    with patch("openflight.iwr6843.runtime.estimate_lcmf_v1", return_value=Measurement()), \
+         patch("openflight.iwr6843.runtime.estimate_club_path", side_effect=fake_club):
+        result = _runtime().process_shot(
+            impact_timestamp=1.0, ball_speed_mph=100.0, club="7i", club_speed_mph=74.0
+        )
+
+    assert seen["tdm_sign"] == 1, "policy default is positive"
+    assert result.club_path.status.endswith("tdm_sign_fallback")
+
+
+def test_no_club_speed_skips_the_estimate():
+    """Without OPS club speed there is no identity gate, so do not guess."""
+    with patch("openflight.iwr6843.runtime.estimate_lcmf_v1", return_value=None):
+        result = _runtime().process_shot(
+            impact_timestamp=1.0, ball_speed_mph=100.0, club="7i", club_speed_mph=None
+        )
+    assert result.club_path is None
