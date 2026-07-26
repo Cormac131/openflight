@@ -15,7 +15,7 @@ from openflight.iwr6843.shot import geometry_from_header
 
 def _synth(range_m_at, speed_ms, *, n_frames=18, loops=12, n_rx=4, n_samples=128):
     """Pack a single mover with a known range walk into the wire format."""
-    from openflight.iwr6843.dump import pack_dump
+    from openflight.iwr6843.dump import SAMPLE_RANGE_FFT_IQ16, pack_dump
 
     res = 6.0 / n_samples
     cube = np.zeros((n_frames, loops * 2, n_rx, n_samples), dtype=complex)
@@ -28,16 +28,22 @@ def _synth(range_m_at, speed_ms, *, n_frames=18, loops=12, n_rx=4, n_samples=128
                 frac = bin_at - lo
                 cube[frame, loop, :, lo] = 1000.0 * (1 - frac)
                 cube[frame, loop, :, lo + 1] = 1000.0 * frac
-    return pack_dump(cube, n_tx=2, version=3, frame_period_us=4000)
+    return pack_dump(
+        cube, n_tx=2, version=3, frame_period_us=4000, sample_fmt=SAMPLE_RANGE_FFT_IQ16
+    )
 
 
 def _track(raw, **kwargs):
+    from openflight.iwr6843.dump import is_range_snapshot
+
     meta, cube = parse_dump(raw)
     geo = geometry_from_header(meta)
-    # range_domain=True: this fixture writes the target directly onto the
-    # range-bin axis (see _synth), so mti_filter must not re-FFT it — doing
-    # so would flatten the spike into a broadband, non-localized spectrum.
-    mti = tracking.mti_filter(cube, range_domain=True, geometry=geo)
+    # Derive range_domain from the header: this fixture writes the target
+    # directly onto the range-bin axis (see _synth), so mti_filter must not
+    # re-FFT it — doing so would flatten the spike into a broadband,
+    # non-localized spectrum. The header now declares this correctly via
+    # sample_fmt=SAMPLE_RANGE_FFT_IQ16.
+    mti = tracking.mti_filter(cube, range_domain=is_range_snapshot(meta), geometry=geo)
     return tracking.find_ball(mti, geo, **kwargs)
 
 
@@ -83,8 +89,9 @@ def test_time_window_excludes_a_later_mover():
     Two movers: a slow one early, a fast one late. Both are inside the club
     speed bounds, so only the time window separates them.
     """
-    # n_frames=6: same club-range constraint as test_club_gates_find_a_slow_close_mover.
-    raw_early = _synth(1.6, 22.0, n_frames=6)
+    # 18 frames (default): needs data past 50 ms to prove the second window
+    # legitimately yields no detections.
+    raw_early = _synth(1.6, 22.0)
     early = _track(
         raw_early,
         gates_m=((1.0, 2.4),),
@@ -94,7 +101,10 @@ def test_time_window_excludes_a_later_mover():
     )
     assert early is not None
     assert early.t_last <= 0.024 + 1e-9, "window must bound the fitted track"
+    assert early.t_first >= 0.0 - 1e-9
 
+    # A window past the mover's exit from the club gate must find nothing,
+    # and must not silently fall back to the early detections.
     late_only = _track(
         raw_early,
         gates_m=((1.0, 2.4),),
@@ -102,5 +112,4 @@ def test_time_window_excludes_a_later_mover():
         min_ball_ms=10.0,
         time_window_s=(0.050, 0.072),
     )
-    if late_only is not None:
-        assert late_only.t_first >= 0.050 - 1e-9
+    assert late_only is None or late_only.t_first >= 0.050 - 1e-9
