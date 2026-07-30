@@ -22,10 +22,10 @@ Use this firmware and runtime configuration together:
 | Runtime config | `config/iwr6843_l3dump_vTX2_window53_12l18f.cfg` |
 | Reference calibration | `config/iwr6843_calibration_reference.json` |
 | Build target | `make -C firmware build-native` |
-| Flash image size | 339,588 bytes |
-| Flash SHA-256 | `3045bb2f087b40c228bf1dd5190cf3fac6dbde50682c7927e86714314b0e7fcb` |
-| Dump format | Version 4, windowed complex range-FFT snapshots |
-| Complete dump size | 549,542 bytes |
+| Flash image size | 339,780 bytes |
+| Flash SHA-256 | `8a87593954fd5ae2b7adf709c78626f81a87b8988b8dc28f2b2be7b5c99eac12` |
+| Dump format | Version 5, windowed complex range-FFT snapshots plus temperature report |
+| Complete dump size | 549,566 bytes |
 
 Verify the checked-in image before flashing:
 
@@ -33,8 +33,8 @@ Verify the checked-in image before flashing:
 sha256sum firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_v2.bin
 ```
 
-The v2 image is the current default because it retains the validated capture
-geometry while fixing repeated application startup and shutdown. It stops the
+The current image retains the validated capture geometry while fixing repeated
+application startup and shutdown. It stops the
 RF front end only after the active HWA frame reaches a safe boundary, then
 disables HWA and EDMA.
 
@@ -108,10 +108,11 @@ current payload is:
 = 549,504 bytes
 ```
 
-The transfer adds a 20-byte header and 18 one-byte frame-window entries:
+The transfer adds a 20-byte header, a 24-byte temperature report, and 18
+one-byte frame-window entries:
 
 ```text
-549,504 + 20 + 18 = 549,542 bytes
+549,504 + 20 + 24 + 18 = 549,566 bytes
 ```
 
 For comparison, retaining all 128 complex range bins with the same TX, loop,
@@ -125,12 +126,13 @@ The wire format is defined in two places that must stay synchronized:
 - Firmware: [`iwr6843/dump_format.h`](iwr6843/dump_format.h)
 - Host parser: [`../src/openflight/iwr6843/dump.py`](../src/openflight/iwr6843/dump.py)
 
-The current version 4 transfer contains:
+The current version 5 transfer contains:
 
 1. A packed 20-byte little-endian `l3_dump_header_t`.
-2. One unsigned start-bin byte for each frame.
-3. Complex int16 samples ordered by frame, chirp, RX, and local range bin.
-4. Each complex sample in TI's native imaginary-then-real order.
+2. A packed 24-byte `l3_temperature_report_t` captured immediately before streaming.
+3. One unsigned start-bin byte for each frame.
+4. Complex int16 samples ordered by frame, chirp, RX, and local range bin.
+5. Each complex sample in TI's native imaginary-then-real order.
 
 The header carries:
 
@@ -375,7 +377,7 @@ Expected completion:
 Erasing existing SFLASH...
 Opening firmware image...
 Writing firmware...
-Writing: 100% (339,588/339,588 bytes)
+Writing: 100% (339,780/339,780 bytes)
 Closing and verifying firmware...
 
 Flash verified by the IWR6843 ROM bootloader.
@@ -408,7 +410,7 @@ healthy capture reports:
 
 ```text
 [IWR6843] Trigger #1: dumping firmware-frozen L3 ring
-[IWR6843] Capture #1 complete: 549542 bytes
+[IWR6843] Capture #1 complete: 549566 bytes
 ```
 
 The firmware/config geometry is checked at `sensorStart`. A mismatch in TX
@@ -483,9 +485,9 @@ Also check:
 | Probe receives no ROM response | Wrong CP2105 interface or RESET timing | Use Enhanced/UARTA, type `READY`, then RESET only when prompted |
 | Flash fails after erase | Image transfer was interrupted | Leave flash mode enabled and rerun the full flash command; the ROM bootloader remains available |
 | No CLI after flashing | Board remains in flash mode or was not reset | Restore functional switches and press RESET |
-| Server rejects the config | Firmware and `.cfg` geometry differ | Use the current v2 binary and `iwr6843_l3dump_vTX2_window53_12l18f.cfg` together |
-| Dump is not 549,542 bytes | Wrong firmware format, interrupted UART transfer, or stale process | Verify SHA-256, use Enhanced/UARTA, stop serial owners, reset, and retry |
-| First run works but restart hangs | Retired v1 image or incomplete shutdown | Flash the current v2 image and reset in functional mode |
+| Server rejects the config | Firmware and `.cfg` geometry differ | Use the current release binary and `iwr6843_l3dump_vTX2_window53_12l18f.cfg` together |
+| Dump is not 549,566 bytes | Wrong firmware format, interrupted UART transfer, or stale process | Verify SHA-256, use Enhanced/UARTA, stop serial owners, reset, and retry |
+| First run works but restart hangs | Retired v1 image or incomplete shutdown | Flash the current release image and reset in functional mode |
 
 ## Historical Context
 

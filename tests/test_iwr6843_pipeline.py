@@ -17,6 +17,7 @@ from openflight.iwr6843.dump import (
     HEADER,
     SAMPLE_RANGE_FFT_IQ16,
     SAMPLE_RANGE_FFT_IQ16_WINDOWED,
+    TEMP_REPORT_KEYS,
     pack_dump,
     parse_dump,
     parse_header,
@@ -231,6 +232,35 @@ def test_windowed_snapshot_round_trip_and_size():
     assert len(snapshot) == HEADER.size + payload_nbytes(header)
     assert cube.shape == (12, 20, 4, 53)
     assert tuple(meta["range_bin_starts"][(3 + index) % 12] for index in range(12)) == starts
+
+
+def test_windowed_snapshot_temperature_report_round_trip_and_projection():
+    rng = np.random.default_rng(24)
+    starts = (20, 20, 32, 32)
+    cube = rng.standard_normal((4, 6, 4, 53)) + 1j * rng.standard_normal((4, 6, 4, 53))
+    report = {key: index + 100 for index, key in enumerate(TEMP_REPORT_KEYS)}
+    raw = pack_dump(
+        cube,
+        n_tx=3,
+        trigger_frame=1,
+        version=5,
+        frame_period_us=4000,
+        sample_fmt=SAMPLE_RANGE_FFT_IQ16_WINDOWED,
+        range_bin_starts=starts,
+        temperature_report=report,
+    )
+
+    header = parse_header(raw)
+    meta, parsed = parse_dump(raw)
+    projected_meta, projected = parse_dump(project_tx_pair(raw, (0, 2)))
+
+    assert header["temperature_report"] == report
+    assert header["header_nbytes"] == HEADER.size + 24
+    assert meta["range_bin_starts"] == starts
+    assert parsed.shape == cube.shape
+    assert projected_meta["temperature_report"] == report
+    assert projected_meta["range_bin_starts"] == starts
+    assert projected.shape == (4, 4, 4, 53)
 
 
 def test_windowed_snapshot_recovers_speed_and_launch_angle(cal):
