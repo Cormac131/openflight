@@ -18,7 +18,8 @@ Use this firmware and runtime configuration together:
 
 | Component | Current value |
 |---|---|
-| Flash image | `firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_v2.bin` |
+| Flash image | `firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_temperature_report_20260731.bin` |
+| Previous rollback image | `firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_v2.bin` |
 | Runtime config | `config/iwr6843_l3dump_vTX2_window53_12l18f.cfg` |
 | Reference calibration | `config/iwr6843_calibration_reference.json` |
 | Build target | `make -C firmware build-native` |
@@ -30,7 +31,7 @@ Use this firmware and runtime configuration together:
 Verify the checked-in image before flashing:
 
 ```bash
-sha256sum firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_v2.bin
+sha256sum firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_temperature_report_20260731.bin
 ```
 
 The current image retains the validated capture geometry while fixing repeated
@@ -38,9 +39,11 @@ application startup and shutdown. It stops the
 RF front end only after the active HWA frame reaches a safe boundary, then
 disables HWA and EDMA.
 
-This is the only checked-in firmware release. Experimental images and configs
-remain available through Git history rather than appearing as supported setup
-choices.
+Release filenames track build iteration separately from the dump wire-format
+version. The `_v2.bin` image remains checked in as the last validated rollback
+artifact (`3045bb2f087b40c228bf1dd5190cf3fac6dbde50682c7927e86714314b0e7fcb`);
+the dated `temperature_report_20260731` image is the current supported release
+and emits dump format v5.
 
 ## What The Current Firmware Captures
 
@@ -279,12 +282,12 @@ The target performs the application build, generates the flashable TI
 meta-image, and copies the production image into `firmware/releases/`:
 
 ```text
-firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_v2.bin
+firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_temperature_report_20260731.bin
 ```
 
 Generated `.xer4f`, `.map`, and intermediate `.bin` files stay under
-`firmware/iwr6843/` and are ignored by Git. The file under `releases/` is the
-only image intended for installation.
+`firmware/iwr6843/` and are ignored by Git. Current production images and
+intentional rollback images live under `releases/`.
 
 ### 6. Copy Artifacts Out Of The VM
 
@@ -363,7 +366,7 @@ Leave the board in flash mode and run:
 
 ```bash
 uv run python firmware/flash_iwr6843.py \
-  firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_v2.bin \
+  firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_temperature_report_20260731.bin \
   --port /dev/ttyUSB0
 ```
 

@@ -49,6 +49,7 @@ typedef struct __attribute__((packed)) {
 
 typedef struct __attribute__((packed)) {
     uint32_t device_time_ms;    /* radarSS local time from powerup */
+    /* TI mmWaveLink rlRfTempData_t temperature fields: signed, 1 LSB = 1 deg C. */
     int16_t  tmpRx0Sens;        /* RX0 temperature sensor reading */
     int16_t  tmpRx1Sens;        /* RX1 temperature sensor reading */
     int16_t  tmpRx2Sens;        /* RX2 temperature sensor reading */

@@ -27,7 +27,7 @@ variants will fail startup or produce the wrong capture geometry.
 
 | Component | Current file or value |
 |---|---|
-| Firmware | `firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_v2.bin` |
+| Firmware | `firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_temperature_report_20260731.bin` |
 | Radar config | `config/iwr6843_l3dump_vTX2_window53_12l18f.cfg` |
 | Reference array calibration | `config/iwr6843_calibration_reference.json` |
 | Transmitters / receivers | 3 TX / 4 RX |
@@ -45,8 +45,13 @@ The validated firmware SHA-256 is:
 On the Pi, verify the checked-in image with:
 
 ```bash
-sha256sum firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_v2.bin
+sha256sum firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_temperature_report_20260731.bin
 ```
+
+Release filenames track build identity, while the dump header carries the wire
+format version. The older `_v2.bin` image remains checked in for rollback
+(`3045bb2f087b40c228bf1dd5190cf3fac6dbde50682c7927e86714314b0e7fcb`); the dated
+`temperature_report_20260731` image is the current release.
 
 ## Before You Start
 
@@ -340,7 +345,7 @@ command will ask for another RESET after it opens the UART.
 
 ```bash
 uv run python firmware/flash_iwr6843.py \
-  firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_v2.bin \
+  firmware/releases/l3_dump_vTX2_hwa_window53_12loops_18frames_4ms_temperature_report_20260731.bin \
   --port /dev/ttyUSB0
 ```
 

@@ -15,6 +15,8 @@ import pytest
 from openflight.iwr6843 import Calibration, estimate_lcmf_v1, lcmf, process_dump
 from openflight.iwr6843.dump import (
     HEADER,
+    MAGIC,
+    MAX_SUPPORTED_DUMP_VERSION,
     SAMPLE_RANGE_FFT_IQ16,
     SAMPLE_RANGE_FFT_IQ16_WINDOWED,
     TEMP_REPORT_KEYS,
@@ -170,6 +172,61 @@ def test_header_carries_period_and_trigger():
     geo = geometry_from_header(meta)
     assert geo.frame_period_s == pytest.approx(0.006)
     assert geo.n_loops == 16
+
+
+def test_parse_header_rejects_future_dump_version():
+    raw = synth_shot()
+    future = bytearray(raw[:HEADER.size])
+    future[4:6] = int(MAX_SUPPORTED_DUMP_VERSION + 1).to_bytes(2, "little")
+
+    with pytest.raises(ValueError, match="unsupported dump version"):
+        parse_header(bytes(future))
+
+
+def test_parse_header_rejects_short_temperature_extension():
+    raw = synth_shot()
+    v5_header_only = bytearray(raw[:HEADER.size])
+    v5_header_only[4:6] = int(MAX_SUPPORTED_DUMP_VERSION).to_bytes(2, "little")
+
+    with pytest.raises(ValueError, match="short temperature report extension"):
+        parse_header(bytes(v5_header_only))
+
+
+def test_pack_dump_rejects_temperature_version_mismatches():
+    cube = np.zeros((2, 4, 4, 8), dtype=complex)
+    report = {key: index for index, key in enumerate(TEMP_REPORT_KEYS)}
+
+    with pytest.raises(ValueError, match="temperature reports require dump version 5"):
+        pack_dump(cube, n_tx=2, version=4, temperature_report=report)
+
+    with pytest.raises(ValueError, match="dump version 5\\+ requires a temperature report"):
+        pack_dump(cube, n_tx=2, version=5)
+
+
+def test_parse_dump_rejects_short_window_table():
+    header = HEADER.pack(
+        MAGIC,
+        4,
+        4,
+        6,
+        3,
+        4,
+        53,
+        SAMPLE_RANGE_FFT_IQ16_WINDOWED,
+        0,
+        0,
+        4000,
+    )
+
+    with pytest.raises(ValueError, match="short per-frame range-window table"):
+        parse_dump(header + b"\x14\x14")
+
+
+def test_parse_dump_rejects_truncated_payload():
+    raw = synth_shot()
+
+    with pytest.raises(ValueError, match="short payload"):
+        parse_dump(raw[:-1])
 
 
 def test_recovers_speed_and_launch_angle(cal):

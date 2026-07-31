@@ -29,6 +29,8 @@ from openflight.iwr6843.music import est_music_fbss, steer
 MAGIC = b"ILD1"
 HEADER = struct.Struct("<4sHHHBBHBBHH")
 TEMP_REPORT = struct.Struct("<Ihhhhhhhhhh")
+MAX_SUPPORTED_DUMP_VERSION = 5
+# TI mmWaveLink rlRfTempData_t temperature fields are signed, 1 LSB = 1 deg C.
 TEMP_REPORT_KEYS = (
     "device_time_ms",
     "rx0_c",
@@ -123,6 +125,10 @@ def parse_header(raw: bytes) -> dict:
     (magic, ver, nf, cpf, ntx, nrx, ns, fmt, _pad, trig, period_us) = HEADER.unpack_from(raw, 0)
     if magic != MAGIC:
         raise ValueError(f"bad magic {magic!r} (expected {MAGIC!r})")
+    if ver > MAX_SUPPORTED_DUMP_VERSION:
+        raise ValueError(
+            f"unsupported dump version {ver}; max supported is {MAX_SUPPORTED_DUMP_VERSION}"
+        )
     if fmt not in (
         SAMPLE_INT16_IQ,
         SAMPLE_RANGE_FFT_IQ16,
@@ -170,6 +176,12 @@ def parse_dump(raw: bytes):
             raise ValueError("short per-frame range-window table")
         meta["range_bin_starts"] = tuple(raw[meta["header_nbytes"] : payload_offset])
     n = nf * cpf * nrx * ns
+    expected_payload_nbytes = n * 4
+    actual_payload_nbytes = len(raw) - payload_offset
+    if actual_payload_nbytes < expected_payload_nbytes:
+        raise ValueError(
+            f"short payload: {actual_payload_nbytes} bytes < {expected_payload_nbytes} needed"
+        )
     body = np.frombuffer(raw, dtype="<i2", offset=payload_offset, count=2 * n)
     if body.size < 2 * n:
         raise ValueError(f"short payload: {body.size} i16 < {2 * n} needed")
