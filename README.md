@@ -4,6 +4,9 @@
 </p>
 
 <p align="center">
+  <a href="https://discord.gg/w8hhG4WVMN">
+    <img src="https://img.shields.io/badge/Discord-join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join the OpenFlight Discord" />
+  </a>
   <a href="https://buymeacoffee.com/colemangolfs">
     <img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow?style=for-the-badge&logo=buy-me-a-coffee&logoColor=white" alt="Buy Me a Coffee" />
   </a>
@@ -277,6 +280,11 @@ openflight/
 ├── docs/                      # Documentation
 └── pyproject.toml
 ```
+
+## Community
+
+Join the **[OpenFlight Discord](https://discord.gg/w8hhG4WVMN)** to ask build
+questions, share results, and follow development.
 
 ## Contributing
 
