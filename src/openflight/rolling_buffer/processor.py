@@ -90,6 +90,7 @@ class RollingBufferProcessor:
     CLUB_TERMINAL_START_MS = -2.5
     CLUB_TERMINAL_END_MS = 1.0
     CLUB_MAX_PLAUSIBLE_SPEED_MPH = 150.0
+    CLUB_SMOOTH_MERGE_TYPES = frozenset({ClubType.SW, ClubType.LW})
 
     # Spin detection via amplitude envelope demodulation.
     # The ball seam modulates the radar return at 1x spin rate.
@@ -1443,10 +1444,9 @@ class RollingBufferProcessor:
         final FFT windows also mix club and ball energy; a robust percentile of
         the preceding plateau avoids that contamination.
 
-        Sand-wedge club and ball speeds can overlap, producing a smooth merge
-        rather than a distinct transition. For that measured case, use the
-        terminal upper branch instead of imposing an iron/driver smash-factor
-        bracket.
+        High-loft wedge club and ball speeds can overlap, producing a smooth
+        merge rather than a distinct transition. For that case, use the terminal
+        upper branch instead of imposing an iron/driver smash-factor bracket.
 
         Args:
             timeline: Speed timeline
@@ -1486,7 +1486,7 @@ class RollingBufferProcessor:
         if len(upper_branch) < 3:
             return legacy_speed, legacy_timestamp
 
-        if club_type == ClubType.SW:
+        if club_type in self.CLUB_SMOOTH_MERGE_TYPES:
             terminal = [
                 reading
                 for reading in upper_branch

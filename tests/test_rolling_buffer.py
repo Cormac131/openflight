@@ -1876,8 +1876,9 @@ class TestFindClubSpeedOverlap:
         assert club_speed == pytest.approx(82.0)
         assert club_ts == 18.0
 
-    def test_sand_wedge_uses_smooth_terminal_trace(self, processor):
-        """A wedge club trace can merge into the similarly fast ball trace."""
+    @pytest.mark.parametrize("club_type", [ClubType.SW, ClubType.LW])
+    def test_high_loft_wedge_uses_smooth_terminal_trace(self, processor, club_type):
+        """A high-loft wedge trace can merge into the similarly fast ball trace."""
         ball_timestamp_ms = 30.0
         readings = [
             SpeedReading(speed, 30.0, ball_timestamp_ms + relative_ms, "outbound")
@@ -1898,7 +1899,7 @@ class TestFindClubSpeedOverlap:
             timeline,
             ball_speed_mph=70.0,
             ball_timestamp_ms=ball_timestamp_ms,
-            club_type=ClubType.SW,
+            club_type=club_type,
         )
 
         assert club_speed == pytest.approx(69.0)
