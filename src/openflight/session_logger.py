@@ -551,6 +551,7 @@ class SessionLogger:
         ball_speed_mph: float,
         measurement: Optional[Dict] = None,
         club_path: Optional[Dict] = None,
+        temperature_report: Optional[Dict[str, Any]] = None,
     ):
         """Log the TI raw-dump reference and complete LCMF evidence."""
         if not self.enabled:
@@ -574,6 +575,7 @@ class SessionLogger:
                 "ball_speed_mph": ball_speed_mph,
                 "measurement": measurement,
                 "club_path": club_path,
+                "temperature_report": temperature_report,
             },
         )
 
