@@ -2852,6 +2852,40 @@ class TestShutdownPreservesRollingBuffer:
         )
 
 
+class TestRollingBufferStartupMode:
+    """Startup should respect the persisted HOST_INT rolling-buffer workaround."""
+
+    def test_sound_trigger_prepares_persisted_buffer_without_runtime_gc(self):
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound", pre_trigger_segments=16)
+        monitor.radar = MagicMock()
+
+        assert monitor.connect() is True
+
+        monitor.radar.connect.assert_called_once()
+        monitor.radar.prepare_persisted_rolling_buffer.assert_called_once_with(
+            pre_trigger_segments=16,
+            sample_rate_ksps=30,
+        )
+        assert not monitor.radar.configure_for_rolling_buffer.called
+
+    def test_non_sound_trigger_can_configure_rolling_buffer_runtime(self):
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="manual", pre_trigger_segments=12)
+        monitor.radar = MagicMock()
+
+        assert monitor.connect() is True
+
+        monitor.radar.connect.assert_called_once()
+        monitor.radar.configure_for_rolling_buffer.assert_called_once_with(
+            pre_trigger_segments=12,
+            sample_rate_ksps=30,
+        )
+        assert not monitor.radar.prepare_persisted_rolling_buffer.called
+
+
 class TestSpinWindowTrimming:
     """The spin window must end where ball signal ends (net impact), not at
     the end of the capture — the amplitude cliff plus dead air corrupts the

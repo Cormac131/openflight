@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useUnitPreference } from '../state/useUnitPreference';
 import type { Shot } from '../types/shot';
-import { computeStats, getUniqueClubs } from '../types/shot';
+import { computeStats, computeSwingSpeedStats, getUniqueClubs, isSwingSpeedShot } from '../types/shot';
 import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
 import './StatsView.css';
 
@@ -32,6 +32,8 @@ export function StatsView({ shots, onClearSession }: StatsViewProps) {
   }, [shots, selectedClub]);
 
   const stats = useMemo(() => computeStats(filteredShots), [filteredShots]);
+  const isSwingSpeedSession = filteredShots.length > 0 && filteredShots.every(isSwingSpeedShot);
+  const swingStats = useMemo(() => computeSwingSpeedStats(filteredShots), [filteredShots]);
 
   if (shots.length === 0) {
     return (
@@ -61,7 +63,27 @@ export function StatsView({ shots, onClearSession }: StatsViewProps) {
         ))}
       </div>
 
-      <div className="stats-grid">
+      {isSwingSpeedSession ? (
+        <div className="stats-grid stats-grid--swing-speed">
+          <div className="stat-card">
+            <span className="stat-card__value">{swingStats.count}</span>
+            <span className="stat-card__label">Swings</span>
+          </div>
+          <div className="stat-card stat-card--primary">
+            <span className="stat-card__value">{formatSpeed(swingStats.last_speed_mph, unitSystem, 1)}</span>
+            <span className="stat-card__label">Last ({speedUnit})</span>
+          </div>
+          <div className="stat-card stat-card--primary">
+            <span className="stat-card__value">{formatSpeed(swingStats.best_speed_mph, unitSystem, 1)}</span>
+            <span className="stat-card__label">Best ({speedUnit})</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-card__value">{formatSpeed(swingStats.avg_speed_mph, unitSystem, 1)}</span>
+            <span className="stat-card__label">Average ({speedUnit})</span>
+          </div>
+        </div>
+      ) : (
+        <div className="stats-grid">
         <div className="stat-card">
           <span className="stat-card__value">{stats.shot_count}</span>
           <span className="stat-card__label">Shots</span>
@@ -91,6 +113,7 @@ export function StatsView({ shots, onClearSession }: StatsViewProps) {
           </div>
         )}
       </div>
+      )}
 
       <button className="clear-button" onClick={onClearSession}>
         Clear Session
