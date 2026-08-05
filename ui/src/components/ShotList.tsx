@@ -132,7 +132,9 @@ const ShotRow = memo(function ShotRow({
           </span>
           <span className="shot-row__stat">
             <span className="shot-row__value">
-              {shot.swing_speed_trigger_mph !== undefined ? formatSpeed(shot.swing_speed_trigger_mph, unitSystem, 1) : '--'}
+              {shot.swing_speed_trigger_mph !== undefined
+                ? formatSpeed(shot.swing_speed_trigger_mph, unitSystem, 1)
+                : '--'}
             </span>
             <span className="shot-row__label">trigger</span>
           </span>
@@ -172,7 +174,9 @@ const ShotRow = memo(function ShotRow({
             />
           </label>
           <div className="validation-diff">
-            <span className="validation-diff__value">{difference === null ? '--' : `${difference >= 0 ? '+' : ''}${difference.toFixed(1)}`}</span>
+            <span className="validation-diff__value">
+              {difference === null ? '--' : `${difference >= 0 ? '+' : ''}${difference.toFixed(1)}`}
+            </span>
             <span className="validation-diff__label">diff</span>
           </div>
           <label className="validation-field validation-field--notes">
@@ -190,9 +194,7 @@ const ShotRow = memo(function ShotRow({
   }
 
   const launchAngle = isNumber(shot.launch_angle_vertical) ? `${shot.launch_angle_vertical.toFixed(1)}°` : '--';
-  const spinRate = isNumber(shot.spin_rpm)
-    ? shot.spin_rpm.toLocaleString('en-US', { maximumFractionDigits: 0 })
-    : '--';
+  const spinRate = isNumber(shot.spin_rpm) ? shot.spin_rpm.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '--';
   const carryDistance = isNumber(shot.estimated_carry_yards)
     ? formatDistance(shot.estimated_carry_yards, unitSystem, 0)
     : '--';
@@ -275,7 +277,11 @@ export function ShotList({ shots, onDeleteShot }: ShotListProps) {
           </span>
         </div>
         <div className="shot-list__actions">
-          <button className="shot-list__export" onClick={() => socketService.uploadCloud()} disabled={cloudUploadState === 'running'}>
+          <button
+            className="shot-list__export"
+            onClick={() => socketService.uploadCloud()}
+            disabled={cloudUploadState === 'running'}
+          >
             {cloudUploadState === 'running' ? 'Uploading' : 'Upload Cloud'}
           </button>
           <button className="shot-list__export" onClick={handleExport}>

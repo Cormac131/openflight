@@ -15,9 +15,7 @@ function loadPlayers(): string[] {
     const raw = window.localStorage.getItem(PLAYERS_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     if (Array.isArray(parsed)) {
-      const players = parsed
-        .map((name) => cleanPlayerName(String(name)))
-        .filter(Boolean);
+      const players = parsed.map((name) => cleanPlayerName(String(name))).filter(Boolean);
       return Array.from(new Set(players)).slice(0, 12);
     }
   } catch {
@@ -63,7 +61,7 @@ interface PlayerState {
 
 const initialPlayers = loadPlayers();
 const savedSelected = loadSelectedPlayer();
-const initialSelected = initialPlayers.includes(savedSelected) ? savedSelected : initialPlayers[0] ?? DEFAULT_PLAYER;
+const initialSelected = initialPlayers.includes(savedSelected) ? savedSelected : (initialPlayers[0] ?? DEFAULT_PLAYER);
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
   players: initialPlayers.length ? initialPlayers : [DEFAULT_PLAYER],
@@ -87,7 +85,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
   selectPlayer: (name) => {
     const playerName = cleanPlayerName(name) || DEFAULT_PLAYER;
-    const nextPlayers = get().players.includes(playerName) ? get().players : [...get().players, playerName].slice(0, 12);
+    const nextPlayers = get().players.includes(playerName)
+      ? get().players
+      : [...get().players, playerName].slice(0, 12);
     savePlayers(nextPlayers);
     saveSelectedPlayer(playerName);
     set({ players: nextPlayers, selectedPlayer: playerName });

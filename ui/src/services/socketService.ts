@@ -3,7 +3,14 @@ import { useSystemStore } from '../stores/useSystemStore';
 import { useShotStore } from '../stores/useShotStore';
 import { useCameraStore, type CameraStatus } from '../stores/useCameraStore';
 import { useDebugStore } from '../stores/useDebugStore';
-import { isSwingSpeedShot, type Shot, type SessionStats, type SessionState, type TriggerDiagnostic, type TriggerStatus } from '../types/shot';
+import {
+  isSwingSpeedShot,
+  type Shot,
+  type SessionStats,
+  type SessionState,
+  type TriggerDiagnostic,
+  type TriggerStatus,
+} from '../types/shot';
 import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
 import { playSwingCapturedCue } from '../utils/audioCue';
 import { getServerOrigin } from '../utils/serverOrigin';
@@ -168,9 +175,12 @@ class SocketService {
       useDebugStore.getState().setTriggerStatus(data);
     });
 
-    this.socket.on('cloud_upload_status', (data: { state: 'idle' | 'running' | 'complete' | 'error'; message: string }) => {
-      useSystemStore.getState().setCloudUploadStatus(data.state, data.message);
-    });
+    this.socket.on(
+      'cloud_upload_status',
+      (data: { state: 'idle' | 'running' | 'complete' | 'error'; message: string }) => {
+        useSystemStore.getState().setCloudUploadStatus(data.state, data.message);
+      }
+    );
   }
 
   // Emitters

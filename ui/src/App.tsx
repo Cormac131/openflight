@@ -122,7 +122,6 @@ function AppContent() {
   const isDisplayRoute = typeof window !== 'undefined' && window.location.pathname.replace(/\/$/, '') === '/display';
   const isSwingSpeedMode = triggerStatus.mode === 'swing-speed';
 
-
   // Trigger explosion when a new shot is detected in Launch Daddy mode
   useEffect(() => {
     if (isNewShot && isLaunchDaddyMode) {
@@ -332,7 +331,9 @@ function AppContent() {
           </div>
         )}
         {currentView === 'stats' && <StatsView shots={shots} onClearSession={() => socketService.clearSession()} />}
-        {currentView === 'shots' && <ShotList shots={shots} onDeleteShot={(timestamp) => socketService.deleteShot(timestamp)} />}
+        {currentView === 'shots' && (
+          <ShotList shots={shots} onDeleteShot={(timestamp) => socketService.deleteShot(timestamp)} />
+        )}
         {currentView === 'camera' && (
           <CameraFeed
             cameraStatus={cameraStatus}

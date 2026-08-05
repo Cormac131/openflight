@@ -1,5 +1,9 @@
 import { useState } from 'react';
-import { TRAINING_IMPLEMENTS, getTrainingImplementLabel, getTrainingImplementsByGroup } from '../data/trainingImplements';
+import {
+  TRAINING_IMPLEMENTS,
+  getTrainingImplementLabel,
+  getTrainingImplementsByGroup,
+} from '../data/trainingImplements';
 import './ClubPicker.css';
 
 interface TrainingImplementPickerProps {

@@ -181,7 +181,9 @@ export function DisplayMode({ connected, cameraStatus, latestShot, shots }: Disp
 
         <div className="display-mode__shot-panel">
           <div className="display-mode__eyebrow">OpenFlight Display</div>
-          <h1 className="display-mode__title">{isSwingSpeedSession ? 'Swing Speed' : latestShot ? latestShot.club : 'Ready'}</h1>
+          <h1 className="display-mode__title">
+            {isSwingSpeedSession ? 'Swing Speed' : latestShot ? latestShot.club : 'Ready'}
+          </h1>
           <div className="display-mode__primary-grid">
             <DisplayMetricCard metric={metrics[0]} featured />
             <DisplayMetricCard metric={metrics[1]} featured />
@@ -202,7 +204,7 @@ export function DisplayMode({ connected, cameraStatus, latestShot, shots }: Disp
             <div className="display-shot-chip" key={shot.timestamp}>
               <span className="display-shot-chip__number">#{shots.length - index}</span>
               <span className="display-shot-chip__club">
-                {isSwingSpeedShot(shot) ? shot.training_implement_label ?? shot.club : shot.club}
+                {isSwingSpeedShot(shot) ? (shot.training_implement_label ?? shot.club) : shot.club}
               </span>
               <span className="display-shot-chip__stat">
                 {formatSpeed(isSwingSpeedShot(shot) ? getSwingSpeedMph(shot) : shot.ball_speed_mph, unitSystem, 0)}{' '}

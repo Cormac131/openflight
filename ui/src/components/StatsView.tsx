@@ -84,35 +84,35 @@ export function StatsView({ shots, onClearSession }: StatsViewProps) {
         </div>
       ) : (
         <div className="stats-grid">
-        <div className="stat-card">
-          <span className="stat-card__value">{stats.shot_count}</span>
-          <span className="stat-card__label">Shots</span>
-        </div>
-        <div className="stat-card stat-card--primary">
-          <span className="stat-card__value">{formatSpeed(stats.avg_ball_speed, unitSystem, 1)}</span>
-          <span className="stat-card__label">Avg Ball ({speedUnit})</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-card__value">{formatSpeed(stats.max_ball_speed, unitSystem, 1)}</span>
-          <span className="stat-card__label">Max Ball ({speedUnit})</span>
-        </div>
-        <div className="stat-card stat-card--primary">
-          <span className="stat-card__value">{formatDistance(stats.avg_carry_est, unitSystem, 0)}</span>
-          <span className="stat-card__label">Avg Carry ({distanceUnit})</span>
-        </div>
-        {stats.avg_club_speed && (
           <div className="stat-card">
-            <span className="stat-card__value">{formatSpeed(stats.avg_club_speed, unitSystem, 1)}</span>
-            <span className="stat-card__label">Avg Club ({speedUnit})</span>
+            <span className="stat-card__value">{stats.shot_count}</span>
+            <span className="stat-card__label">Shots</span>
           </div>
-        )}
-        {stats.avg_smash_factor && (
+          <div className="stat-card stat-card--primary">
+            <span className="stat-card__value">{formatSpeed(stats.avg_ball_speed, unitSystem, 1)}</span>
+            <span className="stat-card__label">Avg Ball ({speedUnit})</span>
+          </div>
           <div className="stat-card">
-            <span className="stat-card__value">{stats.avg_smash_factor.toFixed(2)}</span>
-            <span className="stat-card__label">Avg Smash</span>
+            <span className="stat-card__value">{formatSpeed(stats.max_ball_speed, unitSystem, 1)}</span>
+            <span className="stat-card__label">Max Ball ({speedUnit})</span>
           </div>
-        )}
-      </div>
+          <div className="stat-card stat-card--primary">
+            <span className="stat-card__value">{formatDistance(stats.avg_carry_est, unitSystem, 0)}</span>
+            <span className="stat-card__label">Avg Carry ({distanceUnit})</span>
+          </div>
+          {stats.avg_club_speed && (
+            <div className="stat-card">
+              <span className="stat-card__value">{formatSpeed(stats.avg_club_speed, unitSystem, 1)}</span>
+              <span className="stat-card__label">Avg Club ({speedUnit})</span>
+            </div>
+          )}
+          {stats.avg_smash_factor && (
+            <div className="stat-card">
+              <span className="stat-card__value">{stats.avg_smash_factor.toFixed(2)}</span>
+              <span className="stat-card__label">Avg Smash</span>
+            </div>
+          )}
+        </div>
       )}
 
       <button className="clear-button" onClick={onClearSession}>

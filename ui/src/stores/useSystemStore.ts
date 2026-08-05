@@ -34,8 +34,7 @@ export const useSystemStore = create<SystemState>((set) => ({
   setConnected: (connected) => set({ connected }),
   setMockMode: (mockMode) => set({ mockMode }),
   setDebugMode: (debugMode) => set({ debugMode }),
-  setCloudUploadStatus: (cloudUploadState, cloudUploadMessage) =>
-    set({ cloudUploadState, cloudUploadMessage }),
+  setCloudUploadStatus: (cloudUploadState, cloudUploadMessage) => set({ cloudUploadState, cloudUploadMessage }),
   setSimStatus: (status) =>
     set((state) => ({
       simStatuses: { ...state.simStatuses, [status.target]: status },
