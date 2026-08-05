@@ -363,6 +363,7 @@ class SessionLogger:
         spin_axis_deg: Optional[float] = None,
         pipeline_ms: Optional[Dict] = None,
         impact_timestamp: Optional[float] = None,
+        player_name: Optional[str] = None,
     ):
         """
         Log a detected shot with all metrics.
@@ -410,6 +411,7 @@ class SessionLogger:
             "smash_factor": smash_factor,
             "estimated_carry_yards": estimated_carry_yards,
             "club": club,
+            "player_name": player_name,
             "peak_magnitude": peak_magnitude,
             "readings_count": readings_count,
             "readings": readings,

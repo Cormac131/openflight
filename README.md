@@ -106,6 +106,9 @@ scripts/start-kiosk.sh --iwr6843 \
 # With K-LD7 launch-angle geometry defaults (deprecated hardware)
 scripts/start-kiosk.sh --kld7-geometry
 
+# Swing speed training (air swings / speed sticks, no sound trigger)
+scripts/start-kiosk.sh --swing-speed
+
 # Development mode (no hardware)
 scripts/start-kiosk.sh --mock
 ```
@@ -152,6 +155,15 @@ OpenFlight also serves a fullscreen-friendly browser display for tablets, TV bro
 > and most Linux desktops do, but some smart-TV browsers don't, so use the IP there.
 
 This is browser/tab casting only. OpenFlight does not include native Cast SDK support yet.
+
+### Swing Speed Training
+
+For air swings and speed-stick training, OpenFlight can use the OPS243-A fast
+speed stream directly instead of waiting for impact audio. Start it with
+`scripts/start-kiosk.sh --swing-speed`; the server emits `swing_speed` events
+with peak club speed, rep duration, reading count, and session stats. See the
+**[Swing Speed Training Guide](docs/swing-speed-training.md)** for setup and
+tuning options.
 
 ## How It Works
 
