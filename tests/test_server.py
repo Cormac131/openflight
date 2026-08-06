@@ -177,8 +177,8 @@ class TestIWR6843ShotIntegration:
         assert captured["armed"] is False
         server_module.iwr6843_runtime = None
 
-    def test_init_iwr6843_wires_azimuth_offset_into_runtime(self, monkeypatch, tmp_path):
-        """--iwr6843-azimuth-offset-deg must reach IWR6843Runtime, not just be parsed.
+    def test_init_iwr6843_wires_horizontal_calibration_into_runtime(self, monkeypatch, tmp_path):
+        """Horizontal calibration must reach IWR6843Runtime, not just be parsed.
 
         A flag that parses but never reaches the runtime silently reports every
         club path relative to boresight instead of the target line.
@@ -216,10 +216,13 @@ class TestIWR6843ShotIntegration:
             tx_order="auto",
             capture_timeout_s=12.0,
             azimuth_offset_deg=1.5,
+            horizontal_phase_reference_rad=-0.5,
         )
 
         assert server_module.iwr6843_runtime.azimuth_offset_deg == 1.5
+        assert server_module.iwr6843_runtime.horizontal_phase_reference_rad == -0.5
         assert server_module.iwr6843_runtime_config["azimuth_offset_deg"] == 1.5
+        assert server_module.iwr6843_runtime_config["horizontal_phase_reference_rad"] == -0.5
         server_module.iwr6843_runtime = None
 
     def test_accepted_lcmf_angle_is_applied_to_existing_shot_contract(self, monkeypatch):
