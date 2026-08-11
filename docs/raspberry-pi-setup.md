@@ -36,7 +36,7 @@ Run the following command:
 sudo apt update && sudo apt install -y swig liblgpio-dev python3-dev
 ```
 
-If the `./scripts/setup/setup.sh` or `./scripts/start-kiosk.sh` commands below don't pick up installed dependencies, it may be required to run `source ~/.bashrc` in the terminal. Edits to `~/.bashrc` only load automatically when a new terminal session starts. Running `source ~/.bashrc` forces your current terminal window to re-read the file so those new variables take effect immediately without needing to reboot or re-login.
+If `./scripts/setup/setup.sh` updates `~/.bashrc`, you may need to run `source ~/.bashrc` (or open a new terminal) so your current shell picks up the new environment variables immediately without needing to reboot or re-login.
 
 ### 2. Run the setup script
 
