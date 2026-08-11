@@ -24,9 +24,19 @@ Make sure you have all the hardware. See the **[Parts List](PARTS.md)** for what
 
 ## Setup
 
-### 1. Install Raspberry Pi OS
+### 1. Install Raspberry Pi OS and Dependencies
 
 Use Raspberry Pi Imager to flash **Raspberry Pi OS (64-bit)** to your SD card.
+
+On the first boot, before cloning OpenFlight, you'll likely need a few dependencies to run the setup.sh script.
+
+Run the following command:
+
+```bash
+sudo apt update && sudo apt install -y swig liblgpio-dev python3-dev
+```
+
+If the `./scripts/setup/setup.sh` or `./scripts/start-kiosk.sh` commands below don't pick up installed dependencies, it may be required to run `source ~/.bashrc` in the terminal. Edits to `~/.bashrc` only load automatically when a new terminal session starts. Running `source ~/.bashrc` forces your current terminal window to re-read the file so those new variables take effect immediately without needing to reboot or re-login.
 
 ### 2. Run the setup script
 
