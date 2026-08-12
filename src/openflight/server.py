@@ -178,20 +178,24 @@ shutdown_cleanup_started = False
 
 def _run_shutdown_step(name: str, callback) -> None:
     """Run one shutdown step without preventing later hardware cleanup."""
+    started = time.monotonic()
     try:
         callback()
     except Exception:
         logger.warning("[SERVER] Shutdown cleanup failed during %s", name, exc_info=True)
+    finally:
+        elapsed_ms = (time.monotonic() - started) * 1000
+        logger.info("[SERVER] Shutdown step %s completed in %.1fms", name, elapsed_ms)
 
 
-def _cleanup_hardware_for_shutdown() -> None:
-    """Stop hardware resources in an order that leaves serial devices reusable."""
+def _cleanup_hardware_for_shutdown() -> bool:
+    """Stop hardware resources and report whether this caller owned cleanup."""
     global shutdown_cleanup_started  # pylint: disable=global-statement
 
     with shutdown_lock:
         if shutdown_cleanup_started:
             logger.info("[SERVER] Shutdown cleanup already started")
-            return
+            return False
         shutdown_cleanup_started = True
 
     if kld7_vertical:
@@ -213,11 +217,14 @@ def _cleanup_hardware_for_shutdown() -> None:
     for connector in sim_connectors:
         _run_shutdown_step(f"simulator connector stop ({connector.name})", connector.stop)
 
+    return True
+
 
 def _shutdown_process_after_delay(delay_s: float = 0.5) -> None:
     """Give the HTTP/WebSocket response time to flush, then clean up and exit."""
     time.sleep(delay_s)
-    _cleanup_hardware_for_shutdown()
+    if not _cleanup_hardware_for_shutdown():
+        return
     logger.info("[SERVER] Goodbye")
     os._exit(0)
 
@@ -1904,6 +1911,11 @@ def handle_shutdown():
     threading.Thread(target=_shutdown_process_after_delay, daemon=True).start()
 
 
+def on_shot_processing(state: str) -> None:
+    """Forward the rolling-buffer processing lifecycle to the UI."""
+    socketio.emit("shot_processing", {"state": state})
+
+
 def _forward_shot_to_simulators(shot: Shot) -> None:
     """Resolve a shot once and fan it out to every connected simulator.
 
@@ -3024,6 +3036,7 @@ def start_monitor(
             shot_callback=on_shot_detected,
             live_callback=on_live_reading,
             diagnostic_callback=on_trigger_diagnostic,
+            processing_callback=on_shot_processing,
         )
         if iwr6843_runtime is not None:
             iwr6843_runtime.capture_monitor.arm()
