@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **System Prerequisites:** Documented missing binary dependencies (`swig`, `liblgpio-dev`, `python3-dev`) required prior to executing `./scripts/setup/setup.sh`.
+- **Environment Reload Guidance:** Added instructions for reloading terminal environment variables (`source ~/.bashrc`) when installed dependencies or scripts (`setup.sh`, `start-kiosk.sh`) are not recognized in the current terminal session.
 - **OPS243 over the Raspberry Pi GPIO UART.** The radar can now run on the J3
   header instead of USB, which frees the Pi's USB power budget for the TI angle
   radar. Baud is the real wire rate on that transport and the factory default of
@@ -86,6 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--kld7-bypass-vertical-gate` renamed to `--kld7-vertical-raw`.
 
 ### Fixed
+- **Raspberry Pi 5 & OS Compatibility:** Updated UART configuration documentation to support Debian Bookworm and Raspberry Pi 5 hardware using `dtparam=uart0=on` alongside legacy `enable_uart=1`.
+- **UART Diagnostic Commands:** Simplified UART verification instructions in `docs/iwr6843/README.md` and `docs/ops243-uart-migration.md` using `grep -E` to check for both legacy and modern device-tree parameters simultaneously across config paths.
 - Session logging: serialize all access to the session JSONL file with a
   lock. The `log_*` methods are called concurrently from the OPS243
   capture thread, the K-LD7 stream thread, and Flask-SocketIO handlers;

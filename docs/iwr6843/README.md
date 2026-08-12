@@ -217,13 +217,21 @@ to `/dev/ttyAMA10`, which is the separate debug-header UART rather than the
 If `/dev/ttyAMA0` is missing, confirm that UART0 is enabled:
 
 ```bash
-grep enable_uart /boot/firmware/config.txt /boot/config.txt 2>/dev/null
+grep -E "enable_uart|dtparam=uart0" /boot/firmware/config.txt /boot/config.txt 2>/dev/null
 ```
+
+Note for Raspberry Pi 5 & Newer OS Versions:
+Newer hardware and Debian Bookworm use dtparam=uart0=on instead of the legacy enable_uart=1 setting to enable the UART0 hardware block.
 
 At least one boot configuration should contain:
 
 ```text
 enable_uart=1
+```
+Or
+
+```text
+dtparam=uart0=on
 ```
 
 ## Prepare Serial And GPIO Permissions
