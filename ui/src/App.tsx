@@ -21,6 +21,8 @@ import { TrainingImplementPicker } from './components/TrainingImplementPicker';
 import { PlayerPicker } from './components/PlayerPicker';
 import { BallDetectionIndicator } from './components/BallDetectionIndicator';
 import { DisplayMode } from './components/DisplayMode';
+import { ShotProcessingArea } from './components/ShotProcessingArea';
+import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
 import { unlockAudioCue } from './utils/audioCue';
 import {
   useLaunchDaddy,
@@ -80,11 +82,12 @@ function AppContent() {
       serverClub: state.serverClub,
     }))
   );
-  const { latestShot, shots, isNewShot, shotVersion } = useShotStore(
+  const { latestShot, shots, isNewShot, shotProcessingPhase, shotVersion } = useShotStore(
     useShallow((state) => ({
       latestShot: state.latestShot,
       shots: state.shots,
       isNewShot: state.isNewShot,
+      shotProcessingPhase: state.shotProcessingPhase,
       shotVersion: state.shotVersion,
     }))
   );
@@ -117,6 +120,7 @@ function AppContent() {
   // below, so this interstitial never appears in the passive TV view.
   const [showClubSelect, setShowClubSelect] = useState(true);
   const [showShutdown, setShowShutdown] = useState(false);
+  const [shutdownState, setShutdownState] = useState<ShutdownState>('confirm');
   const { isLaunchDaddyMode, isExploding, triggerExplosion, handleSecretTap } = useLaunchDaddy();
   const { unitSystem, setUnitSystem } = useUnitPreference();
   const isDisplayRoute = typeof window !== 'undefined' && window.location.pathname.replace(/\/$/, '') === '/display';
@@ -149,6 +153,20 @@ function AppContent() {
   const handleTrainingImplementChange = (implement: string) => {
     setSelectedTrainingImplement(implement);
     socketService.setTrainingImplement(implement);
+  };
+
+  const handleShutdown = async () => {
+    setShutdownState('pending');
+    try {
+      await shutdown();
+    } catch {
+      setShutdownState('error');
+    }
+  };
+
+  const closeShutdown = () => {
+    setShowShutdown(false);
+    setShutdownState('confirm');
   };
 
   if (isDisplayRoute) {
@@ -229,7 +247,14 @@ function AppContent() {
           />
           <SimStatus statuses={simStatuses} />
           <ConnectionStatus connected={connected} />
-          <button className="power-button" onClick={() => setShowShutdown(true)} title="Shut down">
+          <button
+            className="power-button"
+            onClick={() => {
+              setShutdownState('confirm');
+              setShowShutdown(true);
+            }}
+            title="Shut down"
+          >
             <svg
               viewBox="0 0 24 24"
               fill="none"
@@ -247,27 +272,9 @@ function AppContent() {
         </div>
       </header>
 
-      {showShutdown && (
-        <div className="shutdown-overlay">
-          <div className="shutdown-dialog">
-            <p>Shut down OpenFlight?</p>
-            <div className="shutdown-dialog__buttons">
-              <button
-                className="shutdown-dialog__confirm"
-                onClick={() => {
-                  shutdown();
-                  setShowShutdown(false);
-                }}
-              >
-                Shut Down
-              </button>
-              <button className="shutdown-dialog__cancel" onClick={() => setShowShutdown(false)}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {showShutdown ? (
+        <ShutdownDialog state={shutdownState} onConfirm={handleShutdown} onCancel={closeShutdown} />
+      ) : null}
 
       <nav className="nav">
         <button
@@ -314,14 +321,16 @@ function AppContent() {
         {currentView === 'live' && (
           <div className="live-view">
             {isNewShot && <div key={shotVersion} className="shot-flash" />}
-            <ShotDisplay
-              key={shotVersion}
-              shot={latestShot}
-              shots={shots}
-              animate={isNewShot}
-              activePlayerName={selectedPlayer}
-              activeTrainingImplement={isSwingSpeedMode ? selectedTrainingImplement : undefined}
-            />
+            <ShotProcessingArea phase={shotProcessingPhase}>
+              <ShotDisplay
+                key={shotVersion}
+                shot={latestShot}
+                shots={shots}
+                animate={isNewShot}
+                activePlayerName={selectedPlayer}
+                activeTrainingImplement={isSwingSpeedMode ? selectedTrainingImplement : undefined}
+              />
+            </ShotProcessingArea>
             {debugMode && <SimShotBadges latestSimShots={latestSimShots} />}
             {mockMode && (
               <button className="simulate-button" onClick={() => socketService.simulateShot()}>
