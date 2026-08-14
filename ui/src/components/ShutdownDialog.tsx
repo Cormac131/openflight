@@ -31,12 +31,7 @@ export function ShutdownDialog({ state, onConfirm, onCancel }: ShutdownDialogPro
   const hasError = state === 'error';
   return (
     <div className="shutdown-overlay">
-      <div
-        className="shutdown-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="shutdown-dialog-title"
-      >
+      <div className="shutdown-dialog" role="dialog" aria-modal="true" aria-labelledby="shutdown-dialog-title">
         <p id="shutdown-dialog-title">{hasError ? 'Could not start shutdown' : 'Shut down OpenFlight?'}</p>
         {hasError ? <span className="shutdown-dialog__error">Check the server and try again.</span> : null}
         <div className="shutdown-dialog__buttons">

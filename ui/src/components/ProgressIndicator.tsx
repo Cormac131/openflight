@@ -8,11 +8,7 @@ interface ProgressIndicatorProps {
 
 export function ProgressIndicator({ variant, title, detail }: ProgressIndicatorProps) {
   return (
-    <div
-      className={`progress-indicator progress-indicator--${variant}`}
-      role="status"
-      aria-live="polite"
-    >
+    <div className={`progress-indicator progress-indicator--${variant}`} role="status" aria-live="polite">
       <span className="progress-indicator__spinner" aria-hidden="true" />
       <span className="progress-indicator__copy">
         <strong className="progress-indicator__title">{title}</strong>

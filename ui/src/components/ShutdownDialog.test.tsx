@@ -6,9 +6,7 @@ const noop = () => {};
 
 describe('ShutdownDialog', () => {
   it('replaces the confirmation controls with persistent shutdown feedback', () => {
-    const html = renderToString(
-      <ShutdownDialog state="pending" onConfirm={noop} onCancel={noop} />
-    );
+    const html = renderToString(<ShutdownDialog state="pending" onConfirm={noop} onCancel={noop} />);
 
     expect(html).toContain('Shutting down OpenFlight…');
     expect(html).toContain('Safely stopping radar services');
@@ -20,9 +18,7 @@ describe('ShutdownDialog', () => {
   });
 
   it('keeps retry and cancel controls available after a request failure', () => {
-    const html = renderToString(
-      <ShutdownDialog state="error" onConfirm={noop} onCancel={noop} />
-    );
+    const html = renderToString(<ShutdownDialog state="error" onConfirm={noop} onCancel={noop} />);
 
     expect(html).toContain('Could not start shutdown');
     expect(html).toContain('aria-labelledby="shutdown-dialog-title"');
