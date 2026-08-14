@@ -3015,8 +3015,7 @@ class TestShutdownPreservesRollingBuffer:
 
             def join(self, timeout=None):
                 self.join_timeouts.append(timeout)
-                if timeout is None:
-                    self.alive = False
+                self.alive = False
 
             def is_alive(self):
                 return self.alive
@@ -3028,7 +3027,7 @@ class TestShutdownPreservesRollingBuffer:
 
         monitor.stop()
 
-        assert active_thread.join_timeouts == [None]
+        assert active_thread.join_timeouts == [5.0]
         assert active_thread.is_alive() is False
         assert monitor._capture_thread is None
 

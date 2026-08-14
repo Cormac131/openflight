@@ -381,13 +381,10 @@ class RollingBufferMonitor:
         self._stop_event.set()
         if self._capture_thread:
             capture_thread = self._capture_thread
-            if self.trigger_type == "sound":
-                # Idle sound waits are cancelled immediately. If bytes are
-                # already arriving, let the bounded radar dump and re-arm
-                # finish before the serial port is closed.
-                capture_thread.join()
-            else:
-                capture_thread.join(timeout=5.0)
+            # Idle sound waits are cancelled immediately. If bytes are
+            # already arriving, let the bounded radar dump and re-arm
+            # finish before the serial port is closed.
+            capture_thread.join(timeout=5.0)
             if capture_thread.is_alive():
                 logger.warning("[MONITOR] Capture thread still active during shutdown")
             else:
