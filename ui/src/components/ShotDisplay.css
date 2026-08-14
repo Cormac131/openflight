@@ -378,7 +378,6 @@
 }
 
 @keyframes ball-breathe {
-
   0%,
   100% {
     transform: scale(1);
@@ -433,7 +432,6 @@
 }
 
 @keyframes shadow-breathe {
-
   0%,
   100% {
     transform: translateX(-50%) scale(1);
