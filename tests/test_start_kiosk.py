@@ -240,6 +240,19 @@ def test_startup_applies_kld7_latency_setup_before_server_start():
     assert setup_idx < server_start_idx
 
 
+def test_shutdown_requests_server_cleanup_before_forcing_process_exit():
+    """The wrapper must let the server drain IWR data and stop firmware first."""
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
+    cleanup = script[script.index("shutdown_server() {") : script.index("configure_kld7_latency()")]
+
+    api_idx = cleanup.index("/api/shutdown")
+    wait_idx = cleanup.index('kill -0 "$SERVER_PID"', api_idx)
+    term_idx = cleanup.index('kill -TERM "$SERVER_PID"')
+
+    assert api_idx < wait_idx < term_idx
+
+
 def test_radc_tuning_values_are_ignored_without_experimental_gate():
     """Loose tuning flags should not alter production extraction by accident."""
     result = _dry_run(

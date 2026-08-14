@@ -21,6 +21,32 @@ def test_send_config_rejects_missing_cli_acknowledgement(tmp_path, monkeypatch):
         radar.send_config(str(config))
 
 
+def test_stop_sensor_requires_acknowledgement_and_inactive_health(monkeypatch):
+    """Shutdown must leave firmware idle rather than merely close the host UART."""
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    responses = iter(["sensorStop\nDone\nl3dump:/>", "stats\nactive=0\nDone\nl3dump:/>"])
+    calls = []
+
+    def fake_cmd(command, window):
+        calls.append((command, window))
+        return next(responses)
+
+    monkeypatch.setattr(radar, "cmd", fake_cmd)
+
+    radar.stop_sensor()
+
+    assert calls == [("sensorStop", 3.0), ("stats", 2.0)]
+
+
+def test_stop_sensor_rejects_firmware_that_remains_active(monkeypatch):
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    responses = iter(["sensorStop\nDone\n", "stats\nactive=1\nDone\n"])
+    monkeypatch.setattr(radar, "cmd", lambda *_args: next(responses))
+
+    with pytest.raises(RuntimeError, match="remained active"):
+        radar.stop_sensor()
+
+
 class FakeSerial:
     """Serial double that exposes the in_waiting/read/write pieces read_dump uses."""
 

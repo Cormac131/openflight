@@ -88,6 +88,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--kld7-bypass-vertical-gate` renamed to `--kld7-vertical-raw`.
 
 ### Fixed
+- **Graceful IWR6843 shutdown.** Kiosk shutdown now asks the server to finish
+  hardware cleanup before escalating to process signals. An active TI dump is
+  allowed to complete, capture firmware is stopped and verified inactive, and
+  the serial port is then closed. This prevents an interrupted L3 transfer or
+  failed GPIO setup from leaving the radar unresponsive on the next startup.
 - **Raspberry Pi 5 & OS Compatibility:** Updated UART configuration documentation to support Debian Bookworm and Raspberry Pi 5 hardware using `dtparam=uart0=on` alongside legacy `enable_uart=1`.
 - **UART Diagnostic Commands:** Simplified UART verification instructions in `docs/iwr6843/README.md` and `docs/ops243-uart-migration.md` using `grep -E` to check for both legacy and modern device-tree parameters simultaneously across config paths.
 - Session logging: serialize all access to the session JSONL file with a

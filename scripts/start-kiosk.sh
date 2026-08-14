@@ -408,13 +408,52 @@ if [ "$KLD7" = true ] && [ -z "$KLD7_MOUNT_TILT" ]; then
     exit 1
 fi
 
-cleanup() {
-    log "Shutting down..."
-    if [ -n "$SERVER_PID" ]; then
-        kill $SERVER_PID 2>/dev/null || true
+shutdown_server() {
+    if [ -z "$SERVER_PID" ] || ! kill -0 "$SERVER_PID" 2>/dev/null; then
+        return 0
     fi
+
+    log "Requesting graceful hardware shutdown..."
+    if curl -fsS --max-time 2 -X POST "http://$HOST:$PORT/api/shutdown" >/dev/null 2>&1; then
+        # IWR dumps normally take 5-8 seconds. Allow the server to preserve an
+        # active dump, stop capture firmware, and close hardware in order.
+        for _ in {1..80}; do
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+                wait "$SERVER_PID" 2>/dev/null || true
+                return 0
+            fi
+            sleep 0.25
+        done
+        warn "Server did not complete graceful shutdown within 20 seconds"
+    else
+        warn "Server shutdown API unavailable; falling back to process signal"
+    fi
+
+    if kill -0 "$SERVER_PID" 2>/dev/null; then
+        kill -TERM "$SERVER_PID" 2>/dev/null || true
+        for _ in {1..8}; do
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+                wait "$SERVER_PID" 2>/dev/null || true
+                return 0
+            fi
+            sleep 0.25
+        done
+    fi
+
+    if kill -0 "$SERVER_PID" 2>/dev/null; then
+        warn "Forcing server exit; connected radar hardware may require reset"
+        kill -KILL "$SERVER_PID" 2>/dev/null || true
+    fi
+    wait "$SERVER_PID" 2>/dev/null || true
+}
+
+cleanup() {
+    # Prevent a second signal from re-entering cleanup while hardware drains.
+    trap - SIGINT SIGTERM
+    log "Shutting down..."
+    shutdown_server
     if [ -n "$BROWSER_PID" ]; then
-        kill $BROWSER_PID 2>/dev/null || true
+        kill "$BROWSER_PID" 2>/dev/null || true
     fi
     # Chromium forks child processes that survive kill — clean them all
     pkill -f "chromium.*--kiosk" 2>/dev/null || true
