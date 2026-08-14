@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Shot } from '../types/shot';
 import { useShotStore } from './useShotStore';
 
@@ -17,6 +17,11 @@ describe('useShotStore processing lifecycle', () => {
       shotProcessingPhase: null,
       shotVersion: 0,
     });
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   it('keeps current shot data while marking the next shot as processing', () => {
