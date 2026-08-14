@@ -192,6 +192,14 @@ class IWR6843Radar:
         """Firmware health line (frames/wraps/active/calib/rf_faults)."""
         return self.cmd("stats", 2.0)
 
+    def stop_sensor(self) -> None:
+        """Stop capture and verify the firmware returned to its idle CLI state."""
+        self._require_done("sensorStop", self.cmd("sensorStop", 3.0))
+        health = self.stats()
+        self._require_done("stats", health)
+        if "active=0" not in health:
+            raise RuntimeError(f"IWR6843 remained active after sensorStop: {health.strip()}")
+
     def close(self) -> None:
         """Release the serial port."""
         self.ser.close()

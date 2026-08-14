@@ -18,7 +18,7 @@ from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
 
 logger = logging.getLogger(__name__)
 
-_GRACEFUL_DUMP_SHUTDOWN_S = 8.0
+_GRACEFUL_DUMP_SHUTDOWN_S = 12.0
 
 
 def tx_order_from_config(config_path: str | Path) -> str:
@@ -108,8 +108,10 @@ class IWR6843CaptureMonitor:
             raise FileNotFoundError(f"IWR6843 config not found: {self.config_path}")
         if self.save_dumps:
             self.output_dir.mkdir(parents=True, exist_ok=True)
+        configured = False
         try:
             self.radar.send_config(str(self.config_path))
+            configured = True
 
             button_factory = self._button_factory
             if button_factory is None:
@@ -137,7 +139,10 @@ class IWR6843CaptureMonitor:
             if self._button is not None:
                 self._button.close()
                 self._button = None
-            self.radar.close()
+            if configured:
+                self._stop_sensor_and_close()
+            else:
+                self.radar.close()
             raise
         logger.info(
             "[IWR6843] Configured on BCM%d using %s (%s%s)",
@@ -298,7 +303,7 @@ class IWR6843CaptureMonitor:
                 self._condition.wait(remaining)
 
     def stop(self) -> None:
-        """Release GPIO, serial transport, and worker resources."""
+        """Drain active capture, stop firmware, then release host resources."""
         if not self._running:
             return
         self._armed = False
@@ -312,21 +317,36 @@ class IWR6843CaptureMonitor:
         except queue.Full:
             pass
         if self._worker is not None:
-            # Keep UART open long enough for a normal 550 KiB dump to finish.
-            # Closing it first strands the firmware in an abandoned transfer.
+            # Preserve a complete debug dump and its trailing CLI prompt before
+            # issuing sensorStop. Closing early strands firmware mid-transfer.
             self._worker.join(timeout=_GRACEFUL_DUMP_SHUTDOWN_S)
             if self._worker.is_alive():
                 logger.warning(
-                    "[IWR6843] Active dump did not finish during shutdown; forcing serial close"
+                    "[IWR6843] Active dump did not finish within %.1fs; "
+                    "forcing serial close (board reset may be required)",
+                    _GRACEFUL_DUMP_SHUTDOWN_S,
                 )
                 self.radar.close()
                 self._worker.join(timeout=2.0)
             else:
-                self.radar.close()
+                self._stop_sensor_and_close()
             self._worker = None
         else:
-            self.radar.close()
+            self._stop_sensor_and_close()
         logger.info("[IWR6843] Capture monitor stopped")
+
+    def _stop_sensor_and_close(self) -> None:
+        """Best-effort firmware stop that never leaks the serial descriptor."""
+        try:
+            self.radar.stop_sensor()
+            logger.info("[IWR6843] Firmware capture stopped and verified inactive")
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "[IWR6843] Firmware did not stop cleanly; board reset may be required",
+                exc_info=True,
+            )
+        finally:
+            self.radar.close()
 
 
 __all__ = [
