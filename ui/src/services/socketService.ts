@@ -51,6 +51,16 @@ class SocketService {
     this.socket.on('disconnect', () => {
       console.log('Disconnected from server');
       useSystemStore.getState().setConnected(false);
+      useShotStore.getState().finishShotProcessing();
+    });
+
+    this.socket.on('shot_processing', (data: { state: 'capturing' | 'calculating' | 'failed' }) => {
+      const shotStore = useShotStore.getState();
+      if (data.state === 'failed') {
+        shotStore.finishShotProcessing();
+      } else {
+        shotStore.startShotProcessing(data.state);
+      }
     });
 
     this.socket.on('shot', (data: { shot: Shot; stats: SessionStats }) => {

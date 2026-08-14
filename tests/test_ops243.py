@@ -1,5 +1,7 @@
 """Tests for OPS243 radar driver."""
 
+import inspect
+import threading
 import time
 
 import pytest
@@ -589,3 +591,50 @@ class TestWaitForHardwareTrigger:
         response = radar.wait_for_hardware_trigger(timeout=5.0)
         assert response == b"".join(self._DUMP).decode("ascii")
         assert time.time() - start < 1.0
+
+    def test_idle_wait_can_be_cancelled_for_fast_shutdown(self):
+        """Shutdown should not wait for the normal 30-second trigger timeout."""
+        parameters = inspect.signature(OPS243Radar.wait_for_hardware_trigger).parameters
+        assert "cancel_event" in parameters
+
+        radar = self._radar(_ScheduledSerial([]))
+        cancel_event = threading.Event()
+        cancel_event.set()
+        start = time.monotonic()
+
+        response = radar.wait_for_hardware_trigger(
+            timeout=30.0,
+            cancel_event=cancel_event,
+        )
+
+        assert response == ""
+        assert time.monotonic() - start < 0.2
+
+    def test_cancel_does_not_discard_a_dump_that_has_started_arriving(self):
+        """Pending capture bytes win a race with the shutdown cancellation."""
+        radar = self._radar(_ScheduledSerial([(0.0, b"".join(self._DUMP))]))
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        response = radar.wait_for_hardware_trigger(
+            timeout=30.0,
+            cancel_event=cancel_event,
+        )
+
+        assert response == b"".join(self._DUMP).decode("ascii")
+
+    def test_first_byte_callback_fires_when_capture_starts(self):
+        """The UI can acknowledge impact before the complete dump arrives."""
+        parameters = inspect.signature(OPS243Radar.wait_for_hardware_trigger).parameters
+        assert "on_first_byte" in parameters
+
+        radar = self._radar(_ScheduledSerial([(0.0, b"".join(self._DUMP))]))
+        events = []
+
+        response = radar.wait_for_hardware_trigger(
+            timeout=5.0,
+            on_first_byte=lambda: events.append("first-byte"),
+        )
+
+        assert response == b"".join(self._DUMP).decode("ascii")
+        assert events == ["first-byte"]

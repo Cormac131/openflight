@@ -74,10 +74,12 @@ class TestShutdownCleanup:
         monkeypatch.setattr(server_module, "camera", None)
         monkeypatch.setattr(server_module, "stop_monitor", lambda: calls.append("monitor"))
 
-        server_module._cleanup_hardware_for_shutdown()
-        server_module._cleanup_hardware_for_shutdown()
+        first_request_owned_cleanup = server_module._cleanup_hardware_for_shutdown()
+        duplicate_request_owned_cleanup = server_module._cleanup_hardware_for_shutdown()
 
         assert calls == ["camera", "monitor"]
+        assert first_request_owned_cleanup is True
+        assert duplicate_request_owned_cleanup is False
 
     def test_shutdown_stops_iwr6843_before_ops_monitor(self, monkeypatch):
         calls = []
@@ -96,6 +98,37 @@ class TestShutdownCleanup:
         server_module._cleanup_hardware_for_shutdown()
 
         assert calls == ["iwr6843", "ops243"]
+
+    def test_shutdown_step_logs_elapsed_time(self, caplog):
+        """Hardware logs should identify which cleanup step is slow in the field."""
+        with caplog.at_level("INFO", logger="openflight.server"):
+            server_module._run_shutdown_step("OPS monitor stop", lambda: None)
+
+        assert "Shutdown step OPS monitor stop completed in" in caplog.text
+
+    def test_duplicate_shutdown_thread_cannot_exit_during_owner_cleanup(self, monkeypatch):
+        """Only the thread that owns hardware cleanup may terminate the process."""
+        exit_codes = []
+        monkeypatch.setattr(server_module, "_cleanup_hardware_for_shutdown", lambda: False)
+        monkeypatch.setattr(server_module.os, "_exit", exit_codes.append)
+
+        server_module._shutdown_process_after_delay(delay_s=0)
+
+        assert exit_codes == []
+
+
+def test_shot_processing_status_is_forwarded_to_ui(monkeypatch):
+    """The monitor lifecycle should be exposed as a dedicated UI event."""
+    emitted = []
+    monkeypatch.setattr(
+        server_module.socketio,
+        "emit",
+        lambda event, payload: emitted.append((event, payload)),
+    )
+
+    server_module.on_shot_processing("capturing")
+
+    assert emitted == [("shot_processing", {"state": "capturing"})]
 
 
 class TestIWR6843ShotIntegration:
