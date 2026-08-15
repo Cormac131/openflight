@@ -2235,14 +2235,29 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
 
         if capture is None:
             logger.warning("[SERVER] IWR6843 capture timed out; preserving OPS shot")
+            _emit_iwr6843_trigger_status(
+                shot,
+                state="error",
+                reason="no capture matched the OPS impact timestamp",
+            )
         elif not capture.valid:
             logger.warning(
                 "[SERVER] IWR6843 capture #%d failed: %s; preserving OPS shot",
                 capture.sequence,
                 capture.error,
             )
+            _emit_iwr6843_trigger_status(
+                shot,
+                state="error",
+                reason=capture.error or "invalid IWR6843 capture",
+            )
         elif measurement is None:
             logger.warning("[SERVER] IWR6843 capture had no LCMF measurement")
+            _emit_iwr6843_trigger_status(
+                shot,
+                state="rejected",
+                reason="no LCMF measurement",
+            )
         elif measurement.accepted:
             shot.launch_angle_vertical = measurement.angle_deg
             # Device-level provenance is retained in iwr6843_capture. The
@@ -2274,10 +2289,21 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 measurement.n_frames,
                 measurement.component_std_deg,
             )
+            _emit_iwr6843_trigger_status(
+                shot,
+                state="accepted",
+                reason="accepted",
+                angle_deg=measurement.angle_deg,
+            )
         else:
             logger.warning(
                 "[SERVER] IWR6843 LCMF-v1 withheld angle: %s",
                 measurement.status,
+            )
+            _emit_iwr6843_trigger_status(
+                shot,
+                state="rejected",
+                reason=measurement.status,
             )
 
         # Club path is independent of the ball measurement's acceptance --
@@ -2304,7 +2330,28 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
             },
             exc=error,
         )
+        _emit_iwr6843_trigger_status(shot, state="error", reason=str(error))
     return (time.time() - started) * 1000.0
+
+
+def _emit_iwr6843_trigger_status(
+    shot: Shot,
+    *,
+    state: str,
+    reason: str,
+    angle_deg: float | None = None,
+) -> None:
+    """Enrich the existing OPS trigger row with the correlated TI result."""
+    iwr_status = {"state": state, "reason": reason}
+    if angle_deg is not None:
+        iwr_status["angle_deg"] = round(angle_deg, 2)
+    socketio.emit(
+        "trigger_diagnostic_update",
+        {
+            "timestamp": shot.timestamp.isoformat(),
+            "iwr6843": iwr_status,
+        },
+    )
 
 
 def on_shot_detected(shot: Shot):

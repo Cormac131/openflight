@@ -228,6 +228,7 @@ class TestIWR6843ShotIntegration:
         server_module.iwr6843_runtime = None
 
     def test_accepted_lcmf_angle_is_applied_to_existing_shot_contract(self, monkeypatch):
+        emitted = []
         measurement = SimpleNamespace(
             accepted=True,
             angle_deg=17.42,
@@ -258,6 +259,11 @@ class TestIWR6843ShotIntegration:
         )
         monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: session)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
 
         shot = Shot(
             ball_speed_mph=100.0,
@@ -276,6 +282,19 @@ class TestIWR6843ShotIntegration:
         assert logged[0]["shot_number"] == 3
         assert logged[0]["ball_speed_mph"] == 100.0
         assert logged[0]["measurement"]["estimator"] == "lcmf_v1"
+        assert emitted == [
+            (
+                "trigger_diagnostic_update",
+                {
+                    "timestamp": shot.timestamp.isoformat(),
+                    "iwr6843": {
+                        "state": "accepted",
+                        "reason": "accepted",
+                        "angle_deg": 17.42,
+                    },
+                },
+            )
+        ]
 
     def test_iwr6843_horizontal_confidence_derived_from_coherence(self, monkeypatch):
         measurement = SimpleNamespace(
@@ -352,11 +371,17 @@ class TestIWR6843ShotIntegration:
         assert shot.launch_angle_horizontal_confidence == pytest.approx(0.35)
 
     def test_missing_ti_capture_preserves_ops_shot(self, monkeypatch):
+        emitted = []
         runtime = SimpleNamespace(
             process_shot=lambda **kwargs: SimpleNamespace(capture=None, measurement=None)
         )
         monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
         shot = Shot(
             ball_speed_mph=100.0,
             timestamp=datetime.now(),
@@ -367,6 +392,69 @@ class TestIWR6843ShotIntegration:
 
         assert shot.ball_speed_mph == 100.0
         assert shot.launch_angle_vertical is None
+        assert emitted == [
+            (
+                "trigger_diagnostic_update",
+                {
+                    "timestamp": shot.timestamp.isoformat(),
+                    "iwr6843": {
+                        "state": "error",
+                        "reason": "no capture matched the OPS impact timestamp",
+                    },
+                },
+            )
+        ]
+
+    def test_rejected_ti_measurement_updates_existing_trigger_row(self, monkeypatch):
+        emitted = []
+        measurement = SimpleNamespace(
+            accepted=False,
+            status="rejected_track_quality",
+            to_dict=lambda: {"status": "rejected_track_quality"},
+        )
+        capture = SimpleNamespace(
+            trigger_timestamp=100.01,
+            path=Path("/tmp/test.l3dump"),
+            raw=b"raw",
+            dump_duration_s=4.5,
+            error=None,
+            valid=True,
+            sequence=1,
+        )
+        runtime = SimpleNamespace(
+            process_shot=lambda **kwargs: SimpleNamespace(
+                capture=capture,
+                measurement=measurement,
+                club_path=None,
+            )
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+        shot = Shot(
+            ball_speed_mph=100.0,
+            timestamp=datetime.now(),
+            club=ClubType.IRON_9,
+        )
+
+        server_module._process_iwr6843_angle(shot)
+
+        assert emitted == [
+            (
+                "trigger_diagnostic_update",
+                {
+                    "timestamp": shot.timestamp.isoformat(),
+                    "iwr6843": {
+                        "state": "rejected",
+                        "reason": "rejected_track_quality",
+                    },
+                },
+            )
+        ]
 
 
 class TestSessionErrorLogging:

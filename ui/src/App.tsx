@@ -93,13 +93,23 @@ function AppContent() {
   );
   const cameraStatus = useCameraStore((state) => state.cameraStatus);
   const selectedPlayer = usePlayerStore((state) => state.selectedPlayer);
-  const { debugReadings, debugShotLogs, radarConfig, triggerDiagnostics, triggerStatus } = useDebugStore(
+  const {
+    debugReadings,
+    debugShotLogs,
+    radarConfig,
+    triggerDiagnostics,
+    triggerStatus,
+    iwr6843Alert,
+    dismissIWR6843Alert,
+  } = useDebugStore(
     useShallow((state) => ({
       debugReadings: state.debugReadings,
       debugShotLogs: state.debugShotLogs,
       radarConfig: state.radarConfig,
       triggerDiagnostics: state.triggerDiagnostics,
       triggerStatus: state.triggerStatus,
+      iwr6843Alert: state.iwr6843Alert,
+      dismissIWR6843Alert: state.dismissIWR6843Alert,
     }))
   );
 
@@ -271,6 +281,18 @@ function AppContent() {
           </button>
         </div>
       </header>
+
+      {iwr6843Alert && (
+        <div className="iwr-alert" role="alert">
+          <div>
+            <strong>TI radar capture failed</strong>
+            <span>This shot used an estimated launch angle. {iwr6843Alert.reason}</span>
+          </div>
+          <button type="button" onClick={dismissIWR6843Alert} aria-label="Dismiss TI radar alert">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {showShutdown ? (
         <ShutdownDialog state={shutdownState} onConfirm={handleShutdown} onCancel={closeShutdown} />

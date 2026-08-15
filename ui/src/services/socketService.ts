@@ -9,6 +9,7 @@ import {
   type SessionStats,
   type SessionState,
   type TriggerDiagnostic,
+  type TriggerDiagnosticUpdate,
   type TriggerStatus,
 } from '../types/shot';
 import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
@@ -179,6 +180,10 @@ class SocketService {
       const debugStore = useDebugStore.getState();
       debugStore.addTriggerDiagnostic(data);
       debugStore.updateTriggerStatusStats(data.accepted);
+    });
+
+    this.socket.on('trigger_diagnostic_update', (data: TriggerDiagnosticUpdate) => {
+      useDebugStore.getState().updateTriggerDiagnostic(data);
     });
 
     this.socket.on('trigger_status', (data: TriggerStatus) => {
