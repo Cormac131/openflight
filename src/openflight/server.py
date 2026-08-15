@@ -30,6 +30,7 @@ from .ops243 import (
     SpeedReading,
     set_show_raw_readings,
 )
+from .power import PowerMonitor, PowerStatus
 from .rolling_buffer.monitor import estimate_carry_with_spin, get_optimal_spin_for_ball_speed
 from .session_logger import get_session_logger, init_session_logger, log_session_error
 from .sim import (
@@ -79,6 +80,8 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # Global state
 monitor = None
+power_monitor: Optional[PowerMonitor] = None
+geekworm_power_enabled: bool = False
 mock_mode: bool = False
 debug_mode: bool = False
 mock_swing_speed_mode: bool = False
@@ -206,6 +209,8 @@ def _cleanup_hardware_for_shutdown() -> bool:
         _run_shutdown_step("inclinometer stop", inclinometer_service.stop)
     if iwr6843_runtime:
         _run_shutdown_step("IWR6843 stop", iwr6843_runtime.stop)
+    if power_monitor:
+        _run_shutdown_step("Geekworm power monitor stop", power_monitor.stop)
 
     _run_shutdown_step("camera thread stop", stop_camera_thread)
     if camera:
@@ -859,6 +864,7 @@ def _session_start_config() -> dict:
     }
     config["iwr6843"] = dict(iwr6843_runtime_config)
     config["inclinometer"] = dict(inclinometer_runtime_config)
+    config["power"] = {"geekworm_enabled": geekworm_power_enabled}
     return config
 
 
@@ -1658,11 +1664,33 @@ def _emit_sim_snapshot() -> None:
         )
 
 
+def _on_power_status(status: PowerStatus) -> None:
+    """Publish one Geekworm power reading to connected UI clients."""
+    socketio.emit("power_status", status.to_dict())
+
+
+def _log_power_status(status: PowerStatus) -> None:
+    """Write throttled Geekworm telemetry into the active session log."""
+    session_log = get_session_logger()
+    if session_log:
+        session_log.log_power_status(status.to_dict())
+
+
+def start_power_monitor() -> None:
+    """Start optional Geekworm monitoring without blocking server startup."""
+    global power_monitor  # pylint: disable=global-statement
+    power_monitor = PowerMonitor(on_status=_on_power_status, on_log=_log_power_status)
+    power_monitor.start()
+    logger.info("[POWER] Geekworm X1202/X1206 monitoring enabled")
+
+
 @socketio.on("connect")
 def handle_connect():
     """Handle client connection."""
     print("Client connected")
     _emit_sim_snapshot()
+    if power_monitor and power_monitor.status:
+        socketio.emit("power_status", power_monitor.status.to_dict())
     if monitor:
         stats = monitor.get_session_stats()
         socketio.emit(
@@ -3640,6 +3668,11 @@ def main():
     )
     parser.add_argument("--no-logging", action="store_true", help="Disable session logging")
     parser.add_argument(
+        "--geekworm-power",
+        action="store_true",
+        help="Show battery and external-power status for Geekworm X1202/X1206 UPS boards",
+    )
+    parser.add_argument(
         "--sim",
         action="store_true",
         help="Enable simulator connectors from config/sim.json (GSPro / OpenGolfSim). "
@@ -4031,6 +4064,7 @@ def main():
     global experimental_kld7_raw_radc_logging
     global active_kld7_radc_tuning
     global ballistics_enabled
+    global geekworm_power_enabled
     experimental_kld7_raw_radc_logging = args.experimental_kld7_raw_radc_logging
     experimental_kld7_radc_tuning = args.experimental_kld7_radc_tuning
     global ball_speed_correction_enabled
@@ -4046,6 +4080,7 @@ def main():
     global calculated_spin_enabled
     calculated_spin_enabled = args.calculated_spin
     ballistics_enabled = args.ballistics
+    geekworm_power_enabled = args.geekworm_power
     kld7_radc_tuning_kwargs = _kld7_radc_tuning_kwargs(args)
     active_kld7_radc_tuning = dict(kld7_radc_tuning_kwargs)
 
@@ -4236,6 +4271,10 @@ def main():
         swing_speed_kwargs=swing_speed_kwargs,
         ops_baud=args.ops_baud,
     )
+
+    if geekworm_power_enabled:
+        start_power_monitor()
+        print("Geekworm power monitoring: ENABLED")
 
     # Simulator connectors (off unless --sim). Started after the monitor exists
     # so inbound club updates can call monitor.set_club().

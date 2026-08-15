@@ -65,6 +65,7 @@ EXPERIMENTAL_KLD7_HORIZONTAL_ANGLE_LIMIT=""
 BALLISTICS=true
 SIM=false
 CALCULATED_SPIN=false
+GEEKWORM_POWER=false
 SWING_SPEED=false
 SWING_SPEED_THRESHOLD=""
 SWING_SPEED_MIN_READINGS=""
@@ -104,6 +105,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --radar-log)
             RADAR_LOG=true
+            shift
+            ;;
+        --geekworm-power)
+            GEEKWORM_POWER=true
             shift
             ;;
         --debug|-d)
@@ -537,6 +542,10 @@ fi
 
 if [ "$NO_CAMERA" = true ]; then
     SERVER_CMD="$SERVER_CMD --no-camera"
+fi
+
+if [ "$GEEKWORM_POWER" = true ]; then
+    SERVER_CMD="$SERVER_CMD --geekworm-power"
 fi
 
 if [ "$BALLISTICS" = false ]; then

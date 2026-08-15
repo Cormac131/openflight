@@ -112,6 +112,9 @@ scripts/start-kiosk.sh --swing-speed
 
 # Development mode (no hardware)
 scripts/start-kiosk.sh --mock
+
+# With Geekworm X1202/X1206 battery monitoring
+scripts/start-kiosk.sh --geekworm-power
 ```
 
 The IWR6843 example values are not universal. Measure the geometry from the
@@ -303,6 +306,7 @@ uv run pytest tests/ -v
 - **[Parts List](docs/PARTS.md)** — What to buy
 - **[Sound Trigger Wiring](docs/sound-trigger-wiring.md)** — How to wire the sound trigger
 - **[Raspberry Pi Setup](docs/raspberry-pi-setup.md)** — Full setup guide
+- **[Geekworm Power Display](docs/geekworm-power.md)** — X1202/X1206 battery monitoring and warnings
 - **[IWR6843 Operator Guide](docs/iwr6843/README.md)** — Wire, flash, mount, aim, and calibrate the angle radar
 - **[LIS3DH Inclinometer Setup](docs/inclinometer/README.md)**: Add enclosure-level compensation to IWR6843 tilt
 - **[OPS243 USB → GPIO UART Migration](docs/ops243-uart-migration.md)** — Required before adding the IWR6843
