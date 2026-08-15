@@ -74,7 +74,11 @@ def test_reader_treats_gpio6_as_active_high_with_a_pull_up(monkeypatch):
 
     class SpyInput(FakeInput):
         def __init__(self, pin, **kwargs):
-            super().__init__(value=1)
+            if kwargs.get("pull_up") is not None and kwargs.get("active_state") is not None:
+                raise ValueError('Pin GPIO6 is not floating, but "active_state" is not None')
+            # gpiozero defaults pull-up inputs to active-low. A physically high
+            # GPIO6 therefore has a logical value of zero.
+            super().__init__(value=0)
             created.update(pin=pin, **kwargs)
 
     fake_gpiozero = ModuleType("gpiozero")
@@ -86,7 +90,7 @@ def test_reader_treats_gpio6_as_active_high_with_a_pull_up(monkeypatch):
         bus=FakeBus({0x02: [0xC3, 0x00], 0x04: [50, 0]}),
     )
 
-    assert created == {"pin": 6, "pull_up": True, "active_state": True}
+    assert created == {"pin": 6, "pull_up": True}
     assert reader.read().external_power is True
 
 

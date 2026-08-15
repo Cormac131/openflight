@@ -53,6 +53,7 @@ class GeekwormPowerReader:
         ac_input: DigitalInputLike | None = None,
     ):
         owns_bus = bus is None
+        gpiozero_pull_up = ac_input is None
         if bus is None:
             from smbus2 import SMBus  # pylint: disable=import-error,import-outside-toplevel
 
@@ -67,12 +68,8 @@ class GeekwormPowerReader:
 
                 ensure_lgpio_pin_factory()
                 # GPIO6 is electrically high when the adapter is present. gpiozero
-                # otherwise inverts ``value`` for pull-up inputs by default.
-                ac_input = DigitalInputDevice(
-                    self.AC_DETECT_PIN,
-                    pull_up=True,
-                    active_state=True,
-                )
+                # represents pull-up inputs as active-low, which is normalized in read().
+                ac_input = DigitalInputDevice(self.AC_DETECT_PIN, pull_up=True)
             except Exception:
                 if owns_bus:
                     bus.close()
@@ -80,6 +77,7 @@ class GeekwormPowerReader:
 
         self.bus = bus
         self.ac_input = ac_input
+        self._gpiozero_pull_up = gpiozero_pull_up
         self.address = address
         self._closed = False
 
@@ -106,10 +104,12 @@ class GeekwormPowerReader:
         if not 0.0 <= battery_percent <= 110.0:
             raise OSError(f"Geekworm battery percentage is invalid: {battery_percent:.2f}%")
 
+        input_value = bool(self.ac_input.value)
+        external_power = not input_value if self._gpiozero_pull_up else input_value
         return PowerSample(
             battery_percent=min(100.0, battery_percent),
             battery_voltage_v=voltage_v,
-            external_power=bool(self.ac_input.value),
+            external_power=external_power,
         )
 
     def close(self) -> None:
