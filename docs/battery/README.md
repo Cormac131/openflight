@@ -57,6 +57,8 @@ warnings or shutdown policy.
 The UI reports plugged-in, on-battery, low, critical, and unavailable states.
 Warnings at 20% and 10% are dismissible and appear only while discharging.
 
+![OpenFlight showing a plugged-in battery at 78%](images/openflight-battery-status.png)
+
 Session logs contain `power_status` records with the provider, percentage,
 voltage, external-power state, availability, timestamp, and any read error.
 The session-start configuration also records the selected provider.
