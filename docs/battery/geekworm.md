@@ -2,6 +2,8 @@
 
 This guide covers installation, Raspberry Pi configuration, verification, and
 OpenFlight battery monitoring for the Geekworm X1202 and X1206 UPS boards.
+See the [battery monitoring overview](README.md) for the shared provider
+architecture, UI behavior, and session logging contract.
 Both boards use the same telemetry interface:
 
 - A MAX17040/MAX17043-compatible fuel gauge at I2C address `0x36`
@@ -76,9 +78,9 @@ before reseating the boards.
 Run the checked-in setup script from the OpenFlight repository root:
 
 ```bash
-sudo scripts/geekworm/setup.sh
+sudo scripts/battery/geekworm/setup.sh
 sudo reboot
-scripts/geekworm/setup.sh --verify
+scripts/battery/geekworm/setup.sh --verify
 ```
 
 The script is safe to rerun. It performs these changes:
@@ -109,10 +111,10 @@ the unpatched panel displays 0% even though UPower and OpenFlight have valid
 data.
 
 The setup script installs the ARM64 package in
-`scripts/geekworm/packages/`. It is built from Raspberry Pi's
+`scripts/battery/packages/`. It is built from Raspberry Pi's
 [`pplug-batt`](https://github.com/raspberrypi-ui/pplug-batt) source at commit
 `f4c18fbca9e1b752e35b6ea8a854676b4777de3b`, with the checked-in patch under
-`scripts/geekworm/patches/`. The patch adds support for the standard
+`scripts/battery/patches/`. The patch adds support for the standard
 `/sys/class/power_supply/.../capacity` property and clamps full-charge
 overshoot to 100%.
 
@@ -121,7 +123,7 @@ battery display works without it. Use `--no-panel` if the Pi does not run the
 standard 64-bit Raspberry Pi desktop:
 
 ```bash
-sudo scripts/geekworm/setup.sh --no-panel
+sudo scripts/battery/geekworm/setup.sh --no-panel
 ```
 
 ### Optional Pi USB Current Setting
@@ -158,7 +160,7 @@ After reboot, the expected native devices are:
 Run the automated checks:
 
 ```bash
-scripts/geekworm/setup.sh --verify
+scripts/battery/geekworm/setup.sh --verify
 ```
 
 The command verifies the EEPROM settings, overlays, kernel modules, battery
@@ -194,7 +196,7 @@ Expected results:
 Enable UPS monitoring explicitly:
 
 ```bash
-scripts/start-kiosk.sh --geekworm-power
+scripts/start-kiosk.sh --battery geekworm
 ```
 
 With the flag enabled, OpenFlight shows:
@@ -215,6 +217,7 @@ changes, warning-threshold changes, telemetry failure or recovery, and at least
 once per minute while unchanged. Each entry includes:
 
 - `state`
+- `provider`
 - `battery_percent`
 - `battery_voltage_v`
 - `external_power`
@@ -222,7 +225,7 @@ once per minute while unchanged. Each entry includes:
 - `error`
 - `updated_at`
 
-When `--geekworm-power` is absent, OpenFlight does not access the UPS hardware
+When `--battery geekworm` is absent, OpenFlight does not access the UPS hardware
 or show a battery indicator.
 
 ## Troubleshooting
@@ -249,7 +252,7 @@ OpenFlight and UPower may still be correct. Check the compatibility package:
 ```bash
 dpkg-query -W wfplug-batt
 dpkg -V wfplug-batt
-sudo scripts/geekworm/setup.sh
+sudo scripts/battery/geekworm/setup.sh
 ```
 
 An OS update may replace the panel plugin with an upstream version. Rerunning

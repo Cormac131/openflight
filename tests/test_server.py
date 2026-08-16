@@ -137,6 +137,7 @@ def test_power_status_is_forwarded_to_ui_and_session_log(monkeypatch):
     logged = []
     status = server_module.PowerStatus(
         available=True,
+        provider="geekworm",
         state=PowerState.ON_BATTERY,
         battery_percent=42.0,
         battery_voltage_v=3.72,
@@ -2794,6 +2795,29 @@ class TestBallisticsConfiguration:
 
     def test_runtime_default_enables_ballistics(self):
         assert server_module.ballistics_enabled is True
+
+
+class TestBatteryConfiguration:
+    """Battery monitoring is explicitly enabled with a supported provider."""
+
+    def test_cli_accepts_geekworm_provider(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_battery_arguments(parser)
+
+        assert parser.parse_args(["--battery", "geekworm"]).battery == "geekworm"
+
+    def test_cli_is_disabled_by_default(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_battery_arguments(parser)
+
+        assert parser.parse_args([]).battery is None
+
+    def test_cli_rejects_unknown_provider(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_battery_arguments(parser)
+
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--battery", "unknown"])
 
 
 class TestCarryComputation:

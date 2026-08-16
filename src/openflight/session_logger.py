@@ -661,7 +661,7 @@ class SessionLogger:
         )
 
     def log_power_status(self, status: Dict[str, Any]) -> None:
-        """Log a Geekworm UPS snapshot or power-state transition."""
+        """Log a battery snapshot or power-state transition."""
         if not self.enabled:
             return
         self._write_entry("power_status", status)

@@ -5,8 +5,9 @@ from types import ModuleType
 
 from openflight import gpio_factory
 from openflight.power import (
+    BatteryProvider,
     GeekwormPowerReader,
-    NativePowerReader,
+    LinuxPowerReader,
     PowerMonitor,
     PowerSample,
     PowerState,
@@ -111,7 +112,7 @@ def test_native_reader_discovers_linux_battery_and_mains_devices(tmp_path):
     (mains / "type").write_text("Mains\n", encoding="ascii")
     (mains / "online").write_text("1\n", encoding="ascii")
 
-    reader = NativePowerReader(power_supply_path=tmp_path)
+    reader = LinuxPowerReader(power_supply_path=tmp_path)
 
     assert reader.read() == PowerSample(
         battery_percent=47.0,
@@ -132,7 +133,7 @@ def test_native_reader_clamps_small_capacity_overshoot_to_full(tmp_path):
     (mains / "type").write_text("Mains\n", encoding="ascii")
     (mains / "online").write_text("1\n", encoding="ascii")
 
-    reader = NativePowerReader(power_supply_path=tmp_path)
+    reader = LinuxPowerReader(power_supply_path=tmp_path)
 
     assert reader.read() == PowerSample(
         battery_percent=100.0,
@@ -149,7 +150,7 @@ def test_native_reader_requires_battery_and_mains_devices(tmp_path):
     (battery / "voltage_now").write_text("3787500\n", encoding="ascii")
 
     try:
-        NativePowerReader(power_supply_path=tmp_path)
+        LinuxPowerReader(power_supply_path=tmp_path)
     except OSError as error:
         assert "Mains" in str(error)
     else:
@@ -168,22 +169,33 @@ def test_reader_factory_prefers_native_power_supply(tmp_path):
     (mains / "online").write_text("1\n", encoding="ascii")
 
     selected = create_power_reader(
+        BatteryProvider.GEEKWORM,
         power_supply_path=tmp_path,
-        direct_factory=lambda: (_ for _ in ()).throw(AssertionError("direct reader used")),
+        provider_factory=lambda: (_ for _ in ()).throw(AssertionError("direct reader used")),
     )
 
-    assert isinstance(selected, NativePowerReader)
+    assert isinstance(selected, LinuxPowerReader)
 
 
 def test_reader_factory_falls_back_when_native_power_supply_is_missing(tmp_path):
     direct_reader = SequenceReader([PowerSample(12.0, 3.5, False)])
 
     selected = create_power_reader(
+        BatteryProvider.GEEKWORM,
         power_supply_path=tmp_path,
-        direct_factory=lambda: direct_reader,
+        provider_factory=lambda: direct_reader,
     )
 
     assert selected is direct_reader
+
+
+def test_reader_factory_rejects_unknown_provider():
+    try:
+        create_power_reader("unknown")
+    except ValueError as error:
+        assert "Unsupported battery provider" in str(error)
+    else:
+        raise AssertionError("unknown battery provider should fail")
 
 
 def test_monitor_classifies_plugged_low_and_critical_states():
@@ -209,6 +221,7 @@ def test_monitor_recovers_after_a_read_failure_and_logs_transitions():
     logged = []
     now = iter([0.0, 1.0])
     monitor = PowerMonitor(
+        provider=BatteryProvider.GEEKWORM,
         on_status=emitted.append,
         on_log=logged.append,
         reader_factory=lambda: readers.pop(0),
@@ -219,6 +232,7 @@ def test_monitor_recovers_after_a_read_failure_and_logs_transitions():
     recovered = monitor.poll_once()
 
     assert unavailable.state is PowerState.UNAVAILABLE
+    assert unavailable.provider == "geekworm"
     assert "0x36 missing" in unavailable.error
     assert recovered.state is PowerState.ON_BATTERY
     assert recovered.battery_percent == 42.2
@@ -237,6 +251,7 @@ def test_monitor_throttles_unchanged_session_log_samples():
     logged = []
     now = iter([0.0, 5.0, 65.0])
     monitor = PowerMonitor(
+        provider=BatteryProvider.GEEKWORM,
         on_status=lambda _status: None,
         on_log=logged.append,
         reader_factory=lambda: reader,

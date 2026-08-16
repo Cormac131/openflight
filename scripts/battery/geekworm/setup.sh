@@ -4,11 +4,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BATTERY_SCRIPT_DIR="$(dirname "$SCRIPT_DIR")"
 BOOT_CONFIG="${OPENFLIGHT_GEEKWORM_BOOT_CONFIG:-/boot/firmware/config.txt}"
 MODULES_CONFIG="${OPENFLIGHT_GEEKWORM_MODULES_CONFIG:-/etc/modules-load.d/openflight-geekworm.conf}"
 POWER_SUPPLY_ROOT="${OPENFLIGHT_GEEKWORM_POWER_SUPPLY_ROOT:-/sys/class/power_supply}"
 PI_MODEL_PATH="${OPENFLIGHT_GEEKWORM_PI_MODEL_PATH:-/proc/device-tree/model}"
-PANEL_PACKAGE="$SCRIPT_DIR/packages/wfplug-batt_1.3+openflight2_arm64.deb"
+PANEL_PACKAGE="$BATTERY_SCRIPT_DIR/packages/wfplug-batt_1.3+openflight2_arm64.deb"
 PANEL_PACKAGE_VERSION="1.3+openflight2"
 PANEL_PACKAGE_SHA256="d9bfeb459e13b328a1f77eeb82f5c387aa861d7c8a3337639a74c1288cd23e15"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
@@ -37,7 +38,7 @@ die() {
 
 usage() {
     cat <<'EOF'
-Usage: scripts/geekworm/setup.sh [--verify] [--no-panel]
+Usage: scripts/battery/geekworm/setup.sh [--verify] [--no-panel]
 
 Configure native Linux telemetry for Geekworm X1202/X1206 UPS boards.
 
@@ -432,7 +433,7 @@ main() {
 
     log "No automatic-shutdown or charging-control service was installed."
     if [[ "$REBOOT_REQUIRED" == "true" ]]; then
-        log "Reboot required. After reboot, run: scripts/geekworm/setup.sh --verify"
+        log "Reboot required. After reboot, run: scripts/battery/geekworm/setup.sh --verify"
     elif [[ "$PANEL_RESTART_REQUIRED" == "true" ]]; then
         log "Restart the desktop panel or reboot to load the taskbar update."
     else

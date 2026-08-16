@@ -1,4 +1,4 @@
-"""Background Geekworm power monitor with retry and log throttling."""
+"""Background battery monitor with retry and log throttling."""
 
 from __future__ import annotations
 
@@ -6,42 +6,33 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Callable, Protocol
+from typing import Callable
 
+from .factory import BatteryProvider, create_power_reader, normalize_battery_provider
 from .models import PowerSample, PowerState, PowerStatus
-from .native import create_power_reader
+from .reader import PowerReader
 
 logger = logging.getLogger(__name__)
 
 
-class PowerReader(Protocol):  # pylint: disable=unnecessary-ellipsis
-    """Hardware reader contract used by the background monitor."""
-
-    def read(self) -> PowerSample:
-        """Read one UPS sample."""
-        ...  # pylint: disable=unnecessary-ellipsis
-
-    def close(self) -> None:
-        """Release hardware resources."""
-        ...  # pylint: disable=unnecessary-ellipsis
-
-
 class PowerMonitor:
-    """Poll Geekworm telemetry and publish stable application-level status."""
+    """Poll one battery provider and publish application-level status."""
 
     def __init__(  # pylint: disable=too-many-arguments
         self,
         *,
+        provider: BatteryProvider | str,
         on_status: Callable[[PowerStatus], None],
         on_log: Callable[[PowerStatus], None] | None = None,
-        reader_factory: Callable[[], PowerReader] = create_power_reader,
+        reader_factory: Callable[[], PowerReader] | None = None,
         poll_interval_s: float = 5.0,
         log_interval_s: float = 60.0,
         clock: Callable[[], float] = time.monotonic,
     ):
+        self.provider = normalize_battery_provider(provider)
         self.on_status = on_status
         self.on_log = on_log
-        self.reader_factory = reader_factory
+        self.reader_factory = reader_factory or (lambda: create_power_reader(self.provider))
         self.poll_interval_s = poll_interval_s
         self.log_interval_s = log_interval_s
         self.clock = clock
@@ -76,6 +67,7 @@ class PowerMonitor:
     def _available_status(self, sample: PowerSample) -> PowerStatus:
         return PowerStatus(
             available=True,
+            provider=self.provider.value,
             state=self._state_for(sample),
             battery_percent=round(sample.battery_percent, 1),
             battery_voltage_v=round(sample.battery_voltage_v, 3),
@@ -86,6 +78,7 @@ class PowerMonitor:
     def _unavailable_status(self, error: Exception) -> PowerStatus:
         return PowerStatus(
             available=False,
+            provider=self.provider.value,
             state=PowerState.UNAVAILABLE,
             battery_percent=None,
             battery_voltage_v=None,
@@ -100,7 +93,7 @@ class PowerMonitor:
         try:
             self._reader.close()
         except Exception:
-            logger.warning("[POWER] Failed to close Geekworm reader", exc_info=True)
+            logger.warning("[POWER] Failed to close battery reader", exc_info=True)
         finally:
             self._reader = None
 
@@ -111,7 +104,7 @@ class PowerMonitor:
                 self._reader = self.reader_factory()
             status = self._available_status(self._reader.read())
         except Exception as error:  # Hardware access must never stop OpenFlight.
-            logger.warning("[POWER] Geekworm telemetry unavailable: %s", error)
+            logger.warning("[POWER] %s telemetry unavailable: %s", self.provider.value, error)
             self._close_reader()
             status = self._unavailable_status(error)
 
@@ -147,7 +140,7 @@ class PowerMonitor:
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, name="geekworm-power", daemon=True)
+        self._thread = threading.Thread(target=self._run, name="battery-power", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:

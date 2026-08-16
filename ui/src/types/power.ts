@@ -2,6 +2,7 @@ export type PowerState = 'plugged_in' | 'on_battery' | 'low' | 'critical' | 'una
 
 export interface PowerStatus {
   available: boolean;
+  provider: string;
   state: PowerState;
   battery_percent: number | null;
   battery_voltage_v: number | null;

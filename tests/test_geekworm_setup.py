@@ -5,11 +5,12 @@ import subprocess
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SETUP_SCRIPT = PROJECT_ROOT / "scripts" / "geekworm" / "setup.sh"
+SETUP_SCRIPT = PROJECT_ROOT / "scripts" / "battery" / "geekworm" / "setup.sh"
 PANEL_PACKAGE = (
-    PROJECT_ROOT / "scripts" / "geekworm" / "packages" / "wfplug-batt_1.3+openflight2_arm64.deb"
+    PROJECT_ROOT / "scripts" / "battery" / "packages" / "wfplug-batt_1.3+openflight2_arm64.deb"
 )
-OPERATOR_GUIDE = PROJECT_ROOT / "docs" / "geekworm" / "README.md"
+BATTERY_GUIDE = PROJECT_ROOT / "docs" / "battery" / "README.md"
+OPERATOR_GUIDE = PROJECT_ROOT / "docs" / "battery" / "geekworm.md"
 MAIN_SETUP_SCRIPT = PROJECT_ROOT / "scripts" / "setup" / "setup.sh"
 
 
@@ -115,8 +116,16 @@ def test_operator_guide_links_models_and_distinguishes_batteries():
     assert "X1206 V2.0" in guide
 
 
+def test_battery_guide_documents_provider_interface_and_cli():
+    guide = BATTERY_GUIDE.read_text(encoding="ascii")
+
+    assert "--battery geekworm" in guide
+    assert "PowerReader" in guide
+    assert "geekworm.md" in guide
+
+
 def test_main_setup_offers_geekworm_provisioning():
     setup = MAIN_SETUP_SCRIPT.read_text(encoding="utf-8")
 
     assert 'confirm "Do you have a Geekworm X1202 or X1206 UPS to set up?"' in setup
-    assert '"$PROJECT_DIR/scripts/geekworm/setup.sh"' in setup
+    assert '"$PROJECT_DIR/scripts/battery/geekworm/setup.sh"' in setup

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .models import PowerSample
+from ..models import PowerSample
 
 
 class SMBusLike(Protocol):  # pylint: disable=unnecessary-ellipsis
@@ -63,7 +63,7 @@ class GeekwormPowerReader:
                     DigitalInputDevice,
                 )
 
-                from ..gpio_factory import ensure_lgpio_pin_factory
+                from ...gpio_factory import ensure_lgpio_pin_factory
 
                 ensure_lgpio_pin_factory()
                 # GPIO6 is high when the adapter is present. A pull-down keeps

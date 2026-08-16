@@ -5,6 +5,7 @@ import { PowerIndicator, PowerWarning } from './PowerStatus';
 
 const status = (overrides: Partial<PowerStatus> = {}): PowerStatus => ({
   available: true,
+  provider: 'geekworm',
   state: 'on_battery',
   battery_percent: 42.4,
   battery_voltage_v: 3.72,

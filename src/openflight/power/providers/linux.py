@@ -1,16 +1,14 @@
-"""Linux power_supply reader for kernel-managed Geekworm telemetry."""
+"""Reader for battery telemetry managed by Linux power_supply drivers."""
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
 from pathlib import Path
 
-from .geekworm import GeekwormPowerReader
-from .models import PowerSample
+from ..models import PowerSample
 
 
-class NativePowerReader:
+class LinuxPowerReader:
     """Read battery and adapter state exposed by Linux power_supply drivers."""
 
     DEFAULT_POWER_SUPPLY_PATH = Path("/sys/class/power_supply")
@@ -68,15 +66,3 @@ class NativePowerReader:
 
     def close(self) -> None:
         """Native sysfs reads do not hold resources between samples."""
-
-
-def create_power_reader(
-    *,
-    power_supply_path: Path = NativePowerReader.DEFAULT_POWER_SUPPLY_PATH,
-    direct_factory: Callable[[], GeekwormPowerReader] = GeekwormPowerReader,
-) -> NativePowerReader | GeekwormPowerReader:
-    """Prefer kernel-managed telemetry and fall back to direct hardware access."""
-    try:
-        return NativePowerReader(power_supply_path=power_supply_path)
-    except OSError:
-        return direct_factory()

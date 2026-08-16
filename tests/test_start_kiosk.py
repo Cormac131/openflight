@@ -41,10 +41,16 @@ def test_no_ballistics_opt_out_is_forwarded():
     assert "--no-ballistics" in command_arguments
 
 
-def test_geekworm_power_flag_is_forwarded():
+def test_battery_provider_is_forwarded():
+    command_arguments = _dry_run("--battery", "geekworm").stdout.strip().split()
+
+    assert command_arguments[command_arguments.index("--battery") + 1] == "geekworm"
+
+
+def test_removed_geekworm_power_flag_is_not_forwarded():
     command_arguments = _dry_run("--geekworm-power").stdout.strip().split()
 
-    assert "--geekworm-power" in command_arguments
+    assert "--geekworm-power" not in command_arguments
 
 
 def test_existing_ballistics_flag_remains_accepted():

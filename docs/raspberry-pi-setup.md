@@ -16,7 +16,7 @@ Make sure you have all the hardware. See the **[Parts List](PARTS.md)** for what
 
 **Optional:**
 - TI IWR6843LEVM + data cable — measured launch angle and experimental club path; see the [IWR6843 Operator Guide](iwr6843/README.md)
-- Geekworm X1202 or X1206 UPS HAT — portable Pi 5 power using four separately purchased 18650 or 21700 cells; see the [Geekworm Operator Guide](geekworm/README.md)
+- Geekworm X1202 or X1206 UPS HAT — portable Pi 5 power using four separately purchased 18650 or 21700 cells; see the [battery monitoring overview](battery/README.md) and [Geekworm operator guide](battery/geekworm.md)
 - InnoMaker OV9281 global-shutter camera (~$30) — experimental vision work; see [Camera and YOLO Experiments](yolo-performance-tuning.md)
 
 **Optional (deprecated):**
@@ -169,9 +169,9 @@ what you flashed.
 The optional UPS setup is automated and safe to rerun:
 
 ```bash
-sudo ./scripts/geekworm/setup.sh
+sudo ./scripts/battery/geekworm/setup.sh
 sudo reboot
-./scripts/geekworm/setup.sh --verify
+./scripts/battery/geekworm/setup.sh --verify
 ```
 
 It enables I2C, native Linux battery and charger devices, the Pi 5 EEPROM power
@@ -180,7 +180,7 @@ package. It does not install automatic shutdown or charging-control services.
 
 Cell type, board-revision power limits, physical installation, every system
 change, and troubleshooting are documented in the
-**[Geekworm X1202/X1206 Operator Guide](geekworm/README.md)**.
+**[Geekworm X1202/X1206 Operator Guide](battery/geekworm.md)**.
 
 ### K-LD7 Device Names (Deprecated Hardware)
 

@@ -1,4 +1,4 @@
-"""Shared Geekworm power telemetry models."""
+"""Shared battery and external-power telemetry models."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ class PowerState(str, Enum):
 
 @dataclass(frozen=True)
 class PowerSample:
-    """One validated reading from the Geekworm UPS."""
+    """Minimum telemetry shared by every supported battery provider."""
 
     battery_percent: float
     battery_voltage_v: float
@@ -31,6 +31,7 @@ class PowerStatus:
     """Power state sent to clients and session logs."""
 
     available: bool
+    provider: str
     state: PowerState
     battery_percent: float | None
     battery_voltage_v: float | None
