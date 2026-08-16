@@ -82,6 +82,8 @@ or energy counters. Some standard Linux battery drivers expose an already
 calculated `capacity` value instead. OpenFlight's shared taskbar patch adds
 support for that standard property and clamps full-charge overshoot to 100%.
 
+![Raspberry Pi desktop showing the taskbar battery indicator](images/raspberry-pi-taskbar.png)
+
 The shared ARM64 Raspberry Pi OS Trixie package and source patch are stored at:
 
 ```text
