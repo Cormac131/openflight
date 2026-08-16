@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Battery and external-power status for Raspberry Pi UPS boards.** OpenFlight
+  can now display charging state and battery percentage, issue dismissible 20%
+  and 10% warnings while discharging, and record throttled power telemetry in
+  session logs. Enable the initial Geekworm X1202/X1206 provider with
+  `--battery geekworm`; monitoring remains disabled when no provider is
+  selected. The accompanying Pi setup installs native Linux power-supply
+  telemetry and optional taskbar capacity support without enabling automatic
+  shutdown or charging control. See [Battery Monitoring](battery/README.md).
 - **System Prerequisites:** Documented missing binary dependencies (`swig`, `liblgpio-dev`, `python3-dev`) required prior to executing `./scripts/setup/setup.sh`.
 - **Environment Reload Guidance:** Added instructions for reloading terminal environment variables (`source ~/.bashrc`) when installed dependencies or scripts (`setup.sh`, `start-kiosk.sh`) are not recognized in the current terminal session.
 - **Configurable IWR6843 capture compression.** One firmware image can now

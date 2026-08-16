@@ -13,6 +13,7 @@ import { ShotList } from './components/ShotList';
 import { DebugPanel } from './components/DebugPanel';
 import { CameraFeed } from './components/CameraFeed';
 import { ConnectionStatus } from './components/ConnectionStatus';
+import { PowerExperience } from './components/PowerStatus';
 import { SimStatus } from './components/SimStatus';
 import { SimShotBadges } from './components/SimShotBadges';
 import { ClubPicker } from './components/ClubPicker';
@@ -256,6 +257,7 @@ function AppContent() {
             onToggle={() => socketService.toggleCamera()}
           />
           <SimStatus statuses={simStatuses} />
+          <PowerExperience />
           <ConnectionStatus connected={connected} />
           <button
             className="power-button"

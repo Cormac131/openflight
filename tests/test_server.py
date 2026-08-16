@@ -14,6 +14,7 @@ from openflight.iwr6843 import Calibration
 from openflight.kld7.types import KLD7Angle
 from openflight.launch_monitor import ClubType, Shot
 from openflight.ops243 import UART_BAUD_COMMANDS
+from openflight.power import PowerState
 from openflight.server import (
     MockLaunchMonitor,
     MockSwingSpeedMonitor,
@@ -129,6 +130,36 @@ def test_shot_processing_status_is_forwarded_to_ui(monkeypatch):
     server_module.on_shot_processing("capturing")
 
     assert emitted == [("shot_processing", {"state": "capturing"})]
+
+
+def test_power_status_is_forwarded_to_ui_and_session_log(monkeypatch):
+    emitted = []
+    logged = []
+    status = server_module.PowerStatus(
+        available=True,
+        provider="geekworm",
+        state=PowerState.ON_BATTERY,
+        battery_percent=42.0,
+        battery_voltage_v=3.72,
+        external_power=False,
+        updated_at="2026-08-15T12:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        server_module.socketio,
+        "emit",
+        lambda event, payload: emitted.append((event, payload)),
+    )
+    monkeypatch.setattr(
+        server_module,
+        "get_session_logger",
+        lambda: SimpleNamespace(log_power_status=logged.append),
+    )
+
+    server_module._on_power_status(status)
+    server_module._log_power_status(status)
+
+    assert emitted == [("power_status", status.to_dict())]
+    assert logged == [status.to_dict()]
 
 
 class TestIWR6843ShotIntegration:
@@ -2764,6 +2795,29 @@ class TestBallisticsConfiguration:
 
     def test_runtime_default_enables_ballistics(self):
         assert server_module.ballistics_enabled is True
+
+
+class TestBatteryConfiguration:
+    """Battery monitoring is explicitly enabled with a supported provider."""
+
+    def test_cli_accepts_geekworm_provider(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_battery_arguments(parser)
+
+        assert parser.parse_args(["--battery", "geekworm"]).battery == "geekworm"
+
+    def test_cli_is_disabled_by_default(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_battery_arguments(parser)
+
+        assert parser.parse_args([]).battery is None
+
+    def test_cli_rejects_unknown_provider(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_battery_arguments(parser)
+
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--battery", "unknown"])
 
 
 class TestCarryComputation:

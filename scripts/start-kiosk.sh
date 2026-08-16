@@ -65,6 +65,7 @@ EXPERIMENTAL_KLD7_HORIZONTAL_ANGLE_LIMIT=""
 BALLISTICS=true
 SIM=false
 CALCULATED_SPIN=false
+BATTERY_PROVIDER=""
 SWING_SPEED=false
 SWING_SPEED_THRESHOLD=""
 SWING_SPEED_MIN_READINGS=""
@@ -105,6 +106,10 @@ while [[ $# -gt 0 ]]; do
         --radar-log)
             RADAR_LOG=true
             shift
+            ;;
+        --battery)
+            BATTERY_PROVIDER="$2"
+            shift 2
             ;;
         --debug|-d)
             DEBUG_MODE=true
@@ -537,6 +542,10 @@ fi
 
 if [ "$NO_CAMERA" = true ]; then
     SERVER_CMD="$SERVER_CMD --no-camera"
+fi
+
+if [ -n "$BATTERY_PROVIDER" ]; then
+    SERVER_CMD="$SERVER_CMD --battery $BATTERY_PROVIDER"
 fi
 
 if [ "$BALLISTICS" = false ]; then
