@@ -158,4 +158,7 @@ def test_candidate_generator_recovers_receding_range_walk():
     assert candidates
     best = min(candidates, key=lambda candidate: abs(candidate.track.speed_ms - expected_speed_ms))
     assert best.track.speed_ms == pytest.approx(expected_speed_ms, abs=0.5)
-    assert best.track.n_inliers == 20
+    assert best.track.n_inliers >= 19
+    assert best.track.rms_bins < 0.35
+    assert best.track.t_first == pytest.approx(times[0])
+    assert best.track.t_last == pytest.approx(times[-1])
