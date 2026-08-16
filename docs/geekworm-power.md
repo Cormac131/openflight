@@ -25,6 +25,23 @@ sudo i2cdetect -y 1
 The scan should show a device at `36`. If it does not, power down and check the
 pogo-pin contact for GPIO2 and GPIO3 before starting OpenFlight.
 
+OpenFlight prefers Linux's native power-supply devices when they are enabled.
+Add these lines to `/boot/firmware/config.txt` and reboot:
+
+```ini
+dtoverlay=i2c-sensor,max17040
+dtoverlay=gpio-charger,gpio=6,active_low=0,gpio_pull=down,type=mains
+```
+
+The first overlay exposes the Geekworm fuel gauge as a `Battery` under
+`/sys/class/power_supply`. The second exposes GPIO6 as an active-high `Mains`
+source. OpenFlight automatically uses both native devices when present and
+falls back to direct I2C/GPIO access otherwise.
+
+The native driver and direct fallback both use the fuel gauge's SOC register
+for percentage. The Geekworm LEDs are coarser voltage bands and can change
+before the modeled SOC percentage while charging or under load.
+
 ## Start OpenFlight
 
 ```bash

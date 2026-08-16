@@ -8,8 +8,8 @@ import time
 from datetime import datetime, timezone
 from typing import Callable, Protocol
 
-from .geekworm import GeekwormPowerReader
 from .models import PowerSample, PowerState, PowerStatus
+from .native import create_power_reader
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class PowerMonitor:
         *,
         on_status: Callable[[PowerStatus], None],
         on_log: Callable[[PowerStatus], None] | None = None,
-        reader_factory: Callable[[], PowerReader] = GeekwormPowerReader,
+        reader_factory: Callable[[], PowerReader] = create_power_reader,
         poll_interval_s: float = 5.0,
         log_interval_s: float = 60.0,
         clock: Callable[[], float] = time.monotonic,

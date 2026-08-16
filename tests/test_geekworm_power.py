@@ -4,7 +4,14 @@ import sys
 from types import ModuleType
 
 from openflight import gpio_factory
-from openflight.power import GeekwormPowerReader, PowerMonitor, PowerSample, PowerState
+from openflight.power import (
+    GeekwormPowerReader,
+    NativePowerReader,
+    PowerMonitor,
+    PowerSample,
+    PowerState,
+    create_power_reader,
+)
 
 
 class FakeBus:
@@ -69,16 +76,14 @@ def test_reader_releases_i2c_and_gpio_resources_once():
     assert ac_input.closed is True
 
 
-def test_reader_treats_gpio6_as_active_high_with_a_pull_up(monkeypatch):
+def test_reader_treats_gpio6_as_active_high_with_a_fail_safe_pull_down(monkeypatch):
     created = {}
 
     class SpyInput(FakeInput):
         def __init__(self, pin, **kwargs):
             if kwargs.get("pull_up") is not None and kwargs.get("active_state") is not None:
                 raise ValueError('Pin GPIO6 is not floating, but "active_state" is not None')
-            # gpiozero defaults pull-up inputs to active-low. A physically high
-            # GPIO6 therefore has a logical value of zero.
-            super().__init__(value=0)
+            super().__init__(value=1)
             created.update(pin=pin, **kwargs)
 
     fake_gpiozero = ModuleType("gpiozero")
@@ -90,8 +95,74 @@ def test_reader_treats_gpio6_as_active_high_with_a_pull_up(monkeypatch):
         bus=FakeBus({0x02: [0xC3, 0x00], 0x04: [50, 0]}),
     )
 
-    assert created == {"pin": 6, "pull_up": True}
+    assert created == {"pin": 6, "pull_up": False}
     assert reader.read().external_power is True
+
+
+def test_native_reader_discovers_linux_battery_and_mains_devices(tmp_path):
+    battery = tmp_path / "battery"
+    battery.mkdir()
+    (battery / "type").write_text("Battery\n", encoding="ascii")
+    (battery / "capacity").write_text("47\n", encoding="ascii")
+    (battery / "voltage_now").write_text("3787500\n", encoding="ascii")
+
+    mains = tmp_path / "charger@0"
+    mains.mkdir()
+    (mains / "type").write_text("Mains\n", encoding="ascii")
+    (mains / "online").write_text("1\n", encoding="ascii")
+
+    reader = NativePowerReader(power_supply_path=tmp_path)
+
+    assert reader.read() == PowerSample(
+        battery_percent=47.0,
+        battery_voltage_v=3.7875,
+        external_power=True,
+    )
+
+
+def test_native_reader_requires_battery_and_mains_devices(tmp_path):
+    battery = tmp_path / "battery"
+    battery.mkdir()
+    (battery / "type").write_text("Battery\n", encoding="ascii")
+    (battery / "capacity").write_text("47\n", encoding="ascii")
+    (battery / "voltage_now").write_text("3787500\n", encoding="ascii")
+
+    try:
+        NativePowerReader(power_supply_path=tmp_path)
+    except OSError as error:
+        assert "Mains" in str(error)
+    else:
+        raise AssertionError("missing native mains device should fail")
+
+
+def test_reader_factory_prefers_native_power_supply(tmp_path):
+    battery = tmp_path / "battery"
+    battery.mkdir()
+    (battery / "type").write_text("Battery\n", encoding="ascii")
+    (battery / "capacity").write_text("47\n", encoding="ascii")
+    (battery / "voltage_now").write_text("3787500\n", encoding="ascii")
+    mains = tmp_path / "charger@0"
+    mains.mkdir()
+    (mains / "type").write_text("Mains\n", encoding="ascii")
+    (mains / "online").write_text("1\n", encoding="ascii")
+
+    selected = create_power_reader(
+        power_supply_path=tmp_path,
+        direct_factory=lambda: (_ for _ in ()).throw(AssertionError("direct reader used")),
+    )
+
+    assert isinstance(selected, NativePowerReader)
+
+
+def test_reader_factory_falls_back_when_native_power_supply_is_missing(tmp_path):
+    direct_reader = SequenceReader([PowerSample(12.0, 3.5, False)])
+
+    selected = create_power_reader(
+        power_supply_path=tmp_path,
+        direct_factory=lambda: direct_reader,
+    )
+
+    assert selected is direct_reader
 
 
 def test_monitor_classifies_plugged_low_and_critical_states():
