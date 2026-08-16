@@ -1505,6 +1505,8 @@ class OPS243Radar:
         self.serial.reset_input_buffer()
 
         response_lines = []
+        idle_bytes = bytearray()
+        capture_markers = (b'{"sample_time"', b'{"trigger_time"')
         start_time = time.time()
         deadline = start_time + timeout
         last_data_time = None
@@ -1514,8 +1516,25 @@ class OPS243Radar:
         while time.time() < deadline:
             waiting = self.serial.in_waiting
             if waiting:
-                first_byte_timestamp = time.time() if last_data_time is None else None
                 chunk = self.serial.read(waiting)
+                first_byte_timestamp = None
+                if last_data_time is None:
+                    idle_bytes.extend(chunk)
+                    marker_offsets = [idle_bytes.find(marker) for marker in capture_markers]
+                    marker_offsets = [offset for offset in marker_offsets if offset >= 0]
+                    if not marker_offsets:
+                        # Preserve enough trailing bytes to recognize a marker split
+                        # across reads, while discarding unsolicited CLI/clock noise.
+                        max_marker = max(len(marker) for marker in capture_markers)
+                        if len(idle_bytes) > max_marker:
+                            del idle_bytes[:-max_marker]
+                        time.sleep(0.01)
+                        continue
+                    capture_start = min(marker_offsets)
+                    chunk = bytes(idle_bytes[capture_start:])
+                    idle_bytes.clear()
+                    first_byte_timestamp = time.time()
+
                 response_lines.append(chunk.decode("ascii", errors="ignore"))
                 bytes_received += len(chunk)
                 if first_byte_timestamp is not None:
