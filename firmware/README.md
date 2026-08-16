@@ -25,8 +25,8 @@ then choose a profile by passing its `.cfg` to OpenFlight.
 | Reference calibration | `config/iwr6843_calibration_reference.json` |
 | Native build | `make -C firmware build-native` |
 | Container build | `make -C firmware docker-build` |
-| Flash image size | 345,604 bytes |
-| Flash SHA-256 | `9f031c29569127579c16e3f58a4f3854d85dc7d37194d4ee1ff4064654dd6d2f` |
+| Flash image size | 345,860 bytes |
+| Flash SHA-256 | `bd68db511b12f5a3236c0a88c70448dc2ff42a0525455329f33138e4a2aa88d5` |
 | Dump format | Variable-width, timed complex range-FFT snapshots |
 
 Verify the checked-in image before flashing:
@@ -385,7 +385,7 @@ Expected completion:
 Erasing existing SFLASH...
 Opening firmware image...
 Writing firmware...
-Writing: 100% (345,604/345,604 bytes)
+Writing: 100% (345,860/345,860 bytes)
 Closing and verifying firmware...
 
 Flash verified by the IWR6843 ROM bootloader.

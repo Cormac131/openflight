@@ -32,8 +32,8 @@ Flash one configurable firmware image, then select one of two runtime profiles:
 | Wide/default config | `config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` |
 | Dense/advanced config | `config/iwr6843_l3dump_dense_36f2ms_53bin_iq8.cfg` |
 | Reference array calibration | `config/iwr6843_calibration_reference.json` |
-| Firmware size | 345,604 bytes |
-| Firmware SHA-256 | `9f031c29569127579c16e3f58a4f3854d85dc7d37194d4ee1ff4064654dd6d2f` |
+| Firmware size | 345,860 bytes |
+| Firmware SHA-256 | `bd68db511b12f5a3236c0a88c70448dc2ff42a0525455329f33138e4a2aa88d5` |
 | Transmitters / receivers | 3 TX / 4 RX |
 | Loops | 12 per frame |
 | Movie duration | 72 ms |
