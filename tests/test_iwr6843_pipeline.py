@@ -36,6 +36,7 @@ from openflight.iwr6843.lcmf import (
     TX2_VERTICAL_TDM_TAU_S,
     _frame_balanced_horizontal_mean,
     _tx2_horizontal_proxy,
+    prepare_lcmf_capture,
 )
 from openflight.iwr6843.music import LAM, steer
 from openflight.iwr6843.shot import ShotMeasurement, geometry_from_header
@@ -980,6 +981,52 @@ def test_lcmf_v1_uses_ops_speed_for_tdm_phase_compensation(cal, monkeypatch):
         "vertical": pytest.approx(ops_speed_ms),
         "horizontal": pytest.approx(ops_speed_ms),
     }
+
+
+def test_lcmf_prepared_capture_is_numerically_equivalent(cal):
+    """Sharing invariant signal products must not change an estimator result."""
+    raw = synth_shot(
+        speed_ms=45.0,
+        launch_deg=18.0,
+        n_loops=12,
+        n_tx=3,
+        frame_period_us=4000,
+        trigger_frame=0,
+    )
+    kwargs = {"ball_speed_mph": 45.0 * 2.23694, "club": "9i"}
+
+    uncached = estimate_lcmf_v1(raw, cal, **kwargs)
+    prepared = prepare_lcmf_capture(raw)
+    cached = estimate_lcmf_v1(raw, cal, prepared=prepared, **kwargs)
+
+    assert cached.to_dict() == uncached.to_dict()
+
+
+def test_lcmf_prepared_capture_computes_each_mti_scope_once(cal, monkeypatch):
+    """Repeated candidate tracks reuse static-removal arrays by scope."""
+    raw = synth_shot(
+        speed_ms=45.0,
+        launch_deg=18.0,
+        n_loops=12,
+        n_tx=3,
+        frame_period_us=4000,
+        trigger_frame=0,
+    )
+    calls: list[str] = []
+    original_mti = tracking.mti_filter
+
+    def mti_spy(*args, scope="burst", **kwargs):
+        calls.append(scope)
+        return original_mti(*args, scope=scope, **kwargs)
+
+    monkeypatch.setattr(tracking, "mti_filter", mti_spy)
+    prepared = prepare_lcmf_capture(raw)
+    prepared.vertical.mti("burst")
+    prepared.vertical.mti("window")
+    prepared.vertical.mti("burst")
+    prepared.vertical.mti("window")
+
+    assert calls == ["burst", "window"]
 
 
 def test_lcmf_v1_mti_uses_per_frame_capture_geometry(cal, monkeypatch):

@@ -8,7 +8,12 @@ from dataclasses import dataclass, replace
 
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.club import ClubPathResult, estimate_club_path
-from openflight.iwr6843.lcmf import LCMFResult, estimate_lcmf_v1
+from openflight.iwr6843.lcmf import (
+    LCMFResult,
+    PreparedLCMFCapture,
+    estimate_lcmf_v1,
+    prepare_lcmf_capture,
+)
 from openflight.iwr6843.monitor import IWR6843Capture, IWR6843CaptureMonitor
 from openflight.iwr6843.recovery import RecoveryCandidate, find_recovery_candidates
 
@@ -116,6 +121,7 @@ class IWR6843Runtime:
         ball_speed_mph: float,
         club: str | None,
         baseline: LCMFResult,
+        prepared: PreparedLCMFCapture,
     ) -> LCMFResult:
         """Replace a suspicious TI range walk with an OPS-compatible one."""
         speed = baseline.track_speed_mph
@@ -136,6 +142,7 @@ class IWR6843Runtime:
                     calibration,
                     ball_speed_mph=ball_speed_mph,
                     net_range_m=self.net_range_m,
+                    prepared=prepared.vertical,
                 )
             )
         except Exception as error:  # pylint: disable=broad-exception-caught
@@ -156,6 +163,7 @@ class IWR6843Runtime:
                 horizontal_phase_reference_rad=self.horizontal_phase_reference_rad,
                 track_override=candidate.track,
                 track_override_scope=candidate.scope,
+                prepared=prepared,
             )
             if (
                 result.accepted
@@ -199,6 +207,7 @@ class IWR6843Runtime:
         shot_calibration = self.calibration
         if tilt_deg is not None:
             shot_calibration = replace(self.calibration, tilt_rad=math.radians(tilt_deg))
+        prepared = prepare_lcmf_capture(capture.raw)
         measurement = estimate_lcmf_v1(
             capture.raw,
             shot_calibration,
@@ -208,6 +217,7 @@ class IWR6843Runtime:
             tx_order=self.tx_order,
             tdm_sign_policy=self.tdm_sign_policy,
             horizontal_phase_reference_rad=self.horizontal_phase_reference_rad,
+            prepared=prepared,
         )
         if isinstance(measurement, LCMFResult):
             measurement = self._ops_guided_measurement(
@@ -216,6 +226,7 @@ class IWR6843Runtime:
                 ball_speed_mph=ball_speed_mph,
                 club=club,
                 baseline=measurement,
+                prepared=prepared,
             )
         horizontal_deg = getattr(measurement, "horizontal_deg", None)
         if horizontal_deg is not None:
