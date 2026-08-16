@@ -24,8 +24,10 @@ from openflight.iwr6843.music import LAM
 from openflight.iwr6843.shot import (
     TX2_LOOP_PERIOD_S,
     TX2_VERTICAL_TDM_TAU_S,
+    PreparedShotDump,
     ShotMeasurement,
     geometry_from_header,
+    prepare_shot_dump,
     process_dump,
 )
 from openflight.iwr6843.tracking import BallTrack
@@ -117,6 +119,44 @@ class LCMFResult:
         }
 
 
+@dataclass
+class PreparedLCMFCapture:
+    """Invariant signal products shared by every candidate range track."""
+
+    full_metadata: dict
+    full_cube: np.ndarray
+    vertical: PreparedShotDump
+    tdm_tau_s: float
+    loop_period_s: float
+    _horizontal_mti: np.ndarray | None = None
+
+    def horizontal_mti(self) -> np.ndarray:
+        """Return the three-TX range movie after per-frame static removal."""
+        if self._horizontal_mti is None:
+            metadata = self.full_metadata
+            n_frames, chirps_per_frame, n_rx, n_samples = self.full_cube.shape
+            loops = chirps_per_frame // metadata["n_tx"]
+            tdm = self.full_cube.reshape(n_frames, loops, metadata["n_tx"], n_rx, n_samples)
+            rfft = tdm if is_range_snapshot(metadata) else np.fft.fft(tdm, axis=-1)
+            self._horizontal_mti = rfft - rfft.mean(axis=1, keepdims=True)
+        return self._horizontal_mti
+
+
+def prepare_lcmf_capture(raw: bytes) -> PreparedLCMFCapture:
+    """Decode and project one capture before evaluating candidate tracks."""
+    full_metadata, full_cube = parse_dump(raw)
+    vertical_raw = project_tx_pair(raw, (0, 2)) if full_metadata["n_tx"] == 3 else raw
+    tdm_tau_s = TX2_VERTICAL_TDM_TAU_S if full_metadata["n_tx"] == 3 else doa.TDM_TAU_S
+    loop_period_s = TX2_LOOP_PERIOD_S if full_metadata["n_tx"] == 3 else tracking.LOOP_PRI_S
+    return PreparedLCMFCapture(
+        full_metadata=full_metadata,
+        full_cube=full_cube,
+        vertical=prepare_shot_dump(vertical_raw, loop_period_s=loop_period_s),
+        tdm_tau_s=tdm_tau_s,
+        loop_period_s=loop_period_s,
+    )
+
+
 def _result_from_track(
     status: str,
     shot: ShotMeasurement,
@@ -148,36 +188,20 @@ def _snapshot_cache(
     loop_period_s: float,
     *,
     phase_velocity_ms: float | None = None,
+    prepared: PreparedShotDump | None = None,
 ) -> tuple[dict[str, np.ndarray], object, np.ndarray]:
     """Build calibrated per-loop snapshots along the TI range track."""
-    meta, cube = parse_dump(raw)
-    geometry = geometry_from_header(meta, loop_period_s=loop_period_s)
-    frame_values = geometry.chirps_per_frame * geometry.n_rx * geometry.n_samples
-    got_frames = cube.reshape(-1).size // frame_values
-    if got_frames < geometry.n_frames:
-        geometry.n_frames = got_frames
-        cube = cube[:got_frames]
+    if prepared is None:
+        prepared = prepare_shot_dump(raw, loop_period_s=loop_period_s)
+    meta = prepared.metadata
+    cube = prepared.cube
+    geometry = prepared.geometry
     if meta["n_tx"] != 2:
         raise ValueError(f"LCMF-v1 requires two TX channels, got {meta['n_tx']}")
 
     scope = "window" if shot.notch_recovered else "burst"
-    range_domain = is_range_snapshot(meta)
-    mti = tracking.mti_filter(
-        cube,
-        scope=scope,
-        range_domain=range_domain,
-        geometry=geometry,
-    )
-    if geometry.range_bin_counts is None:
-        noise = float(np.median(np.abs(mti) ** 2))
-    else:
-        valid_power = np.concatenate(
-            [
-                np.abs(mti[frame, ..., : geometry.frame_bin_count(frame)]).reshape(-1) ** 2
-                for frame in range(geometry.n_frames)
-            ]
-        )
-        noise = float(np.median(valid_power))
+    mti = prepared.mti(scope)
+    noise = prepared.noise_power(scope)
     track = shot.track
     if track is None:
         raise ValueError("ball track unavailable")
@@ -346,9 +370,7 @@ def measured_channels(
     agreement metric reported to the caller.
     """
     return {
-        name: float(value)
-        for name, value in components.items()
-        if evidence.get(name) is not None
+        name: float(value) for name, value in components.items() if evidence.get(name) is not None
     }
 
 
@@ -645,6 +667,7 @@ def _tx2_horizontal_proxy(
     tdm_sign: int,
     phase_reference_rad: float | None = None,
     phase_velocity_ms: float | None = None,
+    prepared: PreparedLCMFCapture | None = None,
 ) -> tuple[float | None, float | None, str | None]:
     """HLCMF-v1: frame-balanced TX2 horizontal launch estimator.
 
@@ -654,15 +677,24 @@ def _tx2_horizontal_proxy(
     sign is flipped into TrackMan convention: positive starts right of the
     target line, negative starts left.
     """
-    meta, cube = parse_dump(raw)
+    if prepared is None:
+        meta, cube = parse_dump(raw)
+        horizontal_mti = None
+    else:
+        meta = prepared.full_metadata
+        cube = prepared.full_cube
+        horizontal_mti = prepared.horizontal_mti()
     if meta["n_tx"] != 3 or shot.track is None:
         return None, None, None
     geometry = geometry_from_header(meta, loop_period_s=TX2_LOOP_PERIOD_S)
     n_frames, chirps_per_frame, n_rx, n_samples = cube.shape
     loops = chirps_per_frame // meta["n_tx"]
     tdm = cube.reshape(n_frames, loops, meta["n_tx"], n_rx, n_samples)
-    rfft = tdm if is_range_snapshot(meta) else np.fft.fft(tdm, axis=-1)
-    mti = rfft - rfft.mean(axis=1, keepdims=True)
+    if horizontal_mti is None:
+        rfft = tdm if is_range_snapshot(meta) else np.fft.fft(tdm, axis=-1)
+        mti = rfft - rfft.mean(axis=1, keepdims=True)
+    else:
+        mti = horizontal_mti
     snapshots: list[tuple[float, float, float]] = []
     for frame in range(geometry.n_frames):
         for loop in range(geometry.n_loops):
@@ -714,6 +746,7 @@ def estimate_lcmf_v1(
     horizontal_phase_reference_rad: float | None = None,
     track_override: BallTrack | None = None,
     track_override_scope: str = "burst",
+    prepared: PreparedLCMFCapture | None = None,
 ) -> LCMFResult:
     """Estimate vertical launch from one TI dump and OPS ball speed.
 
@@ -726,35 +759,41 @@ def estimate_lcmf_v1(
     if cal.tee_range_m is None:
         raise ValueError("LCMF-v1 requires the measured tee slant range")
     full_raw = raw
-    meta, _cube = parse_dump(raw)
-    tdm_tau_s = doa.TDM_TAU_S
-    loop_period_s = tracking.LOOP_PRI_S
-    if meta["n_tx"] == 3:
-        raw = project_tx_pair(raw, (0, 2))
-        tdm_tau_s = TX2_VERTICAL_TDM_TAU_S
-        loop_period_s = TX2_LOOP_PERIOD_S
-
-    shot = process_dump(
-        raw,
-        cal,
-        club=club,
-        net_range_m=net_range_m,
-        tx_order=tx_order,
-        tdm_sign_policy=tdm_sign_policy,
-        loop_period_s=loop_period_s,
-        tdm_tau_s=tdm_tau_s,
-    )
+    if prepared is None:
+        prepared = prepare_lcmf_capture(raw)
+    meta = prepared.full_metadata
+    tdm_tau_s = prepared.tdm_tau_s
+    loop_period_s = prepared.loop_period_s
+    vertical = prepared.vertical
     recovery_override = track_override is not None
     if recovery_override:
         if track_override_scope not in ("burst", "window"):
             raise ValueError("track_override_scope must be burst or window")
         if tdm_sign_policy not in ("positive", "negative"):
             raise ValueError("track_override requires an explicit TDM sign policy")
-        shot.track = track_override
-        shot.ball_found = True
-        shot.quality = "low"
-        shot.notch_recovered = track_override_scope == "window"
-        shot.tdm_sign_used = 1 if tdm_sign_policy == "positive" else -1
+        shot = ShotMeasurement(
+            geometry=vertical.geometry,
+            ball_found=True,
+            track=track_override,
+            club=club,
+            tx_order=tx_order,
+            tdm_sign_policy=tdm_sign_policy,
+            quality="low",
+            notch_recovered=track_override_scope == "window",
+            tdm_sign_used=1 if tdm_sign_policy == "positive" else -1,
+        )
+    else:
+        shot = process_dump(
+            raw,
+            cal,
+            club=club,
+            net_range_m=net_range_m,
+            tx_order=tx_order,
+            tdm_sign_policy=tdm_sign_policy,
+            loop_period_s=loop_period_s,
+            tdm_tau_s=tdm_tau_s,
+            prepared=vertical,
+        )
     if shot.track is None:
         return _result_from_track(
             "rejected_by_ball_tracker",
@@ -787,6 +826,7 @@ def estimate_lcmf_v1(
             tdm_sign=shot.tdm_sign_used,
             phase_reference_rad=horizontal_phase_reference_rad,
             phase_velocity_ms=phase_velocity_ms,
+            prepared=prepared,
         )
         cache, radar_geometry, cube = _snapshot_cache(
             raw,
@@ -797,6 +837,7 @@ def estimate_lcmf_v1(
             tdm_tau_s,
             loop_period_s,
             phase_velocity_ms=phase_velocity_ms,
+            prepared=vertical,
         )
         indices = _balanced_indices(cache)
         vertical_delta_m = cal.tee_ball_height_m - cal.radar_height_m
@@ -881,4 +922,5 @@ __all__ = [
     "LCMFResult",
     "NAME",
     "estimate_lcmf_v1",
+    "prepare_lcmf_capture",
 ]

@@ -19,20 +19,20 @@ then choose a profile by passing its `.cfg` to OpenFlight.
 
 | Component | Current value |
 |---|---|
-| Flash image | `firmware/releases/l3_dump_configurable_capture_20260806.bin` |
+| Flash image | `firmware/releases/l3_dump_configurable_capture_20260816.bin` |
 | Default config | `config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` |
 | Dense config | `config/iwr6843_l3dump_dense_36f2ms_53bin_iq8.cfg` |
 | Reference calibration | `config/iwr6843_calibration_reference.json` |
 | Native build | `make -C firmware build-native` |
 | Container build | `make -C firmware docker-build` |
-| Flash image size | 345,604 bytes |
-| Flash SHA-256 | `9f031c29569127579c16e3f58a4f3854d85dc7d37194d4ee1ff4064654dd6d2f` |
+| Flash image size | 345,860 bytes |
+| Flash SHA-256 | `bd68db511b12f5a3236c0a88c70448dc2ff42a0525455329f33138e4a2aa88d5` |
 | Dump format | Variable-width, timed complex range-FFT snapshots |
 
 Verify the checked-in image before flashing:
 
 ```bash
-sha256sum firmware/releases/l3_dump_configurable_capture_20260806.bin
+sha256sum firmware/releases/l3_dump_configurable_capture_20260816.bin
 ```
 
 ## Choose A Capture Profile
@@ -182,7 +182,7 @@ Docker runs the same `build-native` recipe under `linux/amd64` and writes the
 release artifact back into the host worktree at:
 
 ```text
-firmware/releases/l3_dump_configurable_capture_20260806.bin
+firmware/releases/l3_dump_configurable_capture_20260816.bin
 ```
 
 Use the UTM workflow below only when Docker emulation is unavailable.
@@ -286,7 +286,7 @@ The target performs the application build, generates the flashable TI
 meta-image, and copies the production image into `firmware/releases/`:
 
 ```text
-firmware/releases/l3_dump_configurable_capture_20260806.bin
+firmware/releases/l3_dump_configurable_capture_20260816.bin
 ```
 
 Generated `.xer4f`, `.map`, and intermediate `.bin` files stay under
@@ -371,7 +371,7 @@ Leave the board in flash mode and run:
 
 ```bash
 uv run python firmware/flash_iwr6843.py \
-  firmware/releases/l3_dump_configurable_capture_20260806.bin \
+  firmware/releases/l3_dump_configurable_capture_20260816.bin \
   --port /dev/ttyUSB0
 ```
 
@@ -385,7 +385,7 @@ Expected completion:
 Erasing existing SFLASH...
 Opening firmware image...
 Writing firmware...
-Writing: 100% (345,604/345,604 bytes)
+Writing: 100% (345,860/345,860 bytes)
 Closing and verifying firmware...
 
 Flash verified by the IWR6843 ROM bootloader.
@@ -487,7 +487,7 @@ Also check:
 | Probe receives no ROM response | Wrong CP2105 interface or RESET timing | Use Enhanced/UARTA, type `READY`, then RESET only when prompted |
 | Flash fails after erase | Image transfer was interrupted | Leave flash mode enabled and rerun the full flash command; the ROM bootloader remains available |
 | No CLI after flashing | Board remains in flash mode or was not reset | Restore functional switches and press RESET |
-| Server rejects `captureFormat` or `phaseCaptureCfg` | Older firmware is flashed | Flash `l3_dump_configurable_capture_20260806.bin`, reset in functional mode, and retry |
+| Server rejects `captureFormat` or `phaseCaptureCfg` | Older firmware is flashed | Flash `l3_dump_configurable_capture_20260816.bin`, reset in functional mode, and retry |
 | Dump length differs from the selected profile | Wrong config, interrupted UART transfer, or stale process | Verify firmware SHA-256, use Enhanced/UARTA, stop serial owners, reset, and retry |
 | Dense profile reports `hwa_missed` or `iq8_overrun` | The requested cadence exceeds processing time | Return to the wide profile and inspect `stats`; do not trust descriptor cadence from a missed-frame run |
 | First run works but restart hangs | Retired v1 image or incomplete shutdown | Flash the current release image and reset in functional mode |

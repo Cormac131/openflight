@@ -1,5 +1,8 @@
 """Tests for the offline-only IWR6843 alternative-track selector."""
 
+from unittest.mock import patch
+
+import numpy as np
 import pytest
 
 from openflight.iwr6843.calibration import Calibration
@@ -7,6 +10,8 @@ from openflight.iwr6843.recovery import (
     RecoveryCandidate,
     RecoveryPolicy,
     RecoveryPrior,
+    _candidate_tracks_for_scope,
+    _fit_line,
     select_recovery_candidate,
     track_impact_time_s,
 )
@@ -105,3 +110,55 @@ def test_track_impact_back_extrapolates_to_apparent_tee_range():
     candidate.track.intercept_bins = 23.28
 
     assert track_impact_time_s(candidate.track, geometry, calibration) == pytest.approx(0.010)
+
+
+def test_closed_form_line_fit_matches_numpy_least_squares():
+    times = np.array([0.003, 0.006, 0.012, 0.015, 0.024, 0.030, 0.039])
+    bins = np.array([22.1, 24.0, 27.8, 29.9, 35.7, 39.5, 45.4])
+    design = np.column_stack((times, np.ones(times.size)))
+    expected, *_ = np.linalg.lstsq(design, bins, rcond=None)
+
+    fitted = _fit_line(times, bins)
+
+    assert fitted is not None
+    assert fitted[0] == pytest.approx(expected[0], abs=1e-10)
+    assert fitted[1] == pytest.approx(expected[1], abs=1e-12)
+
+
+def test_closed_form_line_fit_rejects_degenerate_times():
+    assert _fit_line(np.ones(4), np.arange(4.0)) is None
+
+
+def test_candidate_generator_recovers_receding_range_walk():
+    geometry = Geometry(24, 36, 3, 4, 53, 0.003, 0, range_fft_size=128)
+    loop_indices = np.arange(20) * geometry.n_loops
+    times = np.arange(20) * geometry.frame_period_s
+    expected_speed_ms = 40.0
+    bins = np.rint(32.0 + expected_speed_ms / geometry.range_res_m * times).astype(int)
+    calibration = Calibration.identity()
+    calibration.tee_range_m = 1.5
+
+    with (
+        patch("openflight.iwr6843.recovery.tracking.loop_power", return_value=np.zeros(1)),
+        patch(
+            "openflight.iwr6843.recovery.tracking._detections",
+            return_value=(loop_indices, bins),
+        ),
+    ):
+        candidates = _candidate_tracks_for_scope(
+            np.zeros((1, 1)),
+            geometry,
+            calibration,
+            scope="window",
+            ball_speed_mph=90.0,
+            max_range_m=None,
+            mti=np.zeros((1, 1)),
+        )
+
+    assert candidates
+    best = min(candidates, key=lambda candidate: abs(candidate.track.speed_ms - expected_speed_ms))
+    assert best.track.speed_ms == pytest.approx(expected_speed_ms, abs=0.5)
+    assert best.track.n_inliers >= 19
+    assert best.track.rms_bins < 0.35
+    assert best.track.t_first == pytest.approx(times[0])
+    assert best.track.t_last == pytest.approx(times[-1])

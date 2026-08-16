@@ -15,7 +15,7 @@ import numpy as np
 from openflight.iwr6843 import tracking
 from openflight.iwr6843.calibration import Calibration
 from openflight.iwr6843.dump import is_range_snapshot, parse_dump, project_tx_pair
-from openflight.iwr6843.shot import TX2_LOOP_PERIOD_S, geometry_from_header
+from openflight.iwr6843.shot import TX2_LOOP_PERIOD_S, PreparedShotDump, geometry_from_header
 from openflight.iwr6843.tracking import BallTrack, Geometry
 
 
@@ -79,6 +79,20 @@ class RecoveryPolicy:
     burst_scope_penalty: float = 0.5
 
 
+def _fit_line(times: np.ndarray, bins: np.ndarray) -> tuple[float, float] | None:
+    """Fit ``bins = slope * times + intercept`` without allocating a design matrix."""
+    count = times.size
+    sum_time = float(times.sum())
+    sum_bin = float(bins.sum())
+    sum_time_sq = float(np.dot(times, times))
+    denominator = count * sum_time_sq - sum_time * sum_time
+    if denominator <= 0.0:
+        return None
+    slope = (count * float(np.dot(times, bins)) - sum_time * sum_bin) / denominator
+    intercept = (sum_bin - slope * sum_time) / count
+    return slope, intercept
+
+
 def track_impact_time_s(
     track: BallTrack,
     geometry: Geometry,
@@ -102,13 +116,15 @@ def _candidate_tracks_for_scope(  # pylint: disable=too-many-arguments
     scope: str,
     ball_speed_mph: float,
     max_range_m: float | None,
+    mti: np.ndarray | None = None,
 ) -> list[RecoveryCandidate]:
-    mti = tracking.mti_filter(
-        cube,
-        scope=scope,
-        range_domain=True,
-        geometry=geometry,
-    )
+    if mti is None:
+        mti = tracking.mti_filter(
+            cube,
+            scope=scope,
+            range_domain=True,
+            geometry=geometry,
+        )
     power = tracking.loop_power(mti)
     loop_indices, bins = tracking._detections(  # pylint: disable=protected-access
         power,
@@ -129,30 +145,39 @@ def _candidate_tracks_for_scope(  # pylint: disable=too-many-arguments
     if calibration.tee_range_m is None:
         raise ValueError("recovery requires measured tee range")
     apparent_tee_m = calibration.tee_range_m + calibration.range_bias_m
+    min_slope = 20.0 / resolution_m
+    max_slope = 90.0 / resolution_m
     for first in range(times.size - 1):
-        for second in range(first + 1, times.size):
-            delta_t = times[first] - times[second]
-            if abs(delta_t) < 0.003:
-                continue
-            slope = (bins[first] - bins[second]) / delta_t
-            if not 20.0 <= slope * resolution_m <= 90.0:
-                continue
+        later_times = times[first + 1 :]
+        delta_times = times[first] - later_times
+        valid_time = np.abs(delta_times) >= 0.003
+        slopes = np.divide(
+            bins[first] - bins[first + 1 :],
+            delta_times,
+            out=np.zeros_like(delta_times),
+            where=valid_time,
+        )
+        valid_seconds = np.flatnonzero(valid_time & (slopes >= min_slope) & (slopes <= max_slope))
+        for second_offset in valid_seconds:
+            slope = float(slopes[second_offset])
             intercept = bins[first] - slope * times[first]
             inliers = np.abs(bins - (slope * times + intercept)) < 0.8
             count = int(inliers.sum())
             if count < 10:
                 continue
-            design = np.vstack([times[inliers], np.ones(count)]).T
-            (fitted_slope, fitted_intercept), *_ = np.linalg.lstsq(
-                design, bins[inliers], rcond=None
-            )
+            inlier_times = times[inliers]
+            inlier_bins = bins[inliers]
+            fit = _fit_line(inlier_times, inlier_bins)
+            if fit is None:
+                continue
+            fitted_slope, fitted_intercept = fit
             speed_ms = float(fitted_slope * resolution_m)
             if not 20.0 <= speed_ms <= 90.0:
                 continue
-            residuals = bins[inliers] - (fitted_slope * times[inliers] + fitted_intercept)
+            residuals = inlier_bins - (fitted_slope * inlier_times + fitted_intercept)
             rms = float(np.sqrt(np.mean(residuals**2)))
-            first_time = float(times[inliers].min())
-            last_time = float(times[inliers].max())
+            first_time = float(inlier_times.min())
+            last_time = float(inlier_times.max())
             track = BallTrack(
                 speed_ms=speed_ms,
                 slope_bins=float(fitted_slope),
@@ -191,22 +216,40 @@ def find_recovery_candidates(
     *,
     ball_speed_mph: float,
     net_range_m: float | None,
+    prepared: PreparedShotDump | None = None,
 ) -> list[RecoveryCandidate]:
     """Generate alternative tracks from burst- and window-scope MTI."""
     if ball_speed_mph <= 0:
         raise ValueError("ball_speed_mph must be positive")
     if calibration.tee_range_m is None:
         raise ValueError("recovery requires measured tee range")
-    metadata, _ = parse_dump(raw)
-    vertical_raw = project_tx_pair(raw, (0, 2)) if metadata["n_tx"] == 3 else raw
-    vertical_meta, cube = parse_dump(vertical_raw)
+    if prepared is None:
+        metadata, _ = parse_dump(raw)
+        vertical_raw = project_tx_pair(raw, (0, 2)) if metadata["n_tx"] == 3 else raw
+        vertical_meta, cube = parse_dump(vertical_raw)
+        loop_period_s = TX2_LOOP_PERIOD_S if metadata["n_tx"] == 3 else tracking.LOOP_PRI_S
+        geometry = geometry_from_header(vertical_meta, loop_period_s=loop_period_s)
+    else:
+        vertical_meta = prepared.metadata
+        cube = prepared.cube
+        geometry = prepared.geometry
     if not is_range_snapshot(vertical_meta):
         raise ValueError("recovery currently requires a range-snapshot dump")
-    loop_period_s = TX2_LOOP_PERIOD_S if metadata["n_tx"] == 3 else tracking.LOOP_PRI_S
-    geometry = geometry_from_header(vertical_meta, loop_period_s=loop_period_s)
     max_range_m = net_range_m - 0.25 if net_range_m is not None else None
     candidates: list[RecoveryCandidate] = []
     for scope in ("burst", "window"):
+        if prepared is None:
+            candidates.extend(
+                _candidate_tracks_for_scope(
+                    cube,
+                    geometry,
+                    calibration,
+                    scope=scope,
+                    ball_speed_mph=ball_speed_mph,
+                    max_range_m=max_range_m,
+                )
+            )
+            continue
         candidates.extend(
             _candidate_tracks_for_scope(
                 cube,
@@ -215,6 +258,7 @@ def find_recovery_candidates(
                 scope=scope,
                 ball_speed_mph=ball_speed_mph,
                 max_range_m=max_range_m,
+                mti=prepared.mti(scope),
             )
         )
     return candidates

@@ -69,11 +69,16 @@ def test_freeze_request_keeps_rearming_until_post_trigger_target():
     assert "gHwaFreezeTargetFrame = gRingFrame + HWA_POST_TRIGGER_FRAMES" in freeze
 
 
-def test_sensor_stop_uses_completed_frame_boundary_before_teardown():
+def test_sensor_stop_cancels_post_capture_at_next_completed_frame():
     source = FIRMWARE.read_text(encoding="utf-8")
-    stop_helper = _function_source(
+    shutdown_freeze = _function_source(
         source,
-        "static int32_t l3_stopCaptureAtBoundary",
+        "static int32_t l3_freezeHwaForShutdown",
+        "static int32_t l3_finishCaptureStop",
+    )
+    shutdown_stop = _function_source(
+        source,
+        "static int32_t l3_stopCaptureForShutdown",
         "static int32_t l3_armHwaChain",
     )
     sensor_stop = _function_source(
@@ -82,15 +87,31 @@ def test_sensor_stop_uses_completed_frame_boundary_before_teardown():
         "static void l3_initTask",
     )
 
-    freeze = stop_helper.index("l3_freezeHwaAfterPostFrames")
-    rf_stop = stop_helper.index("MMWave_stop")
-    hwa_disable = stop_helper.index("HWA_enable(gHwaHandle, 0U)")
-    inactive = stop_helper.index("gCaptureActive = 0U")
-
-    assert freeze < rf_stop < hwa_disable < inactive
-    assert "if (MMWave_stop(gMMWaveHandle, &errCode) < 0)" in stop_helper
+    assert "gHwaShutdownRequested = 1U" in shutdown_freeze
+    assert "gHwaFreezeRequested = 0U" in shutdown_freeze
+    assert "gPostFramesCaptured = 0U" not in shutdown_freeze
+    assert "gCapturePlan.postFrames" not in shutdown_freeze
+    assert "l3_hwaMaybeQueueRearm()" in shutdown_freeze
+    assert "l3_freezeHwaForShutdown" in shutdown_stop
+    assert "l3_finishCaptureStop" in shutdown_stop
     assert "if (!gCaptureActive)" in sensor_stop
-    assert "return l3_stopCaptureAtBoundary()" in sensor_stop
+    assert "return l3_stopCaptureForShutdown()" in sensor_stop
+
+
+def test_shutdown_waits_for_iq8_pack_without_rearming():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    rearm = _function_source(
+        source,
+        "static void l3_hwaRearmTask",
+        "/* Fill the 20-byte fixed dump header",
+    )
+
+    shutdown = rearm.index("gHwaShutdownRequested")
+    pack = rearm.index("l3_packIq8CompletedFrame", shutdown)
+    completion = rearm.index("Semaphore_post(gHwaFreezeSemaphore)", shutdown)
+    restart = rearm.index("l3_restartCompletedHwaFrame", shutdown)
+
+    assert shutdown < pack < completion < restart
 
 
 def test_dump_header_rotates_from_oldest_completed_frame():
@@ -111,7 +132,7 @@ def test_production_build_uses_configurable_compression_and_single_release():
     assert "--define=L3_IQ8_SPARSE_SCALE=1" in target
     assert "--define=LOOPS=" not in target
     assert "--define=RING_FRAMES=" not in target
-    assert "RELEASE_NAME ?= l3_dump_configurable_capture_20260806.bin" in source
+    assert "RELEASE_NAME ?= l3_dump_configurable_capture_20260816.bin" in source
     assert '"$(RELEASE_DIR)/$(RELEASE_NAME)"' in target
     assert source.count("\nbuild-native:") == 1
 

@@ -1,6 +1,7 @@
 """Runtime forwards per-shot geometry and club-path inputs."""
 
 import math
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -11,6 +12,16 @@ from openflight.iwr6843.lcmf import LCMFResult
 from openflight.iwr6843.recovery import RecoveryCandidate
 from openflight.iwr6843.runtime import IWR6843Runtime
 from openflight.iwr6843.tracking import BallTrack
+
+
+@pytest.fixture(autouse=True)
+def _prepared_capture():
+    """Runtime unit tests mock LCMF, so they also mock its decode boundary."""
+    with patch(
+        "openflight.iwr6843.runtime.prepare_lcmf_capture",
+        return_value=SimpleNamespace(vertical=object()),
+    ):
+        yield
 
 
 class FakeCapture:
@@ -95,7 +106,7 @@ def test_ops_guided_estimator_replaces_a_speed_mismatch_and_marks_single_channel
         patch(
             "openflight.iwr6843.runtime.find_recovery_candidates",
             return_value=[candidate],
-        ),
+        ) as find_candidates,
         patch("openflight.iwr6843.runtime.estimate_club_path", return_value=None),
     ):
         result = _runtime().process_shot(
@@ -107,6 +118,9 @@ def test_ops_guided_estimator_replaces_a_speed_mismatch_and_marks_single_channel
     assert result.measurement.angle_deg == pytest.approx(16.8)
     assert result.measurement.status == "accepted_ops_guided_single_channel"
     assert estimate.call_count == 2
+    prepared = estimate.call_args_list[0].kwargs["prepared"]
+    assert estimate.call_args_list[1].kwargs["prepared"] is prepared
+    assert find_candidates.call_args.kwargs["prepared"] is prepared.vertical
     assert estimate.call_args_list[1].kwargs["track_override"] is candidate.track
     assert estimate.call_args_list[1].kwargs["track_override_scope"] == "window"
 
