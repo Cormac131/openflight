@@ -120,6 +120,27 @@ def test_native_reader_discovers_linux_battery_and_mains_devices(tmp_path):
     )
 
 
+def test_native_reader_clamps_small_capacity_overshoot_to_full(tmp_path):
+    battery = tmp_path / "battery"
+    battery.mkdir()
+    (battery / "type").write_text("Battery\n", encoding="ascii")
+    (battery / "capacity").write_text("101\n", encoding="ascii")
+    (battery / "voltage_now").write_text("4200000\n", encoding="ascii")
+
+    mains = tmp_path / "charger"
+    mains.mkdir()
+    (mains / "type").write_text("Mains\n", encoding="ascii")
+    (mains / "online").write_text("1\n", encoding="ascii")
+
+    reader = NativePowerReader(power_supply_path=tmp_path)
+
+    assert reader.read() == PowerSample(
+        battery_percent=100.0,
+        battery_voltage_v=4.2,
+        external_power=True,
+    )
+
+
 def test_native_reader_requires_battery_and_mains_devices(tmp_path):
     battery = tmp_path / "battery"
     battery.mkdir()

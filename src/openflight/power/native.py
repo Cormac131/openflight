@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from pathlib import Path
 
@@ -51,8 +52,9 @@ class NativePowerReader:
         battery_voltage_v = self._read_number(self.battery_path / "voltage_now") / 1_000_000
         external_power_raw = self._read_number(self.mains_path / "online")
 
-        if not 0.0 <= battery_percent <= 100.0:
+        if not math.isfinite(battery_percent) or battery_percent < 0.0:
             raise OSError(f"Linux battery percentage is invalid: {battery_percent:.2f}%")
+        battery_percent = min(battery_percent, 100.0)
         if not 0.0 <= battery_voltage_v <= 5.0:
             raise OSError(f"Linux battery voltage is invalid: {battery_voltage_v:.3f}V")
         if external_power_raw not in (0.0, 1.0):
