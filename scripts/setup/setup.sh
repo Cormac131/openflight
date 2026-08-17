@@ -274,10 +274,7 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
     # --- Desktop shortcut ---
     echo ""
     if confirm "Add an OpenFlight shortcut to the desktop?" "N"; then
-        mkdir -p "$HOME/Desktop"
-        sed -e "s|/home/coleman/openflight|$PROJECT_DIR|g" \
-            "$SCRIPT_DIR/OpenFlight.desktop" > "$HOME/Desktop/OpenFlight.desktop"
-        chmod +x "$HOME/Desktop/OpenFlight.desktop"
+        "$SCRIPT_DIR/install_desktop_launcher.sh"
         log "Desktop shortcut added ✓"
     fi
 
