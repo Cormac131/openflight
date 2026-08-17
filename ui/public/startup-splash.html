@@ -133,6 +133,84 @@
         font-variant-numeric: tabular-nums;
       }
 
+      .error-details {
+        margin: 18px auto 0;
+        padding: 14px 16px;
+        border: 1px solid rgb(227 101 101 / 42%);
+        border-radius: 12px;
+        background: rgb(111 30 30 / 18%);
+        text-align: left;
+      }
+
+      .error-details[hidden] {
+        display: none;
+      }
+
+      .recovery {
+        margin: 0;
+        color: #f0f0f3;
+        font-size: 15px;
+        line-height: 1.4;
+      }
+
+      .log-location {
+        margin: 8px 0 0;
+        color: #8f939f;
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+
+      .dismiss {
+        display: block;
+        min-width: 180px;
+        min-height: 44px;
+        margin: 14px auto 0;
+        padding: 10px 18px;
+        border: 0;
+        border-radius: 10px;
+        background: #e5be3f;
+        color: #11131a;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .dismiss:disabled {
+        opacity: 0.65;
+        cursor: wait;
+      }
+
+      body.failed main {
+        padding-block: 10px;
+      }
+
+      body.failed .logo {
+        width: min(42vw, 210px);
+        margin-bottom: 4px;
+      }
+
+      body.failed h1 {
+        font-size: clamp(24px, 4vw, 32px);
+      }
+
+      body.failed .components {
+        gap: 6px;
+        margin-top: 12px;
+      }
+
+      body.failed .component {
+        padding-block: 7px;
+      }
+
+      body.failed .error-details {
+        margin-top: 10px;
+        padding-block: 10px;
+      }
+
+      body.failed .elapsed {
+        display: none;
+      }
+
       @keyframes spin {
         to {
           transform: rotate(360deg);
@@ -155,9 +233,14 @@
   <body>
     <main aria-live="polite">
       <img class="logo" src="openflightlogo.svg" alt="OpenFlight" />
-      <h1>Starting OpenFlight</h1>
+      <h1 id="heading">Starting OpenFlight</h1>
       <p class="message" id="message">Preparing software and connecting hardware…</p>
       <ul class="components" id="components" aria-label="Startup progress"></ul>
+      <section class="error-details" id="error-details" hidden>
+        <p class="recovery" id="recovery"></p>
+        <p class="log-location">Technician logs: <span id="log-path"></span></p>
+        <button class="dismiss" id="dismiss" type="button">Return to desktop</button>
+      </section>
       <div class="elapsed" id="elapsed"></div>
     </main>
 
@@ -165,20 +248,32 @@
       const targetUrl =
         new URL(window.location.href).searchParams.get('target') || 'http://localhost:8080';
       const startedAt = Date.now();
+      const heading = document.getElementById('heading');
       const elapsed = document.getElementById('elapsed');
       const message = document.getElementById('message');
       const components = document.getElementById('components');
+      const errorDetails = document.getElementById('error-details');
+      const recovery = document.getElementById('recovery');
+      const logPath = document.getElementById('log-path');
+      const dismiss = document.getElementById('dismiss');
       const stateSymbols = { waiting: '', starting: '', ready: '✓', skipped: '–', error: '!' };
       let renderedComponentSignature = '';
+      let startupFailed = false;
 
       function updateElapsed() {
+        if (startupFailed) {
+          elapsed.textContent = 'Startup stopped';
+          return;
+        }
         const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
         elapsed.textContent = `Starting… ${seconds}s`;
       }
 
       async function waitForOpenFlight() {
+        if (startupFailed) return;
         try {
           await fetch(targetUrl, { mode: 'no-cors', cache: 'no-store' });
+          if (startupFailed) return;
           window.location.replace(targetUrl);
           return;
         } catch {
@@ -190,6 +285,15 @@
         if (status.version !== 1 || !Array.isArray(status.components)) return;
 
         if (typeof status.message === 'string') message.textContent = status.message;
+        if (status.overall === 'error') {
+          startupFailed = true;
+          document.body.classList.add('failed');
+          heading.textContent = 'OpenFlight couldn’t start';
+          recovery.textContent = status.error?.recovery || 'Check the connected hardware.';
+          logPath.textContent = status.error?.log_path || 'Terminal logs';
+          errorDetails.hidden = false;
+          elapsed.textContent = 'Startup stopped';
+        }
         const componentSignature = JSON.stringify(status.components);
         if (componentSignature === renderedComponentSignature) return;
         renderedComponentSignature = componentSignature;
@@ -218,8 +322,19 @@
         } catch {
           // The generic preparation message remains until structured status is available.
         }
-        window.setTimeout(pollStatus, 250);
+        if (!startupFailed) window.setTimeout(pollStatus, 250);
       }
+
+      dismiss.addEventListener('click', async () => {
+        dismiss.disabled = true;
+        dismiss.textContent = 'Closing…';
+        try {
+          await fetch('/dismiss', { method: 'POST' });
+        } catch {
+          dismiss.disabled = false;
+          dismiss.textContent = 'Press Alt+F4 to close';
+        }
+      });
 
       updateElapsed();
       window.setInterval(updateElapsed, 1000);

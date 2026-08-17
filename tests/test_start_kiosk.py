@@ -274,7 +274,7 @@ def test_startup_splash_launches_before_environment_sync():
     script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
 
     splash_idx = script.index("\nstart_startup_splash\n")
-    sync_idx = script.index("\nuv sync --quiet\n")
+    sync_idx = script.index("\nif ! uv sync --quiet; then\n")
 
     assert splash_idx < sync_idx
     assert 'if [ "$STARTUP_SPLASH" != true ]; then' in script
@@ -310,6 +310,20 @@ def test_startup_splash_renders_versioned_component_progress_safely():
     assert "skipped" in splash
 
 
+def test_startup_splash_holds_component_failure_until_dismissed():
+    repo_root = Path(__file__).resolve().parents[1]
+    splash = (repo_root / "ui/public/startup-splash.html").read_text(encoding="utf-8")
+
+    assert 'id="error-details"' in splash
+    assert 'id="recovery"' in splash
+    assert 'id="log-path"' in splash
+    assert 'id="dismiss"' in splash
+    assert "startupFailed = true" in splash
+    assert "document.body.classList.add('failed')" in splash
+    assert "if (startupFailed) return" in splash
+    assert "fetch('/dismiss', { method: 'POST' })" in splash
+
+
 def test_unchanged_status_does_not_restart_component_animations():
     """Polling must not replace spinner DOM nodes unless component state changes."""
     repo_root = Path(__file__).resolve().parents[1]
@@ -328,7 +342,20 @@ def test_startup_splash_passes_status_file_to_server():
     assert 'STARTUP_STATUS_FILE=""' in script
     assert "--startup-status-file $STARTUP_STATUS_FILE" in script
     assert '"$STARTUP_STATUS_FILE"' in script
-    assert 'python -m openflight.startup_status "$STARTUP_STATUS_FILE"' in script
+    assert 'python -m openflight.startup_status ready "$STARTUP_STATUS_FILE"' in script
+
+
+def test_launcher_reports_distinct_failures_and_waits_for_dismissal():
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
+
+    assert "show_startup_failure()" in script
+    assert '"preparation"' in script
+    assert '"OpenFlight preparation failed"' in script
+    assert '"server"' in script
+    assert 'while [ ! -f "$STARTUP_DISMISS_FILE" ]' in script
+    assert "uv sync --quiet" in script
+    assert "npm run build" in script
 
 
 def test_start_kiosk_script_has_valid_shell_syntax():

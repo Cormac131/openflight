@@ -24,6 +24,8 @@ STARTUP_SPLASH=false
 STARTUP_SPLASH_PORT=""
 STARTUP_RUNTIME_DIR=""
 STARTUP_STATUS_FILE=""
+STARTUP_DISMISS_FILE=""
+STARTUP_LOG_PATH="${OPENFLIGHT_STARTUP_LOG:-$HOME/openflight_sessions/terminal_logs/}"
 SPLASH_PID=""
 BROWSER_PID=""
 BROWSER_LAUNCHED=false
@@ -457,6 +459,7 @@ stop_startup_splash_server() {
         rm -f "$STARTUP_RUNTIME_DIR/startup-splash.html"
         rm -f "$STARTUP_RUNTIME_DIR/openflightlogo.svg"
         rm -f "$STARTUP_RUNTIME_DIR/status.json"
+        rm -f "$STARTUP_RUNTIME_DIR/dismissed"
         rmdir "$STARTUP_RUNTIME_DIR" 2>/dev/null || true
     fi
 }
@@ -486,11 +489,13 @@ start_startup_splash() {
     mkdir -p "$STARTUP_RUNTIME_DIR"
     cp "$splash_path" "$STARTUP_RUNTIME_DIR/startup-splash.html"
     cp "$splash_assets/openflightlogo.svg" "$STARTUP_RUNTIME_DIR/openflightlogo.svg"
-    printf '%s\n' '{"version":1,"overall":"starting","message":"Preparing OpenFlight","components":[]}' > "$STARTUP_STATUS_FILE"
+    printf '%s\n' '{"version":1,"overall":"starting","message":"Preparing OpenFlight","components":[{"id":"preparation","label":"OpenFlight files","state":"starting"}]}' > "$STARTUP_STATUS_FILE"
 
     log "Starting startup splash on port $splash_port..."
-    uv run --no-project python -m http.server "$splash_port" \
-        --bind 127.0.0.1 --directory "$STARTUP_RUNTIME_DIR" >"$splash_log" 2>&1 &
+    python3 "$PROJECT_DIR/scripts/startup_splash_server.py" \
+        --port "$splash_port" --bind 127.0.0.1 \
+        --directory "$STARTUP_RUNTIME_DIR" --dismiss-file "$STARTUP_DISMISS_FILE" \
+        >"$splash_log" 2>&1 &
     SPLASH_PID=$!
 
     for _ in {1..20}; do
@@ -506,6 +511,40 @@ start_startup_splash() {
 
     warn "Startup splash failed to start; continuing with normal browser launch"
     stop_startup_splash_server
+}
+
+show_startup_failure() {
+    local component_id="$1"
+    local message="$2"
+    local recovery="$3"
+    local exit_code="${4:-1}"
+    local preserve_existing="${5:-false}"
+
+    error "$message"
+    if [ -n "$STARTUP_STATUS_FILE" ] && [ -f "$STARTUP_STATUS_FILE" ]; then
+        local status_args=(
+            fail "$STARTUP_STATUS_FILE"
+            --message "$message"
+            --recovery "$recovery"
+            --log-path "$STARTUP_LOG_PATH"
+        )
+        [ -n "$component_id" ] && status_args+=(--component "$component_id")
+        [ "$preserve_existing" = true ] && status_args+=(--preserve-existing)
+        PYTHONPATH="$PROJECT_DIR/src" python3 -m openflight.startup_status "${status_args[@]}" || true
+    fi
+
+    shutdown_server
+
+    if [ "$BROWSER_LAUNCHED" = true ] && [ -n "$SPLASH_PID" ] && kill -0 "$SPLASH_PID" 2>/dev/null; then
+        log "Startup stopped. Use Return to desktop on the splash to close it."
+        while [ ! -f "$STARTUP_DISMISS_FILE" ]; do
+            if ! kill -0 "$SPLASH_PID" 2>/dev/null; then
+                break
+            fi
+            sleep 0.25
+        done
+    fi
+    cleanup "$exit_code"
 }
 
 # Mount tilt has no safe default (a wrong value silently biases the launch
@@ -559,6 +598,7 @@ shutdown_server() {
 }
 
 cleanup() {
+    local exit_code="${1:-0}"
     # Prevent a second signal from re-entering cleanup while hardware drains.
     trap - SIGINT SIGTERM
     log "Shutting down..."
@@ -570,7 +610,7 @@ cleanup() {
     # Chromium forks child processes that survive kill — clean them all
     pkill -f "chromium.*--kiosk" 2>/dev/null || true
     pkill -f "chrome.*--kiosk" 2>/dev/null || true
-    exit 0
+    exit "$exit_code"
 }
 
 configure_kld7_latency() {
@@ -616,6 +656,7 @@ cd "$PROJECT_DIR"
 if [ "$STARTUP_SPLASH" = true ]; then
     STARTUP_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/openflight-startup-splash-${PORT}-$$"
     STARTUP_STATUS_FILE="$STARTUP_RUNTIME_DIR/status.json"
+    STARTUP_DISMISS_FILE="$STARTUP_RUNTIME_DIR/dismissed"
 fi
 
 # Build server command
@@ -826,16 +867,23 @@ if [ "$DRY_RUN" = true ]; then
     exit 0
 fi
 
+start_startup_splash
+
 # Ensure the environment is in sync (uv recreates/repairs .venv as needed,
 # so a moved project dir self-heals instead of failing with "command not found")
 if ! command -v uv >/dev/null 2>&1; then
-    error "uv not found. Install it: https://docs.astral.sh/uv/"
-    exit 1
+    show_startup_failure \
+        "preparation" \
+        "OpenFlight preparation failed" \
+        "The uv command is unavailable. Ask a technician to repair the OpenFlight installation."
 fi
 
-start_startup_splash
-
-uv sync --quiet
+if ! uv sync --quiet; then
+    show_startup_failure \
+        "preparation" \
+        "OpenFlight preparation failed" \
+        "Dependency preparation failed. Check the terminal log, then relaunch OpenFlight."
+fi
 
 configure_kld7_latency
 
@@ -843,8 +891,13 @@ configure_kld7_latency
 if [ ! -d "ui/dist" ]; then
     warn "UI not built. Building now..."
     cd ui
-    npm install
-    npm run build
+    if ! npm install || ! npm run build; then
+        cd ..
+        show_startup_failure \
+            "preparation" \
+            "OpenFlight interface build failed" \
+            "Check the terminal log or network connection, then relaunch OpenFlight."
+    fi
     cd ..
 fi
 
@@ -916,17 +969,34 @@ for i in {1..30}; do
     if curl -s "http://$HOST:$PORT" > /dev/null 2>&1; then
         break
     fi
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+        break
+    fi
     sleep 0.5
 done
 
 if ! curl -s "http://$HOST:$PORT" > /dev/null 2>&1; then
-    error "Server failed to start"
-    cleanup
-    exit 1
+    if kill -0 "$SERVER_PID" 2>/dev/null; then
+        show_startup_failure \
+            "server" \
+            "OpenFlight server timed out" \
+            "Wait a moment, then return to the desktop and relaunch OpenFlight." \
+            1 \
+            true
+    else
+        wait "$SERVER_PID" 2>/dev/null || true
+        SERVER_PID=""
+        show_startup_failure \
+            "server" \
+            "OpenFlight server exited during startup" \
+            "Check the connected radar hardware and terminal log, then relaunch OpenFlight." \
+            1 \
+            true
+    fi
 fi
 
 if [ -n "$STARTUP_STATUS_FILE" ]; then
-    uv run --no-sync python -m openflight.startup_status "$STARTUP_STATUS_FILE" || \
+    uv run --no-sync python -m openflight.startup_status ready "$STARTUP_STATUS_FILE" || \
         warn "Could not mark startup splash ready; continuing to OpenFlight"
 fi
 
