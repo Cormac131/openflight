@@ -3,6 +3,25 @@
 
 set -euo pipefail
 
+replace_desktop=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --replace-desktop)
+            replace_desktop=true
+            shift
+            ;;
+        --help|-h)
+            echo "Usage: $0 [--replace-desktop]"
+            exit 0
+            ;;
+        *)
+            echo "ERROR: unknown option: $1" >&2
+            echo "Usage: $0 [--replace-desktop]" >&2
+            exit 2
+            ;;
+    esac
+done
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_dir="$(dirname "$(dirname "$script_dir")")"
 example_launcher="$script_dir/run-openflight.example.sh"
@@ -22,15 +41,7 @@ if [[ "$launcher_path" == *[[:space:]]* ]]; then
     exit 1
 fi
 
-mkdir -p "$(dirname "$launcher_path")" "$desktop_dir"
-if [[ ! -e "$launcher_path" ]]; then
-    install -m 755 "$example_launcher" "$launcher_path"
-    echo "Installed the example local launcher at $launcher_path"
-else
-    chmod +x "$launcher_path"
-    echo "Preserved the existing local launcher at $launcher_path"
-fi
-
+mkdir -p "$desktop_dir"
 temporary_entry="$(mktemp "$desktop_dir/.OpenFlight.desktop.XXXXXX")"
 trap 'rm -f "$temporary_entry"' EXIT
 {
@@ -46,6 +57,27 @@ trap 'rm -f "$temporary_entry"' EXIT
     printf '%s\n' 'StartupNotify=false'
     printf '%s\n' 'Categories=Game;Sports;'
 } > "$temporary_entry"
+
+if [[ -e "$desktop_path" ]] && ! cmp -s "$temporary_entry" "$desktop_path"; then
+    if [[ "$replace_desktop" != true ]]; then
+        echo "Existing desktop entry preserved: $desktop_path"
+        echo "Rerun with --replace-desktop to replace it after creating a backup."
+        exit 0
+    fi
+    backup_path="$(mktemp "$desktop_path.backup-$(date +%Y%m%d-%H%M%S).XXXXXX")"
+    cp -p "$desktop_path" "$backup_path"
+    echo "Backed up the existing desktop entry to $backup_path"
+fi
+
+mkdir -p "$(dirname "$launcher_path")"
+if [[ ! -e "$launcher_path" ]]; then
+    install -m 755 "$example_launcher" "$launcher_path"
+    echo "Installed the example local launcher at $launcher_path"
+else
+    chmod +x "$launcher_path"
+    echo "Preserved the existing local launcher at $launcher_path"
+fi
+
 install -m 755 "$temporary_entry" "$desktop_path"
 rm -f "$temporary_entry"
 trap - EXIT

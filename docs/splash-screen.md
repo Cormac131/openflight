@@ -54,7 +54,9 @@ The installer:
 - Creates `~/run-openflight.sh` from
   `scripts/setup/run-openflight.example.sh` only when the local file is absent.
 - Preserves an existing `~/run-openflight.sh` on every subsequent run.
-- Creates or refreshes `~/Desktop/OpenFlight.desktop` for the current user.
+- Creates `~/Desktop/OpenFlight.desktop` when that path is available.
+- Preserves a different existing desktop entry unless replacement is explicit.
+- Backs up the existing entry before an explicit replacement.
 - Uses `Terminal=false` and does not invoke `lxterminal`.
 - Makes the launcher executable and asks the Pi desktop to trust it.
 - Points the desktop entry at the local wrapper rather than directly at the
@@ -101,8 +103,17 @@ uv sync
 scripts/setup/install_desktop_launcher.sh
 ```
 
-The final command replaces an older desktop entry that opens a terminal while
-preserving the user's `~/run-openflight.sh`. No reboot is required. Close an
+If `OpenFlight.desktop` already contains different settings, the final command
+reports the collision and leaves it untouched. Review the existing entry, then
+explicitly replace it when appropriate:
+
+```bash
+scripts/setup/install_desktop_launcher.sh --replace-desktop
+```
+
+Explicit replacement creates a timestamped
+`OpenFlight.desktop.backup-*` file beside the original. The installer always
+preserves the user's `~/run-openflight.sh`. No reboot is required. Close an
 existing OpenFlight session first, then launch the refreshed desktop icon.
 
 Raspberry Pi desktop settings determine whether icons require a single click or
@@ -159,12 +170,14 @@ Refresh the generated desktop entry:
 
 ```bash
 cd ~/openflight
-scripts/setup/install_desktop_launcher.sh
+scripts/setup/install_desktop_launcher.sh --replace-desktop
 grep -E '^(Exec|Terminal|StartupNotify)=' ~/Desktop/OpenFlight.desktop
 ```
 
-The entry should report `Terminal=false`, `StartupNotify=false`, and an `Exec`
-line that calls `~/run-openflight.sh` through Bash without `lxterminal`.
+Use the replacement flag only after reviewing the existing desktop entry. Its
+timestamped backup remains beside the new file. The new entry should report
+`Terminal=false`, `StartupNotify=false`, and an `Exec` line that calls
+`~/run-openflight.sh` through Bash without `lxterminal`.
 
 ### The Desktop Still Asks How To Open The File
 
@@ -202,6 +215,8 @@ The splash remains controlled by one local option:
   terminal-free desktop entry continue to work.
 - **Restore a customized launcher:** copy back the user's backup of
   `~/run-openflight.sh`, then rerun `install_desktop_launcher.sh`.
+- **Restore a desktop entry:** copy the desired timestamped
+  `OpenFlight.desktop.backup-*` file back to `OpenFlight.desktop`.
 
 The Raspberry Pi field pass covered successful OPS/TI/power startup, unplugged
 OPS and TI failures, a wedged TI firmware failure, repeated desktop taps,

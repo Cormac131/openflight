@@ -275,7 +275,7 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
     echo ""
     if confirm "Add an OpenFlight shortcut to the desktop?" "N"; then
         "$SCRIPT_DIR/install_desktop_launcher.sh"
-        log "Desktop shortcut added ✓"
+        log "Desktop shortcut setup complete ✓"
     fi
 
     # --- Cloud sync (opt-in) ---
