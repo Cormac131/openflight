@@ -65,7 +65,7 @@ trap cleanup EXIT
     printf '%s\n' 'Comment=OpenFlight golf launch monitor'
     printf 'Exec=/bin/bash -lc %s\n' "$launcher_path"
     printf 'Path=%s\n' "$project_dir"
-    printf 'Icon=%s\n' "$project_dir/ui/public/openflightlogo.svg"
+    printf 'Icon=%s\n' "$project_dir/ui/public/openflight-icon-black.png"
     printf '%s\n' 'Terminal=false'
     printf '%s\n' 'StartupNotify=false'
     printf '%s\n' 'Categories=Game;Sports;'

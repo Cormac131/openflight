@@ -70,6 +70,7 @@ def test_installer_creates_terminal_free_desktop_entry_and_preserves_launcher(tm
     assert "StartupNotify=false" in desktop_entry
     assert "lxterminal" not in desktop_entry
     assert "/home/coleman" not in desktop_entry
+    assert f"Icon={REPO_ROOT}/ui/public/openflight-icon-black.png" in desktop_entry
     assert os.access(desktop_path, os.X_OK)
     assert f"openflight_installed_dir={REPO_ROOT}" in launcher_path.read_text(
         encoding="utf-8"
