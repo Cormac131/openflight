@@ -89,6 +89,7 @@ function MetricCard({
   subtext,
   variant = 'default',
   confidence,
+  confidenceLabel,
 }: {
   value: string | number;
   unit?: string;
@@ -96,6 +97,7 @@ function MetricCard({
   subtext?: string;
   variant?: 'default' | 'primary' | 'secondary' | 'spin';
   confidence?: SpinQuality | null;
+  confidenceLabel?: string;
 }) {
   return (
     <div className={`metric-card metric-card--${variant}`}>
@@ -114,7 +116,7 @@ function MetricCard({
               <span className={`dot ${confidence === 'high' ? 'filled' : ''}`} />
             </span>
           )}
-          <span className="metric-card__confidence-label">{confidence}</span>
+          <span className="metric-card__confidence-label">{confidenceLabel ?? confidence}</span>
         </div>
       )}
     </div>
@@ -130,6 +132,11 @@ function getLaunchAngleQuality(confidence: number | null): 'high' | 'medium' | '
   if (confidence >= 0.7) return 'high';
   if (confidence >= 0.4) return 'medium';
   return 'low';
+}
+
+function experimentalStatus(status: string | null | undefined): string {
+  if (!status || status === 'candidate_available') return 'candidate';
+  return status.replace(/^rejected_/, 'rejected: ').replaceAll('_', ' ');
 }
 
 export function ShotDisplay({
@@ -226,6 +233,29 @@ export function ShotDisplay({
 
   const hasSpin = shot.spin_rpm !== null;
   const hasLaunchAngle = shot.launch_angle_vertical !== null;
+  const fusedDeliveryAttempted = shot.experimental_fused_status != null;
+  const attackAngle =
+    shot.club_angle_deg ??
+    shot.experimental_fused_attack_angle_deg ??
+    (!fusedDeliveryAttempted ? shot.experimental_attack_angle_deg : null) ??
+    null;
+  const attackIsExperimental =
+    shot.club_angle_deg === null &&
+    (shot.experimental_fused_attack_angle_deg != null ||
+      shot.experimental_fused_status != null ||
+      shot.experimental_attack_angle_deg != null ||
+      shot.experimental_attack_angle_status != null);
+  const clubPath =
+    shot.club_path_deg ??
+    shot.experimental_fused_club_path_deg ??
+    (!fusedDeliveryAttempted ? shot.experimental_club_path_deg : null) ??
+    null;
+  const clubPathIsExperimental =
+    shot.club_path_deg === null &&
+    (shot.experimental_fused_club_path_deg != null ||
+      shot.experimental_fused_status != null ||
+      shot.experimental_club_path_deg != null ||
+      shot.experimental_club_path_status != null);
 
   return (
     <div className={`shot-display ${animate ? 'shot-display--animate' : ''}`}>
@@ -262,22 +292,54 @@ export function ShotDisplay({
             variant="secondary"
             confidence={hasLaunchAngle ? getLaunchAngleQuality(shot.launch_angle_confidence) : null}
           />
-          {shot.club_angle_deg !== null && (
+          {(attackAngle !== null || attackIsExperimental) && (
             <MetricCard
-              value={shot.club_angle_deg.toFixed(1)}
-              unit="°"
+              value={attackAngle !== null ? attackAngle.toFixed(1) : '—'}
+              unit={attackAngle !== null ? '°' : undefined}
               label="Club AoA"
-              subtext="radar"
+              subtext={
+                fusedDeliveryAttempted
+                  ? shot.experimental_fused_attack_angle_deg != null
+                    ? 'camera fused (experimental)'
+                    : experimentalStatus(shot.experimental_fused_status)
+                  : attackIsExperimental
+                    ? experimentalStatus(shot.experimental_attack_angle_status)
+                    : 'radar'
+              }
               variant="secondary"
+              confidence={
+                attackIsExperimental
+                  ? (shot.experimental_fused_attack_angle_confidence ?? 'experimental')
+                  : null
+              }
+              confidenceLabel={
+                shot.experimental_fused_attack_angle_confidence ? 'experimental' : undefined
+              }
             />
           )}
-          {shot.club_path_deg !== null && (
+          {(clubPath !== null || clubPathIsExperimental) && (
             <MetricCard
-              value={(shot.club_path_deg >= 0 ? '+' : '') + shot.club_path_deg.toFixed(1)}
-              unit="°"
+              value={clubPath !== null ? (clubPath >= 0 ? '+' : '') + clubPath.toFixed(1) : '—'}
+              unit={clubPath !== null ? '°' : undefined}
               label="Club Path"
-              subtext="radar"
+              subtext={
+                fusedDeliveryAttempted
+                  ? shot.experimental_fused_club_path_deg != null
+                    ? 'camera fused (experimental)'
+                    : experimentalStatus(shot.experimental_fused_status)
+                  : clubPathIsExperimental
+                    ? experimentalStatus(shot.experimental_club_path_status)
+                    : 'radar'
+              }
               variant="secondary"
+              confidence={
+                clubPathIsExperimental
+                  ? (shot.experimental_fused_club_path_confidence ?? 'experimental')
+                  : null
+              }
+              confidenceLabel={
+                shot.experimental_fused_club_path_confidence ? 'experimental' : undefined
+              }
             />
           )}
           {shot.spin_axis_deg !== null && (
