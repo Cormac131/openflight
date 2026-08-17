@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+DEFAULT_STARTUP_LOG_PATH = str(Path.home() / "openflight_sessions" / "terminal_logs")
+
 
 @dataclass(frozen=True)
 class StartupComponent:
@@ -93,6 +95,39 @@ def complete_startup_status(path: Path | str) -> None:
     _atomic_write_payload(status_path, payload)
 
 
+def fail_startup_status(
+    path: Path | str,
+    *,
+    component_id: str | None,
+    message: str,
+    recovery: str,
+    log_path: str,
+    preserve_existing: bool = False,
+) -> bool:
+    """Publish a concise startup failure, optionally preserving a more specific one."""
+    status_path = Path(path)
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+    if payload.get("version") != 1 or not isinstance(payload.get("components"), list):
+        raise ValueError("Unsupported startup status document")
+    if preserve_existing and payload.get("overall") == "error":
+        return False
+
+    if component_id is not None:
+        component = next(
+            (item for item in payload["components"] if item.get("id") == component_id),
+            None,
+        )
+        if component is None:
+            raise ValueError(f"Startup status document has no {component_id!r} component")
+        component["state"] = "error"
+
+    payload["overall"] = "error"
+    payload["message"] = message
+    payload["error"] = {"recovery": recovery, "log_path": log_path}
+    _atomic_write_payload(status_path, payload)
+    return True
+
+
 class StartupStatusReporter:
     """Publish versioned startup state to a JSON file using atomic replacement."""
 
@@ -108,6 +143,7 @@ class StartupStatusReporter:
         }
         self._overall = "starting"
         self._message = "Preparing OpenFlight"
+        self._error = None
         self._write()
 
     def start(self, component_id: str, message: str | None = None) -> None:
@@ -122,9 +158,16 @@ class StartupStatusReporter:
         """Mark an optional configured component unavailable without failing startup."""
         self._set_component(component_id, "skipped", message)
 
-    def error(self, component_id: str, message: str) -> None:
+    def error(
+        self,
+        component_id: str,
+        message: str,
+        recovery: str = "Check the connected hardware, then relaunch OpenFlight.",
+        log_path: str = DEFAULT_STARTUP_LOG_PATH,
+    ) -> None:
         """Record an initialization failure for a configured component."""
         self._overall = "error"
+        self._error = {"recovery": recovery, "log_path": log_path}
         self._set_component(component_id, "error", message)
 
     def finish(self, message: str = "OpenFlight is ready") -> None:
@@ -150,6 +193,8 @@ class StartupStatusReporter:
             "message": self._message,
             "components": list(self._components.values()),
         }
+        if self._error is not None:
+            payload["error"] = self._error
         _atomic_write_payload(self._path, payload)
 
 
@@ -157,10 +202,29 @@ def main() -> None:
     """Complete a startup status document from the kiosk launch script."""
     import argparse  # pylint: disable=import-outside-toplevel
 
-    parser = argparse.ArgumentParser(description="Mark an OpenFlight startup status ready")
-    parser.add_argument("status_file")
+    parser = argparse.ArgumentParser(description="Update an OpenFlight startup status")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    ready_parser = subparsers.add_parser("ready")
+    ready_parser.add_argument("status_file")
+    fail_parser = subparsers.add_parser("fail")
+    fail_parser.add_argument("status_file")
+    fail_parser.add_argument("--component", default=None)
+    fail_parser.add_argument("--message", required=True)
+    fail_parser.add_argument("--recovery", required=True)
+    fail_parser.add_argument("--log-path", required=True)
+    fail_parser.add_argument("--preserve-existing", action="store_true")
     args = parser.parse_args()
-    complete_startup_status(args.status_file)
+    if args.command == "ready":
+        complete_startup_status(args.status_file)
+    else:
+        fail_startup_status(
+            args.status_file,
+            component_id=args.component,
+            message=args.message,
+            recovery=args.recovery,
+            log_path=args.log_path,
+            preserve_existing=args.preserve_existing,
+        )
 
 
 if __name__ == "__main__":

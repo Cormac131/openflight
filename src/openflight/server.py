@@ -4248,8 +4248,13 @@ def main():
                 print(f"IWR6843 raw dumps enabled: {iwr_output_dir}")
             startup_status.ready("ti", "TI radar connected")
         else:
-            startup_status.error("ti", "TI radar failed to initialize")
+            startup_status.error(
+                "ti",
+                "TI radar failed to initialize",
+                "Check the TI radar USB and power connections, then relaunch OpenFlight.",
+            )
             print("ERROR: IWR6843 requested but failed to initialize. Exiting.")
+            _cleanup_hardware_for_shutdown()
             sys.exit(1)
 
     if args.inclinometer:
@@ -4283,8 +4288,13 @@ def main():
             print(f"K-LD7 vertical radar enabled (launch angle{offset_str})")
             startup_status.ready("kld7_vertical", "K-LD7 launch radar connected")
         else:
-            startup_status.error("kld7_vertical", "K-LD7 launch radar failed to connect")
+            startup_status.error(
+                "kld7_vertical",
+                "K-LD7 launch radar failed to connect",
+                "Check the K-LD7 USB connection and power, then relaunch OpenFlight.",
+            )
             print("ERROR: K-LD7 vertical requested but failed to connect. Exiting.")
+            _cleanup_hardware_for_shutdown()
             sys.exit(1)
 
     if args.kld7_horizontal:
@@ -4304,24 +4314,43 @@ def main():
             print(f"K-LD7 horizontal radar enabled (club path{offset_str})")
             startup_status.ready("kld7_horizontal", "K-LD7 path radar connected")
         else:
-            startup_status.error("kld7_horizontal", "K-LD7 path radar failed to connect")
+            startup_status.error(
+                "kld7_horizontal",
+                "K-LD7 path radar failed to connect",
+                "Check the K-LD7 USB connection and power, then relaunch OpenFlight.",
+            )
             print("ERROR: K-LD7 horizontal requested but failed to connect. Exiting.")
+            _cleanup_hardware_for_shutdown()
             sys.exit(1)
 
     monitor_component = "monitor" if args.mock else "ops"
     monitor_label = "shot simulator" if args.mock else "OPS radar"
     startup_status.start(monitor_component, f"Starting {monitor_label}")
-    start_monitor(
-        port=args.port,
-        mock=args.mock,
-        trigger_type=args.trigger,
-        debug=args.debug,
-        trigger_kwargs=trigger_kwargs,
-        sample_rate_ksps=args.sample_rate,
-        swing_speed_mode=args.swing_speed,
-        swing_speed_kwargs=swing_speed_kwargs,
-        ops_baud=args.ops_baud,
-    )
+    try:
+        start_monitor(
+            port=args.port,
+            mock=args.mock,
+            trigger_type=args.trigger,
+            debug=args.debug,
+            trigger_kwargs=trigger_kwargs,
+            sample_rate_ksps=args.sample_rate,
+            swing_speed_mode=args.swing_speed,
+            swing_speed_kwargs=swing_speed_kwargs,
+            ops_baud=args.ops_baud,
+        )
+    except Exception:
+        monitor_recovery = (
+            "Relaunch OpenFlight and check the terminal log."
+            if args.mock
+            else "Check the OPS radar USB and power connections, then relaunch OpenFlight."
+        )
+        startup_status.error(
+            monitor_component,
+            f"{'Shot simulator' if args.mock else 'OPS radar'} failed to initialize",
+            monitor_recovery,
+        )
+        _cleanup_hardware_for_shutdown()
+        raise
     startup_status.ready(monitor_component, f"{monitor_label.capitalize()} ready")
 
     if battery_provider:
