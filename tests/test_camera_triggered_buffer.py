@@ -15,6 +15,7 @@ from openflight.camera.capture_runtime import (
 )
 from openflight.camera.triggered_buffer import (
     CameraFrame,
+    TriggeredCapture,
     TriggeredFrameBuffer,
     timing_summary,
     unpack_r8_frame,
@@ -179,6 +180,32 @@ def test_timing_summary_reports_fps_and_gap():
     frames[-1] = make_frame(6)
     summary = timing_summary(frames)
     assert summary["gap_count"] == 1
+
+
+def test_capture_persistence_uses_fast_uncompressed_npz(tmp_path, monkeypatch):
+    """The live callback must not wait on expensive ZIP compression."""
+    runtime = CameraCaptureRuntime(output_dir=tmp_path)
+    capture = TriggeredCapture(
+        frames=tuple(make_frame(index) for index in range(3)),
+        pre_trigger_count=2,
+        trigger_host_timestamp_ns=4_000_000,
+    )
+    compressed_calls = []
+    original_savez = np.savez
+
+    monkeypatch.setattr(
+        capture_runtime.np,
+        "savez_compressed",
+        lambda *_args, **_kwargs: compressed_calls.append(True),
+    )
+    monkeypatch.setattr(capture_runtime.np, "savez", original_savez)
+
+    saved = runtime._save_capture(1, 123.0, capture)
+
+    assert compressed_calls == []
+    with np.load(saved.path / "frames.npz") as archive:
+        assert archive["frames"].shape == (3, 2, 3)
+    assert saved.metadata["storage_format"] == "npz_uncompressed"
 
 
 def test_live_image_controls_update_camera_without_restarting(tmp_path):

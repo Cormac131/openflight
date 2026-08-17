@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from openflight import server as server_module
@@ -1421,6 +1422,44 @@ class TestShotToDict:
         assert shot.experimental_camera_horizontal_status == (
             "camera_withheld_fallback_iwr:rejected_no_camera_capture"
         )
+
+    def test_live_camera_fusion_loads_capture_archive_once(self, monkeypatch, tmp_path):
+        """Horizontal and club delivery should share one NPZ decode per shot."""
+        np.savez(
+            tmp_path / "frames.npz",
+            frames=np.zeros((8, 4, 4), dtype=np.uint8),
+            host_timestamp_ns=np.arange(8, dtype=np.int64),
+            trigger_host_timestamp_ns=np.int64(3),
+            pre_trigger_count=np.int32(4),
+        )
+        capture = SimpleNamespace(valid=True, path=tmp_path)
+        real_load = np.load
+        loads = []
+
+        def counted_load(*args, **kwargs):
+            loads.append(args[0])
+            return real_load(*args, **kwargs)
+
+        monkeypatch.setattr(np, "load", counted_load)
+        fused_archives = []
+        monkeypatch.setattr(
+            server_module,
+            "_fuse_camera_ball_flight",
+            lambda _shot, _capture, archive: fused_archives.append(archive),
+        )
+        monkeypatch.setattr(
+            server_module,
+            "_fuse_camera_club_delivery",
+            lambda _shot, _capture, archive: fused_archives.append(archive),
+        )
+        shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+
+        server_module._fuse_camera_measurements(shot, capture)
+
+        assert loads == [tmp_path / "frames.npz"]
+        assert len(fused_archives) == 2
+        assert fused_archives[0] is fused_archives[1]
+        assert fused_archives[0]["frames"].shape == (8, 4, 4)
 
     def test_angle_source_none_by_default(self):
         """Shot without angle source should have None."""

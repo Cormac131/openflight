@@ -2657,11 +2657,34 @@ def _emit_iwr6843_trigger_status(
     )
 
 
-def _fuse_camera_club_delivery(shot: Shot, camera_capture) -> None:
+_CAMERA_ARCHIVE_UNSET = object()
+
+
+def _load_camera_capture_archive(camera_capture) -> dict[str, object] | None:
+    """Load one camera clip into memory for all per-shot estimators."""
+    if camera_capture is None or not camera_capture.valid or not camera_capture.path:
+        return None
+    frames_path = Path(camera_capture.path) / "frames.npz"
+    if not frames_path.exists():
+        return None
+
+    import numpy as np  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+
+    try:
+        with np.load(frames_path) as archive:
+            return {name: archive[name] for name in archive.files}
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Camera capture archive could not be loaded: %s", error)
+        return None
+
+
+def _fuse_camera_club_delivery(
+    shot: Shot,
+    camera_capture,
+    camera_archive=_CAMERA_ARCHIVE_UNSET,
+) -> None:
     """Impact-centered camera + IWR depth club delivery, experimentally."""
     try:
-        import numpy as np  # noqa: PLC0415  pylint: disable=import-outside-toplevel
-
         from openflight.camera.club_delivery import (  # noqa: PLC0415
             CameraDeliveryGeometry,
             ChainedDelivery,
@@ -2672,44 +2695,53 @@ def _fuse_camera_club_delivery(shot: Shot, camera_capture) -> None:
         if camera_capture is not None and camera_capture.valid and camera_capture.path:
             frames_path = Path(camera_capture.path) / "frames.npz"
             if frames_path.exists():
-                archive = np.load(frames_path)
-                trigger_index = (
-                    int(archive["pre_trigger_count"]) - 1
-                    if "pre_trigger_count" in archive
-                    else None
+                archive = (
+                    _load_camera_capture_archive(camera_capture)
+                    if camera_archive is _CAMERA_ARCHIVE_UNSET
+                    else camera_archive
                 )
-                if iwr6843_runtime is None:
-                    fused = ChainedDelivery(status="rejected_no_iwr_runtime")
+                if archive is None:
+                    fused = ChainedDelivery(status="rejected_missing_camera_frames")
                 else:
-                    calibration = iwr6843_runtime.calibration
-                    if calibration.tee_range_m is None:
-                        fused = ChainedDelivery(status="rejected_missing_tee_geometry")
+                    trigger_index = (
+                        int(archive["pre_trigger_count"]) - 1
+                        if "pre_trigger_count" in archive
+                        else None
+                    )
+                    if iwr6843_runtime is None:
+                        fused = ChainedDelivery(status="rejected_no_iwr_runtime")
                     else:
-                        fused = estimate_chained_delivery(
-                            archive["frames"],
-                            archive["host_timestamp_ns"],
-                            trigger_index=trigger_index,
-                            range_evidence=shot.iwr6843_club_range_evidence,
-                            geometry=CameraDeliveryGeometry(
-                                camera_height_m=float(camera_capture_config["mount_height_m"]),
-                                radar_height_m=calibration.radar_height_m,
-                                tee_range_m=float(calibration.tee_range_m),
-                                ball_height_m=calibration.tee_ball_height_m,
-                                camera_lateral_offset_m=float(
-                                    camera_capture_config.get("lateral_offset_m", 0.0)
+                        calibration = iwr6843_runtime.calibration
+                        if calibration.tee_range_m is None:
+                            fused = ChainedDelivery(status="rejected_missing_tee_geometry")
+                        else:
+                            fused = estimate_chained_delivery(
+                                archive["frames"],
+                                archive["host_timestamp_ns"],
+                                trigger_index=trigger_index,
+                                range_evidence=shot.iwr6843_club_range_evidence,
+                                geometry=CameraDeliveryGeometry(
+                                    camera_height_m=float(camera_capture_config["mount_height_m"]),
+                                    radar_height_m=calibration.radar_height_m,
+                                    tee_range_m=float(calibration.tee_range_m),
+                                    ball_height_m=calibration.tee_ball_height_m,
+                                    camera_lateral_offset_m=float(
+                                        camera_capture_config.get("lateral_offset_m", 0.0)
+                                    ),
+                                    image_width_px=int(camera_capture_config["width"]),
+                                    image_height_px=int(camera_capture_config["height"]),
+                                    horizontal_pixel_sign=(
+                                        -1.0
+                                        if camera_capture_config.get("mirror_horizontal")
+                                        else 1.0
+                                    ),
+                                    roll_correction_deg=float(
+                                        camera_capture_config.get("roll_correction_deg", 0.0)
+                                    ),
                                 ),
-                                image_width_px=int(camera_capture_config["width"]),
-                                image_height_px=int(camera_capture_config["height"]),
-                                horizontal_pixel_sign=(
-                                    -1.0 if camera_capture_config.get("mirror_horizontal") else 1.0
-                                ),
-                                roll_correction_deg=float(
-                                    camera_capture_config.get("roll_correction_deg", 0.0)
-                                ),
-                            ),
-                            ops_club_speed_mph=shot.club_speed_mph,
-                            ball_tracker=camera_reference_ball_tracker,
-                        )
+                                ops_club_speed_mph=shot.club_speed_mph,
+                                ball_tracker=camera_reference_ball_tracker,
+                            )
             else:
                 fused = ChainedDelivery(status="rejected_missing_camera_frames")
         shot.experimental_fused_attack_angle_deg = fused.attack_angle_deg
@@ -2744,11 +2776,13 @@ def _fuse_camera_club_delivery(shot: Shot, camera_capture) -> None:
         )
 
 
-def _fuse_camera_ball_flight(shot: Shot, camera_capture) -> None:
+def _fuse_camera_ball_flight(
+    shot: Shot,
+    camera_capture,
+    camera_archive=_CAMERA_ARCHIVE_UNSET,
+) -> None:
     """Select experimental camera horizontal while preserving IWR fallback."""
     try:
-        import numpy as np  # noqa: PLC0415  pylint: disable=import-outside-toplevel
-
         from openflight.camera.ball_flight import (  # noqa: PLC0415
             CameraBallEstimate,
             CameraBallGeometry,
@@ -2768,7 +2802,14 @@ def _fuse_camera_ball_flight(shot: Shot, camera_capture) -> None:
                 if calibration.tee_range_m is None:
                     estimate = CameraBallEstimate(status="rejected_missing_tee_geometry")
                 else:
-                    with np.load(frames_path) as archive:
+                    archive = (
+                        _load_camera_capture_archive(camera_capture)
+                        if camera_archive is _CAMERA_ARCHIVE_UNSET
+                        else camera_archive
+                    )
+                    if archive is None:
+                        estimate = CameraBallEstimate(status="rejected_missing_camera_frames")
+                    else:
                         trigger_ns = int(archive["trigger_host_timestamp_ns"])
                         estimate = estimate_camera_ball_flight(
                             archive["frames"],
@@ -2837,6 +2878,13 @@ def _fuse_camera_ball_flight(shot: Shot, camera_capture) -> None:
             context={"stage": "ball_flight_fusion", "ball_speed_mph": shot.ball_speed_mph},
             exc=error,
         )
+
+
+def _fuse_camera_measurements(shot: Shot, camera_capture) -> None:
+    """Decode one camera clip and share it across all live estimators."""
+    camera_archive = _load_camera_capture_archive(camera_capture)
+    _fuse_camera_ball_flight(shot, camera_capture, camera_archive)
+    _fuse_camera_club_delivery(shot, camera_capture, camera_archive)
 
 
 def on_shot_detected(shot: Shot):
@@ -3204,8 +3252,7 @@ def on_shot_detected(shot: Shot):
         )
 
     if shot.mode != "mock":
-        _fuse_camera_ball_flight(shot, camera_capture)
-        _fuse_camera_club_delivery(shot, camera_capture)
+        _fuse_camera_measurements(shot, camera_capture)
 
     # Always emit user-facing launch angles. Radar/camera measurements win;
     # rejected or missing axes fall back to conservative estimates.

@@ -595,7 +595,10 @@ class CameraCaptureRuntime:
         exposure_us = np.asarray([frame.exposure_us for frame in capture.frames], dtype=np.int32)
         gain = np.asarray([frame.analogue_gain for frame in capture.frames], dtype=np.float32)
 
-        np.savez_compressed(
+        # These clips are consumed immediately by the live estimators. ZIP
+        # compression delayed shot display by roughly a second on the Pi, so
+        # favor fast sequential I/O over the modest storage reduction.
+        np.savez(
             shot_dir / "frames.npz",
             frames=images,
             sensor_timestamp_ns=sensor_ns,
@@ -626,6 +629,7 @@ class CameraCaptureRuntime:
                 "trigger_host_timestamp_ns": capture.trigger_host_timestamp_ns,
                 "mean_brightness": float(images.mean()),
                 "p99_brightness": float(np.percentile(images, 99)),
+                "storage_format": "npz_uncompressed",
                 "npz_bytes": (shot_dir / "frames.npz").stat().st_size,
                 "save_time_ms": (time.monotonic() - started) * 1000.0,
                 "settings": {
