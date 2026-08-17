@@ -32,28 +32,56 @@ def configured_startup_components(
     simulators: bool,
 ) -> list[StartupComponent]:
     """Return only the components enabled for this OpenFlight process."""
-    components = []
-    if camera:
-        components.append(StartupComponent("camera", "Camera"))
+    components = [StartupComponent("server", "OpenFlight server")]
+    components.append(
+        StartupComponent("monitor", "Shot simulator")
+        if mock
+        else StartupComponent("ops", "OPS radar")
+    )
     if iwr6843:
         components.append(StartupComponent("ti", "TI radar"))
+    if camera:
+        components.append(StartupComponent("camera", "Camera"))
     if inclinometer:
         components.append(StartupComponent("inclinometer", "Inclinometer"))
     if kld7:
         components.append(StartupComponent("kld7_vertical", "K-LD7 launch radar"))
     if kld7_horizontal:
         components.append(StartupComponent("kld7_horizontal", "K-LD7 path radar"))
-    components.append(
-        StartupComponent("monitor", "Shot simulator")
-        if mock
-        else StartupComponent("ops", "OPS radar")
-    )
     if battery:
         components.append(StartupComponent("battery", "Power monitor"))
     if simulators:
         components.append(StartupComponent("simulators", "Simulator connections"))
-    components.append(StartupComponent("server", "OpenFlight server"))
     return components
+
+
+def initialize_startup_status(
+    path: Path | str,
+    *,
+    mock: bool,
+    camera: bool,
+    iwr6843: bool,
+    inclinometer: bool,
+    kld7: bool,
+    kld7_horizontal: bool,
+    battery: bool,
+    simulators: bool,
+) -> None:
+    """Publish the final component layout before the splash browser opens."""
+    reporter = StartupStatusReporter(
+        path,
+        configured_startup_components(
+            mock=mock,
+            camera=camera,
+            iwr6843=iwr6843,
+            inclinometer=inclinometer,
+            kld7=kld7,
+            kld7_horizontal=kld7_horizontal,
+            battery=battery,
+            simulators=simulators,
+        ),
+    )
+    reporter.start("server", "Preparing OpenFlight server")
 
 
 def _atomic_write_payload(path: Path, payload: dict) -> None:
@@ -213,10 +241,20 @@ def main() -> None:
     fail_parser.add_argument("--recovery", required=True)
     fail_parser.add_argument("--log-path", required=True)
     fail_parser.add_argument("--preserve-existing", action="store_true")
+    initialize_parser = subparsers.add_parser("initialize")
+    initialize_parser.add_argument("status_file")
+    initialize_parser.add_argument("--mock", action="store_true")
+    initialize_parser.add_argument("--camera", action="store_true")
+    initialize_parser.add_argument("--iwr6843", action="store_true")
+    initialize_parser.add_argument("--inclinometer", action="store_true")
+    initialize_parser.add_argument("--kld7", action="store_true")
+    initialize_parser.add_argument("--kld7-horizontal", action="store_true")
+    initialize_parser.add_argument("--battery", action="store_true")
+    initialize_parser.add_argument("--simulators", action="store_true")
     args = parser.parse_args()
     if args.command == "ready":
         complete_startup_status(args.status_file)
-    else:
+    elif args.command == "fail":
         fail_startup_status(
             args.status_file,
             component_id=args.component,
@@ -224,6 +262,18 @@ def main() -> None:
             recovery=args.recovery,
             log_path=args.log_path,
             preserve_existing=args.preserve_existing,
+        )
+    else:
+        initialize_startup_status(
+            args.status_file,
+            mock=args.mock,
+            camera=args.camera,
+            iwr6843=args.iwr6843,
+            inclinometer=args.inclinometer,
+            kld7=args.kld7,
+            kld7_horizontal=args.kld7_horizontal,
+            battery=args.battery,
+            simulators=args.simulators,
         )
 
 

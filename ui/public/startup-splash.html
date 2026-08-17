@@ -20,8 +20,9 @@
       body {
         min-height: 100vh;
         margin: 0;
-        display: grid;
-        place-items: center;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
         overflow: hidden;
         background:
           radial-gradient(circle at 50% 15%, rgb(229 190 63 / 16%), transparent 34%),
@@ -30,7 +31,7 @@
 
       main {
         width: min(92vw, 680px);
-        padding: clamp(18px, 4vh, 34px);
+        padding: clamp(28px, 8vh, 44px) clamp(18px, 4vw, 34px);
         text-align: center;
       }
 

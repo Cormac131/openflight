@@ -9,6 +9,7 @@ from openflight.startup_status import (
     complete_startup_status,
     configured_startup_components,
     fail_startup_status,
+    initialize_startup_status,
 )
 
 
@@ -90,10 +91,10 @@ def test_configured_components_hide_disabled_hardware():
     )
 
     assert [(item.component_id, item.label) for item in components] == [
+        ("server", "OpenFlight server"),
+        ("ops", "OPS radar"),
         ("ti", "TI radar"),
         ("inclinometer", "Inclinometer"),
-        ("ops", "OPS radar"),
-        ("server", "OpenFlight server"),
     ]
 
 
@@ -110,8 +111,32 @@ def test_mock_mode_replaces_ops_with_shot_simulator():
     )
 
     assert [(item.component_id, item.label) for item in components] == [
-        ("monitor", "Shot simulator"),
         ("server", "OpenFlight server"),
+        ("monitor", "Shot simulator"),
+    ]
+
+
+def test_initial_status_uses_final_component_order_and_starts_server(tmp_path):
+    status_path = tmp_path / "status.json"
+
+    initialize_startup_status(
+        status_path,
+        mock=False,
+        camera=False,
+        iwr6843=True,
+        inclinometer=False,
+        kld7=False,
+        kld7_horizontal=False,
+        battery=False,
+        simulators=False,
+    )
+
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+    assert payload["message"] == "Preparing OpenFlight server"
+    assert payload["components"] == [
+        {"id": "server", "label": "OpenFlight server", "state": "starting"},
+        {"id": "ops", "label": "OPS radar", "state": "waiting"},
+        {"id": "ti", "label": "TI radar", "state": "waiting"},
     ]
 
 

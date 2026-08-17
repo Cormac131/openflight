@@ -489,7 +489,21 @@ start_startup_splash() {
     mkdir -p "$STARTUP_RUNTIME_DIR"
     cp "$splash_path" "$STARTUP_RUNTIME_DIR/startup-splash.html"
     cp "$splash_assets/openflightlogo.svg" "$STARTUP_RUNTIME_DIR/openflightlogo.svg"
-    printf '%s\n' '{"version":1,"overall":"starting","message":"Preparing OpenFlight","components":[{"id":"preparation","label":"OpenFlight files","state":"starting"}]}' > "$STARTUP_STATUS_FILE"
+    local status_options=()
+    if [ "$MOCK_MODE" = true ] || [ "$MOCK_SWING_SPEED" = true ]; then
+        status_options+=(--mock)
+    fi
+    [ "$NO_CAMERA" != true ] && status_options+=(--camera)
+    [ "$IWR6843" = true ] && status_options+=(--iwr6843)
+    [ "$INCLINOMETER" = true ] && status_options+=(--inclinometer)
+    [ "$KLD7" = true ] && status_options+=(--kld7)
+    [ "$KLD7_HORIZONTAL" = true ] && status_options+=(--kld7-horizontal)
+    [ -n "$BATTERY_PROVIDER" ] && status_options+=(--battery)
+    [ "$SIM" = true ] && status_options+=(--simulators)
+    if ! PYTHONPATH="$PROJECT_DIR/src" python3 -m openflight.startup_status \
+        initialize "$STARTUP_STATUS_FILE" "${status_options[@]}"; then
+        printf '%s\n' '{"version":1,"overall":"starting","message":"Preparing OpenFlight server","components":[{"id":"server","label":"OpenFlight server","state":"starting"},{"id":"ops","label":"OPS radar","state":"waiting"}]}' > "$STARTUP_STATUS_FILE"
+    fi
 
     log "Starting startup splash on port $splash_port..."
     python3 "$PROJECT_DIR/scripts/startup_splash_server.py" \
@@ -873,14 +887,14 @@ start_startup_splash
 # so a moved project dir self-heals instead of failing with "command not found")
 if ! command -v uv >/dev/null 2>&1; then
     show_startup_failure \
-        "preparation" \
+        "server" \
         "OpenFlight preparation failed" \
         "The uv command is unavailable. Ask a technician to repair the OpenFlight installation."
 fi
 
 if ! uv sync --quiet; then
     show_startup_failure \
-        "preparation" \
+        "server" \
         "OpenFlight preparation failed" \
         "Dependency preparation failed. Check the terminal log, then relaunch OpenFlight."
 fi
@@ -894,7 +908,7 @@ if [ ! -d "ui/dist" ]; then
     if ! npm install || ! npm run build; then
         cd ..
         show_startup_failure \
-            "preparation" \
+            "server" \
             "OpenFlight interface build failed" \
             "Check the terminal log or network connection, then relaunch OpenFlight."
     fi

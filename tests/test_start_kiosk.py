@@ -294,6 +294,16 @@ def test_startup_splash_asset_has_branding_and_redirect_contract():
     assert "mode: 'no-cors'" in splash
 
 
+def test_startup_branding_is_top_anchored_while_status_content_changes():
+    repo_root = Path(__file__).resolve().parents[1]
+    splash = (repo_root / "ui/public/startup-splash.html").read_text(encoding="utf-8")
+    body_styles = splash[splash.index("      body {") : splash.index("      main {")]
+
+    assert "align-items: flex-start" in body_styles
+    assert "justify-content: center" in body_styles
+    assert "place-items: center" not in body_styles
+
+
 def test_startup_splash_renders_versioned_component_progress_safely():
     repo_root = Path(__file__).resolve().parents[1]
     splash = (repo_root / "ui/public/startup-splash.html").read_text(encoding="utf-8")
@@ -343,6 +353,8 @@ def test_startup_splash_passes_status_file_to_server():
     assert "--startup-status-file $STARTUP_STATUS_FILE" in script
     assert '"$STARTUP_STATUS_FILE"' in script
     assert 'python -m openflight.startup_status ready "$STARTUP_STATUS_FILE"' in script
+    assert "python3 -m openflight.startup_status" in script
+    assert 'initialize "$STARTUP_STATUS_FILE"' in script
 
 
 def test_launcher_reports_distinct_failures_and_waits_for_dismissal():
@@ -350,7 +362,6 @@ def test_launcher_reports_distinct_failures_and_waits_for_dismissal():
     script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
 
     assert "show_startup_failure()" in script
-    assert '"preparation"' in script
     assert '"OpenFlight preparation failed"' in script
     assert '"server"' in script
     assert 'while [ ! -f "$STARTUP_DISMISS_FILE" ]' in script

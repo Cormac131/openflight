@@ -4115,6 +4115,7 @@ def main():
             simulators=args.sim,
         ),
     )
+    startup_status.start("server", "Preparing OpenFlight server")
 
     # Configure logging - always show INFO and above for openflight modules
     # This ensures trigger events and important messages are visible
