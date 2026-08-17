@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useUnitPreference } from '../state/useUnitPreference';
 import type { Shot } from '../types/shot';
 import { computeStats, computeSwingSpeedStats, getUniqueClubs, isSwingSpeedShot } from '../types/shot';
@@ -7,11 +7,23 @@ import './StatsView.css';
 
 interface StatsViewProps {
   shots: Shot[];
+  activeClub: string;
   onClearSession: () => void;
 }
 
-export function StatsView({ shots, onClearSession }: StatsViewProps) {
-  const [selectedClub, setSelectedClub] = useState<string | null>(null);
+export function StatsView({ shots, activeClub, onClearSession }: StatsViewProps) {
+  // Only default to the active club if we actually have shots recorded for it. Otherwise, default to 'All' (null).
+  const hasShotsForActiveClub = shots.some((s) => s.club === activeClub);
+  const [selectedClub, setSelectedClub] = useState<string | null>(hasShotsForActiveClub ? activeClub : null);
+  
+  // Watch for changes to the active club from the top bar and update our local tab selection
+  useEffect(() => {
+    const hasShots = shots.some((s) => s.club === activeClub);
+    setSelectedClub(hasShots ? activeClub : null);
+    // We intentionally exclude `shots` from dependencies so hitting a new shot doesn't reset the user's tab selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeClub]);
+  
   const { unitSystem } = useUnitPreference();
   const speedUnit = getSpeedUnit(unitSystem);
   const distanceUnit = getDistanceUnit(unitSystem);
