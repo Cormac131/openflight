@@ -25,13 +25,13 @@ Add an opt-in, branded splash that opens Chromium before dependency preparation 
 
 ### Acceptance criteria
 
-- [ ] `--startup-splash` enables the new path and is not forwarded to the OpenFlight server.
-- [ ] Chromium begins opening the local splash before dependency synchronization and hardware initialization.
-- [ ] The splash uses the OpenFlight logo and clearly says that software and hardware are being prepared.
-- [ ] The splash automatically replaces itself with the configured OpenFlight URL when it becomes reachable.
-- [ ] The splash helper and browser participate in the existing cleanup lifecycle.
-- [ ] A splash startup failure falls back safely without changing the flag-off path.
-- [ ] Automated tests cover flag parsing, launch ordering, redirect behavior, and shell syntax.
+- [x] `--startup-splash` enables the new path and is not forwarded to the OpenFlight server.
+- [x] Chromium begins opening the local splash before dependency synchronization and hardware initialization.
+- [x] The splash uses the OpenFlight logo and clearly says that software and hardware are being prepared.
+- [x] The splash automatically replaces itself with the configured OpenFlight URL when it becomes reachable.
+- [x] The splash helper and browser participate in the existing cleanup lifecycle.
+- [x] A splash startup failure falls back safely without changing the flag-off path.
+- [x] Automated tests cover flag parsing, launch ordering, redirect behavior, and shell syntax.
 
 ---
 
@@ -45,11 +45,11 @@ Introduce the versioned startup status document and publish state transitions fr
 
 ### Acceptance criteria
 
-- [ ] Every displayed component is enabled in the active configuration.
-- [ ] Each displayed state reflects an explicit startup event rather than elapsed-time guesses or parsed logs.
-- [ ] OPS, angle radar, and camera success paths are covered by automated tests.
-- [ ] Optional inclinometer, simulator, legacy radar, and power states use the same schema.
-- [ ] Status publication does not make hardware initialization asynchronous.
+- [x] Every displayed component is enabled in the active configuration.
+- [x] Each displayed state reflects an explicit startup event rather than elapsed-time guesses or parsed logs.
+- [x] OPS, angle radar, and camera success paths are covered by automated tests.
+- [x] Optional inclinometer, simulator, legacy radar, and power states use the same schema.
+- [x] Status publication does not make hardware initialization asynchronous.
 
 ---
 
