@@ -39,9 +39,9 @@ trap 'rm -f "$temporary_entry"' EXIT
     printf '%s\n' 'Categories=Game;Sports;'
 } > "$temporary_entry"
 
-if [[ -e "$desktop_path" ]] && ! cmp -s "$temporary_entry" "$desktop_path"; then
+if [[ -e "$desktop_path" ]]; then
     replacement_answer=""
-    echo "A different desktop entry already exists: $desktop_path" >&2
+    echo "A desktop entry already exists: $desktop_path" >&2
     echo "Replacing it will first create a timestamped backup beside it." >&2
     printf "Replace it? [y/N] " >&2
     if ! read -r replacement_answer; then

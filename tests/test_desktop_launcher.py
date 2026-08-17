@@ -56,8 +56,18 @@ def test_installer_creates_terminal_free_desktop_entry_and_preserves_launcher(tm
     assert os.access(desktop_path, os.X_OK)
 
     launcher_path.write_text("#!/bin/bash\n# local calibration\n", encoding="utf-8")
-    subprocess.run(["bash", str(INSTALLER)], check=True, cwd=REPO_ROOT, env=env)
+    repeated_install = subprocess.run(
+        ["bash", str(INSTALLER)],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        input="n\n",
+    )
     assert launcher_path.read_text(encoding="utf-8") == ("#!/bin/bash\n# local calibration\n")
+    assert "Replace it? [y/N]" in repeated_install.stderr
+    assert "Existing desktop entry preserved" in repeated_install.stdout
 
 
 def test_installer_prompts_before_replacing_and_backs_up_existing_desktop_entry(tmp_path):
