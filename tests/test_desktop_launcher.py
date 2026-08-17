@@ -60,7 +60,7 @@ def test_installer_creates_terminal_free_desktop_entry_and_preserves_launcher(tm
     assert launcher_path.read_text(encoding="utf-8") == ("#!/bin/bash\n# local calibration\n")
 
 
-def test_installer_requires_explicit_replace_and_backs_up_existing_desktop_entry(tmp_path):
+def test_installer_prompts_before_replacing_and_backs_up_existing_desktop_entry(tmp_path):
     home = tmp_path / "home"
     desktop = home / "Desktop"
     desktop.mkdir(parents=True)
@@ -81,17 +81,21 @@ def test_installer_requires_explicit_replace_and_backs_up_existing_desktop_entry
         env=env,
         capture_output=True,
         text=True,
+        input="n\n",
     )
 
     assert desktop_path.read_text(encoding="utf-8") == existing_entry
     assert "Existing desktop entry preserved" in preserved.stdout
+    assert "Replace it? [y/N]" in preserved.stderr
     assert not list(desktop.glob("OpenFlight.desktop.backup-*"))
 
     subprocess.run(
-        ["bash", str(INSTALLER), "--replace-desktop"],
+        ["bash", str(INSTALLER)],
         check=True,
         cwd=REPO_ROOT,
         env=env,
+        input="y\n",
+        text=True,
     )
 
     assert "Terminal=false" in desktop_path.read_text(encoding="utf-8")

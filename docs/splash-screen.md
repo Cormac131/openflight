@@ -104,14 +104,10 @@ scripts/setup/install_desktop_launcher.sh
 ```
 
 If `OpenFlight.desktop` already contains different settings, the final command
-reports the collision and leaves it untouched. Review the existing entry, then
-explicitly replace it when appropriate:
+reports the collision and asks whether to replace it. Press Enter or answer
+`n` to preserve the existing entry. Answer `y` only after reviewing it.
 
-```bash
-scripts/setup/install_desktop_launcher.sh --replace-desktop
-```
-
-Explicit replacement creates a timestamped
+An approved replacement creates a timestamped
 `OpenFlight.desktop.backup-*` file beside the original. The installer always
 preserves the user's `~/run-openflight.sh`. No reboot is required. Close an
 existing OpenFlight session first, then launch the refreshed desktop icon.
@@ -170,14 +166,14 @@ Refresh the generated desktop entry:
 
 ```bash
 cd ~/openflight
-scripts/setup/install_desktop_launcher.sh --replace-desktop
+scripts/setup/install_desktop_launcher.sh
 grep -E '^(Exec|Terminal|StartupNotify)=' ~/Desktop/OpenFlight.desktop
 ```
 
-Use the replacement flag only after reviewing the existing desktop entry. Its
-timestamped backup remains beside the new file. The new entry should report
-`Terminal=false`, `StartupNotify=false`, and an `Exec` line that calls
-`~/run-openflight.sh` through Bash without `lxterminal`.
+Answer `y` only after reviewing the existing desktop entry. Its timestamped
+backup remains beside the new file. The new entry should report
+`Terminal=false`, `StartupNotify=false`, and an `Exec` line that calls the local
+`run-openflight.sh` through Bash without `lxterminal`.
 
 ### The Desktop Still Asks How To Open The File
 

@@ -3,25 +3,6 @@
 
 set -euo pipefail
 
-replace_desktop=false
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --replace-desktop)
-            replace_desktop=true
-            shift
-            ;;
-        --help|-h)
-            echo "Usage: $0 [--replace-desktop]"
-            exit 0
-            ;;
-        *)
-            echo "ERROR: unknown option: $1" >&2
-            echo "Usage: $0 [--replace-desktop]" >&2
-            exit 2
-            ;;
-    esac
-done
-
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_dir="$(dirname "$(dirname "$script_dir")")"
 example_launcher="$script_dir/run-openflight.example.sh"
@@ -59,10 +40,25 @@ trap 'rm -f "$temporary_entry"' EXIT
 } > "$temporary_entry"
 
 if [[ -e "$desktop_path" ]] && ! cmp -s "$temporary_entry" "$desktop_path"; then
-    if [[ "$replace_desktop" != true ]]; then
+    replacement_answer=""
+    echo "A different desktop entry already exists: $desktop_path" >&2
+    echo "Replacing it will first create a timestamped backup beside it." >&2
+    printf "Replace it? [y/N] " >&2
+    if ! read -r replacement_answer; then
+        replacement_answer=""
+    fi
+    case "$replacement_answer" in
+        y|Y|[yY][eE][sS])
+            ;;
+        *)
+            echo "Existing desktop entry preserved: $desktop_path"
+            exit 0
+            ;;
+    esac
+    if [[ ! -r "$desktop_path" ]]; then
         echo "Existing desktop entry preserved: $desktop_path"
-        echo "Rerun with --replace-desktop to replace it after creating a backup."
-        exit 0
+        echo "ERROR: the existing entry is not readable, so no backup can be created." >&2
+        exit 1
     fi
     backup_path="$(mktemp "$desktop_path.backup-$(date +%Y%m%d-%H%M%S).XXXXXX")"
     cp -p "$desktop_path" "$backup_path"
