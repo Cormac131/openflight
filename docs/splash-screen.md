@@ -49,20 +49,29 @@ cd ~/openflight
 scripts/setup/install_desktop_launcher.sh
 ```
 
+The installer derives an installation name from the checkout folder. The
+standard `~/openflight` checkout uses `~/run-openflight.sh` and
+`~/Desktop/OpenFlight.desktop`. An `~/openflight-startup-splash` checkout uses
+`~/run-openflight-startup-splash.sh` and
+`~/Desktop/OpenFlight-startup-splash.desktop`, displayed as
+**OpenFlight (startup-splash)**.
+
 The installer:
 
-- Creates `~/run-openflight.sh` from
-  `scripts/setup/run-openflight.example.sh` only when the local file is absent.
-- Preserves an existing `~/run-openflight.sh` on every subsequent run.
-- Creates `~/Desktop/OpenFlight.desktop` when that path is available.
-- Preserves a different existing desktop entry unless replacement is explicit.
+- Creates the checkout-specific wrapper from
+  `scripts/setup/run-openflight.example.sh` only when it is absent.
+- Records the checkout's absolute path in that wrapper while retaining
+  `OPENFLIGHT_DIR` as an override.
+- Preserves an existing checkout-specific wrapper on subsequent runs.
+- Preserves an existing desktop entry unless replacement is explicit.
 - Backs up the existing entry before an explicit replacement.
 - Uses `Terminal=false` and does not invoke `lxterminal`.
 - Makes the launcher executable and asks the Pi desktop to trust it.
 - Points the desktop entry at the local wrapper rather than directly at the
   repository startup script.
 
-Edit the local wrapper after its first installation:
+Edit the reported local wrapper after its first installation. For the standard
+checkout:
 
 ```bash
 nano ~/run-openflight.sh
@@ -103,14 +112,14 @@ uv sync
 scripts/setup/install_desktop_launcher.sh
 ```
 
-If `OpenFlight.desktop` already contains different settings, the final command
-reports the collision and asks whether to replace it. Press Enter or answer
-`n` to preserve the existing entry. Answer `y` only after reviewing it.
+If that checkout's desktop filename already exists, the final command reports
+the collision and asks whether to replace it. Press Enter or answer `n` to
+preserve the existing entry. Answer `y` only after reviewing it.
 
-An approved replacement creates a timestamped
-`OpenFlight.desktop.backup-*` file beside the original. The installer always
-preserves the user's `~/run-openflight.sh`. No reboot is required. Close an
-existing OpenFlight session first, then launch the refreshed desktop icon.
+An approved replacement creates a timestamped backup beside the original. The
+installer always preserves that checkout's local wrapper. No reboot is
+required. Close an existing OpenFlight session first, then launch the refreshed
+desktop icon.
 
 Raspberry Pi desktop settings determine whether icons require a single click or
 a double click. The installer removes the separate “execute or execute in
@@ -170,6 +179,9 @@ scripts/setup/install_desktop_launcher.sh
 grep -E '^(Exec|Terminal|StartupNotify)=' ~/Desktop/OpenFlight.desktop
 ```
 
+The paths above are for the standard checkout. For an alternate checkout, use
+the suffixed filenames reported by the installer.
+
 Answer `y` only after reviewing the existing desktop entry. Its timestamped
 backup remains beside the new file. The new entry should report
 `Terminal=false`, `StartupNotify=false`, and an `Exec` line that calls the local
@@ -198,21 +210,22 @@ ls -lt ~/openflight_sessions/terminal_logs | head
 
 ### Duplicate Desktop Icons
 
-Keep the generated `OpenFlight.desktop`. Move old OpenFlight desktop entries to
-a backup directory rather than maintaining multiple shortcuts with different
-hardware arguments.
+Multiple generated icons are expected when the Pi has multiple OpenFlight
+checkouts; their suffixes identify the target folder. Move only obsolete or
+legacy entries to a backup directory. Do not rename a generated entry without
+also checking its `Exec` target.
 
 ## Promotion And Rollback
 
-The splash remains controlled by one local option:
+The splash remains controlled by one option in that checkout's local wrapper:
 
-- **Promote:** keep `--startup-splash` in `~/run-openflight.sh`.
+- **Promote:** keep `--startup-splash` in the checkout-specific wrapper.
 - **Roll back:** remove only `--startup-splash`; hardware arguments and the
   terminal-free desktop entry continue to work.
 - **Restore a customized launcher:** copy back the user's backup of
-  `~/run-openflight.sh`, then rerun `install_desktop_launcher.sh`.
+  the checkout-specific wrapper, then rerun `install_desktop_launcher.sh`.
 - **Restore a desktop entry:** copy the desired timestamped
-  `OpenFlight.desktop.backup-*` file back to `OpenFlight.desktop`.
+  backup back to that checkout's desktop filename.
 
 The Raspberry Pi field pass covered successful OPS/TI/power startup, unplugged
 OPS and TI failures, a wedged TI firmware failure, repeated desktop taps,

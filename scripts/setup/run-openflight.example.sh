@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Example user-local OpenFlight launcher.
 #
-# Copy this file to ~/run-openflight.sh, then add this Pi's hardware and
-# calibration arguments to openflight_args. Keep the copied file outside the
-# repository so updates cannot overwrite local hardware configuration.
+# Copy this file outside the repository, then add this Pi's hardware and
+# calibration arguments to openflight_args. The desktop installer derives a
+# checkout-specific filename and records the checkout path automatically.
 
 set -o pipefail
 
-project_dir="${OPENFLIGHT_DIR:-$HOME/openflight}"
+openflight_installed_dir="${openflight_installed_dir:-$HOME/openflight}"
+project_dir="${OPENFLIGHT_DIR:-$openflight_installed_dir}"
 runtime_dir="${XDG_RUNTIME_DIR:-/tmp}"
 log_dir="${OPENFLIGHT_LOG_DIR:-$HOME/openflight_sessions/terminal_logs}"
 lock_file="$runtime_dir/openflight-launch.lock"

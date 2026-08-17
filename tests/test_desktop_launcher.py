@@ -14,6 +14,24 @@ EXAMPLE_LAUNCHER = REPO_ROOT / "scripts/setup/run-openflight.example.sh"
 INSTALLER = REPO_ROOT / "scripts/setup/install_desktop_launcher.sh"
 
 
+def install_suffix() -> str:
+    """Return the launcher suffix derived from this checkout's folder name."""
+    project_name = REPO_ROOT.name
+    if project_name == "openflight":
+        return ""
+    if project_name.startswith("openflight-"):
+        return project_name.removeprefix("openflight-")
+    return project_name
+
+
+def installed_paths(home: Path) -> tuple[Path, Path]:
+    """Return the default launcher and desktop paths for this checkout."""
+    suffix = install_suffix()
+    launcher_name = "run-openflight.sh" if not suffix else f"run-openflight-{suffix}.sh"
+    desktop_name = "OpenFlight.desktop" if not suffix else f"OpenFlight-{suffix}.desktop"
+    return home / launcher_name, home / "Desktop" / desktop_name
+
+
 pytestmark = pytest.mark.skipif(
     shutil.which("bash") is None,
     reason="desktop launcher contract tests need bash",
@@ -43,8 +61,7 @@ def test_installer_creates_terminal_free_desktop_entry_and_preserves_launcher(tm
 
     subprocess.run(["bash", str(INSTALLER)], check=True, cwd=REPO_ROOT, env=env)
 
-    launcher_path = home / "run-openflight.sh"
-    desktop_path = desktop / "OpenFlight.desktop"
+    launcher_path, desktop_path = installed_paths(home)
     assert launcher_path.exists()
     assert os.access(launcher_path, os.X_OK)
     desktop_entry = desktop_path.read_text(encoding="utf-8")
@@ -54,6 +71,13 @@ def test_installer_creates_terminal_free_desktop_entry_and_preserves_launcher(tm
     assert "lxterminal" not in desktop_entry
     assert "/home/coleman" not in desktop_entry
     assert os.access(desktop_path, os.X_OK)
+    assert f"openflight_installed_dir={REPO_ROOT}" in launcher_path.read_text(
+        encoding="utf-8"
+    )
+
+    suffix = install_suffix()
+    expected_name = "OpenFlight" if not suffix else f"OpenFlight ({suffix})"
+    assert f"Name={expected_name}" in desktop_entry
 
     launcher_path.write_text("#!/bin/bash\n# local calibration\n", encoding="utf-8")
     repeated_install = subprocess.run(
@@ -74,7 +98,7 @@ def test_installer_prompts_before_replacing_and_backs_up_existing_desktop_entry(
     home = tmp_path / "home"
     desktop = home / "Desktop"
     desktop.mkdir(parents=True)
-    desktop_path = desktop / "OpenFlight.desktop"
+    _, desktop_path = installed_paths(home)
     existing_entry = "[Desktop Entry]\nName=My calibrated OpenFlight\n"
     desktop_path.write_text(existing_entry, encoding="utf-8")
     env = {
@@ -97,7 +121,8 @@ def test_installer_prompts_before_replacing_and_backs_up_existing_desktop_entry(
     assert desktop_path.read_text(encoding="utf-8") == existing_entry
     assert "Existing desktop entry preserved" in preserved.stdout
     assert "Replace it? [y/N]" in preserved.stderr
-    assert not list(desktop.glob("OpenFlight.desktop.backup-*"))
+    backup_pattern = f"{desktop_path.name}.backup-*"
+    assert not list(desktop.glob(backup_pattern))
 
     subprocess.run(
         ["bash", str(INSTALLER)],
@@ -109,7 +134,7 @@ def test_installer_prompts_before_replacing_and_backs_up_existing_desktop_entry(
     )
 
     assert "Terminal=false" in desktop_path.read_text(encoding="utf-8")
-    backups = list(desktop.glob("OpenFlight.desktop.backup-*"))
+    backups = list(desktop.glob(backup_pattern))
     assert len(backups) == 1
     assert backups[0].read_text(encoding="utf-8") == existing_entry
 

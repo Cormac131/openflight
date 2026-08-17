@@ -6,7 +6,32 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_dir="$(dirname "$(dirname "$script_dir")")"
 example_launcher="$script_dir/run-openflight.example.sh"
-launcher_path="${OPENFLIGHT_LAUNCHER_PATH:-$HOME/run-openflight.sh}"
+project_name="$(basename "$project_dir")"
+
+if [[ "$project_name" == openflight ]]; then
+    install_suffix=""
+elif [[ "$project_name" == openflight-* ]]; then
+    install_suffix="${project_name#openflight-}"
+else
+    install_suffix="$project_name"
+fi
+
+if [[ -n "$install_suffix" ]] && [[ ! "$install_suffix" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "ERROR: checkout folder suffix contains unsupported characters: $install_suffix" >&2
+    exit 1
+fi
+
+if [[ -n "$install_suffix" ]]; then
+    launcher_name="run-openflight-$install_suffix.sh"
+    desktop_name="OpenFlight-$install_suffix.desktop"
+    application_name="OpenFlight ($install_suffix)"
+else
+    launcher_name="run-openflight.sh"
+    desktop_name="OpenFlight.desktop"
+    application_name="OpenFlight"
+fi
+
+launcher_path="${OPENFLIGHT_LAUNCHER_PATH:-$HOME/$launcher_name}"
 
 if [[ -n "${OPENFLIGHT_DESKTOP_DIR:-}" ]]; then
     desktop_dir="$OPENFLIGHT_DESKTOP_DIR"
@@ -15,7 +40,7 @@ elif command -v xdg-user-dir >/dev/null 2>&1; then
 else
     desktop_dir="$HOME/Desktop"
 fi
-desktop_path="${OPENFLIGHT_DESKTOP_FILE:-$desktop_dir/OpenFlight.desktop}"
+desktop_path="${OPENFLIGHT_DESKTOP_FILE:-$desktop_dir/$desktop_name}"
 
 if [[ "$launcher_path" == *[[:space:]]* ]]; then
     echo "ERROR: launcher path cannot contain whitespace: $launcher_path" >&2
@@ -23,13 +48,20 @@ if [[ "$launcher_path" == *[[:space:]]* ]]; then
 fi
 
 mkdir -p "$desktop_dir"
-temporary_entry="$(mktemp "$desktop_dir/.OpenFlight.desktop.XXXXXX")"
-trap 'rm -f "$temporary_entry"' EXIT
+temporary_entry="$(mktemp "$desktop_dir/.$desktop_name.XXXXXX")"
+temporary_launcher=""
+cleanup() {
+    rm -f "$temporary_entry"
+    if [[ -n "$temporary_launcher" ]]; then
+        rm -f "$temporary_launcher"
+    fi
+}
+trap cleanup EXIT
 {
     printf '%s\n' '[Desktop Entry]'
     printf '%s\n' 'Version=1.0'
     printf '%s\n' 'Type=Application'
-    printf '%s\n' 'Name=OpenFlight'
+    printf 'Name=%s\n' "$application_name"
     printf '%s\n' 'Comment=OpenFlight golf launch monitor'
     printf 'Exec=/bin/bash -lc %s\n' "$launcher_path"
     printf 'Path=%s\n' "$project_dir"
@@ -67,7 +99,16 @@ fi
 
 mkdir -p "$(dirname "$launcher_path")"
 if [[ ! -e "$launcher_path" ]]; then
-    install -m 755 "$example_launcher" "$launcher_path"
+    temporary_launcher="$(mktemp "$(dirname "$launcher_path")/.$launcher_name.XXXXXX")"
+    {
+        IFS= read -r shebang < "$example_launcher"
+        printf '%s\n' "$shebang"
+        printf 'openflight_installed_dir=%q\n' "$project_dir"
+        tail -n +2 "$example_launcher"
+    } > "$temporary_launcher"
+    install -m 755 "$temporary_launcher" "$launcher_path"
+    rm -f "$temporary_launcher"
+    temporary_launcher=""
     echo "Installed the example local launcher at $launcher_path"
 else
     chmod +x "$launcher_path"

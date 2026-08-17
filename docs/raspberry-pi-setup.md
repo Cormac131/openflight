@@ -208,8 +208,9 @@ cd ~/openflight
 scripts/setup/install_desktop_launcher.sh
 ```
 
-The installer preserves an existing `~/run-openflight.sh`; machine-specific
-device paths and calibration remain outside Git. See the
+The installer uses checkout-specific launcher and desktop filenames, preserving
+multiple OpenFlight installations on the same Pi. Machine-specific device paths
+and calibration remain outside Git. See the
 [Startup Splash Screen](splash-screen.md) guide for configuration, screenshots,
 error recovery, updating existing launchers, and rollback.
 
