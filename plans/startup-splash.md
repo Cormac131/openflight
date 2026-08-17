@@ -80,8 +80,14 @@ Deploy the feature branch into a separate Raspberry Pi work folder with a dedica
 
 ### Acceptance criteria
 
-- [ ] The demo uses a separate Pi work folder and desktop entry.
-- [ ] The production launcher and checkout remain unchanged during evaluation.
-- [ ] Repeated taps cannot create concurrent hardware owners.
-- [ ] Tap-to-splash and tap-to-ready timings are recorded on the target Pi.
-- [ ] Promotion and rollback steps are documented before changing the default.
+- [x] The demo uses a separate Pi work folder and desktop entry.
+- [x] The production launcher and checkout remain unchanged during evaluation.
+- [x] Repeated taps cannot create concurrent hardware owners.
+- [x] Tap-to-splash and tap-to-ready behavior is accepted on the target Pi.
+- [x] Promotion and rollback steps are documented before changing the default.
+
+Field validation completed on a Raspberry Pi at 800×480 on 2026-08-17. The
+operator exercised successful OPS/TI/power startup, unplugged OPS and TI error
+states, a wedged TI firmware state, repeated taps, failure dismissal, and
+relaunch. Operational setup and rollback are documented in
+`docs/splash-screen.md`.
