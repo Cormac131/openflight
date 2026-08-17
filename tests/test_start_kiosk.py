@@ -252,13 +252,16 @@ def test_startup_applies_kld7_latency_setup_before_server_start():
     assert setup_idx < server_start_idx
 
 
-def test_startup_splash_flag_is_kiosk_only():
-    """The experimental splash must not leak into the server CLI."""
+def test_startup_splash_flag_only_adds_structured_status_to_server_cli():
+    """The experimental splash should not alter any hardware configuration."""
     baseline = _dry_run()
     enabled = _dry_run("--startup-splash")
 
-    assert enabled.stdout == baseline.stdout
-    assert "startup-splash" not in enabled.stdout
+    enabled_arguments = enabled.stdout.strip().split()
+    status_index = enabled_arguments.index("--startup-status-file")
+    del enabled_arguments[status_index : status_index + 2]
+    assert enabled_arguments == baseline.stdout.strip().split()
+    assert "--startup-splash " not in enabled.stdout
     script = (Path(__file__).resolve().parents[1] / "scripts/start-kiosk.sh").read_text(
         encoding="utf-8"
     )
@@ -289,6 +292,16 @@ def test_startup_splash_asset_has_branding_and_redirect_contract():
     assert "searchParams.get('target')" in splash
     assert "window.location.replace(targetUrl)" in splash
     assert "mode: 'no-cors'" in splash
+
+
+def test_startup_splash_passes_status_file_to_server():
+    """The server should publish progress into the splash server's runtime directory."""
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
+
+    assert 'STARTUP_STATUS_FILE=""' in script
+    assert "--startup-status-file $STARTUP_STATUS_FILE" in script
+    assert '"$STARTUP_STATUS_FILE"' in script
 
 
 def test_start_kiosk_script_has_valid_shell_syntax():

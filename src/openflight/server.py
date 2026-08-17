@@ -46,6 +46,7 @@ from .sim import (
 )
 from .speed_correction import correct_ball_speed
 from .spin_estimate import calculated_spin_rpm
+from .startup_status import StartupStatusReporter, configured_startup_components
 from .swing_speed import SwingSpeedEvent
 
 # Configure logging
@@ -3621,6 +3622,11 @@ def main():
         "--web-port", type=int, default=8080, help="Web server port (default: 8080)"
     )
     parser.add_argument(
+        "--startup-status-file",
+        default=None,
+        help="Write structured initialization progress for the optional kiosk splash",
+    )
+    parser.add_argument(
         "--debug", "-d", action="store_true", help="Enable verbose FFT/CFAR debug output"
     )
     parser.add_argument(
@@ -4096,6 +4102,19 @@ def main():
     battery_provider = args.battery
     kld7_radc_tuning_kwargs = _kld7_radc_tuning_kwargs(args)
     active_kld7_radc_tuning = dict(kld7_radc_tuning_kwargs)
+    startup_status = StartupStatusReporter(
+        args.startup_status_file,
+        configured_startup_components(
+            mock=args.mock,
+            camera=not args.no_camera,
+            iwr6843=args.iwr6843,
+            inclinometer=args.inclinometer,
+            kld7=args.kld7,
+            kld7_horizontal=args.kld7_horizontal,
+            battery=bool(args.battery),
+            simulators=args.sim,
+        ),
+    )
 
     # Configure logging - always show INFO and above for openflight modules
     # This ensures trigger events and important messages are visible
@@ -4158,6 +4177,7 @@ def main():
 
     # Initialize camera BEFORE starting monitor (so session log is accurate)
     if not args.no_camera:
+        startup_status.start("camera", "Connecting camera")
         # Determine if we should use Hough (default) or YOLO
         use_hough = args.camera_model is None and args.roboflow_model is None
 
@@ -4174,8 +4194,10 @@ def main():
             hough_min_dist=args.hough_min_dist,
         ):
             start_camera_thread()
+            startup_status.ready("camera", "Camera connected")
         else:
             print("Camera not available - running without camera")
+            startup_status.skip("camera", "Camera unavailable; continuing")
     else:
         print("Camera disabled by --no-camera flag")
 
@@ -4185,6 +4207,7 @@ def main():
         print(f"Experimental K-LD7 RADC tuning enabled: {kld7_radc_tuning_kwargs}")
 
     if args.iwr6843:
+        startup_status.start("ti", "Connecting TI radar")
         iwr_output_dir = (
             Path(args.iwr6843_output_dir).expanduser()
             if args.iwr6843_output_dir
@@ -4223,16 +4246,23 @@ def main():
             )
             if args.debug:
                 print(f"IWR6843 raw dumps enabled: {iwr_output_dir}")
+            startup_status.ready("ti", "TI radar connected")
         else:
+            startup_status.error("ti", "TI radar failed to initialize")
             print("ERROR: IWR6843 requested but failed to initialize. Exiting.")
             sys.exit(1)
 
     if args.inclinometer:
+        startup_status.start("inclinometer", "Connecting inclinometer")
         if not init_inclinometer(zero_offset_deg=args.inclinometer_zero_offset):
             print("WARNING: Inclinometer unavailable; continuing with configured IWR6843 tilt")
+            startup_status.skip("inclinometer", "Inclinometer unavailable; continuing")
+        else:
+            startup_status.ready("inclinometer", "Inclinometer connected")
 
     # Initialize K-LD7 angle radars (if enabled)
     if args.kld7:
+        startup_status.start("kld7_vertical", "Connecting K-LD7 launch radar")
         if init_kld7(
             port=args.kld7_port,
             orientation="vertical",
@@ -4251,11 +4281,14 @@ def main():
                 f", offset: {args.kld7_angle_offset:+.1f}°" if args.kld7_angle_offset else ""
             )
             print(f"K-LD7 vertical radar enabled (launch angle{offset_str})")
+            startup_status.ready("kld7_vertical", "K-LD7 launch radar connected")
         else:
+            startup_status.error("kld7_vertical", "K-LD7 launch radar failed to connect")
             print("ERROR: K-LD7 vertical requested but failed to connect. Exiting.")
             sys.exit(1)
 
     if args.kld7_horizontal:
+        startup_status.start("kld7_horizontal", "Connecting K-LD7 path radar")
         if init_kld7(
             port=args.kld7_horizontal_port,
             orientation="horizontal",
@@ -4269,10 +4302,15 @@ def main():
                 else ""
             )
             print(f"K-LD7 horizontal radar enabled (club path{offset_str})")
+            startup_status.ready("kld7_horizontal", "K-LD7 path radar connected")
         else:
+            startup_status.error("kld7_horizontal", "K-LD7 path radar failed to connect")
             print("ERROR: K-LD7 horizontal requested but failed to connect. Exiting.")
             sys.exit(1)
 
+    monitor_component = "monitor" if args.mock else "ops"
+    monitor_label = "shot simulator" if args.mock else "OPS radar"
+    startup_status.start(monitor_component, f"Starting {monitor_label}")
     start_monitor(
         port=args.port,
         mock=args.mock,
@@ -4284,14 +4322,19 @@ def main():
         swing_speed_kwargs=swing_speed_kwargs,
         ops_baud=args.ops_baud,
     )
+    startup_status.ready(monitor_component, f"{monitor_label.capitalize()} ready")
 
     if battery_provider:
+        startup_status.start("battery", "Starting power monitor")
         start_power_monitor(battery_provider)
         print(f"Battery monitoring: ENABLED ({battery_provider})")
+        startup_status.ready("battery", "Power monitor ready")
 
     # Simulator connectors (off unless --sim). Started after the monitor exists
     # so inbound club updates can call monitor.set_club().
     global sim_connectors  # pylint: disable=global-statement
+    if args.sim:
+        startup_status.start("simulators", "Connecting golf simulators")
     sim_cfgs = load_sim_config() if args.sim else []
     sim_connectors = build_connectors(
         sim_cfgs, on_status=_sim_on_status, on_inbound=_sim_on_inbound
@@ -4301,6 +4344,9 @@ def main():
         print(f"Simulator connector enabled: {connector.name} -> {connector.host}:{connector.port}")
     if args.sim and not sim_connectors:
         print("Simulator connectors enabled (--sim) but none are enabled in config/sim.json")
+        startup_status.skip("simulators", "No simulator connections are configured")
+    elif args.sim:
+        startup_status.ready("simulators", "Simulator connections started")
 
     if args.mock:
         print("Running in MOCK mode - no radar required")
@@ -4310,6 +4356,7 @@ def main():
 
     print(f"Server starting at http://{args.host}:{args.web_port}")
     print()
+    startup_status.finish()
 
     try:
         # Note: Flask debug mode (reloader) is disabled to prevent duplicate processes

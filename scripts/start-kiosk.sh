@@ -22,6 +22,8 @@ SESSION_LOCATION=""
 DRY_RUN=false
 STARTUP_SPLASH=false
 STARTUP_SPLASH_PORT=""
+STARTUP_RUNTIME_DIR=""
+STARTUP_STATUS_FILE=""
 SPLASH_PID=""
 BROWSER_PID=""
 BROWSER_LAUNCHED=false
@@ -450,6 +452,13 @@ stop_startup_splash_server() {
         wait "$SPLASH_PID" 2>/dev/null || true
     fi
     SPLASH_PID=""
+
+    if [ -n "$STARTUP_RUNTIME_DIR" ] && [ -d "$STARTUP_RUNTIME_DIR" ]; then
+        rm -f "$STARTUP_RUNTIME_DIR/startup-splash.html"
+        rm -f "$STARTUP_RUNTIME_DIR/openflightlogo.svg"
+        rm -f "$STARTUP_RUNTIME_DIR/status.json"
+        rmdir "$STARTUP_RUNTIME_DIR" 2>/dev/null || true
+    fi
 }
 
 start_startup_splash() {
@@ -458,8 +467,8 @@ start_startup_splash() {
     fi
 
     local splash_port="${STARTUP_SPLASH_PORT:-$((PORT + 1))}"
-    local splash_root="$PROJECT_DIR/ui/public"
-    local splash_path="$splash_root/startup-splash.html"
+    local splash_assets="$PROJECT_DIR/ui/public"
+    local splash_path="$splash_assets/startup-splash.html"
     local target_query="http%3A%2F%2F${HOST}%3A${PORT}"
     local splash_url="http://127.0.0.1:${splash_port}/startup-splash.html?target=${target_query}"
     local splash_log="${XDG_RUNTIME_DIR:-/tmp}/openflight-startup-splash-${PORT}.log"
@@ -474,9 +483,14 @@ start_startup_splash() {
         return 0
     fi
 
+    mkdir -p "$STARTUP_RUNTIME_DIR"
+    cp "$splash_path" "$STARTUP_RUNTIME_DIR/startup-splash.html"
+    cp "$splash_assets/openflightlogo.svg" "$STARTUP_RUNTIME_DIR/openflightlogo.svg"
+    printf '%s\n' '{"version":1,"overall":"starting","message":"Preparing OpenFlight","components":[]}' > "$STARTUP_STATUS_FILE"
+
     log "Starting startup splash on port $splash_port..."
     uv run --no-project python -m http.server "$splash_port" \
-        --bind 127.0.0.1 --directory "$splash_root" >"$splash_log" 2>&1 &
+        --bind 127.0.0.1 --directory "$STARTUP_RUNTIME_DIR" >"$splash_log" 2>&1 &
     SPLASH_PID=$!
 
     for _ in {1..20}; do
@@ -599,8 +613,17 @@ trap cleanup SIGINT SIGTERM
 
 cd "$PROJECT_DIR"
 
+if [ "$STARTUP_SPLASH" = true ]; then
+    STARTUP_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/openflight-startup-splash-${PORT}-$$"
+    STARTUP_STATUS_FILE="$STARTUP_RUNTIME_DIR/status.json"
+fi
+
 # Build server command
 SERVER_CMD="openflight-server --web-port $PORT"
+
+if [ -n "$STARTUP_STATUS_FILE" ]; then
+    SERVER_CMD="$SERVER_CMD --startup-status-file $STARTUP_STATUS_FILE"
+fi
 
 if [ "$MOCK_MODE" = true ] && [ "$SWING_SPEED" = true ]; then
     MOCK_SWING_SPEED=true
@@ -910,7 +933,6 @@ if [ "$STARTUP_SPLASH" != true ] || [ "$BROWSER_LAUNCHED" != true ]; then
 else
     log "Startup splash will continue to OpenFlight"
 fi
-stop_startup_splash_server
 
 log "OpenFlight is running! Press Ctrl+C to stop."
 
