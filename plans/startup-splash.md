@@ -63,10 +63,10 @@ Keep a useful splash state visible when preparation or hardware initialization f
 
 ### Acceptance criteria
 
-- [ ] Preparation, server timeout, and component initialization failures display distinct messages.
-- [ ] Failure details avoid raw tracebacks while identifying the relevant session or terminal log.
-- [ ] Failed startup does not leave a splash helper, duplicate server, browser, or hardware owner behind.
-- [ ] Failure behavior is tested without requiring physical radar hardware.
+- [x] Preparation, server timeout, and component initialization failures display distinct messages.
+- [x] Failure details avoid raw tracebacks while identifying the relevant session or terminal log.
+- [x] Failed startup does not leave a splash helper, duplicate server, browser, or hardware owner behind.
+- [x] Failure behavior is tested without requiring physical radar hardware.
 
 ---
 
