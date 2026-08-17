@@ -310,6 +310,16 @@ def test_startup_splash_renders_versioned_component_progress_safely():
     assert "skipped" in splash
 
 
+def test_unchanged_status_does_not_restart_component_animations():
+    """Polling must not replace spinner DOM nodes unless component state changes."""
+    repo_root = Path(__file__).resolve().parents[1]
+    splash = (repo_root / "ui/public/startup-splash.html").read_text(encoding="utf-8")
+
+    guard_index = splash.index("componentSignature === renderedComponentSignature")
+    replacement_index = splash.index("components.replaceChildren")
+    assert guard_index < replacement_index
+
+
 def test_startup_splash_passes_status_file_to_server():
     """The server should publish progress into the splash server's runtime directory."""
     repo_root = Path(__file__).resolve().parents[1]

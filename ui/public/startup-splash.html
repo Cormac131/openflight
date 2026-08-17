@@ -169,6 +169,7 @@
       const message = document.getElementById('message');
       const components = document.getElementById('components');
       const stateSymbols = { waiting: '', starting: '', ready: '✓', skipped: '–', error: '!' };
+      let renderedComponentSignature = '';
 
       function updateElapsed() {
         const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
@@ -189,6 +190,10 @@
         if (status.version !== 1 || !Array.isArray(status.components)) return;
 
         if (typeof status.message === 'string') message.textContent = status.message;
+        const componentSignature = JSON.stringify(status.components);
+        if (componentSignature === renderedComponentSignature) return;
+        renderedComponentSignature = componentSignature;
+
         const rows = status.components.map((component) => {
           const state = Object.hasOwn(stateSymbols, component.state) ? component.state : 'waiting';
           const row = document.createElement('li');
