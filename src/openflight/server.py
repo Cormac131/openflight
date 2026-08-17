@@ -1157,6 +1157,14 @@ def init_iwr6843(
         return False
 
 
+def _iwr6843_startup_recovery(error: object) -> str:
+    """Translate a known TI initialization failure into operator guidance."""
+    normalized_error = str(error or "").casefold()
+    if "press reset and retry" in normalized_error or "firmware may be wedged" in normalized_error:
+        return "Press RESET on the TI radar, then relaunch OpenFlight."
+    return "Check the TI radar USB and power connections, then relaunch OpenFlight."
+
+
 def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: int = 0x18) -> bool:
     """Start the optional LIS3DH service without risking radar availability."""
     global inclinometer_service  # pylint: disable=global-statement
@@ -4252,7 +4260,7 @@ def main():
             startup_status.error(
                 "ti",
                 "TI radar failed to initialize",
-                "Check the TI radar USB and power connections, then relaunch OpenFlight.",
+                _iwr6843_startup_recovery(iwr6843_runtime_config.get("error")),
             )
             print("ERROR: IWR6843 requested but failed to initialize. Exiting.")
             _cleanup_hardware_for_shutdown()

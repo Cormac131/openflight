@@ -294,3 +294,58 @@ def test_server_publishes_ops_failure_and_cleans_up(tmp_path, monkeypatch):
     assert payload["message"] == "OPS radar failed to initialize"
     assert states["ops"] == "error"
     assert cleanup_calls == ["cleanup"]
+
+
+@pytest.mark.parametrize(
+    ("initialization_error", "expected_recovery"),
+    [
+        (
+            "IWR6843 did not acknowledge 'sensorStop'; the firmware may be wedged "
+            "(press RESET and retry)",
+            "Press RESET on the TI radar, then relaunch OpenFlight.",
+        ),
+        (
+            "IWR6843 serial port is unavailable",
+            "Check the TI radar USB and power connections, then relaunch OpenFlight.",
+        ),
+    ],
+)
+def test_server_publishes_specific_ti_recovery(
+    tmp_path, monkeypatch, initialization_error, expected_recovery
+):
+    """A wedged radar needs different operator action than an unplugged radar."""
+    from openflight import server
+
+    status_path = tmp_path / "status.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "openflight-server",
+            "--no-camera",
+            "--no-logging",
+            "--iwr6843",
+            "--startup-status-file",
+            str(status_path),
+        ],
+    )
+    monkeypatch.setattr(server, "init_session_logger", lambda **_kwargs: None)
+
+    def fail_iwr6843(**_kwargs):
+        server.iwr6843_runtime_config = {
+            "enabled": False,
+            "error": initialization_error,
+        }
+        return False
+
+    monkeypatch.setattr(server, "init_iwr6843", fail_iwr6843)
+    monkeypatch.setattr(server, "_cleanup_hardware_for_shutdown", lambda: None)
+
+    with pytest.raises(SystemExit) as exit_info:
+        server.main()
+
+    assert exit_info.value.code == 1
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+    assert payload["overall"] == "error"
+    assert payload["message"] == "TI radar failed to initialize"
+    assert payload["error"]["recovery"] == expected_recovery
