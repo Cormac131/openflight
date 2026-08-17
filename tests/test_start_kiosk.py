@@ -294,6 +294,22 @@ def test_startup_splash_asset_has_branding_and_redirect_contract():
     assert "mode: 'no-cors'" in splash
 
 
+def test_startup_splash_renders_versioned_component_progress_safely():
+    repo_root = Path(__file__).resolve().parents[1]
+    splash = (repo_root / "ui/public/startup-splash.html").read_text(encoding="utf-8")
+
+    assert "fetch('status.json'" in splash
+    assert "status.version !== 1" in splash
+    assert 'id="components"' in splash
+    assert "component.state" in splash
+    assert "textContent" in splash
+    assert "innerHTML" not in splash
+    assert "waiting" in splash
+    assert "starting" in splash
+    assert "ready" in splash
+    assert "skipped" in splash
+
+
 def test_startup_splash_passes_status_file_to_server():
     """The server should publish progress into the splash server's runtime directory."""
     repo_root = Path(__file__).resolve().parents[1]

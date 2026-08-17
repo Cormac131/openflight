@@ -29,40 +29,100 @@
       }
 
       main {
-        width: min(88vw, 620px);
-        padding: clamp(28px, 7vh, 56px);
+        width: min(92vw, 680px);
+        padding: clamp(18px, 4vh, 34px);
         text-align: center;
       }
 
       .logo {
-        width: min(68vw, 390px);
+        width: min(54vw, 290px);
         height: auto;
-        margin-bottom: clamp(18px, 5vh, 34px);
+        margin-bottom: clamp(8px, 2vh, 16px);
         filter: drop-shadow(0 14px 32px rgb(0 0 0 / 38%));
       }
 
       h1 {
         margin: 0;
         color: #e5be3f;
-        font-size: clamp(28px, 5vw, 42px);
+        font-size: clamp(26px, 4.5vw, 38px);
         font-weight: 650;
         letter-spacing: -0.02em;
       }
 
-      p {
-        margin: 12px 0 0;
+      .message {
+        min-height: 1.4em;
+        margin: 8px 0 0;
         color: #b7bac5;
-        font-size: clamp(16px, 2.7vw, 21px);
+        font-size: clamp(15px, 2.4vw, 19px);
       }
 
-      .loader {
-        width: 48px;
-        height: 48px;
-        margin: clamp(26px, 6vh, 42px) auto 0;
-        border: 4px solid rgb(229 190 63 / 22%);
-        border-top-color: #e5be3f;
+      .components {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin: 20px auto 0;
+        padding: 0;
+        list-style: none;
+        text-align: left;
+      }
+
+      .components:empty {
+        display: none;
+      }
+
+      .component {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        padding: 9px 12px;
+        border: 1px solid rgb(255 255 255 / 8%);
+        border-radius: 10px;
+        background: rgb(255 255 255 / 4%);
+        color: #9b9fab;
+        font-size: 15px;
+      }
+
+      .component-state {
+        width: 20px;
+        height: 20px;
+        margin-right: 9px;
+        display: grid;
+        flex: 0 0 auto;
+        place-items: center;
+        border: 2px solid #5e626e;
         border-radius: 50%;
+        color: #090b12;
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .component.starting {
+        color: #f7f7f9;
+        border-color: rgb(229 190 63 / 32%);
+      }
+
+      .component.starting .component-state {
+        border-color: rgb(229 190 63 / 25%);
+        border-top-color: #e5be3f;
         animation: spin 0.9s linear infinite;
+      }
+
+      .component.ready {
+        color: #f7f7f9;
+      }
+
+      .component.ready .component-state {
+        border-color: #e5be3f;
+        background: #e5be3f;
+      }
+
+      .component.skipped {
+        opacity: 0.58;
+      }
+
+      .component.error .component-state {
+        border-color: #e36565;
+        background: #e36565;
       }
 
       .elapsed {
@@ -80,8 +140,14 @@
       }
 
       @media (prefers-reduced-motion: reduce) {
-        .loader {
+        .component.starting .component-state {
           animation-duration: 1.8s;
+        }
+      }
+
+      @media (max-width: 580px) {
+        .components {
+          grid-template-columns: 1fr;
         }
       }
     </style>
@@ -90,8 +156,8 @@
     <main aria-live="polite">
       <img class="logo" src="openflightlogo.svg" alt="OpenFlight" />
       <h1>Starting OpenFlight</h1>
-      <p>Preparing software and connecting hardware…</p>
-      <div class="loader" role="progressbar" aria-label="OpenFlight is starting"></div>
+      <p class="message" id="message">Preparing software and connecting hardware…</p>
+      <ul class="components" id="components" aria-label="Startup progress"></ul>
       <div class="elapsed" id="elapsed"></div>
     </main>
 
@@ -100,6 +166,9 @@
         new URL(window.location.href).searchParams.get('target') || 'http://localhost:8080';
       const startedAt = Date.now();
       const elapsed = document.getElementById('elapsed');
+      const message = document.getElementById('message');
+      const components = document.getElementById('components');
+      const stateSymbols = { waiting: '', starting: '', ready: '✓', skipped: '–', error: '!' };
 
       function updateElapsed() {
         const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
@@ -116,8 +185,40 @@
         }
       }
 
+      function renderStatus(status) {
+        if (status.version !== 1 || !Array.isArray(status.components)) return;
+
+        if (typeof status.message === 'string') message.textContent = status.message;
+        const rows = status.components.map((component) => {
+          const state = Object.hasOwn(stateSymbols, component.state) ? component.state : 'waiting';
+          const row = document.createElement('li');
+          const indicator = document.createElement('span');
+          const label = document.createElement('span');
+
+          row.className = `component ${state}`;
+          indicator.className = 'component-state';
+          indicator.setAttribute('aria-hidden', 'true');
+          indicator.textContent = stateSymbols[state];
+          label.textContent = component.label;
+          row.append(indicator, label);
+          return row;
+        });
+        components.replaceChildren(...rows);
+      }
+
+      async function pollStatus() {
+        try {
+          const response = await fetch('status.json', { cache: 'no-store' });
+          if (response.ok) renderStatus(await response.json());
+        } catch {
+          // The generic preparation message remains until structured status is available.
+        }
+        window.setTimeout(pollStatus, 250);
+      }
+
       updateElapsed();
       window.setInterval(updateElapsed, 1000);
+      pollStatus();
       waitForOpenFlight();
     </script>
   </body>

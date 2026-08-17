@@ -1,4 +1,5 @@
 import json
+import sys
 
 import pytest
 
@@ -118,3 +119,37 @@ def test_reporter_can_mark_optional_component_skipped(tmp_path):
 
     payload = json.loads(status_path.read_text(encoding="utf-8"))
     assert payload["components"][0]["state"] == "skipped"
+
+
+def test_server_publishes_camera_kld7_and_ops_success(tmp_path, monkeypatch):
+    """The real sequential startup boundaries should publish their success events."""
+    from openflight import server
+
+    status_path = tmp_path / "status.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "openflight-server",
+            "--no-logging",
+            "--kld7",
+            "--kld7-mount-tilt",
+            "10",
+            "--startup-status-file",
+            str(status_path),
+        ],
+    )
+    monkeypatch.setattr(server, "init_session_logger", lambda **_kwargs: None)
+    monkeypatch.setattr(server, "init_camera", lambda **_kwargs: True)
+    monkeypatch.setattr(server, "start_camera_thread", lambda: None)
+    monkeypatch.setattr(server, "init_kld7", lambda **_kwargs: True)
+    monkeypatch.setattr(server, "start_monitor", lambda **_kwargs: None)
+    monkeypatch.setattr(server.socketio, "run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(server, "_cleanup_hardware_for_shutdown", lambda: None)
+
+    server.main()
+
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+    states = {component["id"]: component["state"] for component in payload["components"]}
+    assert payload["overall"] == "ready"
+    assert states == {"camera": "ready", "kld7_vertical": "ready", "ops": "ready"}
