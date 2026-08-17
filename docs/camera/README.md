@@ -88,6 +88,17 @@ sudo apt update
 sudo apt install -y rpicam-apps python3-picamera2 ffmpeg
 ```
 
+Install OpenFlight's optional camera image-processing dependency from the
+repository root:
+
+```bash
+uv sync --extra camera
+```
+
+OpenCV is intentionally not installed for radar-only OpenFlight systems.
+Picamera2 remains an operating-system package because it must match Raspberry
+Pi OS and its installed libcamera stack.
+
 Reboot after enabling or changing camera hardware:
 
 ```bash
@@ -321,6 +332,10 @@ with:
 ```bash
 uv run --no-project --python /usr/bin/python3 python <script>
 ```
+
+For OpenFlight itself, first confirm `python3-picamera2` is installed through
+`apt`, then run `uv sync --extra camera`. The camera runtime exposes Raspberry
+Pi OS's package directory to the OpenFlight environment automatically.
 
 ### Requested high-speed mode is missing
 
