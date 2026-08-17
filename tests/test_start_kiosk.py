@@ -252,6 +252,56 @@ def test_startup_applies_kld7_latency_setup_before_server_start():
     assert setup_idx < server_start_idx
 
 
+def test_startup_splash_flag_is_kiosk_only():
+    """The experimental splash must not leak into the server CLI."""
+    baseline = _dry_run()
+    enabled = _dry_run("--startup-splash")
+
+    assert enabled.stdout == baseline.stdout
+    assert "startup-splash" not in enabled.stdout
+    script = (Path(__file__).resolve().parents[1] / "scripts/start-kiosk.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "--startup-splash)" in script
+
+
+def test_startup_splash_launches_before_environment_sync():
+    """The feature only helps if Chromium starts before the slow preparation work."""
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
+
+    splash_idx = script.index("\nstart_startup_splash\n")
+    sync_idx = script.index("\nuv sync --quiet\n")
+
+    assert splash_idx < sync_idx
+    assert 'if [ "$STARTUP_SPLASH" != true ]; then' in script
+    assert 'launch_kiosk_browser "$KIOSK_URL"' in script
+
+
+def test_startup_splash_asset_has_branding_and_redirect_contract():
+    """The local page should communicate startup and hand off to the configured app."""
+    repo_root = Path(__file__).resolve().parents[1]
+    splash = (repo_root / "ui/public/startup-splash.html").read_text(encoding="utf-8")
+
+    assert "openflightlogo.svg" in splash
+    assert "Starting OpenFlight" in splash
+    assert "Preparing software and connecting hardware" in splash
+    assert "searchParams.get('target')" in splash
+    assert "window.location.replace(targetUrl)" in splash
+    assert "mode: 'no-cors'" in splash
+
+
+def test_start_kiosk_script_has_valid_shell_syntax():
+    repo_root = Path(__file__).resolve().parents[1]
+    subprocess.run(
+        ["bash", "-n", "scripts/start-kiosk.sh"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_shutdown_requests_server_cleanup_before_forcing_process_exit():
     """The wrapper must let the server drain IWR data and stop firmware first."""
     repo_root = Path(__file__).resolve().parents[1]

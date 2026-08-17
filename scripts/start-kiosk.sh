@@ -20,6 +20,12 @@ NO_CAMERA=true  # Camera disabled by default (K-LD7 radar handles angle)
 TRACKMAN_TEST=false
 SESSION_LOCATION=""
 DRY_RUN=false
+STARTUP_SPLASH=false
+STARTUP_SPLASH_PORT=""
+SPLASH_PID=""
+BROWSER_PID=""
+BROWSER_LAUNCHED=false
+SERVER_PID=""
 # Rolling buffer mode is the only mode (streaming mode removed)
 TRIGGER="sound"  # Default: hardware sound trigger (SEN-14262 → HOST_INT)
 SOUND_PRE_TRIGGER=""
@@ -122,6 +128,14 @@ while [[ $# -gt 0 ]]; do
         --dry-run)
             DRY_RUN=true
             shift
+            ;;
+        --startup-splash)
+            STARTUP_SPLASH=true
+            shift
+            ;;
+        --startup-splash-port)
+            STARTUP_SPLASH_PORT="$2"
+            shift 2
             ;;
         --session-location|-l)
             SESSION_LOCATION="$2"
@@ -407,6 +421,79 @@ error() {
     echo -e "${RED}[OpenFlight]${NC} $1"
 }
 
+launch_kiosk_browser() {
+    local url="$1"
+    local chrome_flags="--kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --password-store=basic"
+
+    log "Launching kiosk browser..."
+    if command -v chromium-browser &> /dev/null; then
+        DISPLAY=:0 chromium-browser $chrome_flags "$url" &
+    elif command -v chromium &> /dev/null; then
+        DISPLAY=:0 chromium $chrome_flags "$url" &
+    elif command -v google-chrome &> /dev/null; then
+        DISPLAY=:0 google-chrome $chrome_flags "$url" &
+    elif command -v firefox &> /dev/null; then
+        DISPLAY=:0 firefox --kiosk "$url" &
+    else
+        warn "No supported browser found. Open $url manually."
+        warn "Supported browsers: chromium-browser, chromium, google-chrome, firefox"
+        return 1
+    fi
+
+    BROWSER_PID=$!
+    BROWSER_LAUNCHED=true
+}
+
+stop_startup_splash_server() {
+    if [ -n "$SPLASH_PID" ] && kill -0 "$SPLASH_PID" 2>/dev/null; then
+        kill "$SPLASH_PID" 2>/dev/null || true
+        wait "$SPLASH_PID" 2>/dev/null || true
+    fi
+    SPLASH_PID=""
+}
+
+start_startup_splash() {
+    if [ "$STARTUP_SPLASH" != true ]; then
+        return 0
+    fi
+
+    local splash_port="${STARTUP_SPLASH_PORT:-$((PORT + 1))}"
+    local splash_root="$PROJECT_DIR/ui/public"
+    local splash_path="$splash_root/startup-splash.html"
+    local target_query="http%3A%2F%2F${HOST}%3A${PORT}"
+    local splash_url="http://127.0.0.1:${splash_port}/startup-splash.html?target=${target_query}"
+    local splash_log="${XDG_RUNTIME_DIR:-/tmp}/openflight-startup-splash-${PORT}.log"
+
+    if [ ! -f "$splash_path" ]; then
+        warn "Startup splash asset is missing; continuing with normal browser launch"
+        return 0
+    fi
+
+    if curl -fsS --max-time 1 "http://127.0.0.1:${splash_port}/" >/dev/null 2>&1; then
+        warn "Startup splash port $splash_port is already in use; continuing with normal browser launch"
+        return 0
+    fi
+
+    log "Starting startup splash on port $splash_port..."
+    uv run --no-project python -m http.server "$splash_port" \
+        --bind 127.0.0.1 --directory "$splash_root" >"$splash_log" 2>&1 &
+    SPLASH_PID=$!
+
+    for _ in {1..20}; do
+        if curl -fsS --max-time 1 "$splash_url" >/dev/null 2>&1; then
+            launch_kiosk_browser "$splash_url" || true
+            return 0
+        fi
+        if ! kill -0 "$SPLASH_PID" 2>/dev/null; then
+            break
+        fi
+        sleep 0.1
+    done
+
+    warn "Startup splash failed to start; continuing with normal browser launch"
+    stop_startup_splash_server
+}
+
 # Mount tilt has no safe default (a wrong value silently biases the launch
 # angle), so it must be provided whenever the K-LD7 radars are enabled. Set
 # KLD7_MOUNT_TILT or pass --kld7-mount-tilt; measure it with a phone
@@ -462,6 +549,7 @@ cleanup() {
     trap - SIGINT SIGTERM
     log "Shutting down..."
     shutdown_server
+    stop_startup_splash_server
     if [ -n "$BROWSER_PID" ]; then
         kill "$BROWSER_PID" 2>/dev/null || true
     fi
@@ -721,6 +809,9 @@ if ! command -v uv >/dev/null 2>&1; then
     error "uv not found. Install it: https://docs.astral.sh/uv/"
     exit 1
 fi
+
+start_startup_splash
+
 uv sync --quiet
 
 configure_kld7_latency
@@ -813,31 +904,13 @@ fi
 
 log "Server is running!"
 
-# Launch browser in kiosk mode
-log "Launching kiosk browser..."
-
 KIOSK_URL="http://$HOST:$PORT"
-
-# Try different browsers in order of preference
-# DISPLAY=:0 allows running on Pi's display when SSHed in
-# --password-store=basic disables the keyring unlock prompt
-CHROME_FLAGS="--kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --password-store=basic"
-if command -v chromium-browser &> /dev/null; then
-    DISPLAY=:0 chromium-browser $CHROME_FLAGS "$KIOSK_URL" &
-    BROWSER_PID=$!
-elif command -v chromium &> /dev/null; then
-    DISPLAY=:0 chromium $CHROME_FLAGS "$KIOSK_URL" &
-    BROWSER_PID=$!
-elif command -v google-chrome &> /dev/null; then
-    DISPLAY=:0 google-chrome $CHROME_FLAGS "$KIOSK_URL" &
-    BROWSER_PID=$!
-elif command -v firefox &> /dev/null; then
-    DISPLAY=:0 firefox --kiosk "$KIOSK_URL" &
-    BROWSER_PID=$!
+if [ "$STARTUP_SPLASH" != true ] || [ "$BROWSER_LAUNCHED" != true ]; then
+    launch_kiosk_browser "$KIOSK_URL" || true
 else
-    warn "No supported browser found. Open $KIOSK_URL manually."
-    warn "Supported browsers: chromium-browser, chromium, google-chrome, firefox"
+    log "Startup splash will continue to OpenFlight"
 fi
+stop_startup_splash_server
 
 log "OpenFlight is running! Press Ctrl+C to stop."
 

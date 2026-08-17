@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Starting OpenFlight</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #090b12;
+        color: #f7f7f9;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 50% 15%, rgb(229 190 63 / 16%), transparent 34%),
+          linear-gradient(145deg, #111522 0%, #07080d 72%);
+      }
+
+      main {
+        width: min(88vw, 620px);
+        padding: clamp(28px, 7vh, 56px);
+        text-align: center;
+      }
+
+      .logo {
+        width: min(68vw, 390px);
+        height: auto;
+        margin-bottom: clamp(18px, 5vh, 34px);
+        filter: drop-shadow(0 14px 32px rgb(0 0 0 / 38%));
+      }
+
+      h1 {
+        margin: 0;
+        color: #e5be3f;
+        font-size: clamp(28px, 5vw, 42px);
+        font-weight: 650;
+        letter-spacing: -0.02em;
+      }
+
+      p {
+        margin: 12px 0 0;
+        color: #b7bac5;
+        font-size: clamp(16px, 2.7vw, 21px);
+      }
+
+      .loader {
+        width: 48px;
+        height: 48px;
+        margin: clamp(26px, 6vh, 42px) auto 0;
+        border: 4px solid rgb(229 190 63 / 22%);
+        border-top-color: #e5be3f;
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+
+      .elapsed {
+        min-height: 1.4em;
+        margin-top: 16px;
+        color: #6f7380;
+        font-size: 14px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .loader {
+          animation-duration: 1.8s;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main aria-live="polite">
+      <img class="logo" src="openflightlogo.svg" alt="OpenFlight" />
+      <h1>Starting OpenFlight</h1>
+      <p>Preparing software and connecting hardware…</p>
+      <div class="loader" role="progressbar" aria-label="OpenFlight is starting"></div>
+      <div class="elapsed" id="elapsed"></div>
+    </main>
+
+    <script>
+      const targetUrl =
+        new URL(window.location.href).searchParams.get('target') || 'http://localhost:8080';
+      const startedAt = Date.now();
+      const elapsed = document.getElementById('elapsed');
+
+      function updateElapsed() {
+        const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+        elapsed.textContent = `Starting… ${seconds}s`;
+      }
+
+      async function waitForOpenFlight() {
+        try {
+          await fetch(targetUrl, { mode: 'no-cors', cache: 'no-store' });
+          window.location.replace(targetUrl);
+          return;
+        } catch {
+          window.setTimeout(waitForOpenFlight, 500);
+        }
+      }
+
+      updateElapsed();
+      window.setInterval(updateElapsed, 1000);
+      waitForOpenFlight();
+    </script>
+  </body>
+</html>
