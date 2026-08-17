@@ -44,6 +44,9 @@ def test_example_launcher_is_valid_and_enables_the_splash():
     launcher = EXAMPLE_LAUNCHER.read_text(encoding="utf-8")
     assert "flock -n" in launcher
     assert "--startup-splash" in launcher
+    assert "--calculated-spin" in launcher
+    assert "--ballistics" in launcher
+    assert "# --debug" in launcher
     assert 'scripts/start-kiosk.sh "${openflight_args[@]}"' in launcher
     assert "lxterminal" not in launcher
 

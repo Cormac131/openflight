@@ -81,7 +81,10 @@ Add only the options for hardware installed on that Pi. For example:
 
 ```bash
 openflight_args=(
+    # --debug  # Uncomment to enable debug logging.
     --startup-splash
+    --calculated-spin
+    --ballistics
     --iwr6843
     --iwr6843-port /dev/serial/by-id/REPLACE_WITH_TI_SERIAL_ID
     --iwr6843-tee-m 1.372

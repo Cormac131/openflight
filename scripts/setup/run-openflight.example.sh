@@ -25,9 +25,13 @@ if ! cd "$project_dir"; then
     exit 1
 fi
 
-# Keep the splash flag first. Add only the hardware enabled on this Pi.
+# Keep the splash flag first. Add optional hardware only when it is installed
+# and calibrated on this Pi.
 openflight_args=(
+    # --debug  # Uncomment to enable debug logging.
     --startup-splash
+    --calculated-spin
+    --ballistics
 
     # TI IWR6843 example; replace every geometry value with measurements from
     # this installation before uncommenting.
@@ -42,6 +46,8 @@ openflight_args=(
 
     # Optional Geekworm X1202/X1206 monitoring:
     # --battery geekworm
+
+    # Add additional flags here.
 )
 
 # Optional startup optimization after dependencies have already been synced:
