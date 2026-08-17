@@ -925,6 +925,11 @@ if ! curl -s "http://$HOST:$PORT" > /dev/null 2>&1; then
     exit 1
 fi
 
+if [ -n "$STARTUP_STATUS_FILE" ]; then
+    uv run --no-sync python -m openflight.startup_status "$STARTUP_STATUS_FILE" || \
+        warn "Could not mark startup splash ready; continuing to OpenFlight"
+fi
+
 log "Server is running!"
 
 KIOSK_URL="http://$HOST:$PORT"

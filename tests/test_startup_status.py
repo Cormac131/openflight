@@ -6,6 +6,7 @@ import pytest
 from openflight.startup_status import (
     StartupComponent,
     StartupStatusReporter,
+    complete_startup_status,
     configured_startup_components,
 )
 
@@ -91,6 +92,7 @@ def test_configured_components_hide_disabled_hardware():
         ("ti", "TI radar"),
         ("inclinometer", "Inclinometer"),
         ("ops", "OPS radar"),
+        ("server", "OpenFlight server"),
     ]
 
 
@@ -107,7 +109,23 @@ def test_mock_mode_replaces_ops_with_shot_simulator():
     )
 
     assert [(item.component_id, item.label) for item in components] == [
-        ("monitor", "Shot simulator")
+        ("monitor", "Shot simulator"),
+        ("server", "OpenFlight server"),
+    ]
+
+
+def test_shell_readiness_boundary_marks_server_and_overall_ready(tmp_path):
+    status_path = tmp_path / "status.json"
+    reporter = StartupStatusReporter(status_path, [StartupComponent("server", "OpenFlight server")])
+    reporter.start("server", "Starting OpenFlight server")
+
+    complete_startup_status(status_path)
+
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+    assert payload["overall"] == "ready"
+    assert payload["message"] == "OpenFlight is ready"
+    assert payload["components"] == [
+        {"id": "server", "label": "OpenFlight server", "state": "ready"}
     ]
 
 
@@ -151,5 +169,10 @@ def test_server_publishes_camera_kld7_and_ops_success(tmp_path, monkeypatch):
 
     payload = json.loads(status_path.read_text(encoding="utf-8"))
     states = {component["id"]: component["state"] for component in payload["components"]}
-    assert payload["overall"] == "ready"
-    assert states == {"camera": "ready", "kld7_vertical": "ready", "ops": "ready"}
+    assert payload["overall"] == "starting"
+    assert states == {
+        "camera": "ready",
+        "kld7_vertical": "ready",
+        "ops": "ready",
+        "server": "starting",
+    }

@@ -4356,7 +4356,7 @@ def main():
 
     print(f"Server starting at http://{args.host}:{args.web_port}")
     print()
-    startup_status.finish()
+    startup_status.start("server", "Starting OpenFlight server")
 
     try:
         # Note: Flask debug mode (reloader) is disabled to prevent duplicate processes

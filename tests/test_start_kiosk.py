@@ -328,6 +328,7 @@ def test_startup_splash_passes_status_file_to_server():
     assert 'STARTUP_STATUS_FILE=""' in script
     assert "--startup-status-file $STARTUP_STATUS_FILE" in script
     assert '"$STARTUP_STATUS_FILE"' in script
+    assert 'python -m openflight.startup_status "$STARTUP_STATUS_FILE"' in script
 
 
 def test_start_kiosk_script_has_valid_shell_syntax():

@@ -50,7 +50,47 @@ def configured_startup_components(
         components.append(StartupComponent("battery", "Power monitor"))
     if simulators:
         components.append(StartupComponent("simulators", "Simulator connections"))
+    components.append(StartupComponent("server", "OpenFlight server"))
     return components
+
+
+def _atomic_write_payload(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as temporary:
+            json.dump(payload, temporary, separators=(",", ":"))
+            temporary.write("\n")
+            temporary_path = Path(temporary.name)
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+
+def complete_startup_status(path: Path | str) -> None:
+    """Mark the server ready after the launcher confirms its HTTP endpoint responds."""
+    status_path = Path(path)
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+    if payload.get("version") != 1 or not isinstance(payload.get("components"), list):
+        raise ValueError("Unsupported startup status document")
+
+    server = next(
+        (component for component in payload["components"] if component.get("id") == "server"),
+        None,
+    )
+    if server is None:
+        raise ValueError("Startup status document has no server component")
+    server["state"] = "ready"
+    payload["overall"] = "ready"
+    payload["message"] = "OpenFlight is ready"
+    _atomic_write_payload(status_path, payload)
 
 
 class StartupStatusReporter:
@@ -104,26 +144,24 @@ class StartupStatusReporter:
     def _write(self) -> None:
         if self._path is None:
             return
-        self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "version": 1,
             "overall": self._overall,
             "message": self._message,
             "components": list(self._components.values()),
         }
-        temporary_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                dir=self._path.parent,
-                prefix=f".{self._path.name}.",
-                delete=False,
-            ) as temporary:
-                json.dump(payload, temporary, separators=(",", ":"))
-                temporary.write("\n")
-                temporary_path = Path(temporary.name)
-            os.replace(temporary_path, self._path)
-        finally:
-            if temporary_path is not None and temporary_path.exists():
-                temporary_path.unlink()
+        _atomic_write_payload(self._path, payload)
+
+
+def main() -> None:
+    """Complete a startup status document from the kiosk launch script."""
+    import argparse  # pylint: disable=import-outside-toplevel
+
+    parser = argparse.ArgumentParser(description="Mark an OpenFlight startup status ready")
+    parser.add_argument("status_file")
+    args = parser.parse_args()
+    complete_startup_status(args.status_file)
+
+
+if __name__ == "__main__":
+    main()
