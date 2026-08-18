@@ -1,4 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react';
+import { useCameraPointerDragScroll } from '../hooks/useCameraPointerDragScroll';
 import type { CameraCaptureSettings, CameraStatus } from '../stores/useCameraStore';
 import { verticalViewTargets } from '../utils/cameraView';
 import { getServerOrigin } from '../utils/serverOrigin';
@@ -255,6 +256,7 @@ export function CameraFeed({
   onToggleStream,
   onUpdateCaptureSettings,
 }: CameraFeedProps) {
+  useCameraPointerDragScroll();
   const [previewState, setPreviewState] = useState<PreviewState>('checking');
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);

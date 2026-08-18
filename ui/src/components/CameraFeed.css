@@ -1,5 +1,9 @@
 /* Camera Feed */
 .camera-feed {
+  -webkit-user-select: none;
+  user-select: none;
+}
+.camera-feed {
   display: flex;
   flex-direction: column;
   height: 100%;
