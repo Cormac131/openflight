@@ -105,7 +105,7 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric'): Dis
           (!fusedDeliveryAttempted ? shot.experimental_club_path_deg : null) ??
           null,
         1,
-        true,
+        true
       ),
       unit:
         shot.club_path_deg == null &&
@@ -130,7 +130,7 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric'): Dis
         shot.club_angle_deg ??
           shot.experimental_fused_attack_angle_deg ??
           (!fusedDeliveryAttempted ? shot.experimental_attack_angle_deg : null) ??
-          null,
+          null
       ),
       unit:
         shot.club_angle_deg == null &&
@@ -154,9 +154,7 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric'): Dis
       value: formatOptionalNumber(shot.launch_angle_horizontal, 1, true),
       unit: shot.launch_angle_horizontal === null ? undefined : 'deg',
       detail:
-        shot.launch_angle_horizontal_source === 'camera_assisted_experimental'
-          ? 'camera assisted (exp.)'
-          : undefined,
+        shot.launch_angle_horizontal_source === 'camera_assisted_experimental' ? 'camera assisted (exp.)' : undefined,
     },
   ];
 }

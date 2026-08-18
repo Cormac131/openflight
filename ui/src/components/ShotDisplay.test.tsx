@@ -61,9 +61,7 @@ describe('ShotDisplay', () => {
     });
 
     it('renders a negative club path without a spurious plus', () => {
-      const html = renderToString(
-        <ShotDisplay shot={{ ...withAngles, club_path_deg: -2.6 }} />,
-      );
+      const html = renderToString(<ShotDisplay shot={{ ...withAngles, club_path_deg: -2.6 }} />);
 
       expect(html).toContain('Club Path');
       expect(html).toContain('-2.6');
@@ -91,7 +89,7 @@ describe('ShotDisplay', () => {
             experimental_club_path_deg: 5.8,
             experimental_club_path_status: 'rejected_phase_span',
           }}
-        />,
+        />
       );
 
       expect(html).toContain('Club AoA');
@@ -113,7 +111,7 @@ describe('ShotDisplay', () => {
             experimental_attack_angle_status: 'rejected_no_club_track',
             experimental_club_path_status: 'rejected_no_club_track',
           }}
-        />,
+        />
       );
 
       expect(html).toContain('Club AoA');
@@ -135,7 +133,7 @@ describe('ShotDisplay', () => {
             experimental_fused_club_path_confidence: 'high',
             experimental_fused_status: 'approach_mixed',
           }}
-        />,
+        />
       );
 
       expect(html).toContain('camera fused (experimental)');
@@ -162,7 +160,7 @@ describe('ShotDisplay', () => {
             experimental_fused_attack_angle_confidence: 'withheld',
             experimental_fused_club_path_confidence: 'withheld',
           }}
-        />,
+        />
       );
 
       expect(html).not.toContain('-32.2');
@@ -179,7 +177,7 @@ describe('ShotDisplay', () => {
             launch_angle_horizontal: null,
             club_angle_deg: null,
           }}
-        />,
+        />
       );
 
       expect(html).not.toContain('Club Path');

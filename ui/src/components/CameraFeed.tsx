@@ -58,7 +58,7 @@ const CAMERA_PROFILES = BRIGHTNESS_STEPS.filter((step) => 'id' in step);
 
 function brightnessStepIndex(settings: CameraCaptureSettings): number {
   const exact = BRIGHTNESS_STEPS.findIndex(
-    (step) => step.exposureUs === settings.exposure_us && step.gain === settings.gain,
+    (step) => step.exposureUs === settings.exposure_us && step.gain === settings.gain
   );
   if (exact >= 0) return exact;
   const currentSignal = Math.max(1, (settings.exposure_us ?? 250) * (settings.gain ?? 4));
@@ -73,9 +73,7 @@ function brightnessStepIndex(settings: CameraCaptureSettings): number {
 function brightnessStepLabel(index: number): string {
   const named = BRIGHTNESS_STEPS.map((step, stepIndex) => ('label' in step ? { ...step, stepIndex } : null))
     .filter((step): step is NonNullable<typeof step> => step !== null)
-    .reduce((best, step) =>
-      Math.abs(step.stepIndex - index) < Math.abs(best.stepIndex - index) ? step : best,
-    );
+    .reduce((best, step) => (Math.abs(step.stepIndex - index) < Math.abs(best.stepIndex - index) ? step : best));
   const delta = index - named.stepIndex;
   return `${named.label}${delta === 0 ? '' : ` ${delta > 0 ? '+' : ''}${delta}`}`;
 }
@@ -115,11 +113,7 @@ function CaptureSettingsPanel({ settings, error, onUpdate }: CaptureSettingsPane
           <div className="camera-settings__view-controls">
             <button
               type="button"
-              disabled={
-                !settings.raw_crop_adjustable ||
-                viewUpOffset < verticalMin ||
-                viewUpOffset > verticalMax
-              }
+              disabled={!settings.raw_crop_adjustable || viewUpOffset < verticalMin || viewUpOffset > verticalMax}
               onClick={() => onUpdate({ vertical_offset_px: viewUpOffset })}
             >
               View up
@@ -127,11 +121,7 @@ function CaptureSettingsPanel({ settings, error, onUpdate }: CaptureSettingsPane
             <output>{`${verticalOffset > 0 ? '+' : ''}${verticalOffset} px`}</output>
             <button
               type="button"
-              disabled={
-                !settings.raw_crop_adjustable ||
-                viewDownOffset < verticalMin ||
-                viewDownOffset > verticalMax
-              }
+              disabled={!settings.raw_crop_adjustable || viewDownOffset < verticalMin || viewDownOffset > verticalMax}
               onClick={() => onUpdate({ vertical_offset_px: viewDownOffset })}
             >
               View down
@@ -176,7 +166,9 @@ function CaptureSettingsPanel({ settings, error, onUpdate }: CaptureSettingsPane
             </button>
             <output>
               <strong>{brightnessStepLabel(brightnessIndex)}</strong>
-              <span>{BRIGHTNESS_STEPS[brightnessIndex].exposureUs} µs · {BRIGHTNESS_STEPS[brightnessIndex].gain}×</span>
+              <span>
+                {BRIGHTNESS_STEPS[brightnessIndex].exposureUs} µs · {BRIGHTNESS_STEPS[brightnessIndex].gain}×
+              </span>
             </output>
             <button
               type="button"
@@ -198,7 +190,8 @@ function CaptureSettingsPanel({ settings, error, onUpdate }: CaptureSettingsPane
           </div>
           <div className="camera-settings__ball-guide-position">50% across · 78% down</div>
           <p className="camera-settings__note">
-            Adjust the physical setup or sensor view until the center of the ball sits on the +. This leaves room above the ball for club and launch tracking.
+            Adjust the physical setup or sensor view until the center of the ball sits on the +. This leaves room above
+            the ball for club and launch tracking.
           </p>
         </section>
 

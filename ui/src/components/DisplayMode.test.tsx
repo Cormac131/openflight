@@ -56,7 +56,7 @@ describe('DisplayMode', () => {
     };
 
     const html = renderToString(
-      <DisplayMode connected cameraStatus={cameraStatus} latestShot={rejectedShot} shots={[rejectedShot]} />,
+      <DisplayMode connected cameraStatus={cameraStatus} latestShot={rejectedShot} shots={[rejectedShot]} />
     );
 
     expect(html).toContain('experimental · rejected: no club track');

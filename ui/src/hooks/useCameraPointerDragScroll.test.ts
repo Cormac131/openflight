@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  CAMERA_DRAG_SCROLL_SELECTOR,
-  dragScrollTop,
-  shouldStartCameraPointerDrag,
-} from './useCameraPointerDragScroll';
+import { CAMERA_DRAG_SCROLL_SELECTOR, dragScrollTop, shouldStartCameraPointerDrag } from './useCameraPointerDragScroll';
 
 describe('camera pointer drag scrolling', () => {
   it('moves the settings panel opposite the pointer drag', () => {

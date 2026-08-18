@@ -308,13 +308,9 @@ export function ShotDisplay({
               }
               variant="secondary"
               confidence={
-                attackIsExperimental
-                  ? (shot.experimental_fused_attack_angle_confidence ?? 'experimental')
-                  : null
+                attackIsExperimental ? (shot.experimental_fused_attack_angle_confidence ?? 'experimental') : null
               }
-              confidenceLabel={
-                shot.experimental_fused_attack_angle_confidence ? 'experimental' : undefined
-              }
+              confidenceLabel={shot.experimental_fused_attack_angle_confidence ? 'experimental' : undefined}
             />
           )}
           {(clubPath !== null || clubPathIsExperimental) && (
@@ -333,13 +329,9 @@ export function ShotDisplay({
               }
               variant="secondary"
               confidence={
-                clubPathIsExperimental
-                  ? (shot.experimental_fused_club_path_confidence ?? 'experimental')
-                  : null
+                clubPathIsExperimental ? (shot.experimental_fused_club_path_confidence ?? 'experimental') : null
               }
-              confidenceLabel={
-                shot.experimental_fused_club_path_confidence ? 'experimental' : undefined
-              }
+              confidenceLabel={shot.experimental_fused_club_path_confidence ? 'experimental' : undefined}
             />
           )}
           {shot.spin_axis_deg !== null && (
