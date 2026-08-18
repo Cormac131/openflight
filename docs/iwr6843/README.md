@@ -28,12 +28,12 @@ Flash one configurable firmware image, then select one of two runtime profiles:
 
 | Component | Current file or value |
 |---|---|
-| Firmware | `firmware/releases/l3_dump_configurable_capture_20260816.bin` |
+| Firmware | `firmware/releases/l3_dump_configurable_capture_20260818.bin` |
 | Wide/default config | `config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` |
 | Dense/advanced config | `config/iwr6843_l3dump_dense_36f2ms_53bin_iq8.cfg` |
 | Reference array calibration | `config/iwr6843_calibration_reference.json` |
-| Firmware size | 345,860 bytes |
-| Firmware SHA-256 | `bd68db511b12f5a3236c0a88c70448dc2ff42a0525455329f33138e4a2aa88d5` |
+| Firmware size | 346,436 bytes |
+| Firmware SHA-256 | `a41773bfa22b47df31be3941fcb49d36ba2ee69a3151242996d33eb2590c09e8` |
 | Transmitters / receivers | 3 TX / 4 RX |
 | Loops | 12 per frame |
 | Movie duration | 72 ms |
@@ -69,7 +69,7 @@ the mirrored sign and collapse the vertical two8 channel.
 On the Pi, verify the checked-in image with:
 
 ```bash
-sha256sum firmware/releases/l3_dump_configurable_capture_20260816.bin
+sha256sum firmware/releases/l3_dump_configurable_capture_20260818.bin
 ```
 
 ## Before You Start
@@ -372,7 +372,7 @@ command will ask for another RESET after it opens the UART.
 
 ```bash
 uv run python firmware/flash_iwr6843.py \
-  firmware/releases/l3_dump_configurable_capture_20260816.bin \
+  firmware/releases/l3_dump_configurable_capture_20260818.bin \
   --port /dev/ttyUSB0
 ```
 
@@ -826,7 +826,7 @@ until power, ports, firmware, config, and geometry are verified.
 | Flash fails after `Erasing existing SFLASH` | Transfer was interrupted after the old image was erased | Leave the board in flash mode and rerun the complete flash; the ROM bootloader is still available |
 | Server starts only after unplugging TI | Board was not reset cleanly, a prior dump was still streaming, or USB/power wedged | Stop the old process, press RESET in functional mode, wait for the port, then reconnect USB only if needed |
 | `short IWR6843 dump` | Interrupted UART transfer, process shutdown during dump, or wrong firmware format | Let the active dump finish, restart, and confirm 732,812 bytes for wide or 549,764 bytes for dense |
-| Dense `stats` accumulates `hwa_missed` or `iq8_overrun` | The 2 ms processing budget is not being sustained | Stop using the capture for measurements, reset, and return to the wide profile while investigating |
+| Dense `stats` accumulates `hwa_missed`, `iq8_overrun`, or persistent nonzero `pack_state` | The 2 ms HWA rearm or asynchronous IQ8 packing budget is not being sustained | Stop using the capture for measurements, reset, and return to the wide profile while investigating |
 | Clap produces `rejected_by_ball_tracker` | A clap has no moving ball range track | Expected for trigger testing; confirm the dump completed, then hit a ball |
 | `rejected_track_quality` | A ball-like track was found but it was too thin, noisy, inconsistent, or net-contaminated | Verify geometry and aim; inspect the debug dump before relaxing acceptance gates |
 | `rejected_missing_tdm_sign` | The ball track was usable, but the TX timing evidence did not resolve a trustworthy correction sign | Keep the estimated UI angle, inspect the debug dump, and verify signal quality before changing gates |

@@ -173,7 +173,7 @@ def test_production_build_uses_configurable_compression_and_single_release():
     assert "--define=L3_IQ8_SPARSE_SCALE=1" in target
     assert "--define=LOOPS=" not in target
     assert "--define=RING_FRAMES=" not in target
-    assert "RELEASE_NAME ?= l3_dump_configurable_capture_20260816.bin" in source
+    assert "RELEASE_NAME ?= l3_dump_configurable_capture_20260818.bin" in source
     assert '"$(RELEASE_DIR)/$(RELEASE_NAME)"' in target
     assert source.count("\nbuild-native:") == 1
 

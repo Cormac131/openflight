@@ -19,20 +19,20 @@ then choose a profile by passing its `.cfg` to OpenFlight.
 
 | Component | Current value |
 |---|---|
-| Flash image | `firmware/releases/l3_dump_configurable_capture_20260816.bin` |
+| Flash image | `firmware/releases/l3_dump_configurable_capture_20260818.bin` |
 | Default config | `config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` |
 | Dense config | `config/iwr6843_l3dump_dense_36f2ms_53bin_iq8.cfg` |
 | Reference calibration | `config/iwr6843_calibration_reference.json` |
 | Native build | `make -C firmware build-native` |
 | Container build | `make -C firmware docker-build` |
-| Flash image size | 345,860 bytes |
-| Flash SHA-256 | `bd68db511b12f5a3236c0a88c70448dc2ff42a0525455329f33138e4a2aa88d5` |
+| Flash image size | 346,436 bytes |
+| Flash SHA-256 | `a41773bfa22b47df31be3941fcb49d36ba2ee69a3151242996d33eb2590c09e8` |
 | Dump format | Variable-width, timed complex range-FFT snapshots |
 
 Verify the checked-in image before flashing:
 
 ```bash
-sha256sum firmware/releases/l3_dump_configurable_capture_20260816.bin
+sha256sum firmware/releases/l3_dump_configurable_capture_20260818.bin
 ```
 
 ## Choose A Capture Profile
@@ -94,9 +94,11 @@ allowing the host to restore the physical sample amplitude before processing.
 
 The sparse IQ8 preview examines both I/Q components from every eighth complex
 sample to select a power-of-two frame scale, then performs one complete packing
-pass. This removes most of the old scale-search work while recording clipped
-components and missed HWA starts in `stats` rather than silently hiding cadence
-failures.
+pass. IQ8 conversion runs in a lower-priority worker against two ping-pong
+scratch buffers, so the HWA rearm task can preempt packing and prepare the next
+2 ms frame first. The `stats` response exposes `iq8_wait`, `iq8_overrun`, the two
+scratch `pack_state` values, clipped components, and missed HWA starts rather
+than silently hiding cadence failures.
 
 ## Firmware And Host Contract
 
@@ -182,7 +184,7 @@ Docker runs the same `build-native` recipe under `linux/amd64` and writes the
 release artifact back into the host worktree at:
 
 ```text
-firmware/releases/l3_dump_configurable_capture_20260816.bin
+firmware/releases/l3_dump_configurable_capture_20260818.bin
 ```
 
 Use the UTM workflow below only when Docker emulation is unavailable.
@@ -286,7 +288,7 @@ The target performs the application build, generates the flashable TI
 meta-image, and copies the production image into `firmware/releases/`:
 
 ```text
-firmware/releases/l3_dump_configurable_capture_20260816.bin
+firmware/releases/l3_dump_configurable_capture_20260818.bin
 ```
 
 Generated `.xer4f`, `.map`, and intermediate `.bin` files stay under
@@ -371,7 +373,7 @@ Leave the board in flash mode and run:
 
 ```bash
 uv run python firmware/flash_iwr6843.py \
-  firmware/releases/l3_dump_configurable_capture_20260816.bin \
+  firmware/releases/l3_dump_configurable_capture_20260818.bin \
   --port /dev/ttyUSB0
 ```
 
@@ -385,7 +387,7 @@ Expected completion:
 Erasing existing SFLASH...
 Opening firmware image...
 Writing firmware...
-Writing: 100% (345,860/345,860 bytes)
+Writing: 100% (346,436/346,436 bytes)
 Closing and verifying firmware...
 
 Flash verified by the IWR6843 ROM bootloader.
@@ -487,9 +489,9 @@ Also check:
 | Probe receives no ROM response | Wrong CP2105 interface or RESET timing | Use Enhanced/UARTA, type `READY`, then RESET only when prompted |
 | Flash fails after erase | Image transfer was interrupted | Leave flash mode enabled and rerun the full flash command; the ROM bootloader remains available |
 | No CLI after flashing | Board remains in flash mode or was not reset | Restore functional switches and press RESET |
-| Server rejects `captureFormat` or `phaseCaptureCfg` | Older firmware is flashed | Flash `l3_dump_configurable_capture_20260816.bin`, reset in functional mode, and retry |
+| Server rejects `captureFormat` or `phaseCaptureCfg` | Older firmware is flashed | Flash `l3_dump_configurable_capture_20260818.bin`, reset in functional mode, and retry |
 | Dump length differs from the selected profile | Wrong config, interrupted UART transfer, or stale process | Verify firmware SHA-256, use Enhanced/UARTA, stop serial owners, reset, and retry |
-| Dense profile reports `hwa_missed` or `iq8_overrun` | The requested cadence exceeds processing time | Return to the wide profile and inspect `stats`; do not trust descriptor cadence from a missed-frame run |
+| Dense profile reports `hwa_missed`, `iq8_overrun`, or persistent nonzero `pack_state` | The requested cadence exceeds HWA rearm or asynchronous IQ8 packing time | Return to the wide profile and inspect `stats`; do not trust descriptor cadence from a missed-frame run |
 | First run works but restart hangs | Retired v1 image or incomplete shutdown | Flash the current release image and reset in functional mode |
 
 ## Historical Context
