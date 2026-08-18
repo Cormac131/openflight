@@ -378,6 +378,7 @@ static volatile uint8_t  gHwaOutputSeen;
 static volatile uint8_t  gHwaRearmPending;
 static volatile uint8_t  gHwaRearmBusy;
 static volatile uint8_t  gHwaFreezeRequested;
+static volatile uint8_t  gHwaShutdownRequested;
 static volatile uint32_t gHwaFreezeRequestFrame;
 static volatile uint32_t gHwaFreezeTargetFrame;
 static volatile uint32_t gHwaFreezeRequests;
@@ -1051,6 +1052,21 @@ static void l3_hwaMaybeQueueRearm(void)
 
     key = Hwi_disable();
     if (gCaptureActive && gHwaDoneSeen && gHwaOutputSeen && !gHwaRearmPending) {
+        if (gHwaShutdownRequested) {
+#if defined(CONFIGURABLE_CAPTURE) && defined(L3_RING_IQ8)
+            if (l3_captureUsesIq8()) {
+                /* Let the task pack the completed scratch frame before
+                 * acknowledging the shutdown boundary. */
+                gHwaRearmPending = 1U;
+                queue = 1U;
+            } else
+#endif
+            {
+                gCaptureActive = 0U;
+                gHwaShutdownRequested = 0U;
+                freeze = 1U;
+            }
+        } else {
 #ifdef CONFIGURABLE_CAPTURE
 #ifdef L3_RING_IQ8
         if (l3_captureUsesIq8()) {
@@ -1102,6 +1118,7 @@ static void l3_hwaMaybeQueueRearm(void)
             queue = 1U;
         }
 #endif
+        }
     }
     Hwi_restore(key);
     if (freeze && gHwaFreezeSemaphore != NULL) {
@@ -1705,22 +1722,40 @@ static int32_t l3_freezeHwaAfterPostFrames(void)
     return 0;
 }
 
-/* Stop only after the current HWA output has completed. Tearing down HWA/EDMA
- * before MMWave_stop leaves the RF and rearm state machines out of sync, which
- * makes the next sensorStart hang until the board is power-cycled. */
-static int32_t l3_stopCaptureAtBoundary(void)
+/* Application shutdown is not a shot trigger. Cancel any pending post-frame
+ * plan and stop at the next completed HWA output instead of waiting for a
+ * full post-impact movie that may never arrive while the RF chain is idle. */
+static int32_t l3_freezeHwaForShutdown(void)
+{
+    uintptr_t key;
+
+    if (gHwaFreezeSemaphore == NULL) {
+        return -1;
+    }
+    while (Semaphore_pend(gHwaFreezeSemaphore, BIOS_NO_WAIT)) {
+        /* Discard a stale completion before issuing a new request. */
+    }
+    key = Hwi_disable();
+    gHwaFreezeRequested = 0U;
+    gHwaShutdownRequested = 1U;
+    Hwi_restore(key);
+
+    /* Handle a frame that completed just before the shutdown request. */
+    l3_hwaMaybeQueueRearm();
+    if (!Semaphore_pend(gHwaFreezeSemaphore, 250U)) {
+        key = Hwi_disable();
+        gHwaShutdownRequested = 0U;
+        gHwaFreezeTimeouts++;
+        Hwi_restore(key);
+        return -1;
+    }
+    return 0;
+}
+
+static int32_t l3_finishCaptureStop(void)
 {
     int32_t errCode;
 
-    if (!gCaptureActive) {
-        return 0;
-    }
-#ifdef HWA_CHAINED_SNAPSHOT_RING
-    if (l3_freezeHwaAfterPostFrames() != 0) {
-        CLI_write("Error: HWA post-trigger frame freeze timed out\n");
-        return -1;
-    }
-#endif
     if (MMWave_stop(gMMWaveHandle, &errCode) < 0) {
         CLI_write("Error: MMWave_stop failed (%d)\n", errCode);
         return -1;
@@ -1739,6 +1774,36 @@ static int32_t l3_stopCaptureAtBoundary(void)
 #endif
     gCaptureActive = 0U;
     return 0;
+}
+
+/* Shot dumps preserve the configured post-impact movie before stopping. */
+static int32_t l3_stopCaptureAtBoundary(void)
+{
+    if (!gCaptureActive) {
+        return 0;
+    }
+#ifdef HWA_CHAINED_SNAPSHOT_RING
+    if (l3_freezeHwaAfterPostFrames() != 0) {
+        CLI_write("Error: HWA post-trigger frame freeze timed out\n");
+        return -1;
+    }
+#endif
+    return l3_finishCaptureStop();
+}
+
+/* sensorStop only needs a clean hardware boundary, not post-impact frames. */
+static int32_t l3_stopCaptureForShutdown(void)
+{
+    if (!gCaptureActive) {
+        return 0;
+    }
+#ifdef HWA_CHAINED_SNAPSHOT_RING
+    if (l3_freezeHwaForShutdown() != 0) {
+        CLI_write("Error: HWA shutdown boundary timed out\n");
+        return -1;
+    }
+#endif
+    return l3_finishCaptureStop();
 }
 
 static int32_t l3_armHwaChain(void)
@@ -1847,6 +1912,27 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
                 continue;
             }
 
+#if !defined(L3_RING_IQ8)
+            key = Hwi_disable();
+            if (gHwaShutdownRequested) {
+                gCaptureActive = 0U;
+                gHwaShutdownRequested = 0U;
+                gHwaRearmPending = 0U;
+                freezeAfterPack = 1U;
+            }
+            Hwi_restore(key);
+#else
+            if (!l3_captureUsesIq8()) {
+                key = Hwi_disable();
+                if (gHwaShutdownRequested) {
+                    gCaptureActive = 0U;
+                    gHwaShutdownRequested = 0U;
+                    gHwaRearmPending = 0U;
+                    freezeAfterPack = 1U;
+                }
+                Hwi_restore(key);
+            }
+#endif
 #ifdef L3_RING_IQ8
             if (l3_captureUsesIq8()) {
                 key = Hwi_disable();
@@ -1856,7 +1942,12 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
                     pendingScratch = gIq8PendingScratch;
                     gIq8Pending = 0U;
                 }
-                if (gHwaFreezeRequested && gActiveFrameIsPost &&
+                if (gHwaShutdownRequested) {
+                    gCaptureActive = 0U;
+                    gHwaShutdownRequested = 0U;
+                    gHwaRearmPending = 0U;
+                    freezeAfterPack = 1U;
+                } else if (gHwaFreezeRequested && gActiveFrameIsPost &&
                     gActiveFrameShouldKeep &&
                     gPostFramesCaptured >= gCapturePlan.postFrames) {
                     gCaptureActive = 0U;
@@ -1869,10 +1960,13 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
                 }
                 Hwi_restore(key);
             }
+#endif
             if (freezeAfterPack) {
+#ifdef L3_RING_IQ8
                 if (hadPending) {
                     l3_packIq8CompletedFrame(pendingSlot, pendingScratch);
                 }
+#endif
                 if (gHwaFreezeSemaphore != NULL) {
                     Semaphore_post(gHwaFreezeSemaphore);
                 }
@@ -1881,7 +1975,6 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
                 Hwi_restore(key);
                 continue;
             }
-#endif
             errCode = l3_restartCompletedHwaFrame();
             if (errCode == 0) {
                 gHwaRearms++;
@@ -2922,6 +3015,7 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     gHwaRearmPending   = 0U;
     gHwaRearmBusy      = 0U;
     gHwaFreezeRequested = 0U;
+    gHwaShutdownRequested = 0U;
     gHwaFreezeRequestFrame = 0U;
     gHwaFreezeTargetFrame = 0U;
     gHwaFreezeRequests = 0U;
@@ -2970,7 +3064,7 @@ static int32_t l3_cli_sensorStop(int32_t argc, char *argv[])
 #ifdef LIVE_SNAPSHOT_RING
     gRawFrameReadyMask = 0U;
 #endif
-    return l3_stopCaptureAtBoundary();
+    return l3_stopCaptureForShutdown();
 }
 
 /* System init task: UART, mmWave control, EDMA + ADCBUF + frame-start ISR, CLI. */
