@@ -820,7 +820,18 @@ if ! command -v uv >/dev/null 2>&1; then
     error "uv not found. Install it: https://docs.astral.sh/uv/"
     exit 1
 fi
-uv sync --quiet
+UV_SYNC_ARGS=(--quiet)
+if [ "$CAMERA_CAPTURE" = true ]; then
+    # Picamera2 is supplied by Raspberry Pi OS and must remain visible inside
+    # the project environment; the camera extra supplies portable OpenCV.
+    if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c "import picamera2" >/dev/null 2>&1; then
+        uv venv --clear --system-site-packages --python /usr/bin/python3
+    fi
+    UV_SYNC_ARGS+=(--extra camera)
+    UV_PYTHON=/usr/bin/python3 uv sync "${UV_SYNC_ARGS[@]}"
+else
+    uv sync "${UV_SYNC_ARGS[@]}"
+fi
 
 configure_kld7_latency
 

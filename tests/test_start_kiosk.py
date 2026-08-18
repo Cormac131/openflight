@@ -302,6 +302,19 @@ def test_startup_applies_kld7_latency_setup_before_server_start():
     assert setup_idx < server_start_idx
 
 
+def test_camera_capture_syncs_optional_camera_dependencies():
+    """Camera startup must preserve OpenCV when uv repairs the environment."""
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
+
+    assert 'if [ "$CAMERA_CAPTURE" = true ]; then' in script
+    assert 'uv venv --clear --system-site-packages --python /usr/bin/python3' in script
+    assert 'UV_SYNC_ARGS+=(--extra camera)' in script
+    assert 'UV_PYTHON=/usr/bin/python3 uv sync "${UV_SYNC_ARGS[@]}"' in script
+
+
 def test_shutdown_requests_server_cleanup_before_forcing_process_exit():
     """The wrapper must let the server drain IWR data and stop firmware first."""
     repo_root = Path(__file__).resolve().parents[1]
