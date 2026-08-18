@@ -57,12 +57,6 @@
 #define L3_INIT_TASK_PRIORITY  2
 #define L3_CLI_TASK_PRIORITY   3
 #define L3_HWA_REARM_TASK_PRIORITY (L3_CLI_TASK_PRIORITY - 1U)
-#define L3_IQ8_PACK_TASK_PRIORITY 1U
-/* L3_IQ8_PACK_TASK_PRIORITY < L3_HWA_REARM_TASK_PRIORITY lets a frame
- * completion preempt IQ8 conversion and rearm HWA before the next trigger. */
-#if L3_IQ8_PACK_TASK_PRIORITY >= L3_HWA_REARM_TASK_PRIORITY
-#error "IQ8 packing must run below the HWA rearm task"
-#endif
 /* Keep the live snapshot worker below CLI. SYS/BIOS Task_yield does not allow
  * lower-priority tasks to run, and a priority-4 snapshot loop starved l3dump
  * so the host only saw the echoed 7-byte "l3dump\n" command. */
@@ -350,10 +344,6 @@ static uint8_t       gHwaFftConfigured;
 #ifdef HWA_CHAINED_SNAPSHOT_RING
 static Semaphore_Handle gHwaRearmSemaphore;
 static Semaphore_Handle gHwaFreezeSemaphore;
-#ifdef L3_RING_IQ8
-static Semaphore_Handle gIq8PackSemaphore;
-static Semaphore_Handle gIq8PackDoneSemaphore;
-#endif
 #endif
 #endif
 static uint8_t       gSensorOpened;
@@ -409,13 +399,7 @@ static volatile uint8_t  gIq8PendingScratch;
 static volatile uint8_t  gIq8ActiveScratch;
 static volatile uint32_t gIq8PackFrames;
 static volatile uint32_t gIq8PackOverruns;
-static volatile uint32_t gIq8ScratchWaits;
 static volatile uint32_t gIq8ClippedComponents;
-#define L3_IQ8_SCRATCH_FREE    0U
-#define L3_IQ8_SCRATCH_PENDING 1U
-#define L3_IQ8_SCRATCH_PACKING 2U
-static volatile uint8_t  gIq8ScratchState[2];
-static volatile uint32_t gIq8ScratchSlot[2];
 #endif
 #endif
 #endif
@@ -447,9 +431,6 @@ static void l3_snapshotTask(UArg arg0, UArg arg1);
 #endif
 #ifdef HWA_CHAINED_SNAPSHOT_RING
 static void l3_hwaRearmTask(UArg arg0, UArg arg1);
-#ifdef L3_RING_IQ8
-static void l3_iq8PackTask(UArg arg0, UArg arg1);
-#endif
 #endif
 
 #ifdef CONFIGURABLE_CAPTURE
@@ -1559,53 +1540,6 @@ static void l3_packIq8CompletedFrame(uint32_t slot, uint8_t scratch)
         (uint16_t)(L3_IQ8_HWA_SCALE << packShift);
     gIq8PackFrames++;
 }
-
-static int32_t l3_queueIq8Pack(uint32_t slot, uint8_t scratch)
-{
-    uintptr_t key;
-    int32_t queued = 0;
-
-    key = Hwi_disable();
-    if (gIq8ScratchState[scratch] == L3_IQ8_SCRATCH_FREE) {
-        gIq8ScratchSlot[scratch] = slot;
-        gIq8ScratchState[scratch] = L3_IQ8_SCRATCH_PENDING;
-        queued = 1;
-    } else {
-        gIq8PackOverruns++;
-    }
-    Hwi_restore(key);
-    if (queued && gIq8PackSemaphore != NULL) {
-        Semaphore_post(gIq8PackSemaphore);
-    }
-    return queued ? 0 : -1;
-}
-
-static void l3_waitForIq8Scratch(uint8_t scratch)
-{
-    uint8_t counted = 0U;
-
-    while (1) {
-        uintptr_t key = Hwi_disable();
-        uint8_t free =
-            gIq8ScratchState[scratch] == L3_IQ8_SCRATCH_FREE;
-        Hwi_restore(key);
-
-        if (free) {
-            return;
-        }
-        if (!counted) {
-            gIq8ScratchWaits++;
-            counted = 1U;
-        }
-        Semaphore_pend(gIq8PackDoneSemaphore, BIOS_WAIT_FOREVER);
-    }
-}
-
-static void l3_waitForAllIq8Packs(void)
-{
-    l3_waitForIq8Scratch(0U);
-    l3_waitForIq8Scratch(1U);
-}
 #endif
 
 static uint32_t l3_snapshotBinStartForNextFrame(void)
@@ -1964,7 +1898,6 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
 #ifdef L3_RING_IQ8
             uint8_t hadPending = 0U;
             uint8_t pendingScratch = 0U;
-            uint8_t nextScratch = 0U;
             uint32_t pendingSlot = 0U;
 #endif
             int32_t errCode;
@@ -2023,28 +1956,15 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
                     gHwaRearmPending = 0U;
                     freezeAfterPack = 1U;
                 } else {
-                    nextScratch = gIq8ActiveScratch ^ 1U;
+                    gIq8ActiveScratch ^= 1U;
                 }
                 Hwi_restore(key);
-
-                if (hadPending) {
-                    (void)l3_queueIq8Pack(pendingSlot, pendingScratch);
-                }
-                if (!freezeAfterPack) {
-                    /* Ping-pong gives the pack worker two frame periods. If it
-                     * is still using this scratch buffer, block without
-                     * spinning so the lower-priority worker can finish. */
-                    l3_waitForIq8Scratch(nextScratch);
-                    key = Hwi_disable();
-                    gIq8ActiveScratch = nextScratch;
-                    Hwi_restore(key);
-                }
             }
 #endif
             if (freezeAfterPack) {
 #ifdef L3_RING_IQ8
-                if (l3_captureUsesIq8()) {
-                    l3_waitForAllIq8Packs();
+                if (hadPending) {
+                    l3_packIq8CompletedFrame(pendingSlot, pendingScratch);
                 }
 #endif
                 if (gHwaFreezeSemaphore != NULL) {
@@ -2061,47 +1981,17 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
             } else {
                 gHwaRearmErrors++;
             }
+#ifdef L3_RING_IQ8
+            if (l3_captureUsesIq8() && hadPending) {
+                l3_packIq8CompletedFrame(pendingSlot, pendingScratch);
+            }
+#endif
             key = Hwi_disable();
             gHwaRearmBusy = 0U;
             Hwi_restore(key);
         }
     }
 }
-
-#ifdef L3_RING_IQ8
-static void l3_iq8PackTask(UArg arg0, UArg arg1)
-{
-    (void)arg0;
-    (void)arg1;
-    while (1) {
-        uint8_t scratch;
-        uint8_t found = 0U;
-        uint32_t slot = 0U;
-        uintptr_t key;
-
-        Semaphore_pend(gIq8PackSemaphore, BIOS_WAIT_FOREVER);
-        key = Hwi_disable();
-        for (scratch = 0U; scratch < 2U; scratch++) {
-            if (gIq8ScratchState[scratch] == L3_IQ8_SCRATCH_PENDING) {
-                gIq8ScratchState[scratch] = L3_IQ8_SCRATCH_PACKING;
-                slot = gIq8ScratchSlot[scratch];
-                found = 1U;
-                break;
-            }
-        }
-        Hwi_restore(key);
-
-        if (!found) {
-            continue;
-        }
-        l3_packIq8CompletedFrame(slot, scratch);
-        key = Hwi_disable();
-        gIq8ScratchState[scratch] = L3_IQ8_SCRATCH_FREE;
-        Hwi_restore(key);
-        Semaphore_post(gIq8PackDoneSemaphore);
-    }
-}
-#endif
 #endif
 
 /* Fill the 20-byte fixed dump header (dump_format.h / iwr6843_l3dump.HEADER). */
@@ -2588,16 +2478,12 @@ static int32_t l3_cli_stats(int32_t argc, char *argv[])
               (unsigned)gCapturePlan.loops,
               (unsigned)gCapturePlan.usedBytes,
               (unsigned)l3_captureCapacityBytes());
-    CLI_write("iq8_packed=%u iq8_overrun=%u iq8_wait=%u iq8_clipped=%u "
-              "pending=%u pack_state=%u/%u pre_seen=%u post_kept=%u "
-              "post_seen=%u stride=%u\n",
+    CLI_write("iq8_packed=%u iq8_overrun=%u iq8_clipped=%u pending=%u pre_seen=%u "
+              "post_kept=%u post_seen=%u stride=%u\n",
               (unsigned)gIq8PackFrames,
               (unsigned)gIq8PackOverruns,
-              (unsigned)gIq8ScratchWaits,
               (unsigned)gIq8ClippedComponents,
               (unsigned)gIq8Pending,
-              (unsigned)gIq8ScratchState[0],
-              (unsigned)gIq8ScratchState[1],
               (unsigned)gPreFramesCaptured,
               (unsigned)gPostFramesCaptured,
               (unsigned)gPostFramesObserved,
@@ -3150,12 +3036,7 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     gIq8ActiveScratch = 0U;
     gIq8PackFrames = 0U;
     gIq8PackOverruns = 0U;
-    gIq8ScratchWaits = 0U;
     gIq8ClippedComponents = 0U;
-    gIq8ScratchState[0] = L3_IQ8_SCRATCH_FREE;
-    gIq8ScratchState[1] = L3_IQ8_SCRATCH_FREE;
-    gIq8ScratchSlot[0] = 0U;
-    gIq8ScratchSlot[1] = 0U;
     memset((void *)gFrameIq8Scale, 0, sizeof(gFrameIq8Scale));
 #endif
 #endif
@@ -3326,30 +3207,10 @@ static void l3_initTask(UArg arg0, UArg arg1)
     if (gHwaFreezeSemaphore == NULL) {
         return;
     }
-#ifdef L3_RING_IQ8
-    semaphoreParams.mode = Semaphore_Mode_COUNTING;
-    gIq8PackSemaphore = Semaphore_create(0, &semaphoreParams, NULL);
-    if (gIq8PackSemaphore == NULL) {
-        return;
-    }
-    /* Only one rearm task can wait for scratch completion. Keep this binary
-     * so normal captures do not accumulate stale completion tokens. */
-    semaphoreParams.mode = Semaphore_Mode_BINARY;
-    gIq8PackDoneSemaphore = Semaphore_create(0, &semaphoreParams, NULL);
-    if (gIq8PackDoneSemaphore == NULL) {
-        return;
-    }
-#endif
     Task_Params_init(&taskParams);
     taskParams.priority = L3_HWA_REARM_TASK_PRIORITY;
     taskParams.stackSize = 2U * 1024U;
     Task_create(l3_hwaRearmTask, &taskParams, NULL);
-#ifdef L3_RING_IQ8
-    Task_Params_init(&taskParams);
-    taskParams.priority = L3_IQ8_PACK_TASK_PRIORITY;
-    taskParams.stackSize = 2U * 1024U;
-    Task_create(l3_iq8PackTask, &taskParams, NULL);
-#endif
 #endif
 
     /* CLI with the mmWave extension. */
