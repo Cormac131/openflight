@@ -97,17 +97,14 @@ def test_speed_bounds_are_the_callers_not_the_module_default():
 
     excluded = _track(raw, speed_bounds_ms=(30.0, 45.0), **shared)
     assert excluded is None, (
-        "22 m/s is below the supplied band's 30 m/s floor and must be "
-        f"rejected; got {excluded}"
+        f"22 m/s is below the supplied band's 30 m/s floor and must be rejected; got {excluded}"
     )
 
 
 def test_ball_behaviour_unchanged_by_defaults():
     """Defaults must reproduce today's behaviour exactly."""
     raw = _synth(2.6, 45.0)
-    explicit = _track(
-        raw, gates_m=tracking.BALL_GATES_M, speed_bounds_ms=tracking.SPEED_BOUNDS_MS
-    )
+    explicit = _track(raw, gates_m=tracking.BALL_GATES_M, speed_bounds_ms=tracking.SPEED_BOUNDS_MS)
     implicit = _track(raw)
     assert (explicit is None) == (implicit is None)
     if explicit is not None:

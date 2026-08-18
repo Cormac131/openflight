@@ -204,7 +204,9 @@ def main() -> int:
         from picamera2 import Picamera2  # pylint: disable=import-error,import-outside-toplevel
     except ImportError as exc:
         print(f"Missing Pi camera dependency: {exc}", file=sys.stderr)
-        print("Run on the Pi with: uv run --no-project --python /usr/bin/python3 ...", file=sys.stderr)
+        print(
+            "Run on the Pi with: uv run --no-project --python /usr/bin/python3 ...", file=sys.stderr
+        )
         return 2
 
     session_dir = args.outdir / datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -244,9 +246,7 @@ def main() -> int:
 
         for exposure_us in args.exposures_us:
             if exposure_us >= frame_duration_us:
-                print(
-                    f"Skipping {exposure_us}us exposure; frame period is {frame_duration_us}us"
-                )
+                print(f"Skipping {exposure_us}us exposure; frame period is {frame_duration_us}us")
                 continue
             for gain in args.gains:
                 camera.set_controls({"ExposureTime": exposure_us, "AnalogueGain": gain})
@@ -283,14 +283,14 @@ def main() -> int:
                 stack = np.stack(images)
                 result = summarize_images(stack, exposure_us, gain)
                 result["score"] = score_result(result, args)
-                result["metadata_exposure_us"] = int(
-                    metadata[-1].get("ExposureTime", exposure_us)
-                )
+                result["metadata_exposure_us"] = int(metadata[-1].get("ExposureTime", exposure_us))
                 result["metadata_gain"] = float(metadata[-1].get("AnalogueGain", gain))
                 results.append(result)
 
                 stem = f"exp{exposure_us:04d}_gain{gain:g}".replace(".", "p")
-                save_pgm(session_dir / f"{stem}_median.pgm", np.median(stack, axis=0).astype(np.uint8))
+                save_pgm(
+                    session_dir / f"{stem}_median.pgm", np.median(stack, axis=0).astype(np.uint8)
+                )
                 print(
                     f"exp={exposure_us:4d}us gain={gain:>4g} "
                     f"mean={result['mean']:6.1f} p99={result['p99']:6.1f} "

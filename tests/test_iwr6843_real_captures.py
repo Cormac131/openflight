@@ -54,8 +54,12 @@ def _estimate(capture):
         ball_height_m=0.040,
     )
     return estimate_lcmf_v1(
-        raw, cal, ball_speed_mph=capture["ball_speed_mph"], club="7i",
-        net_range_m=4.064, tx_order="normal",
+        raw,
+        cal,
+        ball_speed_mph=capture["ball_speed_mph"],
+        club="7i",
+        net_range_m=4.064,
+        tx_order="normal",
     )
 
 
@@ -154,9 +158,7 @@ def test_club_is_found_pre_impact_with_a_plausible_speed_projection():
 
     rows = [json.loads(line) for line in SESSION.read_text().splitlines() if line.strip()]
     club_speeds = {
-        r["shot_number"]: r.get("club_speed_mph")
-        for r in rows
-        if r.get("type") == "shot_detected"
+        r["shot_number"]: r.get("club_speed_mph") for r in rows if r.get("type") == "shot_detected"
     }
     cal = build_replay_calibration(
         "config/iwr6843_calibration_reference.json",
@@ -182,8 +184,7 @@ def test_club_is_found_pre_impact_with_a_plausible_speed_projection():
             tdm_sign=measurement.tdm_sign_used or 1,
         )
         assert result.range_rate_ms is not None, (
-            f"shot {shot_number}: no club track in the pre-impact window "
-            f"({result.status})"
+            f"shot {shot_number}: no club track in the pre-impact window ({result.status})"
         )
         projections.append(abs(result.range_rate_ms) / (club_speed_mph / 2.23694))
 

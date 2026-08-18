@@ -56,9 +56,7 @@ def tx2_phase_to_axis_angle_rad(
     projection = np.cos(orthogonal)
     if np.any(np.abs(projection) < 1e-6):
         raise ValueError("orthogonal angle is too close to 90 degrees")
-    axis_sine = phase / (
-        2.0 * np.pi * LEVM_TX2_AXIS_BASELINE_LAMBDA * projection
-    )
+    axis_sine = phase / (2.0 * np.pi * LEVM_TX2_AXIS_BASELINE_LAMBDA * projection)
     angle = np.arcsin(np.clip(axis_sine, -1.0, 1.0))
     return float(angle) if angle.ndim == 0 else angle
 
@@ -71,13 +69,7 @@ def tx2_axis_angle_to_phase_rad(
     """Inverse of :func:`tx2_phase_to_axis_angle_rad` for LEVM geometry."""
     angle = np.asarray(angle_rad, dtype=float)
     orthogonal = np.asarray(orthogonal_angle_rad, dtype=float)
-    phase = (
-        2.0
-        * np.pi
-        * LEVM_TX2_AXIS_BASELINE_LAMBDA
-        * np.sin(angle)
-        * np.cos(orthogonal)
-    )
+    phase = 2.0 * np.pi * LEVM_TX2_AXIS_BASELINE_LAMBDA * np.sin(angle) * np.cos(orthogonal)
     return float(phase) if phase.ndim == 0 else phase
 
 

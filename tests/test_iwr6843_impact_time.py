@@ -113,9 +113,7 @@ class TestImpactTime:
     def test_boundaries_of_the_window_are_inclusive(self):
         window_s = 25 * 4e-3
         assert impact_time_s(_track(impact_at_s=0.0), _geo(), TEE_M) == pytest.approx(0.0)
-        assert impact_time_s(_track(impact_at_s=window_s), _geo(), TEE_M) == pytest.approx(
-            window_s
-        )
+        assert impact_time_s(_track(impact_at_s=window_s), _geo(), TEE_M) == pytest.approx(window_s)
 
 
 class TestPreImpactWindow:

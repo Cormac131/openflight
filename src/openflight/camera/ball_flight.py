@@ -174,9 +174,7 @@ def _camera_ray(
     """Return the unit camera ray through a detected ball centroid."""
     focal_px, pitch, _radar_from_camera = model
     image_x = (
-        geometry.horizontal_pixel_sign
-        * (candidate.x - geometry.image_width_px / 2.0)
-        / focal_px
+        geometry.horizontal_pixel_sign * (candidate.x - geometry.image_width_px / 2.0) / focal_px
     )
     image_z = -(candidate.y - geometry.image_height_px / 2.0) / focal_px
     image_x, image_z = deroll_normalized_offsets(
@@ -275,8 +273,7 @@ def _rough_path_score(path: list[tuple[int, BallCandidate]]) -> float:
     median_x = statistics.median(step[0] for step in steps)
     median_y = statistics.median(step[1] for step in steps)
     dispersion = statistics.median(
-        math.hypot(step_x - median_x, step_y - median_y)
-        for step_x, step_y in steps
+        math.hypot(step_x - median_x, step_y - median_y) for step_x, step_y in steps
     )
     return 20.0 * len(path) - 2.0 * dispersion
 

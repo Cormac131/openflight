@@ -310,8 +310,8 @@ def test_camera_capture_syncs_optional_camera_dependencies():
     script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
 
     assert 'if [ "$CAMERA_CAPTURE" = true ]; then' in script
-    assert 'uv venv --clear --system-site-packages --python /usr/bin/python3' in script
-    assert 'UV_SYNC_ARGS+=(--extra camera)' in script
+    assert "uv venv --clear --system-site-packages --python /usr/bin/python3" in script
+    assert "UV_SYNC_ARGS+=(--extra camera)" in script
     assert 'UV_PYTHON=/usr/bin/python3 uv sync "${UV_SYNC_ARGS[@]}"' in script
 
 
