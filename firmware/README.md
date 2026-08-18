@@ -433,6 +433,7 @@ The runtime config controls the capture without rebuilding firmware:
 |---|---|
 | `frameCfg` | TDM loop count and RF frame period |
 | `captureFormat iq16\|iq8` | L3 sample representation |
+| `iq8Scale 16\|32\|64\|128\|256` | Fixed power-of-two IQ8 quantization scale used by EDMA packing |
 | `phaseCaptureCfg` | Pre/impact/ball window starts, widths, counts, and stride |
 
 Before increasing loops, frames, transmitters, or bins, calculate the ring:
@@ -448,8 +449,12 @@ fails the build if they overflow.
 
 The firmware rejects invalid windows, frame plans, and L3 budgets at
 `sensorStart`. The dense IQ8 profile also has only about 380 microseconds
-between its 1.62 ms RF burst and the next 2 ms frame, so memory fit alone does
-not prove the HWA and packer can sustain a new profile.
+between its 1.62 ms RF burst and the next 2 ms frame. Its EDMA packer moves the
+low byte of each HWA-scaled IQ16 component into the compact ring without a CPU
+copy loop. Cadence testing at scale `128` reduced the observed HWA miss rate
+from 28.2% with CPU packing to 0.0089% with EDMA packing, with no IQ8 overruns
+or EDMA errors. That proves scheduling headroom, but ball-signal fidelity and
+launch-angle accuracy must still be validated against the IQ16 baseline.
 
 ## Validation Before Flashing A New Variant
 
@@ -487,9 +492,9 @@ Also check:
 | Probe receives no ROM response | Wrong CP2105 interface or RESET timing | Use Enhanced/UARTA, type `READY`, then RESET only when prompted |
 | Flash fails after erase | Image transfer was interrupted | Leave flash mode enabled and rerun the full flash command; the ROM bootloader remains available |
 | No CLI after flashing | Board remains in flash mode or was not reset | Restore functional switches and press RESET |
-| Server rejects `captureFormat` or `phaseCaptureCfg` | Older firmware is flashed | Flash `l3_dump_configurable_capture_20260816.bin`, reset in functional mode, and retry |
+| Server rejects `captureFormat`, `iq8Scale`, or `phaseCaptureCfg` | Older firmware is flashed | Flash `l3_dump_configurable_capture_20260818.bin`, reset in functional mode, and retry |
 | Dump length differs from the selected profile | Wrong config, interrupted UART transfer, or stale process | Verify firmware SHA-256, use Enhanced/UARTA, stop serial owners, reset, and retry |
-| Dense profile reports `hwa_missed` or `iq8_overrun` | The requested cadence exceeds processing time | Return to the wide profile and inspect `stats`; do not trust descriptor cadence from a missed-frame run |
+| Dense profile reports sustained `hwa_missed`, `iq8_overrun`, or `iq8_edma_err` | The requested cadence exceeds processing time or EDMA packing failed | Return to the wide profile and inspect `stats`; do not trust descriptor cadence from a missed-frame run |
 | First run works but restart hangs | Retired v1 image or incomplete shutdown | Flash the current release image and reset in functional mode |
 
 ## Historical Context
