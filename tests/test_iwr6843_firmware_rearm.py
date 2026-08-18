@@ -107,11 +107,52 @@ def test_shutdown_waits_for_iq8_pack_without_rearming():
     )
 
     shutdown = rearm.index("gHwaShutdownRequested")
-    pack = rearm.index("l3_packIq8CompletedFrame", shutdown)
+    pack = rearm.index("l3_waitForAllIq8Packs", shutdown)
     completion = rearm.index("Semaphore_post(gHwaFreezeSemaphore)", shutdown)
     restart = rearm.index("l3_restartCompletedHwaFrame", shutdown)
 
     assert shutdown < pack < completion < restart
+
+
+def test_iq8_packing_runs_below_the_time_critical_rearm_task():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    init = _function_source(source, "static void l3_initTask", "int32_t main")
+    rearm = _function_source(
+        source,
+        "static void l3_hwaRearmTask",
+        "static void l3_iq8PackTask",
+    )
+    pack = _function_source(
+        source,
+        "static void l3_iq8PackTask",
+        "/* Fill the 20-byte fixed dump header",
+    )
+
+    assert "L3_IQ8_PACK_TASK_PRIORITY < L3_HWA_REARM_TASK_PRIORITY" in source
+    assert "Task_create(l3_iq8PackTask" in init
+    assert "gIq8PackSemaphore = Semaphore_create" in init
+    assert "semaphoreParams.mode = Semaphore_Mode_BINARY" in init
+    assert "gIq8PackDoneSemaphore = Semaphore_create" in init
+    assert "l3_packIq8CompletedFrame" not in rearm
+    assert "l3_packIq8CompletedFrame" in pack
+
+
+def test_iq8_scratch_is_not_reused_while_its_pack_job_is_active():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    rearm = _function_source(
+        source,
+        "static void l3_hwaRearmTask",
+        "static void l3_iq8PackTask",
+    )
+    wait = _function_source(
+        source,
+        "static void l3_waitForIq8Scratch",
+        "static void l3_waitForAllIq8Packs",
+    )
+
+    assert "l3_waitForIq8Scratch(nextScratch)" in rearm
+    assert "gIq8ScratchState[scratch]" in wait
+    assert "L3_IQ8_SCRATCH_FREE" in wait
 
 
 def test_dump_header_rotates_from_oldest_completed_frame():
