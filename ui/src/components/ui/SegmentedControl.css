@@ -1,0 +1,38 @@
+.segmented-control {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.segmented-control__button {
+  min-height: 44px;
+  padding: var(--space-xs) var(--space-md);
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.segmented-control__button:last-child {
+  border-right: none;
+}
+
+.segmented-control__button--active {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+@media (max-height: 500px) {
+  .segmented-control__button {
+    min-height: 38px;
+  }
+}
