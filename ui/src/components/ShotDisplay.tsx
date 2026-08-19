@@ -1,8 +1,10 @@
 import { useMemo } from 'react';
-import type { Shot, SpinQuality } from '../types/shot';
+import type { Shot } from '../types/shot';
 import { computeSwingSpeedStats, getSwingSpeedMph, isSwingSpeedShot } from '../types/shot';
 import { useUnitPreference } from '../state/useUnitPreference';
+import type { UnitSystem } from '../utils/units';
 import { formatCarryRange, formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
+import { MetricCard } from './ui/MetricCard';
 import './ShotDisplay.css';
 
 interface ShotDisplayProps {
@@ -13,113 +15,7 @@ interface ShotDisplayProps {
   activeTrainingImplement?: string;
 }
 
-const GAUGE_MIN = 0;
-const GAUGE_MAX = 200; // mph
-const GAUGE_START_ANGLE = -140;
-const GAUGE_END_ANGLE = 140;
-
-function SpeedGauge({
-  speedMph,
-  label,
-  displayValue,
-  unit,
-}: {
-  speedMph: number;
-  label: string;
-  displayValue: string;
-  unit: string;
-}) {
-  const percentage = Math.min(Math.max((speedMph - GAUGE_MIN) / (GAUGE_MAX - GAUGE_MIN), 0), 1);
-  const angle = GAUGE_START_ANGLE + (GAUGE_END_ANGLE - GAUGE_START_ANGLE) * percentage;
-
-  const radius = 85;
-  const cx = 100;
-  const cy = 100;
-
-  const polarToCartesian = (centerX: number, centerY: number, r: number, angleInDegrees: number) => {
-    const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
-    return {
-      x: centerX + r * Math.cos(angleInRadians),
-      y: centerY + r * Math.sin(angleInRadians),
-    };
-  };
-
-  const describeArc = (startAngle: number, endAngle: number) => {
-    const start = polarToCartesian(cx, cy, radius, endAngle);
-    const end = polarToCartesian(cx, cy, radius, startAngle);
-    const largeArcFlag = endAngle - startAngle <= 180 ? '0' : '1';
-    return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`;
-  };
-
-  const backgroundArc = describeArc(GAUGE_START_ANGLE, GAUGE_END_ANGLE);
-  const valueArc = describeArc(GAUGE_START_ANGLE, angle);
-
-  return (
-    <div className="speed-gauge">
-      <svg viewBox="0 0 200 140" className="speed-gauge__svg">
-        <path d={backgroundArc} fill="none" stroke="rgba(245, 240, 230, 0.1)" strokeWidth="12" strokeLinecap="round" />
-        <path
-          d={valueArc}
-          fill="none"
-          stroke="url(#goldGradient)"
-          strokeWidth="12"
-          strokeLinecap="round"
-          className="speed-gauge__value-arc"
-        />
-        <defs>
-          <linearGradient id="goldGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#A68B2A" />
-            <stop offset="100%" stopColor="#F4CF47" />
-          </linearGradient>
-        </defs>
-      </svg>
-      <div className="speed-gauge__content">
-        <span className="speed-gauge__value">{displayValue}</span>
-        <span className="speed-gauge__unit">{unit}</span>
-        <span className="speed-gauge__label">{label}</span>
-      </div>
-    </div>
-  );
-}
-
-function MetricCard({
-  value,
-  unit,
-  label,
-  subtext,
-  variant = 'default',
-  confidence,
-}: {
-  value: string | number;
-  unit?: string;
-  label: string;
-  subtext?: string;
-  variant?: 'default' | 'primary' | 'secondary' | 'spin';
-  confidence?: SpinQuality | null;
-}) {
-  return (
-    <div className={`metric-card metric-card--${variant}`}>
-      <div className="metric-card__value-row">
-        <span className="metric-card__value">{value}</span>
-        {unit && <span className="metric-card__unit">{unit}</span>}
-      </div>
-      <span className="metric-card__label">{label}</span>
-      {subtext && <span className="metric-card__subtext">{subtext}</span>}
-      {confidence && (
-        <div className={`metric-card__confidence metric-card__confidence--${confidence}`}>
-          {confidence !== 'experimental' && (
-            <span className="metric-card__confidence-dots">
-              <span className="dot filled" />
-              <span className={`dot ${confidence === 'medium' || confidence === 'high' ? 'filled' : ''}`} />
-              <span className={`dot ${confidence === 'high' ? 'filled' : ''}`} />
-            </span>
-          )}
-          <span className="metric-card__confidence-label">{confidence}</span>
-        </div>
-      )}
-    </div>
-  );
-}
+const MISSING = '—';
 
 function formatSpinRpm(rpm: number): string {
   return rpm.toLocaleString('en-US', { maximumFractionDigits: 0 });
@@ -132,6 +28,91 @@ function getLaunchAngleQuality(confidence: number | null): 'high' | 'medium' | '
   return 'low';
 }
 
+function formatSignedDegrees(value: number): string {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}`;
+}
+
+function ShotMetricGrid({ shot, unitSystem }: { shot: Shot | null; unitSystem: UnitSystem }) {
+  const hasLaunchAngle = shot?.launch_angle_vertical !== null && shot?.launch_angle_vertical !== undefined;
+  const hasHorizontalLaunch = shot?.launch_angle_horizontal !== null && shot?.launch_angle_horizontal !== undefined;
+  const hasClubSpeed = Boolean(shot?.club_speed_mph);
+  const hasAoA = shot?.club_angle_deg !== null && shot?.club_angle_deg !== undefined;
+  const hasPath = shot?.club_path_deg !== null && shot?.club_path_deg !== undefined;
+  const hasSpinAxis = shot?.spin_axis_deg !== null && shot?.spin_axis_deg !== undefined;
+  const hasSpin = shot?.spin_rpm !== null && shot?.spin_rpm !== undefined;
+
+  const displayCarry = shot ? (shot.carry_spin_adjusted ?? shot.estimated_carry_yards ?? 0) : null;
+  const carryRange = shot ? formatCarryRange(shot.carry_range, unitSystem) : null;
+  const carrySubtext = shot?.carry_spin_adjusted ? 'spin-adjusted' : carryRange || undefined;
+
+  return (
+    <div className="shot-display__metrics">
+      <MetricCard
+        variant="emphasis"
+        value={shot ? formatDistance(displayCarry ?? 0, unitSystem, 0) : MISSING}
+        unit={shot ? getDistanceUnit(unitSystem) : undefined}
+        label="Est. Carry"
+        subtext={shot ? carrySubtext : undefined}
+      />
+      <MetricCard
+        value={hasLaunchAngle ? shot.launch_angle_vertical!.toFixed(1) : MISSING}
+        unit={hasLaunchAngle ? '°' : undefined}
+        label="V. Launch"
+        subtext={hasLaunchAngle ? (shot.angle_source ?? undefined) : undefined}
+        confidence={hasLaunchAngle ? getLaunchAngleQuality(shot.launch_angle_confidence) : null}
+      />
+      <MetricCard
+        value={hasPath ? formatSignedDegrees(shot.club_path_deg!) : MISSING}
+        unit={hasPath ? '°' : undefined}
+        label="Club Path"
+        subtext={hasPath ? 'radar' : undefined}
+      />
+      <MetricCard
+        value={hasHorizontalLaunch ? formatSignedDegrees(shot.launch_angle_horizontal!) : MISSING}
+        unit={hasHorizontalLaunch ? '°' : undefined}
+        label="H. Launch"
+        subtext={hasHorizontalLaunch ? (shot.angle_source ?? undefined) : undefined}
+        confidence={hasHorizontalLaunch ? getLaunchAngleQuality(shot.launch_angle_confidence) : null}
+      />
+      <MetricCard
+        value={hasClubSpeed ? formatSpeed(shot.club_speed_mph!, unitSystem, 1) : MISSING}
+        unit={hasClubSpeed ? getSpeedUnit(unitSystem) : undefined}
+        label="Club Speed"
+        subtext={shot?.smash_factor ? `${shot.smash_factor.toFixed(2)} smash` : undefined}
+      />
+      <MetricCard
+        value={hasAoA ? shot.club_angle_deg!.toFixed(1) : MISSING}
+        unit={hasAoA ? '°' : undefined}
+        label="Club AoA"
+        subtext={hasAoA ? 'radar' : undefined}
+      />
+      <MetricCard
+        value={hasSpinAxis ? formatSignedDegrees(shot.spin_axis_deg!) : MISSING}
+        unit={hasSpinAxis ? '°' : undefined}
+        label="Spin Axis"
+        subtext={
+          hasSpinAxis
+            ? shot.spin_axis_deg! > 2
+              ? 'fade'
+              : shot.spin_axis_deg! < -2
+                ? 'draw'
+                : 'straight'
+            : undefined
+        }
+      />
+      <MetricCard
+        value={hasSpin ? formatSpinRpm(shot.spin_rpm!) : MISSING}
+        unit={hasSpin ? 'rpm' : undefined}
+        label="Spin Rate"
+        subtext={
+          hasSpin && shot.spin_source ? (shot.spin_source === 'calculated' ? 'estimated' : 'radar') : undefined
+        }
+        confidence={hasSpin ? shot.spin_quality : null}
+      />
+    </div>
+  );
+}
+
 export function ShotDisplay({
   shot,
   shots = [],
@@ -140,10 +121,6 @@ export function ShotDisplay({
   activeTrainingImplement,
 }: ShotDisplayProps) {
   const { unitSystem } = useUnitPreference();
-  const carryRange = useMemo(() => {
-    if (!shot) return null;
-    return formatCarryRange(shot.carry_range, unitSystem);
-  }, [shot, unitSystem]);
   const swingStats = useMemo(
     () =>
       computeSwingSpeedStats(shots, {
@@ -153,23 +130,16 @@ export function ShotDisplay({
     [shots, activePlayerName, activeTrainingImplement]
   );
 
-  const displayCarry = shot?.carry_spin_adjusted ?? shot?.estimated_carry_yards ?? 0;
-  const carrySubtext = shot?.carry_spin_adjusted ? 'spin-adjusted' : carryRange || undefined;
-
   if (!shot) {
     return (
       <div className="shot-display shot-display--empty">
-        <div className="shot-display__waiting">
-          <div className="golf-ball-indicator">
-            <div className="golf-ball-indicator__ball">
-              <div className="golf-ball-indicator__dimple" />
-              <div className="golf-ball-indicator__dimple" />
-              <div className="golf-ball-indicator__dimple" />
-            </div>
-            <div className="golf-ball-indicator__shadow" />
+        <div className="shot-display__layout">
+          <div className="shot-display__primary">
+            <MetricCard size="hero" variant="emphasis" value={MISSING} label="Ball Speed" />
+            <p className="shot-display__waiting-text">Ready</p>
+            <p className="shot-display__waiting-hint">Start a shot or swing speed session</p>
           </div>
-          <p className="shot-display__waiting-text">Ready</p>
-          <p className="shot-display__waiting-hint">Start a shot or swing speed session</p>
+          <ShotMetricGrid shot={null} unitSystem={unitSystem} />
         </div>
       </div>
     );
@@ -184,30 +154,29 @@ export function ShotDisplay({
       <div className={`shot-display shot-display--swing-speed ${animate ? 'shot-display--animate' : ''}`}>
         <div className="shot-display__layout">
           <div className="shot-display__primary">
-            <SpeedGauge
-              speedMph={lastSpeed}
-              label="Last Swing"
-              displayValue={formatSpeed(lastSpeed, unitSystem, 1)}
+            <MetricCard
+              size="hero"
+              variant="emphasis"
+              value={formatSpeed(lastSpeed, unitSystem, 1)}
               unit={getSpeedUnit(unitSystem)}
+              label="Last Swing"
             />
           </div>
-
           <div className="shot-display__metrics shot-display__metrics--swing-speed">
             <MetricCard
+              variant="emphasis"
               value={formatSpeed(swingStats.best_speed_mph, unitSystem, 1)}
               unit={getSpeedUnit(unitSystem)}
               label="Best"
               subtext="player + implement"
-              variant="primary"
             />
             <MetricCard
               value={formatSpeed(swingStats.avg_speed_mph, unitSystem, 1)}
               unit={getSpeedUnit(unitSystem)}
               label="Average"
               subtext={`${swingStats.count} swings`}
-              variant="secondary"
             />
-            <MetricCard value={swingStats.count} label="Swing Count" subtext={readingDetail} variant="secondary" />
+            <MetricCard value={swingStats.count} label="Swing Count" subtext={readingDetail} />
             <MetricCard
               value={shot.training_implement_label ?? shot.club}
               label="Implement"
@@ -216,7 +185,6 @@ export function ShotDisplay({
                   ? `${formatSpeed(shot.swing_speed_trigger_mph, unitSystem, 1)} ${getSpeedUnit(unitSystem)} trigger`
                   : 'selected'
               }
-              variant="secondary"
             />
           </div>
         </div>
@@ -224,92 +192,19 @@ export function ShotDisplay({
     );
   }
 
-  const hasSpin = shot.spin_rpm !== null;
-  const hasLaunchAngle = shot.launch_angle_vertical !== null;
-
   return (
     <div className={`shot-display ${animate ? 'shot-display--animate' : ''}`}>
       <div className="shot-display__layout">
         <div className="shot-display__primary">
-          <SpeedGauge
-            speedMph={shot.ball_speed_mph}
-            label="Ball Speed"
-            displayValue={formatSpeed(shot.ball_speed_mph, unitSystem, 1)}
+          <MetricCard
+            size="hero"
+            variant="emphasis"
+            value={formatSpeed(shot.ball_speed_mph, unitSystem, 1)}
             unit={getSpeedUnit(unitSystem)}
+            label="Ball Speed"
           />
         </div>
-
-        <div className="shot-display__metrics">
-          <MetricCard
-            value={formatDistance(displayCarry, unitSystem, 0)}
-            unit={getDistanceUnit(unitSystem)}
-            label="Est. Carry"
-            subtext={carrySubtext}
-            variant="primary"
-          />
-          <MetricCard
-            value={shot.club_speed_mph ? formatSpeed(shot.club_speed_mph, unitSystem, 1) : '—'}
-            unit={shot.club_speed_mph ? getSpeedUnit(unitSystem) : undefined}
-            label="Club Speed"
-            subtext={shot.smash_factor ? `${shot.smash_factor.toFixed(2)} smash` : undefined}
-            variant="secondary"
-          />
-          <MetricCard
-            value={hasLaunchAngle ? shot.launch_angle_vertical!.toFixed(1) : '—'}
-            unit={hasLaunchAngle ? '°' : undefined}
-            label="V. Launch"
-            subtext={hasLaunchAngle ? (shot.angle_source ?? undefined) : undefined}
-            variant="secondary"
-            confidence={hasLaunchAngle ? getLaunchAngleQuality(shot.launch_angle_confidence) : null}
-          />
-          {shot.club_angle_deg !== null && (
-            <MetricCard
-              value={shot.club_angle_deg.toFixed(1)}
-              unit="°"
-              label="Club AoA"
-              subtext="radar"
-              variant="secondary"
-            />
-          )}
-          {shot.club_path_deg !== null && (
-            <MetricCard
-              value={(shot.club_path_deg >= 0 ? '+' : '') + shot.club_path_deg.toFixed(1)}
-              unit="°"
-              label="Club Path"
-              subtext="radar"
-              variant="secondary"
-            />
-          )}
-          {shot.spin_axis_deg !== null && (
-            <MetricCard
-              value={(shot.spin_axis_deg >= 0 ? '+' : '') + shot.spin_axis_deg.toFixed(1)}
-              unit="°"
-              label="Spin Axis"
-              subtext={shot.spin_axis_deg > 2 ? 'fade' : shot.spin_axis_deg < -2 ? 'draw' : 'straight'}
-              variant="secondary"
-            />
-          )}
-          {shot.launch_angle_horizontal !== null && (
-            <MetricCard
-              value={(shot.launch_angle_horizontal >= 0 ? '+' : '') + shot.launch_angle_horizontal.toFixed(1)}
-              unit="°"
-              label="H. Launch"
-              subtext={shot.angle_source ?? undefined}
-              variant="secondary"
-              confidence={getLaunchAngleQuality(shot.launch_angle_confidence)}
-            />
-          )}
-          <MetricCard
-            value={hasSpin ? formatSpinRpm(shot.spin_rpm!) : '—'}
-            unit={hasSpin ? 'rpm' : undefined}
-            label="Spin Rate"
-            subtext={
-              hasSpin && shot.spin_source ? (shot.spin_source === 'calculated' ? 'estimated' : 'radar') : undefined
-            }
-            variant="spin"
-            confidence={hasSpin ? shot.spin_quality : null}
-          />
-        </div>
+        <ShotMetricGrid shot={shot} unitSystem={unitSystem} />
       </div>
     </div>
   );
