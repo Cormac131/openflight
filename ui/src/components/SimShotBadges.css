@@ -73,7 +73,7 @@
 
 .sim-shot-badges__badge--estimated {
   background: rgba(251, 191, 36, 0.18);
-  color: #fbbf24;
+  color: var(--color-warning);
 }
 
 .sim-shot-badges__summary {
