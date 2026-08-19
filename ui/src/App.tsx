@@ -225,7 +225,9 @@ function AppContent() {
             userSelect: 'none',
           }}
         >
-          {isLaunchDaddyMode ? <LaunchDaddyBrand /> : <Logo size="small" variant={logoVariant} />}
+          <span className="header__logo">
+            {isLaunchDaddyMode ? <LaunchDaddyBrand /> : <Logo size="small" variant={logoVariant} />}
+          </span>
         </div>
         <div className="header__controls">
           <SegmentedControl

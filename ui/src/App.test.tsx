@@ -17,6 +17,14 @@ describe('App chrome', () => {
     expect(html).not.toContain('TEST | DR');
   });
 
+  it('wraps the logo so accent color inherits onto currentColor', () => {
+    const html = renderToString(<App />);
+
+    expect(html).toContain('header__secret-tap');
+    expect(html).toContain('header__logo');
+    expect(html).toContain('min-height:44px');
+  });
+
   it('marks the Live tab pressed', () => {
     const html = renderToString(<App />);
     const liveButton = html.match(/<button[^>]*nav__button[^>]*>[\s\S]*?<span>Live<\/span>[\s\S]*?<\/button>/)?.[0];

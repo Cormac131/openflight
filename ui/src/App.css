@@ -25,6 +25,8 @@
 }
 
 .header__logo {
+  display: flex;
+  align-items: center;
   height: 40px;
   width: auto;
   color: var(--color-accent);
