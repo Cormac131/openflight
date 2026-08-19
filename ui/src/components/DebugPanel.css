@@ -160,21 +160,21 @@
 }
 
 .system-status__badge--rolling-buffer {
-  background: rgba(139, 92, 246, 0.15);
-  color: #a78bfa;
-  border: 1px solid rgba(139, 92, 246, 0.3);
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  color: var(--color-accent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
 }
 
 .system-status__badge--streaming {
-  background: rgba(59, 130, 246, 0.15);
-  color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: color-mix(in srgb, var(--color-info) 15%, transparent);
+  color: var(--color-info);
+  border: 1px solid color-mix(in srgb, var(--color-info) 30%, transparent);
 }
 
 .system-status__badge--mock {
-  background: rgba(245, 158, 11, 0.15);
-  color: #fbbf24;
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  background: color-mix(in srgb, var(--color-warning) 15%, transparent);
+  color: var(--color-warning);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
 }
 
 .system-status__counter {
@@ -405,17 +405,17 @@
 
 .trigger-row__iwr--accepted,
 .last-trigger__iwr--accepted {
-  color: #4ade80;
+  color: var(--color-success);
 }
 
 .trigger-row__iwr--rejected,
 .last-trigger__iwr--rejected {
-  color: #facc15;
+  color: var(--color-warning);
 }
 
 .trigger-row__iwr--error,
 .last-trigger__iwr--error {
-  color: #fb7185;
+  color: var(--color-danger);
 }
 
 .last-trigger__iwr {
