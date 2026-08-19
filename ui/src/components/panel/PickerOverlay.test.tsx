@@ -17,6 +17,7 @@ describe('PickerOverlay', () => {
 
     expect(html).toContain('aria-label="Groups"');
     expect(html).toMatch(/picker-overlay__option--selected[^>]*aria-pressed="true"[^>]*>DR</);
+    expect(html).toContain('--picker-rows:3');
     expect(html).not.toContain('>7i<');
     expect(html).toContain('>3W<');
   });

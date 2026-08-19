@@ -27,6 +27,7 @@ import {
   trainingImplementSections,
   type PanelView,
 } from './components/panel';
+import { shouldEnableLiveBallWarning } from './components/panel/liveMetrics';
 import { ALL_CLUBS } from './data/clubs';
 import { getTrainingImplementLabel } from './data/trainingImplements';
 import { unlockAudioCue } from './utils/audioCue';
@@ -244,8 +245,11 @@ function AppContent() {
                 clubLabel={activeImplementLabel}
                 activeTrainingImplement={isSwingSpeedMode ? selectedTrainingImplement : undefined}
                 onStatusTap={handleSecretTap}
-                heroMetricId={heroMetricId}
-                onPromoteMetric={setHeroMetricId}
+                selectedMetricId={heroMetricId}
+                onSelectMetric={setHeroMetricId}
+                isNewShot={isNewShot}
+                ballDetectionEnabled={shouldEnableLiveBallWarning(currentView, cameraStatus)}
+                ballDetected={cameraStatus.ball_detected}
               />
             </ShotProcessingArea>
             {debugMode && <SimShotBadges latestSimShots={latestSimShots} />}

@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { SegmentedControl } from '../ui/SegmentedControl';
-import { initialPickerSection, type PickerSection } from './pickerSections';
+import { initialPickerSection, pickerGridRows, type PickerSection } from './pickerSections';
 
 interface PickerOverlayProps {
   title: string;
@@ -14,13 +14,14 @@ interface PickerOverlayProps {
 
 /**
  * Full-screen picker from design doc 6a (`clubsOpen6`): a titled sheet of
- * hairline-bordered option buttons grouped by tab. Every family uses the same
- * 4-across tile size so woods/hybrids match irons.
+ * hairline-bordered option buttons grouped by tab. Four columns span the
+ * overlay; row height is capped so irons stay on screen.
  */
 export function PickerOverlay({ title, selectedId, sections, onSelect, onClose, wide = false }: PickerOverlayProps) {
   const [sectionName, setSectionName] = useState(() => initialPickerSection(sections, selectedId));
   const activeSection = sections.find((section) => section.name === sectionName) ?? sections[0];
   const options = activeSection?.options ?? [];
+  const rows = pickerGridRows(sections);
 
   return (
     <div
@@ -46,7 +47,7 @@ export function PickerOverlay({ title, selectedId, sections, onSelect, onClose, 
         </div>
       ) : null}
       <div className="picker-overlay__body">
-        <div className="picker-overlay__grid">
+        <div className="picker-overlay__grid" style={{ '--picker-rows': String(rows) } as CSSProperties}>
           {options.map((option) => (
             <button
               key={option.id}

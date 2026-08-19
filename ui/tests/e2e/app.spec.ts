@@ -64,12 +64,14 @@ test('renders live shot data and mock-mode simulate flow', async ({ page }) => {
   await page.getByRole('button', { name: 'Simulate shot' }).click();
 
   await expect(page.getByText('Ready', { exact: true })).toBeHidden();
-  await expect(page.locator('.live-panel__hero-value')).not.toHaveText('—');
-  // 6a always shows nine metrics: one hero plus eight tiles.
-  await expect(page.locator('.live-panel__grid .metric-card')).toHaveCount(8);
+  await expect(page.locator('.live-panel__spotlight-value')).not.toHaveText('—');
+  await expect(page.locator('.live-panel__grid .metric-card')).toHaveCount(10);
+
+  await page.getByRole('button', { name: 'Hide shot overlay' }).click();
+  await expect(page.locator('.live-panel__spotlight')).toHaveCount(0);
 });
 
-test('promotes a tapped metric into the hero slot and remembers it', async ({ page }) => {
+test('pins a tapped metric top-left and remembers it', async ({ page }) => {
   await withControlSocket(async (socket) => {
     await simulateShot(socket);
   });
@@ -77,18 +79,20 @@ test('promotes a tapped metric into the hero slot and remembers it', async ({ pa
   await gotoApp(page);
   await dismissPicker(page);
 
-  await expect(page.locator('.live-panel__hero-label')).toContainText('Ball speed');
+  await expect(page.locator('.metric-card--selected')).toContainText('Ball speed');
+  await expect(page.locator('.live-panel__spotlight')).toHaveCount(0);
 
   await page.locator('.metric-card--interactive').filter({ hasText: 'Club speed' }).click();
 
-  await expect(page.locator('.live-panel__hero-label')).toContainText('Club speed');
-  // Ball speed is demoted to a tile rather than dropped.
-  await expect(page.locator('.live-panel__grid .metric-card')).toHaveCount(8);
+  await expect(page.locator('.metric-card--selected')).toContainText('Club speed');
+  await expect(page.locator('.live-panel__grid .metric-card').first()).toContainText('Club speed');
+  await expect(page.locator('.live-panel__grid .metric-card')).toHaveCount(10);
   await expect(page.locator('.live-panel__grid')).toContainText('Ball speed');
 
   await page.reload();
   await dismissPicker(page);
-  await expect(page.locator('.live-panel__hero-label')).toContainText('Club speed');
+  await expect(page.locator('.metric-card--selected')).toContainText('Club speed');
+  await expect(page.locator('.live-panel__grid .metric-card').first()).toContainText('Club speed');
 });
 
 test('switches between primary navigation views', async ({ page }) => {
@@ -166,18 +170,18 @@ test('unit toggle in the menu sheet updates displayed units', async ({ page }) =
   await gotoApp(page);
   await dismissPicker(page);
 
-  await expect(page.locator('.live-panel__hero-unit')).toHaveText('mph');
+  await expect(page.locator('.metric-card--selected .metric-card__unit')).toHaveText('mph');
   await expect(page.locator('.metric-card').filter({ hasText: 'Carry' }).locator('.metric-card__unit')).toHaveText(
     'yds'
   );
 
-  const imperialSpeed = await page.locator('.live-panel__hero-value').textContent();
+  const imperialSpeed = await page.locator('.metric-card--selected .metric-card__value').textContent();
 
   await openMenu(page);
   await page.getByRole('button', { name: 'KMH / M' }).click();
   await page.getByRole('button', { name: 'Close menu' }).click();
 
-  await expect(page.locator('.live-panel__hero-unit')).toHaveText('km/h');
+  await expect(page.locator('.metric-card--selected .metric-card__unit')).toHaveText('km/h');
   await expect(page.locator('.metric-card').filter({ hasText: 'Carry' }).locator('.metric-card__unit')).toHaveText('m');
-  await expect(page.locator('.live-panel__hero-value')).not.toHaveText(imperialSpeed ?? '');
+  await expect(page.locator('.metric-card--selected .metric-card__value')).not.toHaveText(imperialSpeed ?? '');
 });

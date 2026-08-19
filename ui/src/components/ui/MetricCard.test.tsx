@@ -55,4 +55,11 @@ describe('MetricCard', () => {
     expect(empty).toContain('metric-card__meta');
     expect(dense).toContain('metric-card__meta');
   });
+
+  it('sets subtext in the same caption type as spin accuracy', () => {
+    const html = renderToString(
+      <MetricCard value="+3.4" unit="°" label="Spin axis" labelPosition="above" subtext="Fade" />
+    );
+    expect(html).toMatch(/metric-card__subtext metric-card__confidence-label[^>]*>Fade</);
+  });
 });

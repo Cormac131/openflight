@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clubSections, initialPickerSection, trainingImplementSections } from './pickerSections';
+import { clubSections, initialPickerSection, pickerGridRows, trainingImplementSections } from './pickerSections';
 
 describe('initialPickerSection', () => {
   const clubs = clubSections();
@@ -19,5 +19,15 @@ describe('initialPickerSection', () => {
   it('opens the matching training group', () => {
     const groups = trainingImplementSections();
     expect(initialPickerSection(groups, 'stack-160g')).toBe('TheStack');
+  });
+});
+
+describe('pickerGridRows', () => {
+  it('uses three rows for the iron set so woods tiles match that cube size', () => {
+    expect(pickerGridRows(clubSections())).toBe(3);
+  });
+
+  it('uses the densest training group so every tab fits', () => {
+    expect(pickerGridRows(trainingImplementSections())).toBe(4);
   });
 });

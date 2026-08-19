@@ -66,7 +66,7 @@ export function MetricCard({
   );
   const meta = (
     <>
-      {subtext ? <span className="metric-card__subtext">{subtext}</span> : null}
+      {subtext ? <span className="metric-card__subtext metric-card__confidence-label">{subtext}</span> : null}
       {confidence ? (
         <div className={`metric-card__confidence metric-card__confidence--${confidence}`}>
           {confidence !== 'experimental' ? (

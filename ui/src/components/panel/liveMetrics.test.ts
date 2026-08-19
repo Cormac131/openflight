@@ -4,7 +4,8 @@ import {
   buildLiveMetrics,
   LIVE_METRIC_COUNT,
   NO_VALUE,
-  splitHeroMetric,
+  pinSelectedMetric,
+  shouldEnableLiveBallWarning,
   SWING_METRIC_COUNT,
   type LiveMetric,
 } from './liveMetrics';
@@ -50,14 +51,27 @@ function byId(metrics: LiveMetric[], id: string): LiveMetric {
 }
 
 describe('buildLiveMetrics', () => {
-  it('returns a fixed nine metrics for a ball-strike shot', () => {
+  it('returns a fixed ten metrics for a ball-strike shot, including club AoA', () => {
     const metrics = buildLiveMetrics(makeShot(), 'imperial', emptySwingStats);
 
     expect(metrics).toHaveLength(LIVE_METRIC_COUNT);
     expect(new Set(metrics.map((m) => m.id)).size).toBe(LIVE_METRIC_COUNT);
+    expect(metrics.map((m) => m.id)).toEqual([
+      'ball_speed',
+      'carry',
+      'club_speed',
+      'smash',
+      'launch_v',
+      'launch_h',
+      'spin',
+      'spin_axis',
+      'club_path',
+      'club_aoa',
+    ]);
+    expect(byId(metrics, 'club_aoa')).toMatchObject({ value: '+2.1', unit: '°', label: 'Club AoA' });
   });
 
-  it('keeps the same nine metrics in the same order when values are missing', () => {
+  it('keeps the same ten metrics in the same order when values are missing', () => {
     const full = buildLiveMetrics(makeShot(), 'imperial', emptySwingStats);
     const sparse = buildLiveMetrics(
       makeShot({
@@ -99,7 +113,7 @@ describe('buildLiveMetrics', () => {
   it('prefers the spin-adjusted carry and marks model carry as estimated', () => {
     const adjusted = byId(buildLiveMetrics(makeShot(), 'imperial', emptySwingStats), 'carry');
     expect(adjusted.value).toBe('214');
-    expect(adjusted.subtext).toBe('spin-adjusted');
+    expect(adjusted.subtext).toBe('Spin-adjusted');
     expect(adjusted.estimated).toBeUndefined();
 
     const estimated = byId(
@@ -116,13 +130,17 @@ describe('buildLiveMetrics', () => {
 
     expect(byId(metrics, 'launch_h').value).toBe('-1.2');
     expect(byId(metrics, 'club_path').value).toBe('-0.6');
-    expect(byId(metrics, 'spin_axis')).toMatchObject({ value: '+3.4', subtext: 'fade' });
+    expect(byId(metrics, 'club_aoa').value).toBe('+2.1');
+
+    const negativeAoa = buildLiveMetrics(makeShot({ club_angle_deg: -3.2 }), 'imperial', emptySwingStats);
+    expect(byId(negativeAoa, 'club_aoa').value).toBe('-3.2');
+    expect(byId(metrics, 'spin_axis')).toMatchObject({ value: '+3.4', subtext: 'Fade' });
 
     const draw = buildLiveMetrics(makeShot({ spin_axis_deg: -4 }), 'imperial', emptySwingStats);
-    expect(byId(draw, 'spin_axis').subtext).toBe('draw');
+    expect(byId(draw, 'spin_axis').subtext).toBe('Draw');
 
     const straight = buildLiveMetrics(makeShot({ spin_axis_deg: 0.5 }), 'imperial', emptySwingStats);
-    expect(byId(straight, 'spin_axis').subtext).toBe('straight');
+    expect(byId(straight, 'spin_axis').subtext).toBe('Straight');
   });
 
   it('maps launch-angle confidence onto the dot scale', () => {
@@ -173,28 +191,50 @@ describe('buildLiveMetrics', () => {
   });
 });
 
-describe('splitHeroMetric', () => {
+describe('pinSelectedMetric', () => {
   const metrics = buildLiveMetrics(makeShot(), 'imperial', emptySwingStats);
 
-  it('promotes the requested metric and leaves the rest as tiles', () => {
-    const { hero, tiles } = splitHeroMetric(metrics, 'spin');
+  it('moves the selected metric to the front and keeps the rest in order', () => {
+    const pinned = pinSelectedMetric(metrics, 'spin');
 
-    expect(hero?.id).toBe('spin');
-    expect(tiles).toHaveLength(LIVE_METRIC_COUNT - 1);
-    expect(tiles.some((tile) => tile.id === 'spin')).toBe(false);
-    // Remaining tiles keep their relative order.
-    expect(tiles.map((t) => t.id)).toEqual(metrics.filter((m) => m.id !== 'spin').map((m) => m.id));
+    expect(pinned.map((m) => m.id)).toEqual([
+      'spin',
+      'ball_speed',
+      'carry',
+      'club_speed',
+      'smash',
+      'launch_v',
+      'launch_h',
+      'spin_axis',
+      'club_path',
+      'club_aoa',
+    ]);
   });
 
   it('falls back to the first metric when the stored id is absent', () => {
-    // Happens after switching between ball-strike and swing-speed modes, and
-    // when a persisted id predates a rename.
-    expect(splitHeroMetric(metrics, 'swing_best')?.hero?.id).toBe('ball_speed');
-    expect(splitHeroMetric(metrics, null).hero?.id).toBe('ball_speed');
-    expect(splitHeroMetric(metrics, 'nonsense').tiles).toHaveLength(LIVE_METRIC_COUNT - 1);
+    expect(pinSelectedMetric(metrics, 'swing_best')[0]?.id).toBe('ball_speed');
+    expect(pinSelectedMetric(metrics, null)[0]?.id).toBe('ball_speed');
+    expect(pinSelectedMetric(metrics, 'nonsense')).toHaveLength(LIVE_METRIC_COUNT);
   });
 
   it('handles an empty metric list', () => {
-    expect(splitHeroMetric([], 'ball_speed')).toEqual({ hero: null, tiles: [] });
+    expect(pinSelectedMetric([], 'ball_speed')).toEqual([]);
+  });
+});
+
+describe('shouldEnableLiveBallWarning', () => {
+  const cameraOn = { available: true, enabled: true };
+
+  it('is true only on the Live tab', () => {
+    expect(shouldEnableLiveBallWarning('live', cameraOn)).toBe(true);
+    expect(shouldEnableLiveBallWarning('stats', cameraOn)).toBe(false);
+    expect(shouldEnableLiveBallWarning('shots', cameraOn)).toBe(false);
+    expect(shouldEnableLiveBallWarning('camera', cameraOn)).toBe(false);
+    expect(shouldEnableLiveBallWarning('debug', cameraOn)).toBe(false);
+  });
+
+  it('is false when the camera is unavailable or disabled', () => {
+    expect(shouldEnableLiveBallWarning('live', { available: false, enabled: true })).toBe(false);
+    expect(shouldEnableLiveBallWarning('live', { available: true, enabled: false })).toBe(false);
   });
 });
