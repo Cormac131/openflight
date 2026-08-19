@@ -33,6 +33,7 @@ export function TabBar<T extends string>({
             key={option.id}
             type="button"
             className={classes.join(' ')}
+            aria-pressed={active}
             onClick={() => onChange(option.id)}
           >
             {option.icon ? option.icon : null}
