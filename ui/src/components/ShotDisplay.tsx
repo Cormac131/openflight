@@ -91,22 +91,14 @@ function ShotMetricGrid({ shot, unitSystem }: { shot: Shot | null; unitSystem: U
         unit={hasSpinAxis ? '°' : undefined}
         label="Spin Axis"
         subtext={
-          hasSpinAxis
-            ? shot.spin_axis_deg! > 2
-              ? 'fade'
-              : shot.spin_axis_deg! < -2
-                ? 'draw'
-                : 'straight'
-            : undefined
+          hasSpinAxis ? (shot.spin_axis_deg! > 2 ? 'fade' : shot.spin_axis_deg! < -2 ? 'draw' : 'straight') : undefined
         }
       />
       <MetricCard
         value={hasSpin ? formatSpinRpm(shot.spin_rpm!) : MISSING}
         unit={hasSpin ? 'rpm' : undefined}
         label="Spin Rate"
-        subtext={
-          hasSpin && shot.spin_source ? (shot.spin_source === 'calculated' ? 'estimated' : 'radar') : undefined
-        }
+        subtext={hasSpin && shot.spin_source ? (shot.spin_source === 'calculated' ? 'estimated' : 'radar') : undefined}
         confidence={hasSpin ? shot.spin_quality : null}
       />
     </div>

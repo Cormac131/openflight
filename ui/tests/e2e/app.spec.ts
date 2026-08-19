@@ -45,10 +45,12 @@ test('renders live shot data and mock-mode simulate flow', async ({ page }) => {
   await page.getByRole('button', { name: 'Close club selection' }).click();
 
   await expect(page.getByRole('button', { name: 'Simulate Shot' })).toBeVisible();
+  await expect(page.getByText('Ready', { exact: true })).toBeVisible();
+
   await page.getByRole('button', { name: 'Simulate Shot' }).click();
 
-  await expect(page.getByText('Ready for your shot')).toBeHidden();
-  await expect(page.locator('.speed-gauge__value')).not.toHaveText('--');
+  await expect(page.getByText('Ready', { exact: true })).toBeHidden();
+  await expect(page.locator('.metric-card--hero .metric-card__value')).not.toHaveText('--');
   await expect(page.locator('.metric-card').filter({ hasText: 'Carry' }).locator('.metric-card__value')).not.toHaveText('--');
 });
 
@@ -107,14 +109,14 @@ test('unit toggle updates displayed units', async ({ page }) => {
   await gotoApp(page);
   await page.getByRole('button', { name: 'Close club selection' }).click();
 
-  await expect(page.locator('.speed-gauge__unit')).toHaveText('mph');
+  await expect(page.locator('.metric-card--hero .metric-card__unit')).toHaveText('mph');
   await expect(page.locator('.metric-card').filter({ hasText: 'Carry' }).locator('.metric-card__unit')).toHaveText('yds');
 
-  const imperialSpeed = await page.locator('.speed-gauge__value').textContent();
+  const imperialSpeed = await page.locator('.metric-card--hero .metric-card__value').textContent();
 
   await page.getByRole('button', { name: 'KMH/M' }).click();
 
-  await expect(page.locator('.speed-gauge__unit')).toHaveText('km/h');
+  await expect(page.locator('.metric-card--hero .metric-card__unit')).toHaveText('km/h');
   await expect(page.locator('.metric-card').filter({ hasText: 'Carry' }).locator('.metric-card__unit')).toHaveText('m');
-  await expect(page.locator('.speed-gauge__value')).not.toHaveText(imperialSpeed ?? '');
+  await expect(page.locator('.metric-card--hero .metric-card__value')).not.toHaveText(imperialSpeed ?? '');
 });
