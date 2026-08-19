@@ -28,6 +28,17 @@ const experimentalShot: Shot = {
   carry_spin_adjusted: null,
 };
 
+const SECONDARY_LABELS = [
+  'Est. Carry',
+  'V. Launch',
+  'Club Path',
+  'H. Launch',
+  'Club Speed',
+  'Club AoA',
+  'Spin Axis',
+  'Spin Rate',
+] as const;
+
 describe('ShotDisplay', () => {
   it('labels ungated spin as experimental without confidence dots', () => {
     const html = renderToString(<ShotDisplay shot={experimentalShot} />);
@@ -36,5 +47,32 @@ describe('ShotDisplay', () => {
     expect(html).toContain('metric-card__confidence--experimental');
     expect(html).toContain('experimental');
     expect(html).not.toContain('metric-card__confidence-dots');
+  });
+
+  it('always renders eight secondary metric labels', () => {
+    const html = renderToString(<ShotDisplay shot={experimentalShot} />);
+    for (const label of SECONDARY_LABELS) {
+      expect(html).toContain(label);
+    }
+    expect(html).toContain('Ball Speed');
+    expect(html).not.toContain('speed-gauge');
+  });
+
+  it('shows em dash for missing launch angles', () => {
+    const html = renderToString(<ShotDisplay shot={experimentalShot} />);
+    expect(html).toContain('—');
+  });
+
+  it('renders empty skeleton with waiting copy and no golf ball', () => {
+    const html = renderToString(<ShotDisplay shot={null} />);
+    for (const label of SECONDARY_LABELS) {
+      expect(html).toContain(label);
+    }
+    expect(html).toContain('Ball Speed');
+    expect(html).toContain('—');
+    expect(html).toContain('Ready');
+    expect(html).toContain('Start a shot or swing speed session');
+    expect(html).not.toContain('golf-ball');
+    expect(html).not.toContain('speed-gauge');
   });
 });
