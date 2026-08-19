@@ -44,22 +44,6 @@
   --color-border-emphasis: var(--color-accent);
 }
 
-/* Temporary compatibility aliases — delete in Task 7/8 after Display Mode and Launch Daddy migrate */
-:root {
-  --color-bg-deep: var(--color-bg);
-  --color-bg-card: var(--color-surface);
-  --color-bg-elevated: var(--color-surface);
-  --text-primary: var(--color-text);
-  --text-secondary: var(--color-text-muted);
-  --text-muted: var(--color-text-muted);
-  --color-gold: var(--color-accent);
-  --color-cream: var(--color-text);
-  --radius-sm: var(--radius);
-  --radius-md: var(--radius);
-  --radius-lg: var(--radius);
-  --radius-xl: var(--radius);
-}
-
 html {
   color: var(--color-text);
   background-color: var(--color-bg);
@@ -98,14 +82,6 @@ button {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-muted);
-}
-
-.text-gold {
-  color: var(--color-accent);
-}
-
-.text-cream {
-  color: var(--color-text);
 }
 
 .text-muted {
