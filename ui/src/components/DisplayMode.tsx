@@ -5,6 +5,7 @@ import { computeSwingSpeedStats, getSwingSpeedMph, isSwingSpeedShot } from '../t
 import { useUnitPreference } from '../state/useUnitPreference';
 import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
 import { getServerOrigin } from '../utils/serverOrigin';
+import { MetricCard } from './ui/MetricCard';
 import './DisplayMode.css';
 
 interface DisplayModeProps {
@@ -103,16 +104,16 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric'): Dis
   ];
 }
 
-function DisplayMetricCard({ metric, featured = false }: { metric: DisplayMetric; featured?: boolean }) {
+function toMetricCard(metric: DisplayMetric, featured = false) {
   return (
-    <div className={`display-metric ${featured ? 'display-metric--featured' : ''}`}>
-      <span className="display-metric__label">{metric.label}</span>
-      <span className="display-metric__value-row">
-        <span className="display-metric__value">{metric.value}</span>
-        {metric.unit && <span className="display-metric__unit">{metric.unit}</span>}
-      </span>
-      {metric.detail && <span className="display-metric__detail">{metric.detail}</span>}
-    </div>
+    <MetricCard
+      key={metric.label}
+      value={metric.value}
+      unit={metric.unit}
+      label={metric.label}
+      subtext={metric.detail}
+      variant={featured ? 'emphasis' : 'default'}
+    />
   );
 }
 
@@ -185,13 +186,11 @@ export function DisplayMode({ connected, cameraStatus, latestShot, shots }: Disp
             {isSwingSpeedSession ? 'Swing Speed' : latestShot ? latestShot.club : 'Ready'}
           </h1>
           <div className="display-mode__primary-grid">
-            <DisplayMetricCard metric={metrics[0]} featured />
-            <DisplayMetricCard metric={metrics[1]} featured />
+            {toMetricCard(metrics[0], true)}
+            {toMetricCard(metrics[1], true)}
           </div>
           <div className="display-mode__metrics-grid">
-            {metrics.slice(2).map((metric) => (
-              <DisplayMetricCard key={metric.label} metric={metric} />
-            ))}
+            {metrics.slice(2).map((metric) => toMetricCard(metric))}
           </div>
         </div>
       </section>
