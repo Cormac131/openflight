@@ -189,9 +189,7 @@ export function DisplayMode({ connected, cameraStatus, latestShot, shots }: Disp
             {toMetricCard(metrics[0], true)}
             {toMetricCard(metrics[1], true)}
           </div>
-          <div className="display-mode__metrics-grid">
-            {metrics.slice(2).map((metric) => toMetricCard(metric))}
-          </div>
+          <div className="display-mode__metrics-grid">{metrics.slice(2).map((metric) => toMetricCard(metric))}</div>
         </div>
       </section>
 

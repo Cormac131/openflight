@@ -112,6 +112,14 @@
   text-transform: capitalize;
 }
 
+.display-mode .metric-card__value {
+  font-size: clamp(2.35rem, 4vw, 4.75rem);
+}
+
+.display-mode .metric-card--emphasis .metric-card__value {
+  font-size: clamp(4rem, 7.4vw, 8.5rem);
+}
+
 .display-mode__primary-grid,
 .display-mode__metrics-grid {
   display: grid;

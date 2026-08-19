@@ -20,9 +20,7 @@ describe('MetricCard', () => {
   });
 
   it('labels experimental spin without confidence dots', () => {
-    const html = renderToString(
-      <MetricCard value="8,750" unit="rpm" label="Spin Rate" confidence="experimental" />
-    );
+    const html = renderToString(<MetricCard value="8,750" unit="rpm" label="Spin Rate" confidence="experimental" />);
     expect(html).toContain('metric-card__confidence--experimental');
     expect(html).not.toContain('metric-card__confidence-dots');
   });

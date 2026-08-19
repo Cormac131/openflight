@@ -7,6 +7,7 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   min-width: 0;
+  min-height: 0;
 }
 
 .metric-card--emphasis {
@@ -97,4 +98,39 @@
 
 .metric-card__confidence--experimental .metric-card__confidence-label {
   color: var(--color-accent);
+}
+
+@media (max-height: 700px) {
+  .metric-card {
+    padding: var(--space-xs) var(--space-sm);
+    gap: 2px;
+  }
+
+  .metric-card__value-row {
+    gap: 2px;
+  }
+
+  .metric-card__label {
+    margin-top: 2px;
+  }
+
+  .metric-card__confidence--experimental {
+    margin-top: 2px;
+  }
+}
+
+@media (max-height: 500px) {
+  .metric-card {
+    padding: 2px var(--space-xs);
+    gap: 1px;
+  }
+
+  .metric-card__label {
+    margin-top: 1px;
+  }
+
+  .metric-card__confidence--experimental {
+    margin-top: 1px;
+    padding: 1px 5px;
+  }
 }
