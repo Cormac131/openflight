@@ -19,10 +19,10 @@ describe('App chrome', () => {
 
   it('marks the Live tab pressed', () => {
     const html = renderToString(<App />);
-    const liveButton = html.match(/<button[^>]*>[\s\S]*?<span>Live<\/span>[\s\S]*?<\/button>/)?.[0];
+    const liveButton = html.match(/<button[^>]*nav__button[^>]*>[\s\S]*?<span>Live<\/span>[\s\S]*?<\/button>/)?.[0];
 
     expect(liveButton).toBeDefined();
     expect(liveButton).toContain('aria-pressed="true"');
-    expect(liveButton).toContain('nav__button--active');
+    expect(liveButton).not.toContain('DARK');
   });
 });

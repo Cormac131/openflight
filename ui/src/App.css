@@ -43,8 +43,8 @@
   gap: var(--space-lg);
   padding: 0.75rem var(--space-lg);
   border-bottom: 1px solid var(--color-danger);
-  background: var(--color-surface);
-  color: var(--color-danger);
+  background: var(--color-danger);
+  color: var(--color-accent-fg);
   flex-shrink: 0;
 }
 
@@ -63,15 +63,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--color-danger);
+  color: var(--color-accent-fg);
 }
 
 .iwr-alert button {
-  border: 1px solid var(--color-danger);
+  border: 1px solid var(--color-accent-fg);
   border-radius: var(--radius);
   padding: 0.4rem 0.7rem;
   background: transparent;
-  color: var(--color-danger);
+  color: var(--color-accent-fg);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
