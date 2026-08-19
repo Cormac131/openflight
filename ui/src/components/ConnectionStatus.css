@@ -4,12 +4,12 @@
   align-items: center;
   gap: var(--space-xs);
   padding: var(--space-xs) var(--space-sm);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   font-size: 0.6875rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  transition: all var(--transition-smooth);
+  transition: all var(--transition-fast);
 }
 
 .connection-status--connected {
@@ -27,7 +27,7 @@
 .connection-status__dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: var(--radius);
 }
 
 .connection-status--connected .connection-status__dot {

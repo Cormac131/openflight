@@ -3,9 +3,9 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--color-bg-card);
-  border: 1px solid rgba(245, 240, 230, 0.06);
-  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
   overflow: hidden;
 }
 
@@ -19,15 +19,15 @@
   justify-content: space-between;
   align-items: center;
   padding: var(--space-md);
-  background: var(--color-bg-elevated);
-  border-bottom: 1px solid rgba(245, 240, 230, 0.06);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .camera-feed__title {
   margin: 0;
   font-size: 1rem;
   font-weight: 600;
-  color: var(--color-cream);
+  color: var(--color-text);
   letter-spacing: 0.02em;
 }
 
@@ -38,20 +38,20 @@
 
 .camera-feed__button {
   padding: var(--space-xs) var(--space-md);
-  border: 1px solid rgba(245, 240, 230, 0.15);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--color-text-muted);
   font-size: 0.8125rem;
   font-weight: 600;
   cursor: pointer;
-  transition: all var(--transition-smooth);
+  transition: all var(--transition-fast);
   min-height: 36px;
 }
 
 .camera-feed__button:hover {
-  background: rgba(245, 240, 230, 0.05);
-  border-color: rgba(245, 240, 230, 0.25);
+  background: var(--color-surface);
+  border-color: var(--color-border);
 }
 
 .camera-feed__button:active {
@@ -80,7 +80,7 @@
 
 .camera-feed__message {
   text-align: center;
-  color: var(--text-secondary);
+  color: var(--color-text-muted);
 }
 
 .camera-feed__message--error {
@@ -98,19 +98,19 @@
   margin: 0 0 var(--space-xs) 0;
   font-size: 1.125rem;
   font-weight: 600;
-  color: var(--color-cream);
+  color: var(--color-text);
 }
 
 .camera-feed__message p {
   margin: 0;
   font-size: 0.8125rem;
-  color: var(--text-muted);
+  color: var(--color-text-muted);
 }
 
 .camera-feed__detection {
   margin-top: var(--space-md);
   padding: var(--space-sm) var(--space-lg);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius);
   background: rgba(251, 191, 36, 0.12);
   border: 1px solid rgba(251, 191, 36, 0.3);
   color: var(--color-warning);
@@ -128,7 +128,7 @@
   position: relative;
   width: 100%;
   max-width: 640px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   overflow: hidden;
   background: #000;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
@@ -152,7 +152,7 @@
 
 .camera-feed__status {
   padding: var(--space-xs) var(--space-md);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius);
   background: rgba(0, 0, 0, 0.75);
   color: var(--color-warning);
   font-size: 0.75rem;
