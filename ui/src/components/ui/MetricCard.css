@@ -14,6 +14,57 @@
   border-color: var(--color-border-emphasis);
 }
 
+/*
+ * Label-above cards sit inside a hairline grid (design doc 6a / 7a): the grid
+ * container paints the rules via gap, so the cards themselves are borderless.
+ */
+.metric-card--label-above {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  align-content: stretch;
+  justify-items: start;
+  gap: 10px;
+  height: 100%;
+  border: none;
+  background: var(--color-bg);
+  text-align: left;
+}
+
+.metric-card--label-above .metric-card__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 0;
+  letter-spacing: 0.18em;
+  font-size: 0.59rem;
+  white-space: nowrap;
+}
+
+.metric-card--label-above .metric-card__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.metric-card--interactive {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  align-items: stretch;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.metric-card--interactive:hover .metric-card__label,
+.metric-card--selected .metric-card__label {
+  color: var(--color-accent);
+}
+
+.metric-card--selected {
+  box-shadow: inset 3px 0 0 var(--color-accent-block);
+}
+
 .metric-card--hero {
   flex: 1;
   align-items: center;
@@ -21,7 +72,7 @@
 }
 
 .metric-card--hero .metric-card__value {
-  font-size: clamp(3rem, 8vw, 7rem);
+  font-size: clamp(3.5rem, 9vw, 8rem);
   font-weight: 700;
   color: var(--color-text);
 }
@@ -36,10 +87,40 @@
   gap: 4px;
 }
 
+.metric-card__estimated {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.metric-card__estimated svg {
+  width: 11px;
+  height: 7px;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  fill: none;
+  stroke-linecap: round;
+}
+
+.metric-card__estimated-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .metric-card__value {
-  font-size: clamp(1.5rem, 4vw, 2.5rem);
+  font-size: clamp(1.85rem, 4.6vw, 3rem);
   font-weight: 700;
   line-height: 1;
+  letter-spacing: -0.03em;
   color: var(--color-text);
 }
 
@@ -50,6 +131,9 @@
 }
 
 .metric-card__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   font-weight: 600;
@@ -106,12 +190,20 @@
     gap: 2px;
   }
 
+  .metric-card--label-above {
+    gap: 10px;
+  }
+
   .metric-card__value-row {
     gap: 2px;
   }
 
   .metric-card__label {
     margin-top: 2px;
+  }
+
+  .metric-card--label-above .metric-card__label {
+    margin-top: 0;
   }
 
   .metric-card__confidence--experimental {
@@ -125,8 +217,16 @@
     gap: 1px;
   }
 
+  .metric-card--label-above {
+    gap: 8px;
+  }
+
   .metric-card__label {
     margin-top: 1px;
+  }
+
+  .metric-card--label-above .metric-card__label {
+    margin-top: 0;
   }
 
   .metric-card__confidence--experimental {

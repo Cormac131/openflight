@@ -16,6 +16,7 @@ import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } 
 import type { PowerStatus } from '../types/power';
 import { playSwingCapturedCue } from '../utils/audioCue';
 import { getServerOrigin } from '../utils/serverOrigin';
+import { ingestSocketPlayerName } from './playerSocketSync';
 
 const SOCKET_URL = getServerOrigin();
 
@@ -104,7 +105,7 @@ class SocketService {
     });
 
     this.socket.on('player_changed', (data: { player_name: string }) => {
-      useSystemStore.getState().setServerPlayerName(data.player_name);
+      ingestSocketPlayerName('player_changed', data.player_name);
     });
 
     this.socket.on(
@@ -131,9 +132,7 @@ class SocketService {
         if (data.debug_mode !== undefined) {
           systemStore.setDebugMode(data.debug_mode);
         }
-        if (data.player_name !== undefined) {
-          systemStore.setServerPlayerName(data.player_name);
-        }
+        ingestSocketPlayerName('session_state', data.player_name);
 
         // Update camera status from session state
         if (data.camera_available !== undefined) {

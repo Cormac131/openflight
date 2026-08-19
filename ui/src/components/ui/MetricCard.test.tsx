@@ -24,4 +24,35 @@ describe('MetricCard', () => {
     expect(html).toContain('metric-card__confidence--experimental');
     expect(html).not.toContain('metric-card__confidence-dots');
   });
+
+  it('shows an estimated mark on the title, not beside the value', () => {
+    const estimated = renderToString(
+      <MetricCard value="8.9" unit="°" label="V. launch" labelPosition="above" estimated />
+    );
+    const labelIdx = estimated.indexOf('metric-card__label');
+    const markIdx = estimated.indexOf('metric-card__estimated');
+    const valueIdx = estimated.indexOf('metric-card__value-row');
+    expect(markIdx).toBeGreaterThan(labelIdx);
+    expect(markIdx).toBeLessThan(valueIdx);
+
+    const measured = renderToString(<MetricCard value="140.7" unit="mph" label="Ball speed" />);
+    expect(measured).not.toContain('metric-card__estimated');
+  });
+
+  it('always reserves a meta slot on label-above tiles so values share a row', () => {
+    const empty = renderToString(<MetricCard value="-2.9" unit="°" label="Club path" labelPosition="above" />);
+    const dense = renderToString(
+      <MetricCard
+        value="8.9"
+        unit="°"
+        label="V. launch"
+        labelPosition="above"
+        subtext="estimated"
+        confidence="high"
+      />
+    );
+
+    expect(empty).toContain('metric-card__meta');
+    expect(dense).toContain('metric-card__meta');
+  });
 });

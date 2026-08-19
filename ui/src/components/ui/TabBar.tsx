@@ -5,6 +5,8 @@ export function TabBar<T extends string>({
   value,
   options,
   onChange,
+  className,
+  ariaLabel,
 }: {
   value: T;
   options: ReadonlyArray<{
@@ -15,9 +17,12 @@ export function TabBar<T extends string>({
     extraClassName?: string;
   }>;
   onChange: (id: T) => void;
+  /** Extra class on the <nav>, so a host layout can restyle the bar in place. */
+  className?: string;
+  ariaLabel?: string;
 }) {
   return (
-    <nav className="nav">
+    <nav className={className ? `nav ${className}` : 'nav'} aria-label={ariaLabel}>
       {options.map((option) => {
         const active = option.id === value;
         const classes = ['nav__button'];
