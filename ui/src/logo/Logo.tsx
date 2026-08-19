@@ -9,9 +9,8 @@ interface LogoProps {
 function getColor(variant: LogoVariant) {
   switch (variant) {
     case 'light':
-      return 'var(--color-accent)';
     case 'dark':
-      return '##1A3617';
+      return 'currentColor';
     case 'color':
       return null;
     default:

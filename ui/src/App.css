@@ -27,6 +27,7 @@
 .header__logo {
   height: 40px;
   width: auto;
+  color: var(--color-accent);
   filter: brightness(1.1);
 }
 
