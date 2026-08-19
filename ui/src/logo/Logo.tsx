@@ -9,7 +9,7 @@ interface LogoProps {
 function getColor(variant: LogoVariant) {
   switch (variant) {
     case 'light':
-      return '#d4af37'; // var(--color-gold)
+      return 'var(--color-accent)';
     case 'dark':
       return '##1A3617';
     case 'color':

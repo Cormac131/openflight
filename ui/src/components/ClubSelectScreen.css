@@ -28,13 +28,11 @@
      so the top/bottom can't get clipped by the centered overlay. */
   max-height: 100%;
   overflow-y: auto;
-  background: var(--color-bg-elevated);
-  border: 1px solid rgba(212, 175, 55, 0.2);
-  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-emphasis);
+  border-radius: var(--radius);
   padding: var(--space-md) var(--space-lg);
-  box-shadow:
-    0 10px 40px rgba(0, 0, 0, 0.5),
-    0 0 0 1px rgba(212, 175, 55, 0.1);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
 }
 
 .club-select__close {
@@ -49,8 +47,8 @@
   padding: 0;
   background: transparent;
   border: none;
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
+  border-radius: var(--radius);
+  color: var(--color-text-muted);
   cursor: pointer;
   transition: all var(--transition-fast);
 }
@@ -61,8 +59,8 @@
 }
 
 .club-select__close:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-cream);
+  background: var(--color-surface);
+  color: var(--color-text);
 }
 
 .club-select__close:active {
@@ -73,17 +71,17 @@
   margin: 0;
   /* Leave room for the corner X so the centered title can't collide with it. */
   padding: 0 var(--space-xl);
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-weight: 400;
   font-size: 1.375rem;
-  color: var(--color-gold);
+  color: var(--color-accent);
   text-align: center;
 }
 
 .club-select__subtitle {
   margin: var(--space-xs) 0 var(--space-md);
   font-size: 0.8125rem;
-  color: var(--text-muted);
+  color: var(--color-text-muted);
   text-align: center;
 }
 
@@ -99,7 +97,7 @@
   display: block;
   font-size: 0.625rem;
   font-weight: 700;
-  color: var(--text-muted);
+  color: var(--color-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.15em;
   margin-bottom: var(--space-xs);
@@ -113,11 +111,11 @@
 
 .club-select__option {
   padding: var(--space-xs);
-  background: var(--color-bg-card);
-  border: 1px solid rgba(245, 240, 230, 0.08);
-  border-radius: var(--radius-sm);
-  color: var(--color-cream);
-  font-family: var(--font-display);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-text);
+  font-family: var(--font-body);
   font-size: 1rem;
   font-weight: 400;
   cursor: pointer;
@@ -126,8 +124,8 @@
 }
 
 .club-select__option:hover {
-  background: var(--color-bg-hover);
-  border-color: rgba(245, 240, 230, 0.15);
+  background: var(--color-surface);
+  border-color: var(--color-border);
 }
 
 .club-select__option:active {
@@ -135,8 +133,7 @@
 }
 
 .club-select__option--selected {
-  background: rgba(212, 175, 55, 0.15);
-  border-color: var(--color-gold);
-  color: var(--color-gold);
-  box-shadow: 0 0 12px rgba(212, 175, 55, 0.2);
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-fg);
 }

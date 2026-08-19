@@ -64,7 +64,7 @@
 .nav__ball-dot {
   width: 8px;
   height: 8px;
-  border-radius: var(--radius);
+  border-radius: 50%;
   flex-shrink: 0;
 }
 

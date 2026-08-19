@@ -10,7 +10,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-muted);
+  color: var(--color-text-muted);
   font-size: 1rem;
 }
 
@@ -24,14 +24,14 @@
 .club-tabs__tab {
   padding: var(--space-sm) var(--space-md);
   background: transparent;
-  border: 1px solid rgba(245, 240, 230, 0.1);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-text-muted);
   font-size: 0.8125rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   cursor: pointer;
-  transition: all var(--transition-smooth);
+  transition: all var(--transition-fast);
   min-height: 40px;
   touch-action: manipulation;
 }
@@ -41,9 +41,9 @@
 }
 
 .club-tabs__tab--active {
-  background: rgba(212, 175, 55, 0.1);
-  border-color: rgba(212, 175, 55, 0.4);
-  color: var(--color-gold);
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-fg);
 }
 
 /* Stats Grid */
@@ -64,35 +64,34 @@
   align-items: center;
   justify-content: center;
   padding: var(--space-md);
-  background: var(--color-bg-card);
-  border: 1px solid rgba(245, 240, 230, 0.06);
-  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
   text-align: center;
-  transition: all var(--transition-smooth);
+  transition: all var(--transition-fast);
 }
 
 .stat-card--primary {
-  background: linear-gradient(145deg, rgba(212, 175, 55, 0.1) 0%, rgba(212, 175, 55, 0.05) 100%);
-  border-color: rgba(212, 175, 55, 0.2);
+  background: var(--color-surface);
+  border-color: var(--color-border-emphasis);
 }
 
 .stat-card__value {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-size: 2rem;
   font-weight: 400;
-  color: var(--color-cream);
+  color: var(--color-text);
   line-height: 1;
 }
 
 .stat-card--primary .stat-card__value {
-  color: var(--color-gold);
-  text-shadow: 0 0 20px var(--color-gold-glow);
+  color: var(--color-accent);
 }
 
 .stat-card__label {
   font-size: 0.625rem;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--color-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.1em;
   margin-top: var(--space-xs);
@@ -104,13 +103,13 @@
   padding: var(--space-md);
   background: transparent;
   border: 1px solid rgba(248, 113, 113, 0.3);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius);
   color: var(--color-danger);
   font-size: 0.875rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   cursor: pointer;
-  transition: all var(--transition-smooth);
+  transition: all var(--transition-fast);
   min-height: 48px;
   touch-action: manipulation;
 }
