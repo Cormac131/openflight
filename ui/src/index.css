@@ -25,11 +25,10 @@
  * Palette values come from the "Club Select Mockups" design doc: option 6a for
  * the dark theme, option 5a (its daylight sibling) for the light theme.
  *
- * Two accent tokens, because a single yellow cannot do both jobs in light mode:
- *   --color-accent       tint for text, hairlines and icons (must pass contrast
- *                        against --color-bg)
- *   --color-accent-block fill for solid yellow blocks, always paired with
- *                        --color-accent-fg as the foreground
+ * One yellow in both themes (#ffd400). --color-accent is for text, hairlines
+ * and icons; --color-accent-block is for solid fills, always paired with
+ * --color-accent-fg. They share the same hex so light mode does not drift
+ * into a second, muddier gold.
  */
 [data-theme='dark'] {
   color-scheme: dark;
@@ -54,7 +53,7 @@
   color-scheme: light;
   --color-bg: #f4f2ec;
   --color-surface: #ffffff;
-  --color-accent: #8a7400;
+  --color-accent: #ffd400;
   --color-accent-block: #ffd400;
   --color-accent-fg: #14140f;
   --color-text: #14140f;

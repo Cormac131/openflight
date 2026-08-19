@@ -3,12 +3,12 @@ import { create } from 'zustand';
 const STORAGE_KEY = 'openflight.hero-metric';
 
 /**
- * Which metric the Live panel promotes into its hero slot (design doc 6a: the
- * metric tiles are buttons and tapping one swaps it with the hero). Persisted so
- * a player who cares about club speed keeps that choice across restarts.
+ * Which Live metric is selected: yellow title, top-left of the table, and the
+ * value that fills the screen for 10s after a shot. Persisted so a player who
+ * cares about club speed keeps that choice across restarts.
  *
  * Stored as a plain metric id; an id that no longer exists is handled by
- * `splitHeroMetric`, which falls back to the first metric of the current set.
+ * `pinSelectedMetric`, which falls back to the first metric of the current set.
  */
 function readStoredHeroMetric(): string | null {
   if (typeof window === 'undefined') {

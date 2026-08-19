@@ -32,3 +32,20 @@ export function initialPickerSection(
   const match = sections.find((section) => section.options.some((option) => option.id === selectedId));
   return match?.name ?? sections[0]?.name ?? '';
 }
+
+export const PICKER_COLUMNS = 4;
+
+/** Rows needed to show the densest tab at `PICKER_COLUMNS` across, so tile size stays stable. */
+export function pickerGridRows(
+  sections: ReadonlyArray<PickerSection>,
+  columns = PICKER_COLUMNS,
+): number {
+  let maxRows = 1;
+  for (const section of sections) {
+    const rows = Math.ceil(section.options.length / columns);
+    if (rows > maxRows) {
+      maxRows = rows;
+    }
+  }
+  return maxRows;
+}

@@ -2,6 +2,7 @@ import type { Shot, SpinQuality, SwingSpeedStats } from '../../types/shot';
 import { getSwingSpeedMph, isSwingSpeedShot } from '../../types/shot';
 import type { UnitSystem } from '../../utils/units';
 import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../../utils/units';
+import type { PanelView } from './views';
 
 /** Placeholder for a metric the current shot has no value for. */
 export const NO_VALUE = '—';
@@ -19,14 +20,18 @@ export interface LiveMetric {
 }
 
 /**
- * Design doc 6a shows a hero slot plus a 4x2 tile grid: nine metrics, always the
- * same nine in the same order, so the grid never reflows between shots. Metrics
- * the shot did not produce render as {@link NO_VALUE} rather than disappearing.
+ * Live table: ten metrics, always the same ten in the same canonical order, so
+ * the grid never reflows between shots. Metrics the shot did not produce render
+ * as {@link NO_VALUE} rather than disappearing. The selected metric is then
+ * pinned to the top-left by {@link pinSelectedMetric}.
  */
-export const LIVE_METRIC_COUNT = 9;
+export const LIVE_METRIC_COUNT = 10;
 
-/** Metric count for a swing-speed session: hero plus a single 4-tile row. */
+/** Metric count for a swing-speed session: a single 5-tile row. */
 export const SWING_METRIC_COUNT = 5;
+
+/** How long the selected metric occupies the Live panel after a new shot. */
+export const SPOTLIGHT_DURATION_MS = 10_000;
 
 function formatOptionalAngle(value: number | null, signed = false): string {
   if (value === null) return NO_VALUE;
@@ -52,9 +57,9 @@ function launchAngleQuality(confidence: number | null): SpinQuality | null {
 
 function shotShape(spinAxisDeg: number | null): string | undefined {
   if (spinAxisDeg === null) return undefined;
-  if (spinAxisDeg > 2) return 'fade';
-  if (spinAxisDeg < -2) return 'draw';
-  return 'straight';
+  if (spinAxisDeg > 2) return 'Fade';
+  if (spinAxisDeg < -2) return 'Draw';
+  return 'Straight';
 }
 
 function markEstimated(isEstimated: boolean): true | undefined {
@@ -79,7 +84,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       label: 'Carry',
       value: formatDistance(carry, unitSystem, 0),
       unit: getDistanceUnit(unitSystem),
-      subtext: shot.carry_spin_adjusted === null ? undefined : 'spin-adjusted',
+      subtext: shot.carry_spin_adjusted === null ? undefined : 'Spin-adjusted',
       estimated: markEstimated(shot.carry_spin_adjusted === null),
     },
     {
@@ -130,6 +135,12 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       value: formatOptionalAngle(shot.club_path_deg, true),
       unit: angleUnit(shot.club_path_deg),
     },
+    {
+      id: 'club_aoa',
+      label: 'Club AoA',
+      value: formatOptionalAngle(shot.club_angle_deg, true),
+      unit: angleUnit(shot.club_angle_deg),
+    },
   ];
 }
 
@@ -178,7 +189,7 @@ function buildSwingSpeedMetrics(shot: Shot, stats: SwingSpeedStats, unitSystem: 
 /**
  * Build the fixed metric list for the Live panel. Returns {@link LIVE_METRIC_COUNT}
  * entries for a ball-strike shot and {@link SWING_METRIC_COUNT} for a swing-speed
- * one; the two sets share no ids, so a promoted-hero choice never leaks across
+ * one; the two sets share no ids, so a selected-metric choice never leaks across
  * modes.
  */
 export function buildLiveMetrics(shot: Shot, unitSystem: UnitSystem, swingStats: SwingSpeedStats): LiveMetric[] {
@@ -188,23 +199,26 @@ export function buildLiveMetrics(shot: Shot, unitSystem: UnitSystem, swingStats:
 }
 
 /**
- * Split the metric list into the promoted hero and the remaining tiles. Falls
- * back to the first metric when `heroId` is absent from this list — which is the
- * normal case right after switching between ball-strike and swing-speed modes.
+ * Put the selected metric first (top-left of the table) and keep the rest in
+ * canonical order. Falls back to the first metric when `selectedId` is absent
+ * from this list — which is the normal case right after switching between
+ * ball-strike and swing-speed modes.
  */
-export function splitHeroMetric(
-  metrics: LiveMetric[],
-  heroId: string | null
-): { hero: LiveMetric | null; tiles: LiveMetric[] } {
+export function pinSelectedMetric(metrics: LiveMetric[], selectedId: string | null): LiveMetric[] {
   if (metrics.length === 0) {
-    return { hero: null, tiles: [] };
+    return [];
   }
 
-  const heroIndex = metrics.findIndex((metric) => metric.id === heroId);
-  const index = heroIndex === -1 ? 0 : heroIndex;
+  const selectedIndex = metrics.findIndex((metric) => metric.id === selectedId);
+  const index = selectedIndex === -1 ? 0 : selectedIndex;
 
-  return {
-    hero: metrics[index],
-    tiles: metrics.filter((_, i) => i !== index),
-  };
+  return [metrics[index], ...metrics.filter((_, i) => i !== index)];
+}
+
+/** Ball-missing overlay is a Live-tab concern; other panels have their own camera UI. */
+export function shouldEnableLiveBallWarning(
+  currentView: PanelView,
+  camera: { available: boolean; enabled: boolean }
+): boolean {
+  return currentView === 'live' && camera.available && camera.enabled;
 }

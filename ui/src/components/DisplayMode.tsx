@@ -68,7 +68,7 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric'): Dis
       label: 'Carry',
       value: formatDistance(carryYards, unitSystem, 0),
       unit: getDistanceUnit(unitSystem),
-      detail: shot.carry_spin_adjusted ? 'spin-adjusted' : undefined,
+      detail: shot.carry_spin_adjusted ? 'Spin-adjusted' : undefined,
     },
     {
       label: 'Club Speed',

@@ -35,7 +35,12 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
   };
 }
 
-function render(shot: Shot | null, shots: Shot[] = shot ? [shot] : [], heroMetricId: string | null = null) {
+function render(
+  shot: Shot | null,
+  shots: Shot[] = shot ? [shot] : [],
+  selectedMetricId: string | null = null,
+  isNewShot = false
+) {
   return text(
     renderToString(
       <LivePanel
@@ -43,11 +48,16 @@ function render(shot: Shot | null, shots: Shot[] = shot ? [shot] : [], heroMetri
         shots={shots}
         playerName="James"
         clubLabel="DR"
-        heroMetricId={heroMetricId}
-        onPromoteMetric={() => {}}
+        selectedMetricId={selectedMetricId}
+        onSelectMetric={() => {}}
+        isNewShot={isNewShot}
       />
     )
   );
+}
+
+function tileLabels(html: string): string[] {
+  return [...html.matchAll(/metric-card__label[^>]*>([^<]+)/g)].map((match) => match[1]);
 }
 
 describe('LivePanel', () => {
@@ -55,33 +65,52 @@ describe('LivePanel', () => {
     const html = render(null);
 
     expect(html).toContain('Ready');
-    expect(html).not.toContain('live-panel__hero-value');
+    expect(html).not.toContain('live-panel__spotlight');
+    expect(html).not.toContain('metric-card--interactive');
   });
 
-  it('renders the hero beside eight tiles', () => {
+  it('renders all ten metrics in a table with no hero slot', () => {
     const html = render(makeShot());
 
-    expect(html).toContain('live-panel__hero-value">92.0<');
-    expect(html).toContain('Ball speed · DR');
-    expect(html.match(/metric-card--interactive/g)).toHaveLength(8);
-    expect(html).toContain('live-panel__grid--of-8');
+    expect(html).not.toContain('live-panel__hero');
+    expect(html).toContain('live-panel__grid--of-10');
+    expect(html.match(/metric-card--interactive/g)).toHaveLength(10);
+    expect(html).toContain('>Club AoA<');
+    expect(tileLabels(html)[0]).toBe('Ball speed');
   });
 
-  it('promotes the selected metric into the hero slot', () => {
+  it('pins the selected metric to the top left and marks its title selected', () => {
     const html = render(makeShot(), undefined, 'spin');
 
-    expect(html).toContain('live-panel__hero-value">2,650<');
-    expect(html).toContain('Spin · DR');
-    // Ball speed is demoted to a tile rather than lost.
+    expect(tileLabels(html)[0]).toBe('Spin');
+    expect(html).toContain('metric-card--selected');
+    expect(html).toMatch(/metric-card--selected[\s\S]*?>Spin</);
     expect(html).toContain('>Ball speed<');
-    expect(html.match(/metric-card--interactive/g)).toHaveLength(8);
+    expect(html.match(/metric-card--interactive/g)).toHaveLength(10);
   });
 
   it('falls back to ball speed when the selected metric is not in this set', () => {
-    // Happens right after switching between ball-strike and swing-speed modes.
     const html = render(makeShot(), undefined, 'swing_best');
 
-    expect(html).toContain('live-panel__hero-value">92.0<');
+    expect(tileLabels(html)[0]).toBe('Ball speed');
+    expect(html).toMatch(/metric-card--selected[\s\S]*?>Ball speed</);
+  });
+
+  it('shows the selected metric full-screen after a new shot', () => {
+    const html = render(makeShot(), undefined, 'spin', true);
+
+    expect(html).toContain('live-panel__spotlight');
+    expect(html).toContain('live-panel__spotlight-label">Spin');
+    expect(html).toContain('live-panel__spotlight-value">2,650<');
+    expect(html).toContain('live-panel__grid--of-10');
+    expect(html).toMatch(/<button[^>]*live-panel__spotlight/);
+    expect(html).toContain('aria-label="Hide shot overlay"');
+  });
+
+  it('does not show the spotlight for a restored session shot', () => {
+    const html = render(makeShot(), undefined, null, false);
+
+    expect(html).not.toContain('live-panel__spotlight');
   });
 
   it('marks estimated tiles with an icon instead of provenance copy', () => {
@@ -92,12 +121,11 @@ describe('LivePanel', () => {
     expect(html).not.toContain('>radar<');
   });
 
-  it('makes every tile a pressable button so it can be promoted', () => {
+  it('makes every tile a pressable button so it can be selected', () => {
     const html = render(makeShot());
 
-    // 6a's tiles are buttons; a non-interactive grid would break hero swapping.
-    expect(html.match(/<button[^>]*metric-card--interactive/g)).toHaveLength(8);
-    expect(html).toContain('aria-pressed="false"');
+    expect(html.match(/<button[^>]*metric-card--interactive/g)).toHaveLength(10);
+    expect(html).toContain('aria-pressed="true"');
   });
 
   it('shows the shot number and unit label in the header', () => {
@@ -108,7 +136,7 @@ describe('LivePanel', () => {
     expect(html).toContain('panel-header__subtitle">James<');
   });
 
-  it('renders the four-tile grid for a swing-speed shot', () => {
+  it('renders the five-tile grid for a swing-speed shot', () => {
     const swing = makeShot({
       mode: 'swing-speed',
       training_implement: 'stack-100g',
@@ -123,13 +151,65 @@ describe('LivePanel', () => {
           playerName="James"
           clubLabel="Stack 100g"
           activeTrainingImplement="stack-100g"
-          onPromoteMetric={() => {}}
+          onSelectMetric={() => {}}
         />
       )
     );
 
-    expect(html).toContain('live-panel__grid--of-4');
-    expect(html.match(/metric-card--interactive/g)).toHaveLength(4);
-    expect(html).toContain('Last swing · Stack 100g');
+    expect(html).not.toContain('live-panel__hero');
+    expect(html).toContain('live-panel__grid--of-5');
+    expect(html.match(/metric-card--interactive/g)).toHaveLength(5);
+    expect(tileLabels(html)[0]).toBe('Last swing');
+  });
+
+  it('does not warn when ball detection is off', () => {
+    expect(render(makeShot())).not.toContain('live-panel__ball-warning');
+    expect(render(null)).not.toContain('live-panel__ball-warning');
+  });
+
+  it('shows a full-screen warning when ball detection is on and no ball is found', () => {
+    const html = text(
+      renderToString(
+        <LivePanel
+          shot={makeShot()}
+          shots={[makeShot()]}
+          playerName="James"
+          clubLabel="DR"
+          ballDetectionEnabled
+          ballDetected={false}
+        />
+      )
+    );
+
+    expect(html).toContain('live-panel__ball-warning');
+    expect(html).toContain('No ball detected');
+    expect(html).toContain('role="alert"');
+  });
+
+  it('still warns on the ready screen so a swing is not taken without a ball', () => {
+    const html = text(
+      renderToString(
+        <LivePanel shot={null} shots={[]} playerName="James" clubLabel="DR" ballDetectionEnabled ballDetected={false} />
+      )
+    );
+
+    expect(html).toContain('No ball detected');
+  });
+
+  it('hides the warning once a ball is detected', () => {
+    const html = text(
+      renderToString(
+        <LivePanel
+          shot={makeShot()}
+          shots={[makeShot()]}
+          playerName="James"
+          clubLabel="DR"
+          ballDetectionEnabled
+          ballDetected
+        />
+      )
+    );
+
+    expect(html).not.toContain('live-panel__ball-warning');
   });
 });
