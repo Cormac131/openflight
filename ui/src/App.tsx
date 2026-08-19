@@ -32,6 +32,10 @@ import {
   LaunchDaddySecretIndicator,
 } from './components/LaunchDaddy';
 import { useUnitPreference } from './state/useUnitPreference';
+import { useThemeStore } from './stores/useThemeStore';
+import { Button } from './components/ui/Button';
+import { SegmentedControl } from './components/ui/SegmentedControl';
+import { TabBar } from './components/ui/TabBar';
 
 import Logo from './logo/Logo';
 
@@ -134,6 +138,8 @@ function AppContent() {
   const [shutdownState, setShutdownState] = useState<ShutdownState>('confirm');
   const { isLaunchDaddyMode, isExploding, triggerExplosion, handleSecretTap } = useLaunchDaddy();
   const { unitSystem, setUnitSystem } = useUnitPreference();
+  const { theme, setTheme } = useThemeStore();
+  const logoVariant = theme === 'dark' ? 'light' : 'dark';
   const isDisplayRoute = typeof window !== 'undefined' && window.location.pathname.replace(/\/$/, '') === '/display';
   const isSwingSpeedMode = triggerStatus.mode === 'swing-speed';
 
@@ -219,27 +225,27 @@ function AppContent() {
             userSelect: 'none',
           }}
         >
-          {isLaunchDaddyMode ? <LaunchDaddyBrand /> : <Logo size="small" variant="light" />}
+          {isLaunchDaddyMode ? <LaunchDaddyBrand /> : <Logo size="small" variant={logoVariant} />}
         </div>
         <div className="header__controls">
-          <div className="unit-toggle" role="group" aria-label="Display units">
-            <button
-              type="button"
-              className={`unit-toggle__button ${unitSystem === 'imperial' ? 'unit-toggle__button--active' : ''}`}
-              onClick={() => setUnitSystem('imperial')}
-              aria-pressed={unitSystem === 'imperial'}
-            >
-              MPH/YDS
-            </button>
-            <button
-              type="button"
-              className={`unit-toggle__button ${unitSystem === 'metric' ? 'unit-toggle__button--active' : ''}`}
-              onClick={() => setUnitSystem('metric')}
-              aria-pressed={unitSystem === 'metric'}
-            >
-              KMH/M
-            </button>
-          </div>
+          <SegmentedControl
+            ariaLabel="Theme"
+            value={theme}
+            options={[
+              { id: 'dark', label: 'DARK' },
+              { id: 'light', label: 'LIGHT' },
+            ]}
+            onChange={setTheme}
+          />
+          <SegmentedControl
+            ariaLabel="Display units"
+            value={unitSystem}
+            options={[
+              { id: 'imperial', label: 'MPH/YDS' },
+              { id: 'metric', label: 'KMH/M' },
+            ]}
+            onChange={setUnitSystem}
+          />
           <PlayerPicker />
           {isSwingSpeedMode ? (
             <TrainingImplementPicker
@@ -300,46 +306,34 @@ function AppContent() {
         <ShutdownDialog state={shutdownState} onConfirm={handleShutdown} onCancel={closeShutdown} />
       ) : null}
 
-      <nav className="nav">
-        <button
-          className={`nav__button ${currentView === 'live' ? 'nav__button--active' : ''}`}
-          onClick={() => setCurrentView('live')}
-        >
-          {Icons.live}
-          <span>Live</span>
-        </button>
-        <button
-          className={`nav__button ${currentView === 'stats' ? 'nav__button--active' : ''}`}
-          onClick={() => setCurrentView('stats')}
-        >
-          {Icons.stats}
-          <span>Stats</span>
-        </button>
-        <button
-          className={`nav__button ${currentView === 'shots' ? 'nav__button--active' : ''}`}
-          onClick={() => setCurrentView('shots')}
-        >
-          {Icons.shots}
-          <span>Shots</span>
-          {shots.length > 0 && <span className="nav__badge">{shots.length}</span>}
-        </button>
-        <button
-          className={`nav__button ${currentView === 'camera' ? 'nav__button--active' : ''} ${cameraStatus.streaming ? 'nav__button--streaming' : ''}`}
-          onClick={() => setCurrentView('camera')}
-        >
-          {Icons.camera}
-          <span>Camera</span>
-          {cameraStatus.ball_detected && <span className="nav__ball-dot" />}
-        </button>
-        <button
-          className={`nav__button ${currentView === 'debug' ? 'nav__button--active' : ''} ${debugMode ? 'nav__button--recording' : ''}`}
-          onClick={() => setCurrentView('debug')}
-        >
-          {Icons.debug}
-          <span>Debug</span>
-          {debugMode && <span className="nav__recording-dot" />}
-        </button>
-      </nav>
+      <TabBar
+        value={currentView}
+        onChange={setCurrentView}
+        options={[
+          { id: 'live', label: 'Live', icon: Icons.live },
+          { id: 'stats', label: 'Stats', icon: Icons.stats },
+          {
+            id: 'shots',
+            label: 'Shots',
+            icon: Icons.shots,
+            badge: shots.length > 0 ? <span className="nav__badge">{shots.length}</span> : undefined,
+          },
+          {
+            id: 'camera',
+            label: 'Camera',
+            icon: Icons.camera,
+            extraClassName: cameraStatus.streaming ? 'nav__button--streaming' : undefined,
+            badge: cameraStatus.ball_detected ? <span className="nav__ball-dot" /> : undefined,
+          },
+          {
+            id: 'debug',
+            label: 'Debug',
+            icon: Icons.debug,
+            extraClassName: debugMode ? 'nav__button--recording' : undefined,
+            badge: debugMode ? <span className="nav__recording-dot" /> : undefined,
+          },
+        ]}
+      />
 
       <main className="main">
         {currentView === 'live' && (
@@ -356,11 +350,11 @@ function AppContent() {
               />
             </ShotProcessingArea>
             {debugMode && <SimShotBadges latestSimShots={latestSimShots} />}
-            {mockMode && (
-              <button className="simulate-button" onClick={() => socketService.simulateShot()}>
+            {mockMode ? (
+              <Button variant="primary" className="ui-button--block" onClick={() => socketService.simulateShot()}>
                 {isSwingSpeedMode ? 'Simulate Swing' : 'Simulate Shot'}
-              </button>
-            )}
+              </Button>
+            ) : null}
           </div>
         )}
         {currentView === 'stats' && (
