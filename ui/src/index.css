@@ -15,36 +15,63 @@
   --space-xl: 1.5rem;
   --transition-fast: 0.15s ease;
   --color-success: #4ade80;
+  --color-error: #ef4444;
   --color-info: #60a5fa;
   --color-warning: #fbbf24;
-  --color-danger: #f87171;
+  /* --color-danger / --color-danger-border are theme-scoped; see below. */
 }
 
+/*
+ * Palette values come from the "Club Select Mockups" design doc: option 6a for
+ * the dark theme, option 5a (its daylight sibling) for the light theme.
+ *
+ * Two accent tokens, because a single yellow cannot do both jobs in light mode:
+ *   --color-accent       tint for text, hairlines and icons (must pass contrast
+ *                        against --color-bg)
+ *   --color-accent-block fill for solid yellow blocks, always paired with
+ *                        --color-accent-fg as the foreground
+ */
 [data-theme='dark'] {
   color-scheme: dark;
-  --color-bg: #000000;
-  --color-surface: #000000;
-  --color-accent: #f5e000;
-  --color-accent-fg: #000000;
-  --color-text: #ffffff;
-  --color-text-muted: #8a8a8a;
-  --color-border: #4a4a4a;
+  --color-bg: #0e0f10;
+  --color-surface: #16181a;
+  --color-accent: #ffd400;
+  --color-accent-block: #ffd400;
+  --color-accent-fg: #0b0b0c;
+  --color-text: #f2f1ec;
+  --color-text-muted: rgba(242, 241, 236, 0.45);
+  --color-text-faint: rgba(242, 241, 236, 0.32);
+  --color-border: rgba(242, 241, 236, 0.16);
+  --color-border-soft: rgba(242, 241, 236, 0.1);
   --color-border-emphasis: var(--color-accent);
+  --color-scrim: rgba(6, 7, 8, 0.6);
+  --color-hatch: #101112;
+  --color-danger: #ff9b7d;
+  --color-danger-border: rgba(255, 120, 90, 0.5);
 }
 
 [data-theme='light'] {
   color-scheme: light;
-  --color-bg: #f4f4f0;
+  --color-bg: #f4f2ec;
   --color-surface: #ffffff;
-  --color-accent: #c9b800;
-  --color-accent-fg: #000000;
-  --color-text: #111111;
-  --color-text-muted: #5c5c5c;
-  --color-border: #c8c8c4;
+  --color-accent: #8a7400;
+  --color-accent-block: #ffd400;
+  --color-accent-fg: #14140f;
+  --color-text: #14140f;
+  --color-text-muted: rgba(20, 20, 15, 0.5);
+  --color-text-faint: rgba(20, 20, 15, 0.35);
+  --color-border: rgba(20, 20, 15, 0.16);
+  --color-border-soft: rgba(20, 20, 15, 0.1);
   --color-border-emphasis: var(--color-accent);
+  --color-scrim: rgba(20, 20, 15, 0.45);
+  --color-hatch: #eae7df;
+  --color-danger: #b03a1a;
+  --color-danger-border: rgba(176, 58, 26, 0.5);
 }
 
 html {
+  /* Kiosk-readable type: rem sizes (and rem spacing) scale from this. */
+  font-size: 150%;
   color: var(--color-text);
   background-color: var(--color-bg);
   font-family: var(--font-body);
@@ -55,6 +82,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   font-family: var(--font-body);
+  font-size: 1rem;
   background: var(--color-bg);
   color: var(--color-text);
 }

@@ -1,5 +1,6 @@
 type LogoSize = 'small' | 'medium' | 'large';
-type LogoVariant = 'color' | 'light' | 'dark';
+/** `mono` matches the design doc's uploads/logo.svg: every path one flat tint. */
+type LogoVariant = 'color' | 'light' | 'dark' | 'mono';
 
 interface LogoProps {
   size?: LogoSize;
@@ -10,6 +11,7 @@ function getColor(variant: LogoVariant) {
   switch (variant) {
     case 'light':
     case 'dark':
+    case 'mono':
       return 'currentColor';
     case 'color':
       return null;
