@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import type { Shot } from '../../types/shot';
 import {
   computeStats,
@@ -18,6 +18,8 @@ interface StatsPanelProps {
   shots: Shot[];
   activeClub: string;
   playerName: string;
+  /** Pinned header control, e.g. Clear session. */
+  headerAction?: ReactNode;
 }
 
 interface StatTile {
@@ -32,7 +34,7 @@ interface StatTile {
  * filter chips above the tiles. Six tiles for a ball-strike session (3x2 as
  * drawn), four for a swing-speed one.
  */
-export function StatsPanel({ shots, activeClub, playerName }: StatsPanelProps) {
+export function StatsPanel({ shots, activeClub, playerName, headerAction }: StatsPanelProps) {
   const { locale, t } = useI18n();
   const playerShots = useMemo(() => filterShotsByPlayer(shots, playerName), [shots, playerName]);
   const hasShotsForActiveClub = playerShots.some((shot) => shot.club === activeClub);
@@ -168,7 +170,7 @@ export function StatsPanel({ shots, activeClub, playerName }: StatsPanelProps) {
       <PanelHeader
         title={t('nav.stats')}
         subtitle={playerName}
-        actions={<span className="panel-header__meta">{`${speedUnit} / ${distanceUnit}`}</span>}
+        actions={headerAction}
       />
       <div className="panel__body stats-panel">
         {playerShots.length > 0 ? clubFilters : null}

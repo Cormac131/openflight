@@ -6,7 +6,7 @@ async function dismissPicker(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Close Select club' }).click();
 }
 
-/** Open the footer menu sheet (player / units / theme / system / shut down). */
+/** Open the footer menu sheet (units / theme / system / shut down). */
 async function openMenu(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Open menu' }).click();
 }
@@ -29,6 +29,21 @@ test('stays usable when websocket upgrade fails and socket.io falls back to poll
 
   await dismissPicker(page);
   await expect(page.getByLabel('Server connected')).toBeVisible();
+
+  await page.getByLabel('Server connected').click();
+  const statusMenu = page.getByRole('dialog', { name: 'System status' });
+  await expect(statusMenu).toBeVisible();
+  await expect(statusMenu.getByText('Server', { exact: true })).toBeVisible();
+  await expect(statusMenu.getByText('Radar', { exact: true })).toBeVisible();
+  await expect(statusMenu.getByText('Ball detection', { exact: true })).toBeVisible();
+  await expect(statusMenu.getByText('Connected', { exact: true }).first()).toBeVisible();
+
+  await page.getByLabel('Close status').click();
+  await expect(statusMenu).toBeHidden();
+
+  await page.getByRole('button', { name: 'Shots' }).click();
+  await page.getByLabel('Server connected').click();
+  await expect(page.getByRole('dialog', { name: 'System status' })).toBeVisible();
 });
 
 test('supports club selection choose and dismiss flows against mock backend', async ({ page }) => {
@@ -37,7 +52,7 @@ test('supports club selection choose and dismiss flows against mock backend', as
   await page.getByRole('button', { name: 'Irons' }).click();
   await page.getByRole('button', { name: '7i', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Select club' })).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Change club' })).toBeVisible();
+  await expect(page.locator('.panel-header').getByRole('button', { name: 'Change club' })).toBeVisible();
   await expect(page.locator('.panel-header__club', { hasText: '7 Iron' })).toBeVisible();
 
   await withControlSocket(async (socket) => {
@@ -52,7 +67,7 @@ test('supports club selection choose and dismiss flows against mock backend', as
   await expect(page.getByRole('dialog', { name: 'Select club' })).toBeVisible();
   await dismissPicker(page);
   // Dismissing keeps whatever the server last reported, not a reset to driver.
-  await expect(page.getByRole('button', { name: 'Change club' })).toBeVisible();
+  await expect(page.locator('.panel-header').getByRole('button', { name: 'Change club' })).toBeVisible();
   await expect(page.locator('.panel-header__club', { hasText: '7 Iron' })).toBeVisible();
 });
 
@@ -124,23 +139,70 @@ test('switches between primary navigation views', async ({ page }) => {
   await gotoApp(page);
   await dismissPicker(page);
 
+  await expect(page.locator('.panel-footer__units')).toHaveText('mph / yds');
+  await expect(page.locator('.panel-footer__count')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Shots' })).toContainText('2');
+
+  await page.getByRole('button', { name: 'Players' }).click();
+  await expect(page.getByRole('region', { name: 'Players' })).toBeVisible();
+  await expect(page.locator('.panel-header').getByRole('button', { name: 'Add player' })).toBeVisible();
+  await expect(page.locator('.panel-footer__units')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Simulate shot' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Change club' })).toHaveCount(0);
+
   await page.getByRole('button', { name: 'Stats' }).click();
   await expect(page.getByText('Avg ball')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Clear session' })).toBeVisible();
+  await expect(page.locator('.panel-header').getByRole('button', { name: 'Clear session' })).toBeVisible();
+  await expect(page.locator('.panel-footer__units')).toHaveText('mph / yds');
+  await expect(page.locator('.panel-footer__count')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Simulate shot' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Change club' })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Shots' }).click();
   await expect(page.locator('.shots-panel__row')).toHaveCount(2);
   await expect(page.getByText('7-iron')).toBeVisible();
+  await expect(page.locator('.panel-footer__units')).toHaveText('mph / yds');
+  await expect(page.locator('.panel-footer__count')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Simulate shot' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Change club' })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Camera' }).click();
   await expect(page.getByText('Camera unavailable')).toBeVisible();
+  await expect(page.locator('.panel-footer__units')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Simulate shot' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Change club' })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Debug' }).click();
   await expect(page.getByRole('heading', { name: 'System Status' })).toBeVisible();
   await expect(page.getByText('mock')).toBeVisible();
+  await expect(page.locator('.panel-header').getByRole('button', { name: 'Record' })).toBeVisible();
+  await expect(page.locator('.panel-footer__units')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Simulate shot' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Change club' })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Live' }).click();
   await expect(page.getByRole('button', { name: 'Simulate shot' })).toBeVisible();
+  await expect(page.locator('.panel-header').getByRole('button', { name: 'Change club' })).toBeVisible();
+  await expect(page.locator('.panel-footer').getByRole('button', { name: 'Change club' })).toHaveCount(0);
+  await expect(page.locator('.panel-footer__units')).toHaveText('mph / yds');
+  await expect(page.locator('.panel-footer__count')).toHaveCount(0);
+});
+
+test('selecting a player opens Live and does not offer delete on the active player', async ({ page }) => {
+  await gotoApp(page);
+  await dismissPicker(page);
+
+  await page.getByRole('button', { name: 'Players' }).click();
+  await page.getByRole('button', { name: 'Add player' }).click();
+  await page.getByPlaceholder('Name').fill('Alex');
+  await page.getByRole('dialog', { name: 'Add player' }).getByRole('button', { name: 'Add player' }).click();
+
+  await expect(page.getByLabel('Remove Player 1')).toBeVisible();
+  await expect(page.getByLabel('Remove Alex')).toHaveCount(0);
+
+  await page.locator('.players-panel__card').filter({ hasText: 'Player 1' }).click();
+  await expect(page.locator('.panel-header__title')).toHaveText('Live');
+  await expect(page.locator('.panel-header__subtitle')).toHaveText('Player 1');
 });
 
 test('scrolls the shots list by dragging on a row', async ({ page }) => {

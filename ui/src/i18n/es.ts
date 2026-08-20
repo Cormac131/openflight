@@ -2,6 +2,7 @@ import type { Messages } from './en';
 
 export const es: Messages = {
   'nav.live': 'En vivo',
+  'nav.players': 'Jugadores',
   'nav.stats': 'Estadísticas',
   'nav.shots': 'Golpes',
   'nav.camera': 'Cámara',
@@ -11,7 +12,12 @@ export const es: Messages = {
 
   'header.serverConnected': 'Servidor conectado',
   'header.serverDisconnected': 'Servidor desconectado',
-  'header.shotCount': 'Golpe {n}',
+  'header.statusMenu': 'Estado del sistema',
+  'header.closeStatus': 'Cerrar estado',
+  'header.server': 'Servidor',
+  'header.radar': 'Radar',
+  'header.connected': 'Conectado',
+  'header.disconnected': 'Desconectado',
 
   'live.ready': 'Listo',
   'live.readyDetail': 'Empieza un golpe o una sesión de velocidad de swing',
@@ -81,6 +87,11 @@ export const es: Messages = {
   'shots.diff': 'Dif.',
   'shots.notes': 'Notas',
   'shots.notesPlaceholder': 'notas…',
+
+  'players.rosterAria': 'Jugadores',
+  'players.shots': '{count} golpes',
+  'players.shot': '{count} golpe',
+  'players.namePlaceholder': 'Nombre',
 
   'camera.notConnected': 'Cámara no conectada',
   'camera.detectionOff': 'Detección de bola desactivada',

@@ -7,7 +7,7 @@
 
 :root {
   --font-body: 'Outfit', system-ui, -apple-system, sans-serif;
-  --radius: 0px;
+  --radius: 0.25rem;
   --space-xs: 0.25rem;
   --space-sm: 0.5rem;
   --space-md: 0.75rem;
@@ -25,10 +25,13 @@
  * Palette values come from the "Club Select Mockups" design doc: option 6a for
  * the dark theme, option 5a (its daylight sibling) for the light theme.
  *
- * One yellow in both themes (#ffd400). --color-accent is for text, hairlines
- * and icons; --color-accent-block is for solid fills, always paired with
+ * One yellow in both themes (#ffd400). --color-accent is for text and
+ * icons; --color-accent-block is for solid fills, always paired with
  * --color-accent-fg. They share the same hex so light mode does not drift
  * into a second, muddier gold.
+ *
+ * Kiosk contrast: muted/faint stay readable on black. Never park shot
+ * numbers on --color-text-muted. Grid gaps stay grey (--color-border).
  */
 [data-theme='dark'] {
   color-scheme: dark;
@@ -37,11 +40,11 @@
   --color-accent: #ffd400;
   --color-accent-block: #ffd400;
   --color-accent-fg: #0b0b0c;
-  --color-text: #f2f1ec;
-  --color-text-muted: rgba(242, 241, 236, 0.45);
-  --color-text-faint: rgba(242, 241, 236, 0.32);
-  --color-border: rgba(242, 241, 236, 0.16);
-  --color-border-soft: rgba(242, 241, 236, 0.1);
+  --color-text: #ffffff;
+  --color-text-muted: rgba(242, 241, 236, 0.78);
+  --color-text-faint: rgba(242, 241, 236, 0.58);
+  --color-border: rgba(242, 241, 236, 0.32);
+  --color-border-soft: rgba(242, 241, 236, 0.2);
   --color-border-emphasis: var(--color-accent);
   --color-scrim: rgba(6, 7, 8, 0.6);
   --color-hatch: #101112;
@@ -52,15 +55,15 @@
 [data-theme='light'] {
   color-scheme: light;
   --color-bg: #f4f2ec;
-  --color-surface: #ffffff;
+  --color-surface: #f4f2ec;
   --color-accent: #ffd400;
   --color-accent-block: #ffd400;
   --color-accent-fg: #14140f;
   --color-text: #14140f;
-  --color-text-muted: rgba(20, 20, 15, 0.5);
-  --color-text-faint: rgba(20, 20, 15, 0.35);
-  --color-border: rgba(20, 20, 15, 0.16);
-  --color-border-soft: rgba(20, 20, 15, 0.1);
+  --color-text-muted: rgba(20, 20, 15, 0.72);
+  --color-text-faint: rgba(20, 20, 15, 0.52);
+  --color-border: rgba(20, 20, 15, 0.28);
+  --color-border-soft: rgba(20, 20, 15, 0.16);
   --color-border-emphasis: var(--color-accent);
   --color-scrim: rgba(20, 20, 15, 0.45);
   --color-hatch: #eae7df;

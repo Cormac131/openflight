@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Shot } from '../../types/shot';
 import { computeSwingSpeedStats, filterShotsByPlayer } from '../../types/shot';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { useI18n } from '../../i18n/useI18n';
-import { getDistanceUnit, getSpeedUnit } from '../../utils/units';
 import { MetricCard, EstimatedMark } from '../ui/MetricCard';
 import { PanelHeader } from './PanelHeader';
 import { buildLiveMetrics, pinSelectedMetric, SPOTLIGHT_DURATION_MS } from './liveMetrics';
@@ -15,8 +14,6 @@ interface LivePanelProps {
   clubLabel: string;
   /** Undefined outside swing-speed mode. Scopes the swing stats to one implement. */
   activeTrainingImplement?: string;
-  /** Fires the Launch Daddy secret tap, which now lives on the status dot. */
-  onStatusTap?: () => void;
   /** Metric pinned top-left and shown full-screen after a new shot. */
   selectedMetricId?: string | null;
   onSelectMetric?: (id: string) => void;
@@ -26,6 +23,8 @@ interface LivePanelProps {
   ballDetectionEnabled?: boolean;
   /** YOLO currently sees a ball. */
   ballDetected?: boolean;
+  /** Pinned header control, e.g. Change club. */
+  headerAction?: ReactNode;
 }
 
 /**
@@ -39,12 +38,12 @@ export function LivePanel({
   playerName,
   clubLabel,
   activeTrainingImplement,
-  onStatusTap,
   selectedMetricId = null,
   onSelectMetric,
   isNewShot = false,
   ballDetectionEnabled = false,
   ballDetected = false,
+  headerAction,
 }: LivePanelProps) {
   const { locale, t } = useI18n();
   const { unitSystem } = useUnitPreference();
@@ -87,22 +86,8 @@ export function LivePanel({
     return () => clearTimeout(timer);
   }, [spotlightOpen]);
 
-  const unitsLabel = `${getSpeedUnit(unitSystem)} / ${getDistanceUnit(unitSystem)}`;
   const header = (
-    <PanelHeader
-      title={t('nav.live')}
-      subtitle={playerName}
-      club={clubLabel}
-      onStatusTap={onStatusTap}
-      actions={
-        <>
-          <span className="panel-header__meta">{unitsLabel}</span>
-          <span className="panel-header__meta panel-header__meta--faint">
-            {t('header.shotCount', { n: String(playerShots.length).padStart(2, '0') })}
-          </span>
-        </>
-      }
-    />
+    <PanelHeader title={t('nav.live')} subtitle={playerName} club={clubLabel} actions={headerAction} />
   );
 
   if (!selected) {
@@ -130,6 +115,7 @@ export function LivePanel({
             aria-label={t('live.hideOverlay')}
             onClick={() => setSpotlightOpen(false)}
           >
+            {isPlayersNewShot ? <div className="shot-flash" /> : null}
             <span className="live-panel__spotlight-label">
               {selected.label} · {clubLabel}
               {selected.estimated ? <EstimatedMark /> : null}

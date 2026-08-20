@@ -107,12 +107,14 @@ describe('LivePanel', () => {
     expect(html).toContain('live-panel__grid--of-10');
     expect(html).toMatch(/<button[^>]*live-panel__spotlight/);
     expect(html).toContain('aria-label="Hide shot overlay"');
+    expect(html.indexOf('shot-flash')).toBeLessThan(html.indexOf('live-panel__spotlight-value'));
   });
 
   it('does not show the spotlight for a restored session shot', () => {
     const html = render(makeShot(), undefined, null, false);
 
     expect(html).not.toContain('live-panel__spotlight');
+    expect(html).not.toContain('shot-flash');
   });
 
   it('marks estimated tiles with an icon instead of provenance copy', () => {
@@ -130,13 +132,35 @@ describe('LivePanel', () => {
     expect(html).toContain('aria-pressed="true"');
   });
 
-  it('shows the shot number and unit label in the header', () => {
+  it('shows the player and club in the header', () => {
     const html = render(makeShot(), [makeShot(), makeShot(), makeShot()]);
 
-    expect(html).toContain('mph / yds');
-    expect(html).toContain('Shot 03');
     expect(html).toContain('panel-header__subtitle">James<');
     expect(html).toContain('panel-header__club">DR<');
+    expect(html).not.toContain('mph / yds');
+    expect(html).not.toContain('Shot 03');
+  });
+
+  it('places Change club in the header actions', () => {
+    const html = text(
+      renderToString(
+        <LivePanel
+          shot={null}
+          shots={[]}
+          playerName="James"
+          clubLabel="DR"
+          headerAction={
+            <button type="button" className="panel-action">
+              Change club
+            </button>
+          }
+        />
+      )
+    );
+    const header = html.match(/<header class="panel-header">[\s\S]*?<\/header>/)?.[0] ?? '';
+
+    expect(header).toContain('Change club');
+    expect(header).toContain('panel-action');
   });
 
   it('shows the current player\'s last shot, not the previous player\'s', () => {
@@ -146,7 +170,6 @@ describe('LivePanel', () => {
 
     expect(html).toContain('>90.0<');
     expect(html).not.toContain('>150.0<');
-    expect(html).toContain('Shot 01');
     expect(html).not.toContain('Ready');
   });
 
@@ -155,7 +178,6 @@ describe('LivePanel', () => {
     const html = render(alex, [alex]);
 
     expect(html).toContain('Ready');
-    expect(html).toContain('Shot 00');
     expect(html).not.toContain('metric-card--interactive');
   });
 

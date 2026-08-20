@@ -18,5 +18,6 @@ describe('SegmentedControl', () => {
     expect(html).toContain('DARK');
     expect(html).toContain('aria-pressed="true"');
     expect(html).toContain('segmented-control__button--active');
+    expect(html).toContain('aria-pressed="false"');
   });
 });

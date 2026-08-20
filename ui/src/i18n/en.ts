@@ -1,5 +1,6 @@
 export const en = {
   'nav.live': 'Live',
+  'nav.players': 'Players',
   'nav.stats': 'Stats',
   'nav.shots': 'Shots',
   'nav.camera': 'Camera',
@@ -9,7 +10,12 @@ export const en = {
 
   'header.serverConnected': 'Server connected',
   'header.serverDisconnected': 'Server disconnected',
-  'header.shotCount': 'Shot {n}',
+  'header.statusMenu': 'System status',
+  'header.closeStatus': 'Close status',
+  'header.server': 'Server',
+  'header.radar': 'Radar',
+  'header.connected': 'Connected',
+  'header.disconnected': 'Disconnected',
 
   'live.ready': 'Ready',
   'live.readyDetail': 'Start a shot or swing speed session',
@@ -79,6 +85,11 @@ export const en = {
   'shots.diff': 'Diff',
   'shots.notes': 'Notes',
   'shots.notesPlaceholder': 'notes…',
+
+  'players.rosterAria': 'Players',
+  'players.shots': '{count} shots',
+  'players.shot': '{count} shot',
+  'players.namePlaceholder': 'Name',
 
   'camera.notConnected': 'Camera not connected',
   'camera.detectionOff': 'Ball detection off',

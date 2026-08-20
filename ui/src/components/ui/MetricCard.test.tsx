@@ -53,6 +53,18 @@ describe('MetricCard', () => {
     expect(dense).toContain('metric-card__meta');
   });
 
+  it('vertically centers label-above content on shared label/value/meta bands', () => {
+    expect(css).toMatch(
+      /\.metric-card--label-above \{[^}]*grid-template-rows: 1fr auto auto auto 1fr/
+    );
+    expect(css).toMatch(/\.metric-card--label-above \.metric-card__label \{[^}]*grid-row: 2/);
+    expect(css).toMatch(/\.metric-card--label-above \.metric-card__label \{[^}]*min-height: 16px/);
+    expect(css).toMatch(/\.metric-card--label-above \.metric-card__value-row \{[^}]*grid-row: 3/);
+    expect(css).toMatch(/\.metric-card--label-above \.metric-card__meta \{[^}]*grid-row: 4/);
+    expect(css).toMatch(/\.metric-card--label-above \.metric-card__meta \{[^}]*min-height: 1\.125rem/);
+    expect(css).toMatch(/\.metric-card__unit \{[^}]*line-height: 1/);
+  });
+
   it('sets subtext in the same caption type as spin accuracy', () => {
     const html = renderToString(
       <MetricCard value="+3.4" unit="°" label="Spin axis" labelPosition="above" subtext="Fade" />
@@ -67,5 +79,15 @@ describe('MetricCard', () => {
     // match on hybrid PCs, so the title color must not use :hover at all.
     expect(css).not.toMatch(/:hover[^\n]*metric-card__label/);
     expect(css).toMatch(/\.metric-card--selected \.metric-card__label \{[^}]*color: var\(--color-accent\)/);
+  });
+
+  it('keeps values and units on full text color', () => {
+    expect(css).toMatch(/\.metric-card__value \{[^}]*color: var\(--color-text\)/);
+    expect(css).toMatch(/\.metric-card__unit \{[^}]*color: var\(--color-text\)/);
+    expect(css).not.toMatch(/\.metric-card__unit,\s*\.metric-card__label \{[^}]*--color-text-muted/);
+  });
+
+  it('does not draw a full accent box around the selected tile', () => {
+    expect(css).not.toMatch(/\.metric-card--selected \{[^}]*inset 0 0 0 2px var\(--color-accent\)/);
   });
 });

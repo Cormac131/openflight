@@ -5,14 +5,14 @@ import type { PanelView } from './views';
 import { PANEL_VIEWS } from './views';
 import { useI18n } from '../../i18n/useI18n';
 import type { MessageKey } from '../../i18n';
+import { useUnitPreference } from '../../state/useUnitPreference';
+import { getUnitsLabel } from '../../utils/units';
 
 interface PanelFooterProps {
   currentView: PanelView;
   onChangeView: (view: PanelView) => void;
   onOpenMenu: () => void;
   menuOpen: boolean;
-  /** Right-hand action for the active panel (change club, clear session, …). */
-  action?: ReactNode;
   shotCount: number;
   cameraStreaming: boolean;
   ballDetected: boolean;
@@ -21,19 +21,20 @@ interface PanelFooterProps {
   brand?: ReactNode;
 }
 
+const VIEWS_WITH_UNITS: ReadonlySet<PanelView> = new Set(['live', 'stats', 'shots']);
+
 /**
- * Bottom bar from design doc 6a: menu button, text nav tabs, panel action.
+ * Bottom bar: menu button, divider-separated panel tabs, and view meta on the
+ * right. Panel actions live in `PanelHeader`.
  *
- * The mockup footer shows four tabs; Debug is kept as a fifth because it is a
- * working diagnostic tool and burying it behind a gesture makes it unreachable
- * on the kiosk touchscreen.
+ * The mockup footer shows four tabs; Players and Debug are extra working
+ * screens. Burying either behind a gesture makes them unreachable on the kiosk.
  */
 export function PanelFooter({
   currentView,
   onChangeView,
   onOpenMenu,
   menuOpen,
-  action,
   shotCount,
   cameraStreaming,
   ballDetected,
@@ -41,6 +42,9 @@ export function PanelFooter({
   brand,
 }: PanelFooterProps) {
   const { t } = useI18n();
+  const { unitSystem } = useUnitPreference();
+  const unitsLabel = getUnitsLabel(unitSystem);
+  const showUnits = VIEWS_WITH_UNITS.has(currentView);
   const options = PANEL_VIEWS.map((view) => {
     const label = t(`nav.${view.id}` as MessageKey);
     switch (view.id) {
@@ -82,15 +86,22 @@ export function PanelFooter({
         {brand ?? <Logo size="small" variant="mono" />}
       </button>
 
-      <TabBar
-        className="panel-footer__tabs"
-        ariaLabel={t('nav.panels')}
-        value={currentView}
-        onChange={onChangeView}
-        options={options}
-      />
+      <div className="panel-footer__nav">
+        <TabBar
+          className="panel-footer__tabs"
+          ariaLabel={t('nav.panels')}
+          value={currentView}
+          onChange={onChangeView}
+          options={options}
+          separator={<span className="panel-header__divider" aria-hidden="true" />}
+        />
+      </div>
 
-      {action ? <div className="panel-footer__action">{action}</div> : null}
+      {showUnits ? (
+        <div className="panel-footer__meta">
+          <span className="panel-footer__units">{unitsLabel}</span>
+        </div>
+      ) : null}
     </div>
   );
 }

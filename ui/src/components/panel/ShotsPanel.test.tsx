@@ -1,7 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Shot } from '../../types/shot';
 import { ShotsPanel } from './ShotsPanel';
+
+const css = readFileSync(fileURLToPath(new URL('./panel.css', import.meta.url)), 'utf8');
 
 function text(html: string): string {
   return html.replace(/<!-- -->/g, '');
@@ -46,6 +50,16 @@ describe('ShotsPanel', () => {
     expect(html).not.toContain('shots-panel__row-main');
     // Nothing to upload or export yet.
     expect(html).toContain('disabled=""');
+  });
+
+  it('makes Export CSV the primary header action', () => {
+    const html = render([makeShot()]);
+    const header = html.match(/<header class="panel-header">[\s\S]*?<\/header>/)?.[0] ?? '';
+    const exportButton = header.match(/<button[^>]*>[\s\S]*?Export CSV[\s\S]*?<\/button>/)?.[0];
+    const uploadButton = header.match(/<button[^>]*>[\s\S]*?Upload[\s\S]*?<\/button>/)?.[0];
+
+    expect(exportButton).toContain('panel-action--primary');
+    expect(uploadButton).toContain('panel-action--secondary');
   });
 
   it('exposes the shot rows as a drag-scrollable region', () => {
@@ -144,5 +158,10 @@ describe('ShotsPanel', () => {
 
     expect(html).toContain('No shots yet');
     expect(html).not.toContain('shots-panel__row-main');
+  });
+
+  it('paints the list on the same surface as the header', () => {
+    expect(render([makeShot()])).toContain('panel shots-panel');
+    expect(css).toMatch(/\.panel\.shots-panel \{[^}]*background: var\(--color-surface\)/);
   });
 });

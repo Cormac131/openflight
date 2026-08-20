@@ -15,13 +15,13 @@ describe('App shell', () => {
     expect(html).not.toContain('unit-toggle');
   });
 
-  it('renders every panel tab, including Debug as the fifth', () => {
+  it('renders every panel tab, with Players as a first-class view', () => {
     const html = renderToString(<App />);
 
     for (const view of PANEL_VIEWS) {
       expect(html).toContain(`<span>${view.label}</span>`);
     }
-    expect(PANEL_VIEWS).toHaveLength(5);
+    expect(PANEL_VIEWS.map((view) => view.id)).toEqual(['live', 'stats', 'shots', 'camera', 'players', 'debug']);
   });
 
   it('marks the Live tab pressed and shows the Live panel', () => {
@@ -43,11 +43,21 @@ describe('App shell', () => {
     expect(html).toContain('aria-label="Close Select club"');
   });
 
-  it('offers the club change action in the footer', () => {
+  it('offers the club change action in the Live header', () => {
     const html = renderToString(<App />);
 
     expect(html).toContain('Change club');
+    expect(html).not.toContain('panel-footer__action');
     expect(html).not.toContain('panel-action__value');
     expect(html).toContain('panel-header__club">Driver<');
+  });
+
+  it('puts units in the Live footer', () => {
+    const html = renderToString(<App />);
+
+    expect(html).toContain('panel-footer__units');
+    expect(html).toContain('mph / yds');
+    expect(html).not.toContain('Shot 00');
+    expect(html).not.toContain('panel-footer__count');
   });
 });

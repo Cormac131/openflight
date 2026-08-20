@@ -1,6 +1,12 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import type { CameraStatus } from '../../stores/useCameraStore';
+import { useCameraStore } from '../../stores/useCameraStore';
+import { useDebugStore } from '../../stores/useDebugStore';
+import { useLaunchDaddyStore } from '../../stores/useLaunchDaddyStore';
 import { useSystemStore } from '../../stores/useSystemStore';
 import { useI18n } from '../../i18n/useI18n';
+import { ballDetectionStatusLabel } from '../../utils/ballDetectionStatus';
+import { StatusMenu } from './StatusMenu';
 
 interface PanelHeaderProps {
   /** Uppercase panel name, e.g. "Live". */
@@ -9,19 +15,22 @@ interface PanelHeaderProps {
   subtitle?: ReactNode;
   /** Active club or training implement, shown after the subtitle. */
   club?: ReactNode;
-  /** Right-hand controls: filters, unit label, panel actions. */
+  /** Right-hand `PanelAction` buttons: primary, secondary, or danger. */
   actions?: ReactNode;
   /**
    * Socket connection. Omit to read `useSystemStore`; pass it in tests so SSR
    * is not stuck with the store's initial `false`.
    */
   connected?: boolean;
+  /** OPS243 link from `trigger_status`. Omit to read `useDebugStore`. */
+  radarConnected?: boolean;
+  /** Camera / YOLO snapshot. Omit to read `useCameraStore`. */
+  cameraStatus?: CameraStatus;
   /**
-   * Invoked when the status dot is tapped. The dot is otherwise decorative, so
-   * it carries the Launch Daddy secret tap that used to live on the header logo
-   * (the logo now opens the menu sheet).
+   * Force the status menu open or closed. Omit to toggle from the LED + title
+   * tap (the path the kiosk uses).
    */
-  onStatusTap?: () => void;
+  statusMenuOpen?: boolean;
 }
 
 /**
@@ -38,9 +47,9 @@ function IdentityPart({ children, className }: { children: ReactNode; className:
 }
 
 /**
- * Page chrome: title plus a connection LED. Green when the socket is up, red
- * when it is down — the same signal that used to live as a System row in the
- * menu sheet.
+ * Page chrome: title plus a connection LED. Tapping the LED and title opens a
+ * status menu (server, radar, ball detection). Five taps still toggle Launch
+ * Daddy, which used to live on this LED alone.
  */
 export function PanelHeader({
   title,
@@ -48,33 +57,61 @@ export function PanelHeader({
   club,
   actions,
   connected: connectedProp,
-  onStatusTap,
+  radarConnected: radarConnectedProp,
+  cameraStatus: cameraStatusProp,
+  statusMenuOpen: statusMenuOpenProp,
 }: PanelHeaderProps) {
   const { t } = useI18n();
   const storeConnected = useSystemStore((state) => state.connected);
+  const storeRadarConnected = useDebugStore((state) => state.triggerStatus.radar_connected);
+  const storeCameraStatus = useCameraStore((state) => state.cameraStatus);
+  const handleSecretTap = useLaunchDaddyStore((state) => state.handleSecretTap);
+  const [internalOpen, setInternalOpen] = useState(false);
+
   const connected = connectedProp ?? storeConnected;
+  const radarConnected = radarConnectedProp ?? storeRadarConnected;
+  const cameraStatus = cameraStatusProp ?? storeCameraStatus;
+  const menuOpen = statusMenuOpenProp ?? internalOpen;
   const status = connected ? 'connected' : 'disconnected';
   const statusLabel = connected ? t('header.serverConnected') : t('header.serverDisconnected');
-  const dotClasses = `panel-header__dot panel-header__dot--${status}`;
+
+  const toggleMenu = () => {
+    handleSecretTap();
+    if (statusMenuOpenProp === undefined) {
+      setInternalOpen((open) => !open);
+    }
+  };
 
   return (
     <header className="panel-header">
       <div className="panel-header__identity">
-        {onStatusTap ? (
-          <button
-            type="button"
-            className={`${dotClasses} panel-header__dot--tappable`}
-            onClick={onStatusTap}
-            aria-label={statusLabel}
-          />
-        ) : (
-          <span className={dotClasses} role="status" aria-label={statusLabel} />
-        )}
-        <span className="panel-header__title">{title}</span>
+        <button
+          type="button"
+          className="panel-header__status"
+          onClick={toggleMenu}
+          aria-label={statusLabel}
+          aria-haspopup="dialog"
+          aria-expanded={menuOpen}
+        >
+          <span className={`panel-header__dot panel-header__dot--${status}`} aria-hidden="true" />
+          <span className="panel-header__title">{title}</span>
+        </button>
         {subtitle ? <IdentityPart className="panel-header__subtitle">{subtitle}</IdentityPart> : null}
         {club ? <IdentityPart className="panel-header__club">{club}</IdentityPart> : null}
       </div>
       {actions ? <div className="panel-header__actions">{actions}</div> : null}
+      {menuOpen ? (
+        <StatusMenu
+          connected={connected}
+          radarConnected={radarConnected}
+          ballDetection={ballDetectionStatusLabel(cameraStatus)}
+          onClose={() => {
+            if (statusMenuOpenProp === undefined) {
+              setInternalOpen(false);
+            }
+          }}
+        />
+      ) : null}
     </header>
   );
 }

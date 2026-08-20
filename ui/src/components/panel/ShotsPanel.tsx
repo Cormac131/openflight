@@ -11,6 +11,7 @@ import type { UnitSystem } from '../../utils/units';
 import { formatDistance, formatSpeed } from '../../utils/units';
 import { buildValidationCsv, comparatorDifference, downloadCsv } from '../../utils/validationCsv';
 import { PanelHeader } from './PanelHeader';
+import { PanelAction } from './PanelAction';
 import { getHtmlLang } from '../../i18n';
 import { useI18n } from '../../i18n/useI18n';
 
@@ -163,17 +164,16 @@ export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: Shots
       club={clubLabel}
       actions={
         <>
-          <button
-            type="button"
-            className="panel-chip"
+          <PanelAction
+            variant="secondary"
             disabled={cloudUploadState === 'running' || playerShots.length === 0}
             onClick={() => socketService.uploadCloud()}
           >
             {cloudUploadState === 'running' ? t('shots.uploading') : t('shots.uploadCloud')}
-          </button>
-          <button type="button" className="panel-chip" disabled={playerShots.length === 0} onClick={handleExport}>
+          </PanelAction>
+          <PanelAction variant="primary" disabled={playerShots.length === 0} onClick={handleExport}>
             {t('shots.exportCsv')}
-          </button>
+          </PanelAction>
         </>
       }
     />
@@ -181,7 +181,7 @@ export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: Shots
 
   if (playerShots.length === 0) {
     return (
-      <div className="panel">
+      <div className="panel shots-panel">
         {header}
         <div className="panel__body panel__body--empty">
           <span className="panel__empty-title">{t('shots.noShots')}</span>
@@ -192,7 +192,7 @@ export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: Shots
   }
 
   return (
-    <div className="panel">
+    <div className="panel shots-panel">
       {header}
       <div className="shots-panel__columns" role="presentation">
         <span>{t('shots.colShot')}</span>

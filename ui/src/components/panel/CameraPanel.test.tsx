@@ -29,6 +29,7 @@ describe('CameraPanel', () => {
     expect(html).toContain('Camera disabled');
     expect(html).toContain('Enable the camera to start ball detection');
     expect(html).toContain('Enable camera');
+    expect(html).toContain('panel-action--primary');
     expect(html).toContain('Ball detection off');
     // No stream controls until the camera is on.
     expect(html).not.toContain('Start stream');
@@ -39,6 +40,7 @@ describe('CameraPanel', () => {
 
     expect(html).toContain('Disable camera');
     expect(html).toContain('Start stream');
+    expect(html).toContain('panel-action--secondary');
     expect(html).toContain('Stream paused');
   });
 
