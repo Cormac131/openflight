@@ -6,7 +6,11 @@ import { useUnitPreference } from '../state/useUnitPreference';
 import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../utils/units';
 import { getServerOrigin } from '../utils/serverOrigin';
 import { MetricCard } from './ui/MetricCard';
+import { getHtmlLang, type MessageKey } from '../i18n';
+import { useI18n } from '../i18n/useI18n';
 import './DisplayMode.css';
+
+type Translate = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
 interface DisplayModeProps {
   connected: boolean;
@@ -39,20 +43,20 @@ function formatSpin(value: number | null): string {
     return '--';
   }
 
-  return value.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  return value.toLocaleString(getHtmlLang(), { maximumFractionDigits: 0 });
 }
 
-function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric'): DisplayMetric[] {
+function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric', t: Translate): DisplayMetric[] {
   if (!shot) {
     return [
-      { label: 'Ball Speed', value: '--', unit: getSpeedUnit(unitSystem) },
-      { label: 'Carry', value: '--', unit: getDistanceUnit(unitSystem) },
-      { label: 'Club Speed', value: '--', unit: getSpeedUnit(unitSystem) },
-      { label: 'Smash', value: '--' },
-      { label: 'Launch', value: '--', unit: 'deg' },
-      { label: 'Spin', value: '--', unit: 'rpm' },
-      { label: 'Club Path', value: '--', unit: 'deg' },
-      { label: 'H. Launch', value: '--', unit: 'deg' },
+      { label: t('display.ballSpeed'), value: '--', unit: getSpeedUnit(unitSystem) },
+      { label: t('metric.carry'), value: '--', unit: getDistanceUnit(unitSystem) },
+      { label: t('display.clubSpeed'), value: '--', unit: getSpeedUnit(unitSystem) },
+      { label: t('metric.smash'), value: '--' },
+      { label: t('display.launch'), value: '--', unit: 'deg' },
+      { label: t('metric.spin'), value: '--', unit: 'rpm' },
+      { label: t('display.clubPath'), value: '--', unit: 'deg' },
+      { label: t('metric.hLaunch'), value: '--', unit: 'deg' },
     ];
   }
 
@@ -60,44 +64,44 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric'): Dis
 
   return [
     {
-      label: 'Ball Speed',
+      label: t('display.ballSpeed'),
       value: formatSpeed(shot.ball_speed_mph, unitSystem, 1),
       unit: getSpeedUnit(unitSystem),
     },
     {
-      label: 'Carry',
+      label: t('metric.carry'),
       value: formatDistance(carryYards, unitSystem, 0),
       unit: getDistanceUnit(unitSystem),
-      detail: shot.carry_spin_adjusted ? 'Spin-adjusted' : undefined,
+      detail: shot.carry_spin_adjusted ? t('metric.spinAdjusted') : undefined,
     },
     {
-      label: 'Club Speed',
+      label: t('display.clubSpeed'),
       value: shot.club_speed_mph === null ? '--' : formatSpeed(shot.club_speed_mph, unitSystem, 1),
       unit: shot.club_speed_mph === null ? undefined : getSpeedUnit(unitSystem),
     },
     {
-      label: 'Smash',
+      label: t('metric.smash'),
       value: shot.smash_factor === null ? '--' : shot.smash_factor.toFixed(2),
     },
     {
-      label: 'Launch',
+      label: t('display.launch'),
       value: formatOptionalNumber(shot.launch_angle_vertical),
       unit: shot.launch_angle_vertical === null ? undefined : 'deg',
       detail: shot.angle_source ?? undefined,
     },
     {
-      label: 'Spin',
+      label: t('metric.spin'),
       value: formatSpin(shot.spin_rpm),
       unit: shot.spin_rpm === null ? undefined : 'rpm',
       detail: shot.spin_quality ?? undefined,
     },
     {
-      label: 'Club Path',
+      label: t('display.clubPath'),
       value: formatOptionalNumber(shot.club_path_deg, 1, true),
       unit: shot.club_path_deg === null ? undefined : 'deg',
     },
     {
-      label: 'H. Launch',
+      label: t('metric.hLaunch'),
       value: formatOptionalNumber(shot.launch_angle_horizontal, 1, true),
       unit: shot.launch_angle_horizontal === null ? undefined : 'deg',
     },
@@ -118,6 +122,7 @@ function toMetricCard(metric: DisplayMetric, featured = false) {
 }
 
 export function DisplayMode({ connected, cameraStatus, latestShot, shots }: DisplayModeProps) {
+  const { t } = useI18n();
   const [failedCameraKey, setFailedCameraKey] = useState<string | null>(null);
   const { unitSystem } = useUnitPreference();
   const isSwingSpeedSession = latestShot ? isSwingSpeedShot(latestShot) : false;
@@ -125,40 +130,40 @@ export function DisplayMode({ connected, cameraStatus, latestShot, shots }: Disp
   const metrics = isSwingSpeedSession
     ? [
         {
-          label: 'Last Swing',
+          label: t('display.lastSwing'),
           value: formatSpeed(swingStats.last_speed_mph, unitSystem, 1),
           unit: getSpeedUnit(unitSystem),
         },
         {
-          label: 'Best',
+          label: t('metric.best'),
           value: formatSpeed(swingStats.best_speed_mph, unitSystem, 1),
           unit: getSpeedUnit(unitSystem),
-          detail: 'this session',
+          detail: t('display.thisSession'),
         },
         {
-          label: 'Average',
+          label: t('metric.average'),
           value: formatSpeed(swingStats.avg_speed_mph, unitSystem, 1),
           unit: getSpeedUnit(unitSystem),
         },
-        { label: 'Swings', value: String(swingStats.count) },
+        { label: t('metric.swings'), value: String(swingStats.count) },
       ]
-    : buildMetrics(latestShot, unitSystem);
+    : buildMetrics(latestShot, unitSystem, t);
   const recentShots = shots.slice(-RECENT_SHOT_COUNT).reverse();
   const cameraKey = `${cameraStatus.available}-${cameraStatus.streaming}`;
   const cameraError = failedCameraKey === cameraKey;
 
   return (
     <main className="display-mode">
-      <section className="display-mode__hero" aria-label="TV display mode">
+      <section className="display-mode__hero" aria-label={t('display.tvAria')}>
         <div className="display-mode__camera">
           {cameraError ? (
             <div className="display-mode__camera-placeholder">
-              <span>Camera stream unavailable</span>
+              <span>{t('display.streamUnavailable')}</span>
             </div>
           ) : (
             <img
               src={CAMERA_STREAM_URL}
-              alt="OpenFlight camera stream"
+              alt={t('display.streamAlt')}
               className="display-mode__camera-image"
               onError={() => setFailedCameraKey(cameraKey)}
               onLoad={() => setFailedCameraKey(null)}
@@ -168,22 +173,22 @@ export function DisplayMode({ connected, cameraStatus, latestShot, shots }: Disp
             <span
               className={`display-mode__status ${connected ? 'display-mode__status--online' : 'display-mode__status--offline'}`}
             >
-              {connected ? 'Socket connected' : 'Socket disconnected'}
+              {connected ? t('display.socketOn') : t('display.socketOff')}
             </span>
             <span
               className={`display-mode__status ${cameraStatus.available && cameraStatus.streaming && !cameraError ? 'display-mode__status--online' : 'display-mode__status--offline'}`}
             >
               {cameraStatus.available && cameraStatus.streaming && !cameraError
-                ? 'Camera stream active'
-                : 'Camera unavailable'}
+                ? t('display.streamActive')
+                : t('display.cameraUnavailable')}
             </span>
           </div>
         </div>
 
         <div className="display-mode__shot-panel">
-          <div className="display-mode__eyebrow">OpenFlight Display</div>
+          <div className="display-mode__eyebrow">{t('display.eyebrow')}</div>
           <h1 className="display-mode__title">
-            {isSwingSpeedSession ? 'Swing Speed' : latestShot ? latestShot.club : 'Ready'}
+            {isSwingSpeedSession ? t('display.swingSpeed') : latestShot ? latestShot.club : t('display.ready')}
           </h1>
           <div className="display-mode__primary-grid">
             {toMetricCard(metrics[0], true)}
@@ -193,9 +198,9 @@ export function DisplayMode({ connected, cameraStatus, latestShot, shots }: Disp
         </div>
       </section>
 
-      <section className="display-mode__recent" aria-label="Recent shots">
+      <section className="display-mode__recent" aria-label={t('display.recentAria')}>
         {recentShots.length === 0 ? (
-          <div className="display-mode__empty-strip">Recent shots will appear here</div>
+          <div className="display-mode__empty-strip">{t('display.recentEmpty')}</div>
         ) : (
           recentShots.map((shot, index) => (
             <div className="display-shot-chip" key={shot.timestamp}>

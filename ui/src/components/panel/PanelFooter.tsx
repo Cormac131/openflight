@@ -3,6 +3,8 @@ import Logo from '../../logo/Logo';
 import { TabBar } from '../ui/TabBar';
 import type { PanelView } from './views';
 import { PANEL_VIEWS } from './views';
+import { useI18n } from '../../i18n/useI18n';
+import type { MessageKey } from '../../i18n';
 
 interface PanelFooterProps {
   currentView: PanelView;
@@ -38,27 +40,32 @@ export function PanelFooter({
   debugRecording,
   brand,
 }: PanelFooterProps) {
+  const { t } = useI18n();
   const options = PANEL_VIEWS.map((view) => {
+    const label = t(`nav.${view.id}` as MessageKey);
     switch (view.id) {
       case 'shots':
         return {
           ...view,
+          label,
           badge: shotCount > 0 ? <span className="nav__badge">{shotCount}</span> : undefined,
         };
       case 'camera':
         return {
           ...view,
+          label,
           extraClassName: cameraStreaming ? 'nav__button--streaming' : undefined,
           badge: ballDetected ? <span className="nav__ball-dot" /> : undefined,
         };
       case 'debug':
         return {
           ...view,
+          label,
           extraClassName: debugRecording ? 'nav__button--recording' : undefined,
           badge: debugRecording ? <span className="nav__recording-dot" /> : undefined,
         };
       default:
-        return view;
+        return { ...view, label };
     }
   });
 
@@ -70,14 +77,14 @@ export function PanelFooter({
         style={{ border: 'none' }}
         onClick={onOpenMenu}
         aria-expanded={menuOpen}
-        aria-label="Open menu"
+        aria-label={t('nav.openMenu')}
       >
         {brand ?? <Logo size="small" variant="mono" />}
       </button>
 
       <TabBar
         className="panel-footer__tabs"
-        ariaLabel="Panels"
+        ariaLabel={t('nav.panels')}
         value={currentView}
         onChange={onChangeView}
         options={options}

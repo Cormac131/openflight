@@ -1,4 +1,5 @@
 import type { SpinQuality } from '../../types/shot';
+import { t } from '../../i18n';
 import './MetricCard.css';
 
 export interface MetricCardProps {
@@ -24,12 +25,12 @@ export interface MetricCardProps {
 
 export function EstimatedMark() {
   return (
-    <span className="metric-card__estimated" title="Estimated">
+    <span className="metric-card__estimated" title={t('metric.estimated')}>
       <svg viewBox="0 0 16 10" aria-hidden="true">
         <path d="M1 3.1c2.2-1.6 4.4 1.6 6.6 0s4.4-1.6 6.6 0" />
         <path d="M1 7.4c2.2-1.6 4.4 1.6 6.6 0s4.4-1.6 6.6 0" />
       </svg>
-      <span className="metric-card__estimated-label">Estimated</span>
+      <span className="metric-card__estimated-label">{t('metric.estimated')}</span>
     </span>
   );
 }

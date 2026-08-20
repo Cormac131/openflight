@@ -124,4 +124,25 @@ describe('ShotsPanel', () => {
     expect(html).toContain('>7<');
     expect(html).toContain('>120<');
   });
+
+  it('lists only the current player\'s shots', () => {
+    const html = render([
+      makeShot({ timestamp: 'a', ball_speed_mph: 92 }),
+      makeShot({ player_name: 'Alex', timestamp: 'b', ball_speed_mph: 140 }),
+    ]);
+    const indexes = [...html.matchAll(/shots-panel__index">(\d+)</g)].map((m) => m[1]);
+
+    expect(html).toContain('>92.0<');
+    expect(html).not.toContain('>140.0<');
+    expect(html).not.toContain('>Alex<');
+    expect(html).toContain('1 recorded · 0/1 validated');
+    expect(indexes).toEqual(['1']);
+  });
+
+  it('shows the empty state when only other players have shots', () => {
+    const html = render([makeShot({ player_name: 'Alex' })]);
+
+    expect(html).toContain('No shots yet');
+    expect(html).not.toContain('shots-panel__row-main');
+  });
 });

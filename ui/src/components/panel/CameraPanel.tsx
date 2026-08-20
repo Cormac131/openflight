@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { CameraStatus } from '../../stores/useCameraStore';
 import { getServerOrigin } from '../../utils/serverOrigin';
 import { PanelHeader } from './PanelHeader';
+import { useI18n } from '../../i18n/useI18n';
 
 interface CameraPanelProps {
   cameraStatus: CameraStatus;
@@ -26,6 +27,7 @@ function CameraGlyph() {
  * error states reuse the same hatched stage so the panel reads as one surface.
  */
 export function CameraPanel({ cameraStatus, clubLabel, onToggleCamera, onToggleStream }: CameraPanelProps) {
+  const { t } = useI18n();
   const [streamError, setStreamError] = useState(false);
   const { available, enabled, streaming, ball_detected, ball_confidence } = cameraStatus;
 
@@ -36,20 +38,20 @@ export function CameraPanel({ cameraStatus, clubLabel, onToggleCamera, onToggleS
   }, [streaming]);
 
   const subtitle = !available
-    ? 'Camera not connected'
+    ? t('camera.notConnected')
     : !enabled
-      ? 'Ball detection off'
+      ? t('camera.detectionOff')
       : ball_detected
-        ? `Ball detected ${Math.round(ball_confidence * 100)}%`
-        : 'Ball detection on';
+        ? t('camera.detected', { percent: Math.round(ball_confidence * 100) })
+        : t('camera.detectionOn');
 
   const stage = () => {
     if (!available) {
       return (
         <div className="camera-panel__stage">
           <CameraGlyph />
-          <span className="camera-panel__title">Camera unavailable</span>
-          <span className="camera-panel__detail">Start the server with --camera to enable ball detection</span>
+          <span className="camera-panel__title">{t('camera.unavailable')}</span>
+          <span className="camera-panel__detail">{t('camera.unavailableDetail')}</span>
         </div>
       );
     }
@@ -58,8 +60,8 @@ export function CameraPanel({ cameraStatus, clubLabel, onToggleCamera, onToggleS
       return (
         <div className="camera-panel__stage">
           <CameraGlyph />
-          <span className="camera-panel__title">Camera disabled</span>
-          <span className="camera-panel__detail">Enable the camera to start ball detection</span>
+          <span className="camera-panel__title">{t('camera.disabled')}</span>
+          <span className="camera-panel__detail">{t('camera.disabledDetail')}</span>
         </div>
       );
     }
@@ -68,10 +70,8 @@ export function CameraPanel({ cameraStatus, clubLabel, onToggleCamera, onToggleS
       return (
         <div className="camera-panel__stage">
           <CameraGlyph />
-          <span className="camera-panel__title">Stream paused</span>
-          <span className="camera-panel__detail">
-            Ball detection is running. Start the stream to see the live feed.
-          </span>
+          <span className="camera-panel__title">{t('camera.streamPaused')}</span>
+          <span className="camera-panel__detail">{t('camera.streamPausedDetail')}</span>
         </div>
       );
     }
@@ -80,10 +80,10 @@ export function CameraPanel({ cameraStatus, clubLabel, onToggleCamera, onToggleS
       return (
         <div className="camera-panel__stage">
           <CameraGlyph />
-          <span className="camera-panel__title">Stream error</span>
-          <span className="camera-panel__detail">Could not load the camera stream</span>
+          <span className="camera-panel__title">{t('camera.streamError')}</span>
+          <span className="camera-panel__detail">{t('camera.streamErrorDetail')}</span>
           <button type="button" className="panel-chip" onClick={() => setStreamError(false)}>
-            Retry
+            {t('camera.retry')}
           </button>
         </div>
       );
@@ -91,9 +91,16 @@ export function CameraPanel({ cameraStatus, clubLabel, onToggleCamera, onToggleS
 
     return (
       <div className="camera-panel__stage camera-panel__stage--live">
-        <img src={STREAM_URL} alt="Camera feed" className="camera-panel__video" onError={() => setStreamError(true)} />
+        <img
+          src={STREAM_URL}
+          alt={t('camera.feedAlt')}
+          className="camera-panel__video"
+          onError={() => setStreamError(true)}
+        />
         <span className={`camera-panel__chip${ball_detected ? ' camera-panel__chip--detected' : ''}`}>
-          {ball_detected ? `Ball ${Math.round(ball_confidence * 100)}%` : 'Searching…'}
+          {ball_detected
+            ? t('camera.ballPercent', { percent: Math.round(ball_confidence * 100) })
+            : t('camera.searching')}
         </span>
       </div>
     );
@@ -102,18 +109,18 @@ export function CameraPanel({ cameraStatus, clubLabel, onToggleCamera, onToggleS
   return (
     <div className="panel">
       <PanelHeader
-        title="Camera"
+        title={t('nav.camera')}
         subtitle={subtitle}
         club={clubLabel}
         actions={
           available ? (
             <>
               <button type="button" className="panel-chip panel-chip--accent" onClick={onToggleCamera}>
-                {enabled ? 'Disable camera' : 'Enable camera'}
+                {enabled ? t('camera.disable') : t('camera.enable')}
               </button>
               {enabled ? (
                 <button type="button" className="panel-chip" onClick={onToggleStream}>
-                  {streaming ? 'Stop stream' : 'Start stream'}
+                  {streaming ? t('camera.stopStream') : t('camera.startStream')}
                 </button>
               ) : null}
             </>

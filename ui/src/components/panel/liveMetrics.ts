@@ -2,6 +2,7 @@ import type { Shot, SpinQuality, SwingSpeedStats } from '../../types/shot';
 import { getSwingSpeedMph, isSwingSpeedShot } from '../../types/shot';
 import type { UnitSystem } from '../../utils/units';
 import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../../utils/units';
+import { getHtmlLang, t } from '../../i18n';
 import type { PanelView } from './views';
 
 /** Placeholder for a metric the current shot has no value for. */
@@ -45,7 +46,7 @@ function angleUnit(value: number | null): string | undefined {
 
 function formatSpinRpm(rpm: number | null): string {
   if (rpm === null) return NO_VALUE;
-  return rpm.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  return rpm.toLocaleString(getHtmlLang(), { maximumFractionDigits: 0 });
 }
 
 function launchAngleQuality(confidence: number | null): SpinQuality | null {
@@ -57,9 +58,9 @@ function launchAngleQuality(confidence: number | null): SpinQuality | null {
 
 function shotShape(spinAxisDeg: number | null): string | undefined {
   if (spinAxisDeg === null) return undefined;
-  if (spinAxisDeg > 2) return 'Fade';
-  if (spinAxisDeg < -2) return 'Draw';
-  return 'Straight';
+  if (spinAxisDeg > 2) return t('shape.fade');
+  if (spinAxisDeg < -2) return t('shape.draw');
+  return t('shape.straight');
 }
 
 function markEstimated(isEstimated: boolean): true | undefined {
@@ -75,32 +76,32 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
   return [
     {
       id: 'ball_speed',
-      label: 'Ball speed',
+      label: t('metric.ballSpeed'),
       value: formatSpeed(shot.ball_speed_mph, unitSystem, 1),
       unit: speedUnit,
     },
     {
       id: 'carry',
-      label: 'Carry',
+      label: t('metric.carry'),
       value: formatDistance(carry, unitSystem, 0),
       unit: getDistanceUnit(unitSystem),
-      subtext: shot.carry_spin_adjusted === null ? undefined : 'Spin-adjusted',
+      subtext: shot.carry_spin_adjusted === null ? undefined : t('metric.spinAdjusted'),
       estimated: markEstimated(shot.carry_spin_adjusted === null),
     },
     {
       id: 'club_speed',
-      label: 'Club speed',
+      label: t('metric.clubSpeed'),
       value: shot.club_speed_mph === null ? NO_VALUE : formatSpeed(shot.club_speed_mph, unitSystem, 1),
       unit: shot.club_speed_mph === null ? undefined : speedUnit,
     },
     {
       id: 'smash',
-      label: 'Smash',
+      label: t('metric.smash'),
       value: shot.smash_factor === null ? NO_VALUE : shot.smash_factor.toFixed(2),
     },
     {
       id: 'launch_v',
-      label: 'V. launch',
+      label: t('metric.vLaunch'),
       value: formatOptionalAngle(shot.launch_angle_vertical),
       unit: angleUnit(shot.launch_angle_vertical),
       estimated: markEstimated(shot.launch_angle_vertical !== null && angleEstimated),
@@ -108,7 +109,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
     },
     {
       id: 'launch_h',
-      label: 'H. launch',
+      label: t('metric.hLaunch'),
       value: formatOptionalAngle(shot.launch_angle_horizontal, true),
       unit: angleUnit(shot.launch_angle_horizontal),
       estimated: markEstimated(shot.launch_angle_horizontal !== null && angleEstimated),
@@ -116,7 +117,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
     },
     {
       id: 'spin',
-      label: 'Spin',
+      label: t('metric.spin'),
       value: formatSpinRpm(shot.spin_rpm),
       unit: shot.spin_rpm === null ? undefined : 'rpm',
       estimated: markEstimated(shot.spin_rpm !== null && shot.spin_source === 'calculated'),
@@ -124,20 +125,20 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
     },
     {
       id: 'spin_axis',
-      label: 'Spin axis',
+      label: t('metric.spinAxis'),
       value: formatOptionalAngle(shot.spin_axis_deg, true),
       unit: angleUnit(shot.spin_axis_deg),
       subtext: shotShape(shot.spin_axis_deg),
     },
     {
       id: 'club_path',
-      label: 'Club path',
+      label: t('metric.clubPath'),
       value: formatOptionalAngle(shot.club_path_deg, true),
       unit: angleUnit(shot.club_path_deg),
     },
     {
       id: 'club_aoa',
-      label: 'Club AoA',
+      label: t('metric.clubAoa'),
       value: formatOptionalAngle(shot.club_angle_deg, true),
       unit: angleUnit(shot.club_angle_deg),
     },
@@ -150,38 +151,44 @@ function buildSwingSpeedMetrics(shot: Shot, stats: SwingSpeedStats, unitSystem: 
   return [
     {
       id: 'swing_last',
-      label: 'Last swing',
+      label: t('metric.lastSwing'),
       value: formatSpeed(getSwingSpeedMph(shot), unitSystem, 1),
       unit: speedUnit,
     },
     {
       id: 'swing_best',
-      label: 'Best',
+      label: t('metric.best'),
       value: formatSpeed(stats.best_speed_mph, unitSystem, 1),
       unit: speedUnit,
-      subtext: 'player + implement',
+      subtext: t('metric.playerImplement'),
     },
     {
       id: 'swing_avg',
-      label: 'Average',
+      label: t('metric.average'),
       value: formatSpeed(stats.avg_speed_mph, unitSystem, 1),
       unit: speedUnit,
-      subtext: `${stats.count} swings`,
+      subtext: t('metric.swingsCount', { count: stats.count }),
     },
     {
       id: 'swing_count',
-      label: 'Swings',
+      label: t('metric.swings'),
       value: String(stats.count),
-      subtext: shot.swing_speed_reading_count === undefined ? undefined : `${shot.swing_speed_reading_count} readings`,
+      subtext:
+        shot.swing_speed_reading_count === undefined
+          ? undefined
+          : t('metric.readingsCount', { count: shot.swing_speed_reading_count }),
     },
     {
       id: 'swing_implement',
-      label: 'Implement',
+      label: t('metric.implement'),
       value: shot.training_implement_label ?? shot.club,
       subtext:
         shot.swing_speed_trigger_mph === undefined
           ? undefined
-          : `${formatSpeed(shot.swing_speed_trigger_mph, unitSystem, 1)} ${speedUnit} trigger`,
+          : t('metric.trigger', {
+              speed: formatSpeed(shot.swing_speed_trigger_mph, unitSystem, 1),
+              unit: speedUnit,
+            }),
     },
   ];
 }

@@ -92,6 +92,28 @@ covers casting it.
 **Launch Daddy** is a hidden mode toggled by a tap area in the header. When on,
 new shots can fire an animated overlay.
 
+## Languages
+
+UI copy lives in `src/i18n/`. English, Spanish, French, and Portuguese ship
+today. Pick a language from the footer menu (**Language** dropdown). The choice
+is stored in `localStorage` under `openflight.locale:v1`.
+
+### Add a language
+
+1. Copy `src/i18n/en.ts` to `src/i18n/<code>.ts` (use a short BCP 47 language
+   code such as `de` or `ja`).
+2. Translate every value. Keep the same keys; TypeScript will fail the build if
+   a key is missing.
+3. Register it in `src/i18n/index.ts`:
+   - Add the id to `LocaleId`.
+   - Add `{ id, nativeName, htmlLang }` to `LOCALES` (`nativeName` is the
+     language’s own name, shown in the dropdown).
+   - Import the catalog and add it to `catalogs`.
+4. Run `npm test` — a catalog that drifts from English keys fails.
+
+Do not translate player names, club tile codes (`7i`, `DR`), or unit
+abbreviations (`MPH` / `YDS`).
+
 ## Project layout
 
 A few files do most of the work. This is illustrative, not exhaustive —

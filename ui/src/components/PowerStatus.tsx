@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useSystemStore } from '../stores/useSystemStore';
 import type { PowerStatus as PowerStatusData } from '../types/power';
+import { useI18n } from '../i18n/useI18n';
 import './PowerStatus.css';
 
 type WarningLevel = 'low' | 'critical';
@@ -23,11 +24,14 @@ function BatteryIcon({ status }: { status: PowerStatusData }) {
 }
 
 export function PowerIndicator({ status }: { status: PowerStatusData }) {
+  const { t } = useI18n();
   const percentage = status.battery_percent === null ? '--' : `${Math.round(status.battery_percent)}%`;
-  const source = status.external_power ? 'Plugged in' : 'On battery';
-  const label = status.available ? `${source}, ${percentage} battery` : 'Battery status unavailable';
+  const source = status.external_power ? t('power.pluggedIn') : t('power.onBattery');
+  const label = status.available ? t('power.label', { source, percent: percentage }) : t('power.unavailable');
   const detail = status.available
-    ? `${label}${status.battery_voltage_v === null ? '' : `, ${status.battery_voltage_v.toFixed(2)} volts`}`
+    ? status.battery_voltage_v === null
+      ? label
+      : t('power.detailVolts', { label, volts: status.battery_voltage_v.toFixed(2) })
     : status.error || label;
 
   return (
@@ -39,6 +43,7 @@ export function PowerIndicator({ status }: { status: PowerStatusData }) {
 }
 
 export function PowerWarning({ level, percentage }: { level: WarningLevel; percentage: number }) {
+  const { t } = useI18n();
   const [dismissed, setDismissed] = useState(false);
   if (dismissed) return null;
 
@@ -57,13 +62,11 @@ export function PowerWarning({ level, percentage }: { level: WarningLevel; perce
           {`${roundedPercentage}%`}
         </div>
         <div className="power-warning__content">
-          <h2 id="power-warning-title">{critical ? 'Battery critically low' : 'Battery low'}</h2>
-          <p id="power-warning-detail">
-            {critical ? 'Connect OpenFlight to external power now.' : 'Connect OpenFlight to external power soon.'}
-          </p>
+          <h2 id="power-warning-title">{critical ? t('power.critical') : t('power.low')}</h2>
+          <p id="power-warning-detail">{critical ? t('power.criticalDetail') : t('power.lowDetail')}</p>
         </div>
         <button type="button" onClick={() => setDismissed(true)} autoFocus>
-          Dismiss
+          {t('power.dismiss')}
         </button>
       </div>
     </div>

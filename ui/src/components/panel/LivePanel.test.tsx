@@ -31,6 +31,7 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     spin_source: 'measured',
     spin_method: null,
     carry_spin_adjusted: 214,
+    player_name: 'James',
     ...overrides,
   };
 }
@@ -136,6 +137,26 @@ describe('LivePanel', () => {
     expect(html).toContain('Shot 03');
     expect(html).toContain('panel-header__subtitle">James<');
     expect(html).toContain('panel-header__club">DR<');
+  });
+
+  it('shows the current player\'s last shot, not the previous player\'s', () => {
+    const james = makeShot({ ball_speed_mph: 90, timestamp: 'a' });
+    const alex = makeShot({ player_name: 'Alex', ball_speed_mph: 150, timestamp: 'b' });
+    const html = render(alex, [james, alex]);
+
+    expect(html).toContain('>90.0<');
+    expect(html).not.toContain('>150.0<');
+    expect(html).toContain('Shot 01');
+    expect(html).not.toContain('Ready');
+  });
+
+  it('returns to ready when the current player has no shots', () => {
+    const alex = makeShot({ player_name: 'Alex', ball_speed_mph: 150, timestamp: 'b' });
+    const html = render(alex, [alex]);
+
+    expect(html).toContain('Ready');
+    expect(html).toContain('Shot 00');
+    expect(html).not.toContain('metric-card--interactive');
   });
 
   it('renders the five-tile grid for a swing-speed shot', () => {

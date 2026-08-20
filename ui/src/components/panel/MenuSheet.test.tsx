@@ -19,6 +19,19 @@ const batteryStatus = (overrides: Partial<PowerStatus> = {}): PowerStatus => ({
   ...overrides,
 });
 
+describe('MenuSheet language', () => {
+  it('offers a language dropdown with the shipped locales', () => {
+    const html = renderMenu();
+
+    expect(html).toContain('menu-sheet__section-title">Language');
+    expect(html).toContain('aria-label="Language"');
+    expect(html).toContain('>English</option>');
+    expect(html).toContain('>Español</option>');
+    expect(html).toContain('>Français</option>');
+    expect(html).toContain('>Português</option>');
+  });
+});
+
 describe('MenuSheet battery row', () => {
   it('hides the battery row when no battery is present', () => {
     const html = renderMenu();

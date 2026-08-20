@@ -1,8 +1,11 @@
 import { useState } from 'react';
+import { LOCALES, type LocaleId } from '../../i18n';
+import { useI18n } from '../../i18n/useI18n';
 import { usePlayerStore } from '../../stores/usePlayerStore';
 import { useSystemStore } from '../../stores/useSystemStore';
 import { useCameraStore } from '../../stores/useCameraStore';
 import { useThemeStore } from '../../stores/useThemeStore';
+import { useLocaleStore } from '../../stores/useLocaleStore';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { socketService } from '../../services/socketService';
 import { SegmentedControl } from '../ui/SegmentedControl';
@@ -35,8 +38,10 @@ export function MenuSheet({ onClose, onShutdown, powerStatus: powerStatusProp }:
   const powerStatus = powerStatusProp ?? storePowerStatus;
   const simStatuses = useSystemStore((state) => state.simStatuses);
   const cameraStatus = useCameraStore((state) => state.cameraStatus);
+  const { t } = useI18n();
   const { unitSystem, setUnitSystem } = useUnitPreference();
   const { theme, setTheme } = useThemeStore();
+  const { locale, setLocale } = useLocaleStore();
 
   const handleSelectPlayer = (playerName: string) => {
     selectPlayer(playerName);
@@ -58,19 +63,19 @@ export function MenuSheet({ onClose, onShutdown, powerStatus: powerStatusProp }:
   };
 
   const ballDetectionValue = !cameraStatus.available
-    ? 'Unavailable'
+    ? t('menu.unavailable')
     : !cameraStatus.enabled
-      ? 'Off'
+      ? t('menu.off')
       : cameraStatus.ball_detected
-        ? `Ball ${Math.round(cameraStatus.ball_confidence * 100)}%`
-        : 'Searching';
+        ? t('menu.ballPercent', { percent: Math.round(cameraStatus.ball_confidence * 100) })
+        : t('menu.searching');
 
   return (
     <>
-      <button type="button" className="panel-scrim" onClick={onClose} aria-label="Close menu" />
-      <div className="menu-sheet" role="dialog" aria-modal="true" aria-label="Menu">
+      <button type="button" className="panel-scrim" onClick={onClose} aria-label={t('menu.close')} />
+      <div className="menu-sheet" role="dialog" aria-modal="true" aria-label={t('menu.title')}>
         <section className="menu-sheet__section">
-          <span className="menu-sheet__section-title">Player</span>
+          <span className="menu-sheet__section-title">{t('menu.player')}</span>
           <div className="menu-sheet__chips">
             {players.map((playerName) => (
               <span className="menu-sheet__chip-group" key={playerName}>
@@ -86,7 +91,7 @@ export function MenuSheet({ onClose, onShutdown, powerStatus: powerStatusProp }:
                   <button
                     type="button"
                     className="menu-sheet__chip-remove"
-                    aria-label={`Remove ${playerName}`}
+                    aria-label={t('menu.removePlayer', { name: playerName })}
                     onClick={() => handleRemovePlayer(playerName)}
                   >
                     ✕
@@ -99,7 +104,7 @@ export function MenuSheet({ onClose, onShutdown, powerStatus: powerStatusProp }:
             <input
               className="menu-sheet__input"
               type="text"
-              placeholder="Add player"
+              placeholder={t('menu.addPlayer')}
               maxLength={40}
               value={newPlayer}
               onChange={(event) => setNewPlayer(event.target.value)}
@@ -108,15 +113,15 @@ export function MenuSheet({ onClose, onShutdown, powerStatus: powerStatusProp }:
               }}
             />
             <button type="button" className="menu-sheet__chip" onClick={handleAddPlayer}>
-              Add
+              {t('menu.add')}
             </button>
           </div>
         </section>
 
         <section className="menu-sheet__section">
-          <span className="menu-sheet__section-title">Units</span>
+          <span className="menu-sheet__section-title">{t('menu.units')}</span>
           <SegmentedControl
-            ariaLabel="Display units"
+            ariaLabel={t('menu.displayUnits')}
             value={unitSystem}
             options={[
               { id: 'imperial', label: 'MPH / YDS' },
@@ -127,45 +132,61 @@ export function MenuSheet({ onClose, onShutdown, powerStatus: powerStatusProp }:
         </section>
 
         <section className="menu-sheet__section">
-          <span className="menu-sheet__section-title">Theme</span>
+          <span className="menu-sheet__section-title">{t('menu.theme')}</span>
           <SegmentedControl
-            ariaLabel="Theme"
+            ariaLabel={t('menu.theme')}
             value={theme}
             options={[
-              { id: 'dark', label: 'Dark' },
-              { id: 'light', label: 'Light' },
+              { id: 'dark', label: t('menu.themeDark') },
+              { id: 'light', label: t('menu.themeLight') },
             ]}
             onChange={setTheme}
           />
         </section>
 
         <section className="menu-sheet__section">
-          <span className="menu-sheet__section-title">System</span>
+          <span className="menu-sheet__section-title">{t('menu.language')}</span>
+          <select
+            className="menu-sheet__select"
+            aria-label={t('menu.language')}
+            value={locale}
+            onChange={(event) => setLocale(event.target.value as LocaleId)}
+          >
+            {LOCALES.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.nativeName}
+              </option>
+            ))}
+          </select>
+        </section>
+
+        <section className="menu-sheet__section">
+          <span className="menu-sheet__section-title">{t('menu.system')}</span>
           {powerStatus ? (
             <div className="menu-sheet__status-row">
-              <span className="menu-sheet__status-label">Battery</span>
+              <span className="menu-sheet__status-label">{t('menu.battery')}</span>
               <PowerExperience status={powerStatus} />
             </div>
           ) : null}
           <div className="menu-sheet__status-row">
-            <span className="menu-sheet__status-label">Ball detection</span>
+            <span className="menu-sheet__status-label">{t('menu.ballDetection')}</span>
             <span className="menu-sheet__status-value">{ballDetectionValue}</span>
             {cameraStatus.available ? (
               <button type="button" className="menu-sheet__chip" onClick={() => socketService.toggleCamera()}>
-                {cameraStatus.enabled ? 'Disable' : 'Enable'}
+                {cameraStatus.enabled ? t('menu.disable') : t('menu.enable')}
               </button>
             ) : null}
           </div>
           {Object.keys(simStatuses).length > 0 ? (
             <div className="menu-sheet__status-row">
-              <span className="menu-sheet__status-label">Simulators</span>
+              <span className="menu-sheet__status-label">{t('menu.simulators')}</span>
               <SimStatus statuses={simStatuses} />
             </div>
           ) : null}
         </section>
 
         <button type="button" className="menu-sheet__shutdown" onClick={onShutdown}>
-          Shut down
+          {t('menu.shutdown')}
         </button>
       </div>
     </>

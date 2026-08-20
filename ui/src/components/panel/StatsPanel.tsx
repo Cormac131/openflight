@@ -1,8 +1,15 @@
 import { useMemo, useState } from 'react';
 import type { Shot } from '../../types/shot';
-import { computeStats, computeSwingSpeedStats, getUniqueClubs, isSwingSpeedShot } from '../../types/shot';
+import {
+  computeStats,
+  computeSwingSpeedStats,
+  filterShotsByPlayer,
+  getUniqueClubs,
+  isSwingSpeedShot,
+} from '../../types/shot';
 import { useDragScroll } from '../../hooks/useDragScroll';
 import { useUnitPreference } from '../../state/useUnitPreference';
+import { useI18n } from '../../i18n/useI18n';
 import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../../utils/units';
 import { MetricCard } from '../ui/MetricCard';
 import { PanelHeader } from './PanelHeader';
@@ -26,14 +33,18 @@ interface StatTile {
  * drawn), four for a swing-speed one.
  */
 export function StatsPanel({ shots, activeClub, playerName }: StatsPanelProps) {
-  const hasShotsForActiveClub = shots.some((shot) => shot.club === activeClub);
+  const { locale, t } = useI18n();
+  const playerShots = useMemo(() => filterShotsByPlayer(shots, playerName), [shots, playerName]);
+  const hasShotsForActiveClub = playerShots.some((shot) => shot.club === activeClub);
   const [selectedClub, setSelectedClub] = useState<string | null>(hasShotsForActiveClub ? activeClub : null);
   const [prevActiveClub, setPrevActiveClub] = useState(activeClub);
+  const [prevPlayerName, setPrevPlayerName] = useState(playerName);
   const chipScroll = useDragScroll<HTMLDivElement>('x');
 
   // Update state during render when the prop changes, rather than in an effect.
-  if (activeClub !== prevActiveClub) {
+  if (activeClub !== prevActiveClub || playerName !== prevPlayerName) {
     setPrevActiveClub(activeClub);
+    setPrevPlayerName(playerName);
     setSelectedClub(hasShotsForActiveClub ? activeClub : null);
   }
 
@@ -41,18 +52,18 @@ export function StatsPanel({ shots, activeClub, playerName }: StatsPanelProps) {
   const speedUnit = getSpeedUnit(unitSystem);
   const distanceUnit = getDistanceUnit(unitSystem);
 
-  const availableClubs = useMemo(() => getUniqueClubs(shots), [shots]);
+  const availableClubs = useMemo(() => getUniqueClubs(playerShots), [playerShots]);
   const clubCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const shot of shots) {
+    for (const shot of playerShots) {
       counts[shot.club] = (counts[shot.club] ?? 0) + 1;
     }
     return counts;
-  }, [shots]);
+  }, [playerShots]);
 
   const filteredShots = useMemo(
-    () => (selectedClub === null ? shots : shots.filter((shot) => shot.club === selectedClub)),
-    [shots, selectedClub]
+    () => (selectedClub === null ? playerShots : playerShots.filter((shot) => shot.club === selectedClub)),
+    [playerShots, selectedClub]
   );
 
   const stats = useMemo(() => computeStats(filteredShots), [filteredShots]);
@@ -62,46 +73,71 @@ export function StatsPanel({ shots, activeClub, playerName }: StatsPanelProps) {
   const tiles: StatTile[] = useMemo(() => {
     if (isSwingSpeedSession) {
       return [
-        { id: 'count', label: 'Swings', value: String(swingStats.count) },
-        { id: 'last', label: 'Last', value: formatSpeed(swingStats.last_speed_mph, unitSystem, 1), unit: speedUnit },
-        { id: 'best', label: 'Best', value: formatSpeed(swingStats.best_speed_mph, unitSystem, 1), unit: speedUnit },
-        { id: 'avg', label: 'Average', value: formatSpeed(swingStats.avg_speed_mph, unitSystem, 1), unit: speedUnit },
+        { id: 'count', label: t('metric.swings'), value: String(swingStats.count) },
+        {
+          id: 'last',
+          label: t('stats.last'),
+          value: formatSpeed(swingStats.last_speed_mph, unitSystem, 1),
+          unit: speedUnit,
+        },
+        {
+          id: 'best',
+          label: t('metric.best'),
+          value: formatSpeed(swingStats.best_speed_mph, unitSystem, 1),
+          unit: speedUnit,
+        },
+        {
+          id: 'avg',
+          label: t('metric.average'),
+          value: formatSpeed(swingStats.avg_speed_mph, unitSystem, 1),
+          unit: speedUnit,
+        },
       ];
     }
 
     return [
-      { id: 'count', label: 'Shots', value: String(stats.shot_count) },
-      { id: 'avg_ball', label: 'Avg ball', value: formatSpeed(stats.avg_ball_speed, unitSystem, 1), unit: speedUnit },
-      { id: 'max_ball', label: 'Max ball', value: formatSpeed(stats.max_ball_speed, unitSystem, 1), unit: speedUnit },
+      { id: 'count', label: t('stats.shots'), value: String(stats.shot_count) },
+      {
+        id: 'avg_ball',
+        label: t('stats.avgBall'),
+        value: formatSpeed(stats.avg_ball_speed, unitSystem, 1),
+        unit: speedUnit,
+      },
+      {
+        id: 'max_ball',
+        label: t('stats.maxBall'),
+        value: formatSpeed(stats.max_ball_speed, unitSystem, 1),
+        unit: speedUnit,
+      },
       {
         id: 'avg_carry',
-        label: 'Avg carry',
+        label: t('stats.avgCarry'),
         value: formatDistance(stats.avg_carry_est, unitSystem, 0),
         unit: distanceUnit,
       },
       {
         id: 'avg_club',
-        label: 'Avg club',
+        label: t('stats.avgClub'),
         value: stats.avg_club_speed === null ? '—' : formatSpeed(stats.avg_club_speed, unitSystem, 1),
         unit: stats.avg_club_speed === null ? undefined : speedUnit,
       },
       {
         id: 'avg_smash',
-        label: 'Avg smash',
+        label: t('stats.avgSmash'),
         value: stats.avg_smash_factor === null ? '—' : stats.avg_smash_factor.toFixed(2),
       },
     ];
-  }, [isSwingSpeedSession, stats, swingStats, unitSystem, speedUnit, distanceUnit]);
+  }, [isSwingSpeedSession, stats, swingStats, unitSystem, speedUnit, distanceUnit, locale]);
 
   const clubFilters = (
-    <div className="stats-panel__chips" role="group" aria-label="Filter by club">
+    <div className="stats-panel__chips" role="group" aria-label={t('stats.filterByClub')}>
       <button
         type="button"
         className={`panel-chip${selectedClub === null ? ' panel-chip--active' : ''}`}
         aria-pressed={selectedClub === null}
         onClick={() => setSelectedClub(null)}
       >
-        All ({shots.length})
+        {t('stats.all', { count: playerShots.length })}
       </button>
       <div
         className="panel-chips stats-panel__chip-scroll"
@@ -130,16 +166,16 @@ export function StatsPanel({ shots, activeClub, playerName }: StatsPanelProps) {
   return (
     <div className="panel">
       <PanelHeader
-        title="Stats"
+        title={t('nav.stats')}
         subtitle={playerName}
         actions={<span className="panel-header__meta">{`${speedUnit} / ${distanceUnit}`}</span>}
       />
       <div className="panel__body stats-panel">
-        {clubFilters}
-        {shots.length === 0 ? (
+        {playerShots.length > 0 ? clubFilters : null}
+        {playerShots.length === 0 ? (
           <div className="panel__body--empty">
-            <span className="panel__empty-title">No shots yet</span>
-            <span className="panel__empty-detail">Session stats appear after your first shot</span>
+            <span className="panel__empty-title">{t('stats.noShots')}</span>
+            <span className="panel__empty-detail">{t('stats.noShotsDetail')}</span>
           </div>
         ) : (
           <div className={`stats-panel__grid stats-panel__grid--of-${tiles.length}`}>
