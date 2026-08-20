@@ -25,10 +25,10 @@
  * Palette values come from the "Club Select Mockups" design doc: option 6a for
  * the dark theme, option 5a (its daylight sibling) for the light theme.
  *
- * One yellow in both themes (#ffd400). --color-accent is for text and
- * icons; --color-accent-block is for solid fills, always paired with
- * --color-accent-fg. They share the same hex so light mode does not drift
- * into a second, muddier gold.
+ * --color-accent is for text and icons; --color-accent-block is for solid
+ * fills, always paired with --color-accent-fg. Dark mode uses #ffd400 for
+ * both. Light mode uses a darker, more saturated gold for both: pale
+ * #ffd400 washes out on cream, as text and as a chip fill.
  *
  * Kiosk contrast: muted/faint stay readable on black. Never park shot
  * numbers on --color-text-muted. Grid gaps stay grey (--color-border).
@@ -56,8 +56,8 @@
   color-scheme: light;
   --color-bg: #f4f2ec;
   --color-surface: #f4f2ec;
-  --color-accent: #ffd400;
-  --color-accent-block: #ffd400;
+  --color-accent: #ffbe1b;
+  --color-accent-block: #ffbe1b;
   --color-accent-fg: #14140f;
   --color-text: #14140f;
   --color-text-muted: rgba(20, 20, 15, 0.72);

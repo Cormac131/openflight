@@ -19,9 +19,10 @@
   border-radius: 8px;
   color: var(--color-text-muted);
   font-family: inherit;
-  font-size: 0.75rem;
+  font-size: 0.625rem;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
   text-align: center;
   text-transform: uppercase;
   cursor: pointer;
@@ -36,7 +37,7 @@
 }
 
 .segmented-control__button--active {
-  background: var(--color-accent);
+  background: var(--color-accent-block);
   color: var(--color-accent-fg);
   font-weight: 700;
 }

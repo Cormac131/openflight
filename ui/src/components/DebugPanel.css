@@ -54,8 +54,8 @@
 }
 
 .debug-tabs__tab--active {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
+  background: var(--color-accent-block);
+  border-color: var(--color-accent-block);
   color: var(--color-accent-fg);
 }
 
@@ -475,7 +475,7 @@
   appearance: none;
   width: 20px;
   height: 20px;
-  background: var(--color-accent);
+  background: var(--color-accent-block);
   border-radius: var(--radius);
   cursor: pointer;
 }
@@ -483,7 +483,7 @@
 .slider-control__input::-moz-range-thumb {
   width: 20px;
   height: 20px;
-  background: var(--color-accent);
+  background: var(--color-accent-block);
   border: none;
   border-radius: var(--radius);
   cursor: pointer;

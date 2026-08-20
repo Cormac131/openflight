@@ -27,9 +27,9 @@
 }
 
 .nav__button--active {
-  background: var(--color-accent);
+  background: var(--color-accent-block);
   color: var(--color-accent-fg);
-  border-color: var(--color-accent);
+  border-color: var(--color-accent-block);
 }
 
 .nav__button svg {
@@ -45,7 +45,7 @@
   min-width: 1.25rem;
   height: 1.25rem;
   padding: 0 var(--space-xs);
-  background: var(--color-accent);
+  background: var(--color-accent-block);
   color: var(--color-accent-fg);
   border-radius: var(--radius);
   font-size: 0.6875rem;
