@@ -83,6 +83,36 @@ describe('StatsPanel', () => {
     expect(html).toContain('7-IRON (1)');
   });
 
+  it('puts club filters above the metric tiles, not in the header', () => {
+    // Extra clubs used to live in panel-header__actions and clip the title.
+    const html = render([
+      makeShot(),
+      makeShot({ club: '3-wood', timestamp: 'b' }),
+      makeShot({ club: '5-iron', timestamp: 'c' }),
+      makeShot({ club: 'pw', timestamp: 'd' }),
+    ]);
+    const header = html.match(/<header class="panel-header">[\s\S]*?<\/header>/)?.[0] ?? '';
+
+    expect(header).not.toContain('Filter by club');
+    expect(html).toContain('stats-panel__chips');
+    expect(html.indexOf('stats-panel__chips')).toBeLessThan(html.indexOf('stats-panel__grid'));
+    expect(html).toContain('PW (1)');
+  });
+
+  it('keeps All fixed while the club chips scroll', () => {
+    const html = render([
+      makeShot(),
+      makeShot({ club: '3-wood', timestamp: 'b' }),
+      makeShot({ club: 'pw', timestamp: 'c' }),
+    ]);
+    const scroller = html.match(/stats-panel__chip-scroll[\s\S]*?<\/div>/)?.[0] ?? '';
+
+    expect(html.indexOf('All (3)')).toBeLessThan(html.indexOf('stats-panel__chip-scroll'));
+    expect(scroller).not.toContain('All (');
+    expect(scroller).toContain('DRIVER (1)');
+    expect(scroller).toContain('PW (1)');
+  });
+
   it('preselects the active club when it has shots', () => {
     const html = render([makeShot(), makeShot({ club: '7-iron', timestamp: 'b' })], '7-iron');
     const activeChip = html.match(/<button[^>]*panel-chip--active[^>]*>([^<]*)</)?.[1];

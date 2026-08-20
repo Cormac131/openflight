@@ -1,13 +1,17 @@
 import { useRef, type PointerEvent, type MouseEvent } from 'react';
-import { createDragScrollController, type DragScrollTarget } from '../utils/dragScroll';
+import {
+  createDragScrollController,
+  type DragScrollAxis,
+  type DragScrollTarget,
+} from '../utils/dragScroll';
 
 /** Bind pointer drag-to-scroll onto an overflow container for kiosk touchscreens. */
-export function useDragScroll<T extends HTMLElement>() {
+export function useDragScroll<T extends HTMLElement>(axis: DragScrollAxis = 'y') {
   const ref = useRef<T>(null);
   const controllerRef = useRef<ReturnType<typeof createDragScrollController> | null>(null);
 
   if (controllerRef.current === null) {
-    controllerRef.current = createDragScrollController(() => ref.current);
+    controllerRef.current = createDragScrollController(() => ref.current, { axis });
   }
 
   const controller = controllerRef.current;
@@ -18,6 +22,7 @@ export function useDragScroll<T extends HTMLElement>() {
       controller.pointerDown({
         button: event.button,
         pointerId: event.pointerId,
+        clientX: event.clientX,
         clientY: event.clientY,
         target: event.target as DragScrollTarget | null,
       }),
@@ -25,6 +30,7 @@ export function useDragScroll<T extends HTMLElement>() {
       controller.pointerMove({
         button: event.button,
         pointerId: event.pointerId,
+        clientX: event.clientX,
         clientY: event.clientY,
         target: event.target as DragScrollTarget | null,
       }),

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { Shot } from '../../types/shot';
 import { computeStats, computeSwingSpeedStats, getUniqueClubs, isSwingSpeedShot } from '../../types/shot';
+import { useDragScroll } from '../../hooks/useDragScroll';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../../utils/units';
 import { MetricCard } from '../ui/MetricCard';
@@ -21,13 +22,14 @@ interface StatTile {
 
 /**
  * Design doc 7a: session summary as a hairline tile grid, with the per-club
- * filter chips in the header. Six tiles for a ball-strike session (3x2 as
+ * filter chips above the tiles. Six tiles for a ball-strike session (3x2 as
  * drawn), four for a swing-speed one.
  */
 export function StatsPanel({ shots, activeClub, playerName }: StatsPanelProps) {
   const hasShotsForActiveClub = shots.some((shot) => shot.club === activeClub);
   const [selectedClub, setSelectedClub] = useState<string | null>(hasShotsForActiveClub ? activeClub : null);
   const [prevActiveClub, setPrevActiveClub] = useState(activeClub);
+  const chipScroll = useDragScroll<HTMLDivElement>('x');
 
   // Update state during render when the prop changes, rather than in an effect.
   if (activeClub !== prevActiveClub) {
@@ -91,58 +93,61 @@ export function StatsPanel({ shots, activeClub, playerName }: StatsPanelProps) {
     ];
   }, [isSwingSpeedSession, stats, swingStats, unitSystem, speedUnit, distanceUnit]);
 
-  const header = (
-    <PanelHeader
-      title="Stats"
-      subtitle={playerName}
-      actions={
-        <>
-          <div className="panel-chips" role="group" aria-label="Filter by club">
-            <button
-              type="button"
-              className={`panel-chip${selectedClub === null ? ' panel-chip--active' : ''}`}
-              aria-pressed={selectedClub === null}
-              onClick={() => setSelectedClub(null)}
-            >
-              All ({shots.length})
-            </button>
-            {availableClubs.map((club) => (
-              <button
-                key={club}
-                type="button"
-                className={`panel-chip${selectedClub === club ? ' panel-chip--active' : ''}`}
-                aria-pressed={selectedClub === club}
-                onClick={() => setSelectedClub(club)}
-              >
-                {club.toUpperCase()} ({clubCounts[club] ?? 0})
-              </button>
-            ))}
-          </div>
-          <span className="panel-header__meta">{`${speedUnit} / ${distanceUnit}`}</span>
-        </>
-      }
-    />
-  );
-
-  if (shots.length === 0) {
-    return (
-      <div className="panel">
-        {header}
-        <div className="panel__body panel__body--empty">
-          <span className="panel__empty-title">No shots yet</span>
-          <span className="panel__empty-detail">Session stats appear after your first shot</span>
-        </div>
+  const clubFilters = (
+    <div className="stats-panel__chips" role="group" aria-label="Filter by club">
+      <button
+        type="button"
+        className={`panel-chip${selectedClub === null ? ' panel-chip--active' : ''}`}
+        aria-pressed={selectedClub === null}
+        onClick={() => setSelectedClub(null)}
+      >
+        All ({shots.length})
+      </button>
+      <div
+        className="panel-chips stats-panel__chip-scroll"
+        ref={chipScroll.ref}
+        onPointerDown={chipScroll.onPointerDown}
+        onPointerMove={chipScroll.onPointerMove}
+        onPointerUp={chipScroll.onPointerUp}
+        onPointerCancel={chipScroll.onPointerCancel}
+        onClickCapture={chipScroll.onClickCapture}
+      >
+        {availableClubs.map((club) => (
+          <button
+            key={club}
+            type="button"
+            className={`panel-chip${selectedClub === club ? ' panel-chip--active' : ''}`}
+            aria-pressed={selectedClub === club}
+            onClick={() => setSelectedClub(club)}
+          >
+            {club.toUpperCase()} ({clubCounts[club] ?? 0})
+          </button>
+        ))}
       </div>
-    );
-  }
+    </div>
+  );
 
   return (
     <div className="panel">
-      {header}
-      <div className={`panel__body stats-panel__grid stats-panel__grid--of-${tiles.length}`}>
-        {tiles.map((tile) => (
-          <MetricCard key={tile.id} label={tile.label} value={tile.value} unit={tile.unit} labelPosition="above" />
-        ))}
+      <PanelHeader
+        title="Stats"
+        subtitle={playerName}
+        actions={<span className="panel-header__meta">{`${speedUnit} / ${distanceUnit}`}</span>}
+      />
+      <div className="panel__body stats-panel">
+        {clubFilters}
+        {shots.length === 0 ? (
+          <div className="panel__body--empty">
+            <span className="panel__empty-title">No shots yet</span>
+            <span className="panel__empty-detail">Session stats appear after your first shot</span>
+          </div>
+        ) : (
+          <div className={`stats-panel__grid stats-panel__grid--of-${tiles.length}`}>
+            {tiles.map((tile) => (
+              <MetricCard key={tile.id} label={tile.label} value={tile.value} unit={tile.unit} labelPosition="above" />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
