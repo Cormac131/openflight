@@ -542,6 +542,13 @@
 .shots-panel__rows {
   border-top: none;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* Own the gesture: global * { touch-action: manipulation } plus row
+     buttons otherwise swallow finger-drags on the kiosk touchscreen. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .shots-panel__row {
@@ -563,6 +570,7 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+  touch-action: none;
 }
 
 .shots-panel__index {
@@ -620,6 +628,7 @@
   letter-spacing: 0.14em;
   text-transform: uppercase;
   cursor: pointer;
+  touch-action: none;
 }
 
 .shots-panel__delete:hover {
@@ -658,6 +667,9 @@
   font-size: 0.8125rem;
   letter-spacing: 0;
   text-transform: none;
+  touch-action: manipulation;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .shots-panel__field--notes {

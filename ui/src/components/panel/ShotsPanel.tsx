@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { Shot } from '../../types/shot';
 import { getSwingSpeedMph, isSwingSpeedShot } from '../../types/shot';
+import { useDragScroll } from '../../hooks/useDragScroll';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { useSystemStore } from '../../stores/useSystemStore';
 import { getEmptyValidationEntry, useValidationStore, type ValidationEntry } from '../../stores/useValidationStore';
@@ -117,6 +118,7 @@ export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: Shots
   const { unitSystem } = useUnitPreference();
   const { entries, updateEntry, removeEntry } = useValidationStore();
   const [expanded, setExpanded] = useState<string | null>(null);
+  const dragScroll = useDragScroll<HTMLDivElement>();
   const { cloudUploadState, cloudUploadMessage } = useSystemStore(
     useShallow((state) => ({
       cloudUploadState: state.cloudUploadState,
@@ -192,7 +194,17 @@ export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: Shots
         <span className="shots-panel__num">Carry</span>
         <span />
       </div>
-      <div className="panel__body shots-panel__rows">
+      <div
+        className="panel__body shots-panel__rows"
+        role="region"
+        aria-label="Recorded shots"
+        ref={dragScroll.ref}
+        onPointerDown={dragScroll.onPointerDown}
+        onPointerMove={dragScroll.onPointerMove}
+        onPointerUp={dragScroll.onPointerUp}
+        onPointerCancel={dragScroll.onPointerCancel}
+        onClickCapture={dragScroll.onClickCapture}
+      >
         {visibleShots.map((shot, index) => {
           const shotNumber = shots.length - index;
           const entry = entries[shot.timestamp] ?? getEmptyValidationEntry();

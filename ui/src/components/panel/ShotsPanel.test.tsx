@@ -48,6 +48,14 @@ describe('ShotsPanel', () => {
     expect(html).toContain('disabled=""');
   });
 
+  it('exposes the shot rows as a drag-scrollable region', () => {
+    const html = render([makeShot()]);
+
+    expect(html).toContain('shots-panel__rows');
+    expect(html).toContain('aria-label="Recorded shots"');
+    expect(html).toContain('role="region"');
+  });
+
   it('renders the seven columns the mockup draws', () => {
     const html = render([makeShot()]);
 

@@ -70,8 +70,9 @@ export function PowerWarning({ level, percentage }: { level: WarningLevel; perce
   );
 }
 
-export function PowerExperience() {
-  const status = useSystemStore((state) => state.powerStatus);
+export function PowerExperience({ status: statusProp }: { status?: PowerStatusData | null }) {
+  const storeStatus = useSystemStore((state) => state.powerStatus);
+  const status = statusProp ?? storeStatus;
   if (!status) return null;
 
   const warningLevel: WarningLevel | null =

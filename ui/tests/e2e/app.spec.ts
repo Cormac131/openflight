@@ -73,6 +73,23 @@ test('renders live shot data and mock-mode simulate flow', async ({ page }) => {
   await expect(page.locator('.live-panel__spotlight')).toHaveCount(0);
 });
 
+test('does not keep the previous metric title yellow after selecting a new hero', async ({ page }) => {
+  await withControlSocket(async (socket) => {
+    await simulateShot(socket);
+  });
+
+  await gotoApp(page);
+  await dismissPicker(page);
+
+  await page.locator('.metric-card--interactive').filter({ hasText: 'Club speed' }).click();
+
+  await expect(page.locator('.metric-card--selected')).toContainText('Club speed');
+  await expect(page.locator('.metric-card--selected .metric-card__label')).toHaveCSS('color', 'rgb(255, 212, 0)');
+  await expect(
+    page.locator('.metric-card--interactive').filter({ hasText: 'Ball speed' }).locator('.metric-card__label')
+  ).not.toHaveCSS('color', 'rgb(255, 212, 0)');
+});
+
 test('pins a tapped metric top-left and remembers it', async ({ page }) => {
   await withControlSocket(async (socket) => {
     await simulateShot(socket);
@@ -126,6 +143,35 @@ test('switches between primary navigation views', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Simulate shot' })).toBeVisible();
 });
 
+test('scrolls the shots list by dragging on a row', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 600 });
+
+  await withControlSocket(async (socket) => {
+    for (let i = 0; i < 16; i += 1) {
+      await simulateShot(socket);
+    }
+  });
+
+  await gotoApp(page);
+  await dismissPicker(page);
+  await page.getByRole('button', { name: 'Shots' }).click();
+
+  const list = page.getByRole('region', { name: 'Recorded shots' });
+  await expect(list.locator('.shots-panel__row')).toHaveCount(16);
+
+  const before = await list.evaluate((node) => node.scrollTop);
+  const box = await list.boundingBox();
+  expect(box).toBeTruthy();
+
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + 180);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + 40, { steps: 12 });
+  await page.mouse.up();
+
+  await expect.poll(async () => list.evaluate((node) => node.scrollTop)).toBeGreaterThan(before);
+  await expect(page.locator('.shots-panel__validation')).toHaveCount(0);
+});
+
 test('expands a shot row to reveal its validation fields', async ({ page }) => {
   await withControlSocket(async (socket) => {
     await simulateShot(socket);
@@ -143,6 +189,24 @@ test('expands a shot row to reveal its validation fields', async ({ page }) => {
   await expect(page.locator('.shots-panel__validation')).toBeVisible();
   await expect(page.getByPlaceholder('mph')).toBeVisible();
   await expect(page.getByPlaceholder('notes…')).toBeVisible();
+});
+
+test.describe('shots list on a touchscreen', () => {
+  test.use({ hasTouch: true, viewport: { width: 1024, height: 600 } });
+
+  test('taps a row to open details', async ({ page }) => {
+    await withControlSocket(async (socket) => {
+      await simulateShot(socket);
+    });
+
+    await gotoApp(page);
+    await dismissPicker(page);
+    await page.getByRole('button', { name: 'Shots' }).click();
+
+    await expect(page.locator('.shots-panel__validation')).toHaveCount(0);
+    await page.locator('.shots-panel__row-main').first().tap();
+    await expect(page.locator('.shots-panel__validation')).toBeVisible();
+  });
 });
 
 test('display route shows latest shot and recent shots from mock backend session', async ({ page }) => {

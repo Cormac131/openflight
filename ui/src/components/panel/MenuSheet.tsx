@@ -8,10 +8,16 @@ import { socketService } from '../../services/socketService';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { PowerExperience } from '../PowerStatus';
 import { SimStatus } from '../SimStatus';
+import type { PowerStatus } from '../../types/power';
 
 interface MenuSheetProps {
   onClose: () => void;
   onShutdown: () => void;
+  /**
+   * Battery telemetry. Omit to read `useSystemStore`; pass it in tests so SSR
+   * is not stuck with the store's initial `null`.
+   */
+  powerStatus?: PowerStatus | null;
 }
 
 /**
@@ -22,9 +28,11 @@ interface MenuSheetProps {
  * ball-detection state had nowhere else to go. Socket connection lives on the
  * panel header LED.
  */
-export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
+export function MenuSheet({ onClose, onShutdown, powerStatus: powerStatusProp }: MenuSheetProps) {
   const [newPlayer, setNewPlayer] = useState('');
   const { players, selectedPlayer, addPlayer, removePlayer, selectPlayer } = usePlayerStore();
+  const storePowerStatus = useSystemStore((state) => state.powerStatus);
+  const powerStatus = powerStatusProp ?? storePowerStatus;
   const simStatuses = useSystemStore((state) => state.simStatuses);
   const cameraStatus = useCameraStore((state) => state.cameraStatus);
   const { unitSystem, setUnitSystem } = useUnitPreference();
@@ -133,10 +141,12 @@ export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
 
         <section className="menu-sheet__section">
           <span className="menu-sheet__section-title">System</span>
-          <div className="menu-sheet__status-row">
-            <span className="menu-sheet__status-label">Battery</span>
-            <PowerExperience />
-          </div>
+          {powerStatus ? (
+            <div className="menu-sheet__status-row">
+              <span className="menu-sheet__status-label">Battery</span>
+              <PowerExperience status={powerStatus} />
+            </div>
+          ) : null}
           <div className="menu-sheet__status-row">
             <span className="menu-sheet__status-label">Ball detection</span>
             <span className="menu-sheet__status-value">{ballDetectionValue}</span>

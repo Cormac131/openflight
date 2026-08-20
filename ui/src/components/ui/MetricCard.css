@@ -56,7 +56,8 @@
   appearance: none;
 }
 
-.metric-card--interactive:hover .metric-card__label,
+/* Selected is the only yellow title. :hover would stick on the previous hero
+ * after a tap reorders the grid, including on hybrid touch PCs. */
 .metric-card--selected .metric-card__label {
   color: var(--color-accent);
 }
