@@ -14,9 +14,9 @@
 }
 
 .ui-button--primary {
-  background: var(--color-accent);
+  background: var(--color-accent-block);
   color: var(--color-accent-fg);
-  border: 1px solid var(--color-accent);
+  border: 1px solid var(--color-accent-block);
 }
 
 .ui-button--ghost {

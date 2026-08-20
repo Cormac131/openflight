@@ -83,7 +83,7 @@
 }
 
 .metric-card--selected {
-  box-shadow: inset 3px 0 0 var(--color-accent-block);
+  box-shadow: inset 5px 0 0 var(--color-accent-block);
 }
 
 .metric-card--hero {
