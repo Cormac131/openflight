@@ -6,6 +6,8 @@ interface PanelHeaderProps {
   title: string;
   /** Secondary text after the hairline divider, e.g. the player or shot count. */
   subtitle?: ReactNode;
+  /** Active club or training implement, shown after the subtitle. */
+  club?: ReactNode;
   /** Right-hand controls: filters, unit label, panel actions. */
   actions?: ReactNode;
   /**
@@ -22,6 +24,19 @@ interface PanelHeaderProps {
 }
 
 /**
+ * Hairline divider plus muted identity text. Used for the player/status
+ * subtitle and the active club so both stay visually in the same row.
+ */
+function IdentityPart({ children, className }: { children: ReactNode; className: string }) {
+  return (
+    <>
+      <span className="panel-header__divider" aria-hidden="true" />
+      <span className={className}>{children}</span>
+    </>
+  );
+}
+
+/**
  * Page chrome: title plus a connection LED. Green when the socket is up, red
  * when it is down — the same signal that used to live as a System row in the
  * menu sheet.
@@ -29,6 +44,7 @@ interface PanelHeaderProps {
 export function PanelHeader({
   title,
   subtitle,
+  club,
   actions,
   connected: connectedProp,
   onStatusTap,
@@ -53,12 +69,8 @@ export function PanelHeader({
           <span className={dotClasses} role="status" aria-label={statusLabel} />
         )}
         <span className="panel-header__title">{title}</span>
-        {subtitle ? (
-          <>
-            <span className="panel-header__divider" aria-hidden="true" />
-            <span className="panel-header__subtitle">{subtitle}</span>
-          </>
-        ) : null}
+        {subtitle ? <IdentityPart className="panel-header__subtitle">{subtitle}</IdentityPart> : null}
+        {club ? <IdentityPart className="panel-header__club">{club}</IdentityPart> : null}
       </div>
       {actions ? <div className="panel-header__actions">{actions}</div> : null}
     </header>

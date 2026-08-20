@@ -143,6 +143,16 @@
   white-space: nowrap;
 }
 
+.panel-header__club {
+  font-weight: 600;
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .panel-header__actions {
   display: flex;
   align-items: center;
@@ -309,11 +319,6 @@
   white-space: nowrap;
 }
 
-.panel-action__value {
-  font-size: 1rem;
-  letter-spacing: 0;
-}
-
 .panel-action--danger {
   background: transparent;
   border: 1px solid var(--color-danger-border);
@@ -329,6 +334,25 @@
 }
 
 /* ------------------------------------------------------------ live panel -- */
+
+.live-panel__empty {
+  gap: 12px;
+  text-align: center;
+  padding: 0 32px;
+}
+
+.live-panel__empty-title {
+  font-size: clamp(3.5rem, 16vh, 7rem);
+  line-height: 0.95;
+  letter-spacing: 0.06em;
+}
+
+.live-panel__empty-detail {
+  font-weight: 600;
+  font-size: clamp(0.85rem, 2.4vh, 1.25rem);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
 
 .live-panel__body {
   position: relative;
@@ -1001,6 +1025,7 @@
   }
 
   .live-panel__spotlight,
+  .live-panel__empty,
   .live-panel__grid .metric-card {
     padding-inline: 18px;
   }

@@ -28,7 +28,7 @@ import {
   type PanelView,
 } from './components/panel';
 import { shouldEnableLiveBallWarning } from './components/panel/liveMetrics';
-import { ALL_CLUBS } from './data/clubs';
+import { getClubName } from './data/clubs';
 import { getTrainingImplementLabel } from './data/trainingImplements';
 import { unlockAudioCue } from './utils/audioCue';
 import {
@@ -40,10 +40,6 @@ import {
 
 import './App.css';
 import './components/panel/panel.css';
-
-function clubLabel(clubId: string): string {
-  return ALL_CLUBS.find((club) => club.id === clubId)?.label ?? clubId.toUpperCase();
-}
 
 function AppContent() {
   const { shutdown } = useSocket();
@@ -127,7 +123,7 @@ function AppContent() {
   const isSwingSpeedMode = triggerStatus.mode === 'swing-speed';
   const activeImplementLabel = isSwingSpeedMode
     ? getTrainingImplementLabel(selectedTrainingImplement)
-    : clubLabel(selectedClub);
+    : getClubName(selectedClub);
 
   // Push the local player to the server once connected, so a reload restores it.
   // Do not re-emit when selectedPlayer changes: that echoes player_changed back
@@ -194,7 +190,6 @@ function AppContent() {
       }}
     >
       {isSwingSpeedMode ? 'Change implement' : 'Change club'}
-      <span className="panel-action__value">{activeImplementLabel}</span>
     </button>
   );
 
@@ -260,12 +255,14 @@ function AppContent() {
           <ShotsPanel
             shots={shots}
             playerName={selectedPlayer}
+            clubLabel={activeImplementLabel}
             onDeleteShot={(timestamp) => socketService.deleteShot(timestamp)}
           />
         )}
         {currentView === 'camera' && (
           <CameraPanel
             cameraStatus={cameraStatus}
+            clubLabel={activeImplementLabel}
             onToggleCamera={() => socketService.toggleCamera()}
             onToggleStream={() => socketService.toggleCameraStream()}
           />

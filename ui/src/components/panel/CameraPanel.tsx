@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CameraStatus } from '../../stores/useCameraStore';
 import { getServerOrigin } from '../../utils/serverOrigin';
 import { PanelHeader } from './PanelHeader';
 
 interface CameraPanelProps {
   cameraStatus: CameraStatus;
+  clubLabel?: string;
   onToggleCamera: () => void;
   onToggleStream: () => void;
 }
@@ -24,17 +25,15 @@ function CameraGlyph() {
  * Design doc 7c draws the disabled state. The unavailable, idle, streaming and
  * error states reuse the same hatched stage so the panel reads as one surface.
  */
-export function CameraPanel({ cameraStatus, onToggleCamera, onToggleStream }: CameraPanelProps) {
+export function CameraPanel({ cameraStatus, clubLabel, onToggleCamera, onToggleStream }: CameraPanelProps) {
   const [streamError, setStreamError] = useState(false);
-  const [prevStreaming, setPrevStreaming] = useState(false);
   const { available, enabled, streaming, ball_detected, ball_confidence } = cameraStatus;
 
-  if (streaming && !prevStreaming) {
-    setStreamError(false);
-  }
-  if (streaming !== prevStreaming) {
-    setPrevStreaming(streaming);
-  }
+  useEffect(() => {
+    if (streaming) {
+      setStreamError(false);
+    }
+  }, [streaming]);
 
   const subtitle = !available
     ? 'Camera not connected'
@@ -105,6 +104,7 @@ export function CameraPanel({ cameraStatus, onToggleCamera, onToggleStream }: Ca
       <PanelHeader
         title="Camera"
         subtitle={subtitle}
+        club={clubLabel}
         actions={
           available ? (
             <>

@@ -14,6 +14,7 @@ import { PanelHeader } from './PanelHeader';
 interface ShotsPanelProps {
   shots: Shot[];
   playerName: string;
+  clubLabel?: string;
   onDeleteShot: (timestamp: string) => void;
 }
 
@@ -112,7 +113,7 @@ function ValidationEditor({
  * inline, so a row expands on tap to reveal them — the mockup's own "make the
  * shot rows tappable to open shot detail" follow-up.
  */
-export function ShotsPanel({ shots, playerName, onDeleteShot }: ShotsPanelProps) {
+export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: ShotsPanelProps) {
   const { unitSystem } = useUnitPreference();
   const { entries, updateEntry, removeEntry } = useValidationStore();
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -147,6 +148,7 @@ export function ShotsPanel({ shots, playerName, onDeleteShot }: ShotsPanelProps)
           ? playerName
           : cloudUploadMessage || `${shots.length} recorded · ${validatedCount}/${shots.length} validated`
       }
+      club={clubLabel}
       actions={
         <>
           <button
