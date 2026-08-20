@@ -2,6 +2,7 @@ import type { Messages } from './en';
 
 export const pt: Messages = {
   'nav.live': 'Ao vivo',
+  'nav.players': 'Jogadores',
   'nav.stats': 'Estatísticas',
   'nav.shots': 'Tacadas',
   'nav.camera': 'Câmera',
@@ -11,7 +12,12 @@ export const pt: Messages = {
 
   'header.serverConnected': 'Servidor conectado',
   'header.serverDisconnected': 'Servidor desconectado',
-  'header.shotCount': 'Tacada {n}',
+  'header.statusMenu': 'Estado do sistema',
+  'header.closeStatus': 'Fechar estado',
+  'header.server': 'Servidor',
+  'header.radar': 'Radar',
+  'header.connected': 'Conectado',
+  'header.disconnected': 'Desconectado',
 
   'live.ready': 'Pronto',
   'live.readyDetail': 'Comece uma tacada ou uma sessão de velocidade de swing',
@@ -81,6 +87,11 @@ export const pt: Messages = {
   'shots.diff': 'Dif.',
   'shots.notes': 'Notas',
   'shots.notesPlaceholder': 'notas…',
+
+  'players.rosterAria': 'Jogadores',
+  'players.shots': '{count} tacadas',
+  'players.shot': '{count} tacada',
+  'players.namePlaceholder': 'Nome',
 
   'camera.notConnected': 'Câmera não conectada',
   'camera.detectionOff': 'Detecção de bola desligada',

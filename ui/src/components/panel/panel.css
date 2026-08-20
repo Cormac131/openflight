@@ -4,7 +4,7 @@
  * hard-codes a hex, so the light theme (option 5a) falls out for free.
  *
  * The recurring device is a hairline grid: a container painted in
- * --color-border with 1px gaps, and cells painted in --color-bg. The "borders"
+ * --color-border with 1px gaps, and cells painted in --color-surface. The "borders"
  * are the background showing through.
  */
 
@@ -76,6 +76,8 @@
   padding: 14px 26px 12px;
   flex-shrink: 0;
   min-height: calc(var(--panel-control-height, 32px) + 14px + 12px);
+  position: relative;
+  background: var(--color-surface);
 }
 
 .panel-header__identity {
@@ -85,14 +87,27 @@
   min-width: 0;
 }
 
+.panel-header__status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  margin: -8px 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  outline-offset: 4px;
+}
+
 .panel-header__dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
   background: var(--color-error);
   flex-shrink: 0;
-  border: none;
-  padding: 0;
 }
 
 .panel-header__dot--connected {
@@ -103,21 +118,38 @@
   background: var(--color-error);
 }
 
-.panel-header__dot--tappable {
-  cursor: pointer;
-  position: relative;
-  outline-offset: 8px;
+.panel-header__status-menu {
+  position: absolute;
+  top: calc(var(--panel-control-height, 32px) + 26px);
+  left: 20px;
+  z-index: 21;
+  min-width: 260px;
+  padding: 10px 14px;
+  background: var(--color-surface);
+  border: 0px;
+  border-radius: var(--radius);
 }
 
-/* Give the 9px dot a 44px touch target without changing the layout. */
-.panel-header__dot--tappable::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 44px;
-  height: 44px;
+.panel-header__status-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: 44px;
+}
+
+.panel-header__status-label {
+  flex: 1;
+  font-weight: 500;
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.panel-header__status-value {
+  font-weight: 600;
+  font-size: 0.8125rem;
+  color: var(--color-text);
 }
 
 .panel-header__title {
@@ -161,6 +193,12 @@
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
+}
+
+.panel-header__actions .panel-action {
+  height: var(--panel-control-height, 32px);
+  padding: 0 14px;
+  font-size: 0.625rem;
 }
 
 .panel-header__meta {
@@ -218,15 +256,9 @@
   font-weight: 700;
 }
 
-.panel-chip--accent {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
-  font-weight: 700;
-}
-
 .panel-chip:disabled {
-  color: var(--color-text-faint);
-  border-color: var(--color-border-soft);
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
   cursor: default;
 }
 
@@ -235,11 +267,11 @@
 .panel-footer {
   display: flex;
   align-items: center;
-  gap: 20px;
-  padding: 8px 26px;
+  gap: 1.6vw;
+  padding: 8px 2.5vw;
   border-top: 1px solid var(--color-border);
   flex-shrink: 0;
-  background: var(--color-bg);
+  background: var(--color-surface);
 }
 
 .panel-footer__menu {
@@ -263,11 +295,22 @@
   display: block;
 }
 
-/* Restyle the shared TabBar in place: text-only, borderless, accent = active. */
-.panel-footer__tabs {
+/* Footer tabs: same hairline dividers as the header identity row.
+ * Spacing is vw-based so the cluster does not resize when footer meta appears. */
+.panel-footer__nav {
   flex: 1;
   min-width: 0;
-  gap: 22px;
+  display: flex;
+  align-items: center;
+}
+
+.panel-footer__tabs {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 64vw;
+  min-width: 0;
+  align-items: center;
+  gap: 1.2vw;
   padding: 0;
   background: transparent;
   overflow-x: auto;
@@ -280,15 +323,17 @@
 
 .panel-footer__tabs .nav__button {
   flex: 0 0 auto;
+  min-width: 0;
   border: none;
+  border-radius: 0;
   background: transparent;
-  padding: 0;
+  padding: 0 0.4vw;
   min-height: 44px;
-  gap: 6px;
+  gap: 0.6vw;
   font-weight: 600;
-  font-size: 0.625rem;
-  letter-spacing: 0.14em;
-  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  color: var(--color-text);
 }
 
 .panel-footer__tabs .nav__button--active {
@@ -297,11 +342,22 @@
   font-weight: 700;
 }
 
-.panel-footer__action {
-  flex-shrink: 0;
+.panel-footer__meta {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: flex-end;
+  gap: 1vw;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.panel-footer__units {
+  font-weight: 600;
+  font-size: 0.625rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  white-space: nowrap;
 }
 
 .panel-action {
@@ -310,8 +366,8 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  border: none;
-  border-radius: var(--radius);
+  border: 1px solid var(--color-accent-block);
+  border-radius: 8px;
   background: var(--color-accent-block);
   color: var(--color-accent-fg);
   font-family: inherit;
@@ -323,18 +379,27 @@
   white-space: nowrap;
 }
 
-.panel-action--danger {
-  background: transparent;
-  border: 1px solid var(--color-danger-border);
-  color: var(--color-danger);
-  font-size: 0.6875rem;
-  letter-spacing: 0.16em;
+.panel-action:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
-.panel-action--ghost {
+.panel-action--primary {
+  background: var(--color-accent-block);
+  border-color: var(--color-accent-block);
+  color: var(--color-accent-fg);
+}
+
+.panel-action--secondary {
   background: transparent;
-  border: 1px solid var(--color-border);
+  border-color: var(--color-accent);
   color: var(--color-text);
+}
+
+.panel-action--danger {
+  background: transparent;
+  border-color: var(--color-danger-border);
+  color: var(--color-danger);
 }
 
 /* ------------------------------------------------------------ live panel -- */
@@ -362,6 +427,34 @@
   position: relative;
   display: grid;
   min-height: 0;
+}
+
+.shot-flash {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  animation: shot-impact 0.65s ease-out forwards;
+}
+
+@keyframes shot-impact {
+  0% {
+    opacity: 1;
+    background: radial-gradient(circle at center, var(--color-accent) 0%, transparent 0%);
+  }
+  40% {
+    opacity: 0.9;
+    background: radial-gradient(
+      circle at center,
+      var(--color-accent) 0%,
+      color-mix(in srgb, var(--color-accent) 45%, transparent) 42%,
+      transparent 72%
+    );
+  }
+  100% {
+    opacity: 0;
+    background: radial-gradient(circle at center, var(--color-accent) 0%, transparent 78%);
+  }
 }
 
 .live-panel__spotlight {
@@ -415,6 +508,8 @@
 }
 
 .live-panel__spotlight-label {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -436,6 +531,8 @@
 }
 
 .live-panel__spotlight-value-row {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: baseline;
   justify-content: center;
@@ -453,10 +550,12 @@
 .live-panel__spotlight-unit {
   font-weight: 500;
   font-size: 3rem;
-  color: var(--color-text-muted);
+  color: var(--color-text);
 }
 
 .live-panel__spotlight-subtext {
+  position: relative;
+  z-index: 1;
   margin-top: 16px;
   font-weight: 600;
   font-size: 1.5rem;
@@ -485,6 +584,7 @@
   padding: 12px 18px;
   justify-content: stretch;
   gap: 12px;
+  border-radius: 0;
 }
 
 .live-panel__grid .metric-card__value {
@@ -498,6 +598,7 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  background: var(--color-surface);
 }
 
 .stats-panel__chips {
@@ -540,6 +641,7 @@
   grid-template-rows: 1fr 1fr;
   background: var(--color-border);
   gap: 1px;
+  border-top: 1px solid var(--color-border);
 }
 
 .stats-panel__grid--of-4 {
@@ -547,8 +649,9 @@
 }
 
 .stats-panel__grid .metric-card {
-  padding: 0 22px;
+  padding: 22px;
   justify-content: stretch;
+  border-radius: 0;
 }
 
 .stats-panel__grid .metric-card__value {
@@ -557,7 +660,97 @@
   letter-spacing: -0.03em;
 }
 
+/* ---------------------------------------------------------- players panel -- */
+
+.players-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 12px;
+  padding: 16px 26px 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.players-panel__card-wrap {
+  position: relative;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 132px;
+}
+
+.players-panel__card {
+  width: 100%;
+  min-height: 132px;
+  padding: 22px 20px 18px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.players-panel__card--selected {
+  border-color: var(--color-accent);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+
+.players-panel__name {
+  font-weight: 700;
+  font-size: clamp(1.25rem, 4vh, 1.75rem);
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.players-panel__count {
+  font-weight: 600;
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text);
+}
+
+.players-panel__remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--color-text-faint);
+  font-size: 0.875rem;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.players-panel__remove:hover,
+.players-panel__remove:active {
+  color: var(--color-danger);
+}
+
 /* ----------------------------------------------------------- shots panel -- */
+
+.panel.shots-panel {
+  background: var(--color-surface);
+}
 
 .shots-panel__columns,
 .shots-panel__row-main {
@@ -576,7 +769,7 @@
   font-size: 0.5625rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--color-text-faint);
+  color: var(--color-text-muted);
 }
 
 .shots-panel__num {
@@ -620,7 +813,7 @@
 .shots-panel__index {
   font-weight: 700;
   font-size: 0.9375rem;
-  color: var(--color-text-muted);
+  color: var(--color-text);
 }
 
 .shots-panel__player {
@@ -845,7 +1038,8 @@
   max-height: calc(100% - 86px);
   overflow-y: auto;
   background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  border: 0px ;
+  border-radius: var(--radius);
   padding: 18px;
   display: flex;
   flex-direction: column;
@@ -1013,8 +1207,16 @@
 }
 
 .picker-overlay__tabs {
+  display: flex;
   flex-shrink: 0;
+  gap: 10px;
   padding: 14px 26px 0;
+}
+
+.picker-overlay__tabs .panel-action {
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
 }
 
 .picker-overlay__body {
@@ -1075,12 +1277,123 @@
   padding: 0 16px;
 }
 
+/* ------------------------------------------------------- add player modal -- */
+
+.add-player-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.add-player-modal__scrim {
+  position: absolute;
+  inset: 0;
+  border: none;
+  padding: 0;
+  background: var(--color-scrim);
+  cursor: pointer;
+}
+
+.add-player-modal__dialog {
+  position: relative;
+  z-index: 1;
+  width: min(420px, calc(100% - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 22px 24px;
+  background: var(--color-bg);
+  border: 0px;
+  border-radius: var(--radius);
+}
+
+.add-player-modal__title {
+  font-weight: 700;
+  font-size: 0.8125rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--color-text);
+}
+
+.add-player-modal__input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  padding: 0 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  appearance: none;
+  -webkit-appearance: none;
+  box-shadow: none;
+}
+
+.add-player-modal__input::placeholder {
+  color: var(--color-text-faint);
+}
+
+.add-player-modal__input:focus,
+.add-player-modal__input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-color: var(--color-border);
+}
+
+.add-player-modal__actions {
+  display: flex;
+  gap: 10px;
+}
+
+.add-player-modal__actions .panel-action {
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
+}
+
+/* ------------------------------------------------------- mock simulate -- */
+
+.simulate-bubble {
+  position: absolute;
+  right: 18px;
+  bottom: 16px;
+  z-index: 15;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 0 20px 0 color-mix(in srgb, var(--color-text) 30%, transparent);
+}
+
 /* ---------------------------------------------- landscape kiosk (1024x600) */
 
 @media (max-height: 640px) {
   .panel-header {
     padding: 10px 18px;
     min-height: calc(var(--panel-control-height, 32px) + 10px + 10px);
+  }
+
+  .panel-header__status-menu {
+    top: calc(var(--panel-control-height, 32px) + 20px);
+    left: 18px;
   }
 
   .panel-footer {
@@ -1106,6 +1419,16 @@
   .shots-panel__row,
   .shots-panel__validation {
     padding-inline: 18px;
+  }
+
+  .players-panel__grid {
+    padding-inline: 18px;
+    gap: 10px;
+  }
+
+  .players-panel__card {
+    min-height: 112px;
+    padding: 16px 16px 14px;
   }
 
   .shots-panel__row-main {

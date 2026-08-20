@@ -2,9 +2,11 @@
   display: flex;
   width: 100%;
   align-items: stretch;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface);
+  gap: 3px;
+  padding: 3px;
+  border: none;
+  border-radius: 8px;
+  background: var(--color-bg);
 }
 
 .segmented-control__button {
@@ -14,9 +16,8 @@
   padding: var(--space-xs) var(--space-md);
   background: transparent;
   border: none;
-  border-right: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  color: var(--color-text);
+  border-radius: 8px;
+  color: var(--color-text-muted);
   font-family: inherit;
   font-size: 0.75rem;
   font-weight: 600;
@@ -24,15 +25,20 @@
   text-align: center;
   text-transform: uppercase;
   cursor: pointer;
+  /* Group focus ring lives on .segmented-control; individual outlines make
+     unselected options look like standalone buttons. */
+  outline: none;
 }
 
-.segmented-control__button:last-child {
-  border-right: none;
+.segmented-control__button:focus,
+.segmented-control__button:focus-visible {
+  outline: none;
 }
 
 .segmented-control__button--active {
   background: var(--color-accent);
   color: var(--color-accent-fg);
+  font-weight: 700;
 }
 
 @media (max-height: 500px) {

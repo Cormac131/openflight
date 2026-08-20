@@ -1,7 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import type { ReactNode } from 'react';
 import type { Shot } from '../../types/shot';
 import { StatsPanel } from './StatsPanel';
+
+const css = readFileSync(fileURLToPath(new URL('./panel.css', import.meta.url)), 'utf8');
 
 function text(html: string): string {
   return html.replace(/<!-- -->/g, '');
@@ -35,8 +40,8 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
   };
 }
 
-const render = (shots: Shot[], activeClub = 'driver') =>
-  text(renderToString(<StatsPanel shots={shots} activeClub={activeClub} playerName="James" />));
+const render = (shots: Shot[], activeClub = 'driver', headerAction?: ReactNode) =>
+  text(renderToString(<StatsPanel shots={shots} activeClub={activeClub} playerName="James" headerAction={headerAction} />));
 
 describe('StatsPanel', () => {
   it('shows an empty state before any shots', () => {
@@ -102,6 +107,13 @@ describe('StatsPanel', () => {
     expect(html).toContain('PW (1)');
   });
 
+  it('places Clear session in the header', () => {
+    const html = render([], 'driver', <button type="button" className="panel-action">Clear session</button>);
+    const header = html.match(/<header class="panel-header">[\s\S]*?<\/header>/)?.[0] ?? '';
+
+    expect(header).toContain('Clear session');
+  });
+
   it('keeps All fixed while the club chips scroll', () => {
     const html = render([
       makeShot(),
@@ -154,5 +166,11 @@ describe('StatsPanel', () => {
     expect(html).not.toContain('stats-panel__grid');
     expect(html).not.toContain('All (0)');
     expect(html).not.toContain('Filter by club');
+  });
+
+  it('paints chips and tiles on the same surface', () => {
+    // Light theme made this look like a cream chip gutter over a white spreadsheet.
+    expect(css).toMatch(/\.stats-panel \{[^}]*background: var\(--color-surface\)/);
+    expect(css).not.toMatch(/\.stats-panel__grid \.metric-card--label-above \{[^}]*align-content: center/);
   });
 });

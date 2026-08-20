@@ -5,7 +5,7 @@
   padding: var(--space-sm) var(--space-md);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+  border-radius: 0;
   min-width: 0;
   min-height: 0;
 }
@@ -17,34 +17,54 @@
 /*
  * Label-above cards sit inside a hairline grid (design doc 6a / 7a): the grid
  * container paints the rules via gap, so the cards themselves are borderless.
+ * Cell fill is --color-surface (same cream as the page in light theme).
  */
 .metric-card--label-above {
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  /*
+   * Equal 1fr spacers vertically center the block. Label / value / meta are
+   * explicit auto rows with reserved min-heights so every tile in a grid row
+   * shares the same bands — independent `align-content: center` would shift
+   * numbers on tiles that omit ≈, units, or captions.
+   */
+  grid-template-rows: 1fr auto auto auto 1fr;
   align-content: stretch;
   justify-items: start;
   gap: 10px;
   height: 100%;
   border: none;
-  background: var(--color-bg);
+  border-radius: 0;
+  background: var(--color-surface);
   text-align: left;
 }
 
 .metric-card--label-above .metric-card__label {
   display: inline-flex;
+  grid-row: 2;
   align-items: center;
   gap: 6px;
   margin-top: 0;
+  /* Estimated ≈ is 16px; keep titles the same height without it. */
+  min-height: 16px;
   letter-spacing: 0.18em;
   font-size: 0.72rem;
+  line-height: 1;
   white-space: nowrap;
+}
+
+.metric-card--label-above .metric-card__value-row {
+  grid-row: 3;
+  min-height: 1em;
 }
 
 .metric-card--label-above .metric-card__meta {
   display: flex;
   flex-direction: column;
+  justify-content: center;
+  grid-row: 4;
   gap: 6px;
-  min-height: 0;
+  /* One caption line (dots + HIGH / FADE / SPIN-ADJUSTED) even when empty. */
+  min-height: 1.125rem;
 }
 
 .metric-card--interactive {
@@ -92,13 +112,13 @@
   position: relative;
   display: inline-flex;
   align-items: center;
-  color: var(--color-text-muted);
+  color: var(--color-accent);
   flex-shrink: 0;
 }
 
 .metric-card__estimated svg {
-  width: 11px;
-  height: 7px;
+  width: 16px;
+  height: 16px;
   stroke: currentColor;
   stroke-width: 1.7;
   fill: none;
@@ -120,6 +140,8 @@
 .metric-card__unit {
   font-size: 0.95rem;
   font-weight: 600;
+  line-height: 1;
+  color: var(--color-text);
 }
 
 .metric-card__value {
@@ -130,11 +152,6 @@
   color: var(--color-text);
 }
 
-.metric-card__unit,
-.metric-card__label {
-  color: var(--color-text-muted);
-}
-
 .metric-card__label {
   display: inline-flex;
   align-items: center;
@@ -142,8 +159,9 @@
   margin-top: 6px;
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  font-weight: 600;
+  font-weight: 700;
   font-size: 0.85rem;
+  color: var(--color-text-muted);
 }
 
 .metric-card__subtext,

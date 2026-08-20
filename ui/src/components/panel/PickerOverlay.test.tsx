@@ -16,6 +16,9 @@ describe('PickerOverlay', () => {
     );
 
     expect(html).toContain('aria-label="Groups"');
+    expect(html).toMatch(/panel-action--primary[^>]*>Woods</);
+    expect(html).toMatch(/panel-action--secondary[^>]*>Irons</);
+    expect(html).toMatch(/panel-action--secondary[^>]*>Hybrids</);
     expect(html).toMatch(/picker-overlay__option--selected[^>]*aria-pressed="true"[^>]*>DR</);
     expect(html).toContain('--picker-rows:3');
     expect(html).not.toContain('>7i<');
@@ -33,6 +36,7 @@ describe('PickerOverlay', () => {
       />,
     );
 
+    expect(html).toMatch(/panel-action--primary[^>]*>Irons</);
     expect(html).toMatch(/picker-overlay__option--selected[^>]*aria-pressed="true"[^>]*>7i</);
     expect(html).not.toContain('>DR<');
   });

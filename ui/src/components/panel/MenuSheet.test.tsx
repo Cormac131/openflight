@@ -19,6 +19,16 @@ const batteryStatus = (overrides: Partial<PowerStatus> = {}): PowerStatus => ({
   ...overrides,
 });
 
+describe('MenuSheet players', () => {
+  it('does not manage players in the menu', () => {
+    const html = renderMenu();
+
+    expect(html).not.toContain('menu-sheet__section-title">Player');
+    expect(html).not.toContain('Add player');
+    expect(html).not.toContain('menu-sheet__input');
+  });
+});
+
 describe('MenuSheet language', () => {
   it('offers a language dropdown with the shipped locales', () => {
     const html = renderMenu();

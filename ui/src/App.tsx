@@ -17,10 +17,14 @@ import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog'
 import {
   CameraPanel,
   LivePanel,
+  AddPlayerDialog,
+  SimulateBubble,
   MenuSheet,
   PanelFooter,
   PanelHeader,
+  PanelAction,
   PickerOverlay,
+  PlayersPanel,
   ShotsPanel,
   StatsPanel,
   clubSections,
@@ -36,7 +40,6 @@ import {
   useLaunchDaddy,
   LaunchDaddyOverlay,
   LaunchDaddyBrand,
-  LaunchDaddySecretIndicator,
 } from './components/LaunchDaddy';
 
 import { useI18n } from './i18n/useI18n';
@@ -64,8 +67,14 @@ function AppContent() {
     }))
   );
   const cameraStatus = useCameraStore((state) => state.cameraStatus);
-  const { selectedPlayer, selectPlayer } = usePlayerStore(
-    useShallow((state) => ({ selectedPlayer: state.selectedPlayer, selectPlayer: state.selectPlayer }))
+  const { selectedPlayer, players, selectPlayer, addPlayer, removePlayer } = usePlayerStore(
+    useShallow((state) => ({
+      selectedPlayer: state.selectedPlayer,
+      players: state.players,
+      selectPlayer: state.selectPlayer,
+      addPlayer: state.addPlayer,
+      removePlayer: state.removePlayer,
+    }))
   );
   const serverPlayerName = useSystemStore((state) => state.serverPlayerName);
   const { heroMetricId, setHeroMetricId } = useHeroMetricStore(
@@ -101,6 +110,8 @@ function AppContent() {
   // shot; dismissing keeps the default. The /display route returns early below,
   // so this never appears in the passive TV view.
   const [pickerOpen, setPickerOpen] = useState(true);
+  const [addPlayerOpen, setAddPlayerOpen] = useState(false);
+  const [newPlayerName, setNewPlayerName] = useState('');
 
   // Reflect a server-pushed club change (e.g. the club changed in the connected
   // simulator) locally without echoing back. Done during render (React's "adjust
@@ -120,7 +131,7 @@ function AppContent() {
     }
   }
 
-  const { isLaunchDaddyMode, isExploding, triggerExplosion, handleSecretTap } = useLaunchDaddy();
+  const { isLaunchDaddyMode, isExploding, triggerExplosion } = useLaunchDaddy();
   const isDisplayRoute = typeof window !== 'undefined' && window.location.pathname.replace(/\/$/, '') === '/display';
   const isSwingSpeedMode = triggerStatus.mode === 'swing-speed';
   const activeImplementLabel = isSwingSpeedMode
@@ -153,6 +164,25 @@ function AppContent() {
       window.removeEventListener('keydown', unlock);
     };
   }, []);
+
+  const handleSelectPlayer = (playerName: string) => {
+    selectPlayer(playerName);
+    socketService.setPlayer(playerName);
+    setCurrentView('live');
+  };
+
+  const handleRemovePlayer = (playerName: string) => {
+    if (playerName === usePlayerStore.getState().selectedPlayer) return;
+    removePlayer(playerName);
+  };
+
+  const handleAddPlayer = () => {
+    if (!newPlayerName.trim()) return;
+    const playerName = addPlayer(newPlayerName);
+    socketService.setPlayer(playerName);
+    setNewPlayerName('');
+    setAddPlayerOpen(false);
+  };
 
   const handlePickerSelect = (id: string) => {
     if (isSwingSpeedMode) {
@@ -189,35 +219,31 @@ function AppContent() {
     return <DisplayMode connected={connected} cameraStatus={cameraStatus} latestShot={latestShot} shots={shots} />;
   }
 
-  const changeAction = (
-    <button
-      type="button"
-      className="panel-action"
-      onClick={() => {
-        setPickerOpen(true);
-      }}
-    >
+  const changeClubAction = (
+    <PanelAction onClick={() => setPickerOpen(true)}>
       {isSwingSpeedMode ? t('app.changeImplement') : t('app.changeClub')}
-    </button>
+    </PanelAction>
   );
 
-  const footerAction =
-    currentView === 'stats' ? (
-      <button type="button" className="panel-action panel-action--danger" onClick={() => socketService.clearSession()}>
-        {t('app.clearSession')}
-      </button>
-    ) : currentView === 'debug' ? (
-      <button type="button" className="panel-action panel-action--ghost" onClick={() => socketService.toggleDebug()}>
-        {debugMode ? t('app.stopRecording') : t('app.record')}
-      </button>
-    ) : (
-      changeAction
-    );
+  const addPlayerAction = (
+    <PanelAction onClick={() => setAddPlayerOpen(true)}>{t('menu.addPlayer')}</PanelAction>
+  );
+
+  const clearSessionAction = (
+    <PanelAction variant="danger" onClick={() => socketService.clearSession()}>
+      {t('app.clearSession')}
+    </PanelAction>
+  );
+
+  const debugRecordAction = (
+    <PanelAction variant="secondary" onClick={() => socketService.toggleDebug()}>
+      {debugMode ? t('app.stopRecording') : t('app.record')}
+    </PanelAction>
+  );
 
   return (
     <div className={`panel-app ${isLaunchDaddyMode ? 'app--launch-daddy' : ''} ${isExploding ? 'app--exploding' : ''}`}>
       <LaunchDaddyOverlay />
-      <LaunchDaddySecretIndicator />
 
       {iwr6843Alert && (
         <div className="iwr-alert" role="alert">
@@ -238,7 +264,6 @@ function AppContent() {
       <main className="panel-app__main">
         {currentView === 'live' && (
           <>
-            {playerIsNewShot && <div key={shotVersion} className="shot-flash" />}
             <ShotProcessingArea phase={shotProcessingPhase}>
               <LivePanel
                 key={shotVersion}
@@ -247,18 +272,35 @@ function AppContent() {
                 playerName={selectedPlayer}
                 clubLabel={activeImplementLabel}
                 activeTrainingImplement={isSwingSpeedMode ? selectedTrainingImplement : undefined}
-                onStatusTap={handleSecretTap}
                 selectedMetricId={heroMetricId}
                 onSelectMetric={setHeroMetricId}
                 isNewShot={playerIsNewShot}
                 ballDetectionEnabled={shouldEnableLiveBallWarning(currentView, cameraStatus)}
                 ballDetected={cameraStatus.ball_detected}
+                headerAction={changeClubAction}
               />
             </ShotProcessingArea>
             {debugMode && <SimShotBadges latestSimShots={latestSimShots} />}
           </>
         )}
-        {currentView === 'stats' && <StatsPanel shots={shots} activeClub={selectedClub} playerName={selectedPlayer} />}
+        {currentView === 'players' && (
+          <PlayersPanel
+            players={players}
+            selectedPlayer={selectedPlayer}
+            shots={shots}
+            onSelectPlayer={handleSelectPlayer}
+            onRemovePlayer={handleRemovePlayer}
+            headerAction={addPlayerAction}
+          />
+        )}
+        {currentView === 'stats' && (
+          <StatsPanel
+            shots={shots}
+            activeClub={selectedClub}
+            playerName={selectedPlayer}
+            headerAction={clearSessionAction}
+          />
+        )}
         {currentView === 'shots' && (
           <ShotsPanel
             shots={shots}
@@ -277,7 +319,11 @@ function AppContent() {
         )}
         {currentView === 'debug' && (
           <div className="panel">
-            <PanelHeader title={t('nav.debug')} subtitle={debugMode ? t('app.debugRecording') : t('app.debugIdle')} />
+            <PanelHeader
+              title={t('nav.debug')}
+              subtitle={debugMode ? t('app.debugRecording') : t('app.debugIdle')}
+              actions={debugRecordAction}
+            />
             <div className="panel__body panel-app__debug">
               <DebugPanel
                 enabled={debugMode}
@@ -294,6 +340,12 @@ function AppContent() {
             </div>
           </div>
         )}
+        {mockMode && currentView === 'live' ? (
+          <SimulateBubble
+            label={isSwingSpeedMode ? t('app.simulateSwing') : t('app.simulateShot')}
+            onSimulate={() => socketService.simulateShot()}
+          />
+        ) : null}
       </main>
 
       {/*
@@ -307,6 +359,18 @@ function AppContent() {
             setMenuOpen(false);
             setShutdownState('confirm');
             setShowShutdown(true);
+          }}
+        />
+      ) : null}
+
+      {addPlayerOpen ? (
+        <AddPlayerDialog
+          name={newPlayerName}
+          onChange={setNewPlayerName}
+          onAdd={handleAddPlayer}
+          onCancel={() => {
+            setNewPlayerName('');
+            setAddPlayerOpen(false);
           }}
         />
       ) : null}
@@ -327,20 +391,6 @@ function AppContent() {
         onChangeView={setCurrentView}
         onOpenMenu={() => setMenuOpen((open) => !open)}
         menuOpen={menuOpen}
-        action={
-          <>
-            {mockMode ? (
-              <button
-                type="button"
-                className="panel-action panel-action--ghost"
-                onClick={() => socketService.simulateShot()}
-              >
-                {isSwingSpeedMode ? t('app.simulateSwing') : t('app.simulateShot')}
-              </button>
-            ) : null}
-            {footerAction}
-          </>
-        }
         shotCount={playerShots.length}
         cameraStreaming={cameraStatus.streaming}
         ballDetected={cameraStatus.ball_detected}

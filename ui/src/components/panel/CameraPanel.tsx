@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { CameraStatus } from '../../stores/useCameraStore';
 import { getServerOrigin } from '../../utils/serverOrigin';
 import { PanelHeader } from './PanelHeader';
+import { PanelAction } from './PanelAction';
 import { useI18n } from '../../i18n/useI18n';
 
 interface CameraPanelProps {
@@ -115,13 +116,11 @@ export function CameraPanel({ cameraStatus, clubLabel, onToggleCamera, onToggleS
         actions={
           available ? (
             <>
-              <button type="button" className="panel-chip panel-chip--accent" onClick={onToggleCamera}>
-                {enabled ? t('camera.disable') : t('camera.enable')}
-              </button>
+              <PanelAction onClick={onToggleCamera}>{enabled ? t('camera.disable') : t('camera.enable')}</PanelAction>
               {enabled ? (
-                <button type="button" className="panel-chip" onClick={onToggleStream}>
+                <PanelAction variant="secondary" onClick={onToggleStream}>
                   {streaming ? t('camera.stopStream') : t('camera.startStream')}
-                </button>
+                </PanelAction>
               ) : null}
             </>
           ) : null

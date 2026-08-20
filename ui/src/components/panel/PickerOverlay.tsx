@@ -1,7 +1,7 @@
 import { useState, type CSSProperties } from 'react';
 import { clubGroupLabel } from '../../i18n';
 import { useI18n } from '../../i18n/useI18n';
-import { SegmentedControl } from '../ui/SegmentedControl';
+import { PanelAction } from './PanelAction';
 import { initialPickerSection, pickerGridRows, type PickerSection } from './pickerSections';
 
 interface PickerOverlayProps {
@@ -45,13 +45,20 @@ export function PickerOverlay({ title, selectedId, sections, onSelect, onClose, 
         </button>
       </div>
       {sections.length > 1 ? (
-        <div className="picker-overlay__tabs">
-          <SegmentedControl
-            ariaLabel={t('picker.groups')}
-            value={sectionName}
-            options={sections.map((section) => ({ id: section.name, label: clubGroupLabel(section.name) }))}
-            onChange={setSectionName}
-          />
+        <div className="picker-overlay__tabs" role="group" aria-label={t('picker.groups')}>
+          {sections.map((section) => {
+            const active = section.name === sectionName;
+            return (
+              <PanelAction
+                key={section.name}
+                variant={active ? 'primary' : 'secondary'}
+                aria-pressed={active}
+                onClick={() => setSectionName(section.name)}
+              >
+                {clubGroupLabel(section.name)}
+              </PanelAction>
+            );
+          })}
         </div>
       ) : null}
       <div className="picker-overlay__body">
