@@ -126,21 +126,22 @@ function normalizePlayerName(playerName: string | null | undefined): string {
   return (playerName?.trim() || 'Player 1').toLowerCase();
 }
 
+export function filterShotsByPlayer(shots: Shot[], playerName: string): Shot[] {
+  const normalized = normalizePlayerName(playerName);
+  return shots.filter((shot) => normalizePlayerName(shot.player_name) === normalized);
+}
+
 function normalizeToken(value: string | null | undefined): string {
   return (value?.trim() || '').toLowerCase();
 }
 
 export function filterSwingSpeedShots(shots: Shot[], filter: SwingSpeedStatsFilter = {}): Shot[] {
-  const playerName = normalizePlayerName(filter.playerName);
+  const scoped = filter.playerName ? filterShotsByPlayer(shots, filter.playerName) : shots;
   const trainingImplement = normalizeToken(filter.trainingImplement);
   const club = normalizeToken(filter.club);
 
-  return shots.filter((shot) => {
+  return scoped.filter((shot) => {
     if (!isSwingSpeedShot(shot)) {
-      return false;
-    }
-
-    if (filter.playerName && normalizePlayerName(shot.player_name) !== playerName) {
       return false;
     }
 

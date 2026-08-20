@@ -15,6 +15,7 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     estimated_carry_yards: 200,
     carry_range: [195, 205],
     club: 'driver',
+    player_name: 'James',
     timestamp: '2026-08-19T10:00:00Z',
     peak_magnitude: 100,
     launch_angle_vertical: 13,
@@ -43,6 +44,8 @@ describe('StatsPanel', () => {
 
     expect(html).toContain('No shots yet');
     expect(html).not.toContain('stats-panel__grid');
+    expect(html).not.toContain('All (0)');
+    expect(html).not.toContain('Filter by club');
   });
 
   it('renders six tiles for a ball-strike session', () => {
@@ -127,5 +130,29 @@ describe('StatsPanel', () => {
     const activeChip = html.match(/<button[^>]*panel-chip--active[^>]*>([^<]*)</)?.[1];
 
     expect(activeChip).toBe('All (1)');
+  });
+
+  it('computes averages and club chips from the current player only', () => {
+    const html = render([
+      makeShot({ ball_speed_mph: 90, timestamp: 'a' }),
+      makeShot({ player_name: 'Alex', ball_speed_mph: 150, club: '7-iron', timestamp: 'b' }),
+    ]);
+
+    expect(html).toContain('All (1)');
+    expect(html).toContain('DRIVER (1)');
+    expect(html).not.toContain('7-IRON');
+    expect(html).toContain('metric-card__value">1<');
+    expect(html).toContain('metric-card__value">90.0<');
+    expect(html).not.toContain('metric-card__value">150.0<');
+    expect(html).not.toContain('metric-card__value">120.0<');
+  });
+
+  it('shows the empty state when only other players have shots', () => {
+    const html = render([makeShot({ player_name: 'Alex' })]);
+
+    expect(html).toContain('No shots yet');
+    expect(html).not.toContain('stats-panel__grid');
+    expect(html).not.toContain('All (0)');
+    expect(html).not.toContain('Filter by club');
   });
 });

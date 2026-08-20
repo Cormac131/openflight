@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { useSystemStore } from '../../stores/useSystemStore';
+import { useI18n } from '../../i18n/useI18n';
 
 interface PanelHeaderProps {
   /** Uppercase panel name, e.g. "Live". */
@@ -49,10 +50,11 @@ export function PanelHeader({
   connected: connectedProp,
   onStatusTap,
 }: PanelHeaderProps) {
+  const { t } = useI18n();
   const storeConnected = useSystemStore((state) => state.connected);
   const connected = connectedProp ?? storeConnected;
   const status = connected ? 'connected' : 'disconnected';
-  const statusLabel = connected ? 'Server connected' : 'Server disconnected';
+  const statusLabel = connected ? t('header.serverConnected') : t('header.serverDisconnected');
   const dotClasses = `panel-header__dot panel-header__dot--${status}`;
 
   return (

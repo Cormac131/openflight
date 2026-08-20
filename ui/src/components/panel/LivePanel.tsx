@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Shot } from '../../types/shot';
-import { computeSwingSpeedStats } from '../../types/shot';
+import { computeSwingSpeedStats, filterShotsByPlayer } from '../../types/shot';
 import { useUnitPreference } from '../../state/useUnitPreference';
+import { useI18n } from '../../i18n/useI18n';
 import { getDistanceUnit, getSpeedUnit } from '../../utils/units';
 import { MetricCard, EstimatedMark } from '../ui/MetricCard';
 import { PanelHeader } from './PanelHeader';
@@ -45,27 +46,35 @@ export function LivePanel({
   ballDetectionEnabled = false,
   ballDetected = false,
 }: LivePanelProps) {
+  const { locale, t } = useI18n();
   const { unitSystem } = useUnitPreference();
+  const playerShots = useMemo(() => filterShotsByPlayer(shots, playerName), [shots, playerName]);
+  const displayedShot = playerShots[playerShots.length - 1] ?? null;
+  const isPlayersNewShot = Boolean(isNewShot && shot && displayedShot && shot.timestamp === displayedShot.timestamp);
   // App remounts this panel on `shotVersion`, so a new shot starts with the
   // spotlight open. The effect only hides it after 10s — it must not call
   // setState synchronously, and it must not depend on `isNewShot` (that flag
   // clears at 2.5s).
-  const [spotlightOpen, setSpotlightOpen] = useState(isNewShot);
+  const [spotlightOpen, setSpotlightOpen] = useState(isPlayersNewShot);
 
   const swingStats = useMemo(
-    () => computeSwingSpeedStats(shots, { playerName, trainingImplement: activeTrainingImplement }),
-    [shots, playerName, activeTrainingImplement]
+    () => computeSwingSpeedStats(playerShots, { playerName, trainingImplement: activeTrainingImplement }),
+    [playerShots, playerName, activeTrainingImplement]
   );
   const metrics = useMemo(
-    () => (shot ? pinSelectedMetric(buildLiveMetrics(shot, unitSystem, swingStats), selectedMetricId) : []),
-    [shot, unitSystem, swingStats, selectedMetricId]
+    () =>
+      displayedShot ? pinSelectedMetric(buildLiveMetrics(displayedShot, unitSystem, swingStats), selectedMetricId) : [],
+    // locale is not read in the factory; t() is a stable import. Without it,
+    // changing language would keep stale metric labels.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
+    [displayedShot, unitSystem, swingStats, selectedMetricId, locale]
   );
   const selected = metrics[0] ?? null;
   const showBallWarning = ballDetectionEnabled && !ballDetected;
   const ballWarning = showBallWarning ? (
     <div className="live-panel__ball-warning" role="alert">
-      <span className="live-panel__ball-warning-title">No ball detected</span>
-      <span className="live-panel__ball-warning-detail">Place a ball in the camera view before swinging</span>
+      <span className="live-panel__ball-warning-title">{t('live.noBall')}</span>
+      <span className="live-panel__ball-warning-detail">{t('live.noBallDetail')}</span>
     </div>
   ) : null;
 
@@ -81,7 +90,7 @@ export function LivePanel({
   const unitsLabel = `${getSpeedUnit(unitSystem)} / ${getDistanceUnit(unitSystem)}`;
   const header = (
     <PanelHeader
-      title="Live"
+      title={t('nav.live')}
       subtitle={playerName}
       club={clubLabel}
       onStatusTap={onStatusTap}
@@ -89,7 +98,7 @@ export function LivePanel({
         <>
           <span className="panel-header__meta">{unitsLabel}</span>
           <span className="panel-header__meta panel-header__meta--faint">
-            Shot {String(shots.length).padStart(2, '0')}
+            {t('header.shotCount', { n: String(playerShots.length).padStart(2, '0') })}
           </span>
         </>
       }
@@ -102,10 +111,8 @@ export function LivePanel({
         {header}
         <div className="panel__body panel__body--empty live-panel__empty">
           {ballWarning}
-          <span className="panel__empty-title live-panel__empty-title">Ready</span>
-          <span className="panel__empty-detail live-panel__empty-detail">
-            Start a shot or swing speed session
-          </span>
+          <span className="panel__empty-title live-panel__empty-title">{t('live.ready')}</span>
+          <span className="panel__empty-detail live-panel__empty-detail">{t('live.readyDetail')}</span>
         </div>
       </div>
     );
@@ -120,7 +127,7 @@ export function LivePanel({
           <button
             type="button"
             className="live-panel__spotlight"
-            aria-label="Hide shot overlay"
+            aria-label={t('live.hideOverlay')}
             onClick={() => setSpotlightOpen(false)}
           >
             <span className="live-panel__spotlight-label">

@@ -28,6 +28,7 @@ import {
   type PanelView,
 } from './components/panel';
 import { shouldEnableLiveBallWarning } from './components/panel/liveMetrics';
+import { filterShotsByPlayer } from './types/shot';
 import { getClubName } from './data/clubs';
 import { getTrainingImplementLabel } from './data/trainingImplements';
 import { unlockAudioCue } from './utils/audioCue';
@@ -38,10 +39,11 @@ import {
   LaunchDaddySecretIndicator,
 } from './components/LaunchDaddy';
 
-import './App.css';
+import { useI18n } from './i18n/useI18n';
 import './components/panel/panel.css';
 
 function AppContent() {
+  const { t } = useI18n();
   const { shutdown } = useSocket();
   const { connected, mockMode, debugMode, latestSimShots, serverClub } = useSystemStore(
     useShallow((state) => ({
@@ -177,6 +179,12 @@ function AppContent() {
     setShutdownState('confirm');
   };
 
+  const playerShots = filterShotsByPlayer(shots, selectedPlayer);
+  const playerLatestShot = playerShots[playerShots.length - 1] ?? null;
+  const playerIsNewShot = Boolean(
+    isNewShot && latestShot && playerLatestShot && latestShot.timestamp === playerLatestShot.timestamp
+  );
+
   if (isDisplayRoute) {
     return <DisplayMode connected={connected} cameraStatus={cameraStatus} latestShot={latestShot} shots={shots} />;
   }
@@ -189,18 +197,18 @@ function AppContent() {
         setPickerOpen(true);
       }}
     >
-      {isSwingSpeedMode ? 'Change implement' : 'Change club'}
+      {isSwingSpeedMode ? t('app.changeImplement') : t('app.changeClub')}
     </button>
   );
 
   const footerAction =
     currentView === 'stats' ? (
       <button type="button" className="panel-action panel-action--danger" onClick={() => socketService.clearSession()}>
-        Clear session
+        {t('app.clearSession')}
       </button>
     ) : currentView === 'debug' ? (
       <button type="button" className="panel-action panel-action--ghost" onClick={() => socketService.toggleDebug()}>
-        {debugMode ? 'Stop recording' : 'Record'}
+        {debugMode ? t('app.stopRecording') : t('app.record')}
       </button>
     ) : (
       changeAction
@@ -214,11 +222,11 @@ function AppContent() {
       {iwr6843Alert && (
         <div className="iwr-alert" role="alert">
           <div>
-            <strong>TI radar capture failed</strong>
-            <span>This shot used an estimated launch angle. {iwr6843Alert.reason}</span>
+            <strong>{t('live.tiRadarFailed')}</strong>
+            <span>{t('live.tiRadarDetail', { reason: iwr6843Alert.reason })}</span>
           </div>
-          <button type="button" onClick={dismissIWR6843Alert} aria-label="Dismiss TI radar alert">
-            Dismiss
+          <button type="button" onClick={dismissIWR6843Alert} aria-label={t('live.dismissAlert')}>
+            {t('live.dismiss')}
           </button>
         </div>
       )}
@@ -230,11 +238,11 @@ function AppContent() {
       <main className="panel-app__main">
         {currentView === 'live' && (
           <>
-            {isNewShot && <div key={shotVersion} className="shot-flash" />}
+            {playerIsNewShot && <div key={shotVersion} className="shot-flash" />}
             <ShotProcessingArea phase={shotProcessingPhase}>
               <LivePanel
                 key={shotVersion}
-                shot={latestShot}
+                shot={playerLatestShot}
                 shots={shots}
                 playerName={selectedPlayer}
                 clubLabel={activeImplementLabel}
@@ -242,7 +250,7 @@ function AppContent() {
                 onStatusTap={handleSecretTap}
                 selectedMetricId={heroMetricId}
                 onSelectMetric={setHeroMetricId}
-                isNewShot={isNewShot}
+                isNewShot={playerIsNewShot}
                 ballDetectionEnabled={shouldEnableLiveBallWarning(currentView, cameraStatus)}
                 ballDetected={cameraStatus.ball_detected}
               />
@@ -269,7 +277,7 @@ function AppContent() {
         )}
         {currentView === 'debug' && (
           <div className="panel">
-            <PanelHeader title="Debug" subtitle={debugMode ? 'Recording' : 'Idle'} />
+            <PanelHeader title={t('nav.debug')} subtitle={debugMode ? t('app.debugRecording') : t('app.debugIdle')} />
             <div className="panel__body panel-app__debug">
               <DebugPanel
                 enabled={debugMode}
@@ -305,7 +313,7 @@ function AppContent() {
 
       {pickerOpen ? (
         <PickerOverlay
-          title={isSwingSpeedMode ? 'Select implement' : 'Select club'}
+          title={isSwingSpeedMode ? t('app.selectImplement') : t('app.selectClub')}
           selectedId={isSwingSpeedMode ? selectedTrainingImplement : selectedClub}
           sections={isSwingSpeedMode ? trainingImplementSections() : clubSections()}
           onSelect={handlePickerSelect}
@@ -327,13 +335,13 @@ function AppContent() {
                 className="panel-action panel-action--ghost"
                 onClick={() => socketService.simulateShot()}
               >
-                {isSwingSpeedMode ? 'Simulate swing' : 'Simulate shot'}
+                {isSwingSpeedMode ? t('app.simulateSwing') : t('app.simulateShot')}
               </button>
             ) : null}
             {footerAction}
           </>
         }
-        shotCount={shots.length}
+        shotCount={playerShots.length}
         cameraStreaming={cameraStatus.streaming}
         ballDetected={cameraStatus.ball_detected}
         debugRecording={debugMode}

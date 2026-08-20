@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { Shot } from '../../types/shot';
-import { getSwingSpeedMph, isSwingSpeedShot } from '../../types/shot';
+import { filterShotsByPlayer, getSwingSpeedMph, isSwingSpeedShot } from '../../types/shot';
 import { useDragScroll } from '../../hooks/useDragScroll';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { useSystemStore } from '../../stores/useSystemStore';
@@ -11,6 +11,8 @@ import type { UnitSystem } from '../../utils/units';
 import { formatDistance, formatSpeed } from '../../utils/units';
 import { buildValidationCsv, comparatorDifference, downloadCsv } from '../../utils/validationCsv';
 import { PanelHeader } from './PanelHeader';
+import { getHtmlLang } from '../../i18n';
+import { useI18n } from '../../i18n/useI18n';
 
 interface ShotsPanelProps {
   shots: Shot[];
@@ -45,7 +47,7 @@ function rowValues(shot: Shot, unitSystem: UnitSystem): string[] {
     formatSpeed(shot.ball_speed_mph, unitSystem, 1),
     shot.club_speed_mph === null ? '—' : formatSpeed(shot.club_speed_mph, unitSystem, 1),
     optionalNumber(shot.launch_angle_vertical),
-    shot.spin_rpm === null ? '—' : shot.spin_rpm.toLocaleString('en-US', { maximumFractionDigits: 0 }),
+    shot.spin_rpm === null ? '—' : shot.spin_rpm.toLocaleString(getHtmlLang(), { maximumFractionDigits: 0 }),
     formatDistance(shot.estimated_carry_yards, unitSystem, 0),
   ];
 }
@@ -59,17 +61,18 @@ function ValidationEditor({
   entry: ValidationEntry;
   onUpdate: (timestamp: string, patch: Partial<ValidationEntry>) => void;
 }) {
+  const { t } = useI18n();
   const difference = comparatorDifference(shot, entry);
 
   return (
     <div className="shots-panel__validation">
       <label className="shots-panel__field">
-        <span>Device</span>
+        <span>{t('shots.device')}</span>
         <select
           value={entry.comparatorDevice}
           onChange={(event) => onUpdate(shot.timestamp, { comparatorDevice: event.target.value })}
         >
-          <option value="">Device</option>
+          <option value="">{t('shots.device')}</option>
           {COMPARATOR_DEVICES.map((device) => (
             <option key={device} value={device}>
               {device}
@@ -78,7 +81,7 @@ function ValidationEditor({
         </select>
       </label>
       <label className="shots-panel__field">
-        <span>Comparator</span>
+        <span>{t('shots.comparator')}</span>
         <input
           type="number"
           inputMode="decimal"
@@ -90,14 +93,14 @@ function ValidationEditor({
         />
       </label>
       <div className="shots-panel__field shots-panel__field--diff">
-        <span>Diff</span>
+        <span>{t('shots.diff')}</span>
         <strong>{difference === null ? '—' : `${difference >= 0 ? '+' : ''}${difference.toFixed(1)}`}</strong>
       </div>
       <label className="shots-panel__field shots-panel__field--notes">
-        <span>Notes</span>
+        <span>{t('shots.notes')}</span>
         <input
           type="text"
-          placeholder="notes…"
+          placeholder={t('shots.notesPlaceholder')}
           value={entry.notes}
           onChange={(event) => onUpdate(shot.timestamp, { notes: event.target.value })}
         />
@@ -115,6 +118,7 @@ function ValidationEditor({
  * shot rows tappable to open shot detail" follow-up.
  */
 export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: ShotsPanelProps) {
+  const { t } = useI18n();
   const { unitSystem } = useUnitPreference();
   const { entries, updateEntry, removeEntry } = useValidationStore();
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -126,15 +130,16 @@ export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: Shots
     }))
   );
 
-  const visibleShots = useMemo(() => [...shots].reverse(), [shots]);
+  const playerShots = useMemo(() => filterShotsByPlayer(shots, playerName), [shots, playerName]);
+  const visibleShots = useMemo(() => [...playerShots].reverse(), [playerShots]);
   const validatedCount = useMemo(
-    () => shots.filter((shot) => entries[shot.timestamp]?.comparatorSpeed).length,
-    [entries, shots]
+    () => playerShots.filter((shot) => entries[shot.timestamp]?.comparatorSpeed).length,
+    [entries, playerShots]
   );
 
   const handleExport = () => {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    downloadCsv(`openflight-validation-${stamp}.csv`, buildValidationCsv(shots, entries));
+    downloadCsv(`openflight-validation-${stamp}.csv`, buildValidationCsv(playerShots, entries));
   };
 
   const handleDelete = (timestamp: string) => {
@@ -144,11 +149,16 @@ export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: Shots
 
   const header = (
     <PanelHeader
-      title="Shots"
+      title={t('nav.shots')}
       subtitle={
-        shots.length === 0
+        playerShots.length === 0
           ? playerName
-          : cloudUploadMessage || `${shots.length} recorded · ${validatedCount}/${shots.length} validated`
+          : cloudUploadMessage ||
+            t('shots.recorded', {
+              count: playerShots.length,
+              validated: validatedCount,
+              total: playerShots.length,
+            })
       }
       club={clubLabel}
       actions={
@@ -156,26 +166,26 @@ export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: Shots
           <button
             type="button"
             className="panel-chip"
-            disabled={cloudUploadState === 'running' || shots.length === 0}
+            disabled={cloudUploadState === 'running' || playerShots.length === 0}
             onClick={() => socketService.uploadCloud()}
           >
-            {cloudUploadState === 'running' ? 'Uploading' : 'Upload cloud'}
+            {cloudUploadState === 'running' ? t('shots.uploading') : t('shots.uploadCloud')}
           </button>
-          <button type="button" className="panel-chip" disabled={shots.length === 0} onClick={handleExport}>
-            Export CSV
+          <button type="button" className="panel-chip" disabled={playerShots.length === 0} onClick={handleExport}>
+            {t('shots.exportCsv')}
           </button>
         </>
       }
     />
   );
 
-  if (shots.length === 0) {
+  if (playerShots.length === 0) {
     return (
       <div className="panel">
         {header}
         <div className="panel__body panel__body--empty">
-          <span className="panel__empty-title">No shots yet</span>
-          <span className="panel__empty-detail">Recorded shots appear here</span>
+          <span className="panel__empty-title">{t('shots.noShots')}</span>
+          <span className="panel__empty-detail">{t('shots.noShotsDetail')}</span>
         </div>
       </div>
     );
@@ -185,19 +195,19 @@ export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: Shots
     <div className="panel">
       {header}
       <div className="shots-panel__columns" role="presentation">
-        <span>Shot</span>
-        <span>Player</span>
-        <span className="shots-panel__num">Ball</span>
-        <span className="shots-panel__num">Club</span>
-        <span className="shots-panel__num">Launch</span>
-        <span className="shots-panel__num">Spin</span>
-        <span className="shots-panel__num">Carry</span>
+        <span>{t('shots.colShot')}</span>
+        <span>{t('shots.colPlayer')}</span>
+        <span className="shots-panel__num">{t('shots.colBall')}</span>
+        <span className="shots-panel__num">{t('shots.colClub')}</span>
+        <span className="shots-panel__num">{t('shots.colLaunch')}</span>
+        <span className="shots-panel__num">{t('shots.colSpin')}</span>
+        <span className="shots-panel__num">{t('shots.colCarry')}</span>
         <span />
       </div>
       <div
         className="panel__body shots-panel__rows"
         role="region"
-        aria-label="Recorded shots"
+        aria-label={t('shots.recordedAria')}
         ref={dragScroll.ref}
         onPointerDown={dragScroll.onPointerDown}
         onPointerMove={dragScroll.onPointerMove}
@@ -206,7 +216,7 @@ export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: Shots
         onClickCapture={dragScroll.onClickCapture}
       >
         {visibleShots.map((shot, index) => {
-          const shotNumber = shots.length - index;
+          const shotNumber = playerShots.length - index;
           const entry = entries[shot.timestamp] ?? getEmptyValidationEntry();
           const isOpen = expanded === shot.timestamp;
           const [ball, club, launch, spin, carry] = rowValues(shot, unitSystem);
@@ -234,10 +244,10 @@ export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: Shots
                 <button
                   type="button"
                   className="shots-panel__delete"
-                  aria-label={`Delete shot ${shotNumber}`}
+                  aria-label={t('shots.delete', { n: shotNumber })}
                   onClick={() => handleDelete(shot.timestamp)}
                 >
-                  Del
+                  {t('shots.deleteShort')}
                 </button>
               </div>
               {isOpen ? <ValidationEditor shot={shot} entry={entry} onUpdate={updateEntry} /> : null}

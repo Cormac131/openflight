@@ -1,4 +1,6 @@
 import { useState, type CSSProperties } from 'react';
+import { clubGroupLabel } from '../../i18n';
+import { useI18n } from '../../i18n/useI18n';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { initialPickerSection, pickerGridRows, type PickerSection } from './pickerSections';
 
@@ -18,6 +20,7 @@ interface PickerOverlayProps {
  * overlay; row height is capped so irons stay on screen.
  */
 export function PickerOverlay({ title, selectedId, sections, onSelect, onClose, wide = false }: PickerOverlayProps) {
+  const { t } = useI18n();
   const [sectionName, setSectionName] = useState(() => initialPickerSection(sections, selectedId));
   const activeSection = sections.find((section) => section.name === sectionName) ?? sections[0];
   const options = activeSection?.options ?? [];
@@ -32,16 +35,21 @@ export function PickerOverlay({ title, selectedId, sections, onSelect, onClose, 
     >
       <div className="picker-overlay__header">
         <span className="picker-overlay__title">{title}</span>
-        <button type="button" className="picker-overlay__close" onClick={onClose} aria-label={`Close ${title}`}>
+        <button
+          type="button"
+          className="picker-overlay__close"
+          onClick={onClose}
+          aria-label={t('picker.close', { title })}
+        >
           ✕
         </button>
       </div>
       {sections.length > 1 ? (
         <div className="picker-overlay__tabs">
           <SegmentedControl
-            ariaLabel="Groups"
+            ariaLabel={t('picker.groups')}
             value={sectionName}
-            options={sections.map((section) => ({ id: section.name, label: section.name }))}
+            options={sections.map((section) => ({ id: section.name, label: clubGroupLabel(section.name) }))}
             onChange={setSectionName}
           />
         </div>
@@ -52,9 +60,7 @@ export function PickerOverlay({ title, selectedId, sections, onSelect, onClose, 
             <button
               key={option.id}
               type="button"
-              className={`picker-overlay__option${
-                option.id === selectedId ? ' picker-overlay__option--selected' : ''
-              }`}
+              className={`picker-overlay__option${option.id === selectedId ? ' picker-overlay__option--selected' : ''}`}
               aria-pressed={option.id === selectedId}
               onClick={() => onSelect(option.id)}
             >
