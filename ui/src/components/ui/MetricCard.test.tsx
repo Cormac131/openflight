@@ -1,6 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { MetricCard } from './MetricCard';
+
+const css = readFileSync(fileURLToPath(new URL('./MetricCard.css', import.meta.url)), 'utf8');
 
 describe('MetricCard', () => {
   it('renders value, unit, and label', () => {
@@ -42,14 +46,7 @@ describe('MetricCard', () => {
   it('always reserves a meta slot on label-above tiles so values share a row', () => {
     const empty = renderToString(<MetricCard value="-2.9" unit="°" label="Club path" labelPosition="above" />);
     const dense = renderToString(
-      <MetricCard
-        value="8.9"
-        unit="°"
-        label="V. launch"
-        labelPosition="above"
-        subtext="estimated"
-        confidence="high"
-      />
+      <MetricCard value="8.9" unit="°" label="V. launch" labelPosition="above" subtext="estimated" confidence="high" />
     );
 
     expect(empty).toContain('metric-card__meta');
@@ -61,5 +58,14 @@ describe('MetricCard', () => {
       <MetricCard value="+3.4" unit="°" label="Spin axis" labelPosition="above" subtext="Fade" />
     );
     expect(html).toMatch(/metric-card__subtext metric-card__confidence-label[^>]*>Fade</);
+  });
+
+  it('does not paint the title yellow from :hover', () => {
+    // Selecting a tile reorders the grid. Touch (and the compatibility mouse
+    // events Windows synthesizes after a tap) leave :hover at the tap point,
+    // which is then occupied by the previous hero. Hover media queries still
+    // match on hybrid PCs, so the title color must not use :hover at all.
+    expect(css).not.toMatch(/:hover[^\n]*metric-card__label/);
+    expect(css).toMatch(/\.metric-card--selected \.metric-card__label \{[^}]*color: var\(--color-accent\)/);
   });
 });
