@@ -65,6 +65,7 @@ describe('LivePanel', () => {
     const html = render(null);
 
     expect(html).toContain('Ready');
+    expect(html).toContain('live-panel__empty-title');
     expect(html).not.toContain('live-panel__spotlight');
     expect(html).not.toContain('metric-card--interactive');
   });
@@ -134,6 +135,7 @@ describe('LivePanel', () => {
     expect(html).toContain('mph / yds');
     expect(html).toContain('Shot 03');
     expect(html).toContain('panel-header__subtitle">James<');
+    expect(html).toContain('panel-header__club">DR<');
   });
 
   it('renders the five-tile grid for a swing-speed shot', () => {

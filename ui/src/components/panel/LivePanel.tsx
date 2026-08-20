@@ -83,6 +83,7 @@ export function LivePanel({
     <PanelHeader
       title="Live"
       subtitle={playerName}
+      club={clubLabel}
       onStatusTap={onStatusTap}
       actions={
         <>
@@ -99,10 +100,12 @@ export function LivePanel({
     return (
       <div className="panel">
         {header}
-        <div className="panel__body panel__body--empty">
+        <div className="panel__body panel__body--empty live-panel__empty">
           {ballWarning}
-          <span className="panel__empty-title">Ready</span>
-          <span className="panel__empty-detail">Start a shot or swing speed session</span>
+          <span className="panel__empty-title live-panel__empty-title">Ready</span>
+          <span className="panel__empty-detail live-panel__empty-detail">
+            Start a shot or swing speed session
+          </span>
         </div>
       </div>
     );

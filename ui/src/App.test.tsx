@@ -47,6 +47,7 @@ describe('App shell', () => {
     const html = renderToString(<App />);
 
     expect(html).toContain('Change club');
-    expect(html).toContain('panel-action__value">DR<');
+    expect(html).not.toContain('panel-action__value');
+    expect(html).toContain('panel-header__club">Driver<');
   });
 });

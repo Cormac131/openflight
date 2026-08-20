@@ -37,7 +37,8 @@ test('supports club selection choose and dismiss flows against mock backend', as
   await page.getByRole('button', { name: 'Irons' }).click();
   await page.getByRole('button', { name: '7i', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Select club' })).toBeHidden();
-  await expect(page.getByRole('button', { name: /Change club\s*7i/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Change club' })).toBeVisible();
+  await expect(page.locator('.panel-header__club', { hasText: '7 Iron' })).toBeVisible();
 
   await withControlSocket(async (socket) => {
     await simulateShot(socket);
@@ -51,7 +52,8 @@ test('supports club selection choose and dismiss flows against mock backend', as
   await expect(page.getByRole('dialog', { name: 'Select club' })).toBeVisible();
   await dismissPicker(page);
   // Dismissing keeps whatever the server last reported, not a reset to driver.
-  await expect(page.getByRole('button', { name: /Change club\s*7i/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Change club' })).toBeVisible();
+  await expect(page.locator('.panel-header__club', { hasText: '7 Iron' })).toBeVisible();
 });
 
 test('renders live shot data and mock-mode simulate flow', async ({ page }) => {
