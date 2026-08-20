@@ -57,9 +57,10 @@ describe('isEditableDragScrollTarget', () => {
 });
 
 describe('createDragScrollController', () => {
-  function fakeElement(scrollTop = 0) {
+  function fakeElement({ scrollTop = 0, scrollLeft = 0 } = {}) {
     return {
       scrollTop,
+      scrollLeft,
       setPointerCapture: vi.fn(),
       releasePointerCapture: vi.fn(),
       hasPointerCapture: vi.fn(() => true),
@@ -67,7 +68,7 @@ describe('createDragScrollController', () => {
   }
 
   it('drags the list and swallows the trailing click so a row is not tapped', () => {
-    const element = fakeElement(12);
+    const element = fakeElement({ scrollTop: 12 });
     const controller = createDragScrollController(() => element);
 
     controller.pointerDown({ button: 0, pointerId: 7, clientY: 200, target: { nodeName: 'BUTTON' } });
@@ -147,5 +148,60 @@ describe('createDragScrollController', () => {
     controller.pointerMove({ button: 2, pointerId: 1, clientY: 10, target: { nodeName: 'BUTTON' } });
 
     expect(element.scrollTop).toBe(0);
+  });
+
+  it('drags horizontally and swallows the trailing click so a chip is not selected', () => {
+    const element = fakeElement({ scrollLeft: 12 });
+    const controller = createDragScrollController(() => element, { axis: 'x' });
+
+    controller.pointerDown({
+      button: 0,
+      pointerId: 7,
+      clientX: 200,
+      clientY: 10,
+      target: { nodeName: 'BUTTON' },
+    });
+    controller.pointerMove({
+      button: 0,
+      pointerId: 7,
+      clientX: 120,
+      clientY: 10,
+      target: { nodeName: 'BUTTON' },
+    });
+
+    expect(element.scrollLeft).toBe(92);
+    expect(element.scrollTop).toBe(0);
+    expect(element.setPointerCapture).toHaveBeenCalledWith(7);
+
+    controller.pointerUp({ pointerId: 7 });
+    const click = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
+
+    expect(controller.clickCapture(click)).toBe(true);
+    expect(click.preventDefault).toHaveBeenCalled();
+    expect(click.stopPropagation).toHaveBeenCalled();
+  });
+
+  it('leaves a horizontal tap under the threshold as a click', () => {
+    const element = fakeElement();
+    const controller = createDragScrollController(() => element, { axis: 'x' });
+
+    controller.pointerDown({
+      button: 0,
+      pointerId: 1,
+      clientX: 50,
+      clientY: 10,
+      target: { nodeName: 'BUTTON' },
+    });
+    controller.pointerMove({
+      button: 0,
+      pointerId: 1,
+      clientX: 50 + DRAG_SCROLL_THRESHOLD_PX - 1,
+      clientY: 10,
+      target: { nodeName: 'BUTTON' },
+    });
+    controller.pointerUp({ pointerId: 1 });
+
+    expect(element.scrollLeft).toBe(0);
+    expect(controller.clickCapture({ preventDefault: vi.fn(), stopPropagation: vi.fn() })).toBe(false);
   });
 });

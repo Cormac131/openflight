@@ -193,6 +193,7 @@
   padding: 0 12px;
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 6px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
@@ -490,8 +491,48 @@
 
 /* ----------------------------------------------------------- stats panel -- */
 
+.stats-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.stats-panel__chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 26px;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.stats-panel__chip-scroll {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  overscroll-behavior: contain;
+  /* Own the gesture: global * { touch-action: manipulation } plus chip
+     buttons otherwise steal the drag. Taps still fire as clicks. */
+  touch-action: none;
+}
+
+.stats-panel__chips .panel-chip {
+  touch-action: none;
+}
+
+.stats-panel > .panel__body--empty {
+  flex: 1;
+}
+
 .stats-panel__grid {
   display: grid;
+  flex: 1;
+  min-height: 0;
   grid-template-columns: repeat(3, 1fr);
   grid-template-rows: 1fr 1fr;
   background: var(--color-border);
@@ -1039,6 +1080,10 @@
   .live-panel__spotlight,
   .live-panel__empty,
   .live-panel__grid .metric-card {
+    padding-inline: 18px;
+  }
+
+  .stats-panel__chips {
     padding-inline: 18px;
   }
 

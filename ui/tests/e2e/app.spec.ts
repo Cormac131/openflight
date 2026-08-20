@@ -172,6 +172,38 @@ test('scrolls the shots list by dragging on a row', async ({ page }) => {
   await expect(page.locator('.shots-panel__validation')).toHaveCount(0);
 });
 
+test('scrolls stats club chips by dragging without changing the filter', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 600 });
+
+  const clubs = ['driver', '3-wood', '5-wood', '4-iron', '5-iron', '6-iron', '7-iron', '8-iron', '9-iron', 'pw', 'sw'];
+  await withControlSocket(async (socket) => {
+    for (const club of clubs) {
+      await setClub(socket, club);
+      await simulateShot(socket);
+    }
+  });
+
+  await gotoApp(page);
+  await dismissPicker(page);
+  await page.getByRole('button', { name: 'Stats' }).click();
+
+  const chips = page.getByRole('group', { name: 'Filter by club' });
+  const scroller = chips.locator('.stats-panel__chip-scroll');
+  const activeBefore = await chips.locator('.panel-chip--active').innerText();
+  const before = await scroller.evaluate((node) => node.scrollLeft);
+  const box = await scroller.boundingBox();
+  expect(box).toBeTruthy();
+
+  await page.mouse.move(box!.x + box!.width - 40, box!.y + box!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + 40, box!.y + box!.height / 2, { steps: 12 });
+  await page.mouse.up();
+
+  await expect.poll(async () => scroller.evaluate((node) => node.scrollLeft)).toBeGreaterThan(before);
+  await expect(chips.locator('.panel-chip--active')).toHaveText(activeBefore);
+  await expect(chips.getByRole('button', { name: /All \(/ })).toBeVisible();
+});
+
 test('expands a shot row to reveal its validation fields', async ({ page }) => {
   await withControlSocket(async (socket) => {
     await simulateShot(socket);
@@ -206,6 +238,29 @@ test.describe('shots list on a touchscreen', () => {
     await expect(page.locator('.shots-panel__validation')).toHaveCount(0);
     await page.locator('.shots-panel__row-main').first().tap();
     await expect(page.locator('.shots-panel__validation')).toBeVisible();
+  });
+});
+
+test.describe('stats club chips on a touchscreen', () => {
+  test.use({ hasTouch: true, viewport: { width: 1024, height: 600 } });
+
+  test('taps a club chip to filter', async ({ page }) => {
+    await withControlSocket(async (socket) => {
+      await setClub(socket, 'driver');
+      await simulateShot(socket);
+      await setClub(socket, '7-iron');
+      await simulateShot(socket);
+    });
+
+    await gotoApp(page);
+    await dismissPicker(page);
+    await page.getByRole('button', { name: 'Stats' }).click();
+
+    await expect(page.getByRole('button', { name: '7-IRON (1)' })).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: 'DRIVER (1)' }).tap();
+    await expect(page.getByRole('button', { name: 'DRIVER (1)' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('button', { name: '7-IRON (1)' })).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('.stats-panel__grid .metric-card').first()).toContainText('1');
   });
 });
 

@@ -17,8 +17,15 @@ export interface DragScrollTarget {
   closest?: (selector: string) => unknown;
 }
 
+export type DragScrollAxis = 'x' | 'y';
+
+export interface DragScrollOptions {
+  axis?: DragScrollAxis;
+}
+
 export interface DragScrollElement {
   scrollTop: number;
+  scrollLeft: number;
   setPointerCapture?: (pointerId: number) => void;
   releasePointerCapture?: (pointerId: number) => void;
   hasPointerCapture?: (pointerId: number) => boolean;
@@ -27,6 +34,7 @@ export interface DragScrollElement {
 export interface DragScrollPointerEvent {
   button: number;
   pointerId: number;
+  clientX?: number;
   clientY: number;
   target: DragScrollTarget | null;
 }
@@ -66,9 +74,25 @@ export function applyDragScrollMove(
  * Pointer drag-to-scroll for kiosk touchscreens. Many Pi displays report
  * finger motion as mouse drags, which native overflow scrolling ignores.
  */
-export function createDragScrollController(getElement: () => DragScrollElement | null) {
+export function createDragScrollController(
+  getElement: () => DragScrollElement | null,
+  options: DragScrollOptions = {}
+) {
+  const axis: DragScrollAxis = options.axis ?? 'y';
   let session: DragScrollSession | null = null;
   let suppressClick = false;
+
+  const clientPos = (event: DragScrollPointerEvent) => (axis === 'x' ? (event.clientX ?? 0) : event.clientY);
+
+  const readScroll = (element: DragScrollElement) => (axis === 'x' ? element.scrollLeft : element.scrollTop);
+
+  const writeScroll = (element: DragScrollElement, value: number) => {
+    if (axis === 'x') {
+      element.scrollLeft = value;
+    } else {
+      element.scrollTop = value;
+    }
+  };
 
   const endSession = (pointerId: number) => {
     const current = session;
@@ -95,7 +119,7 @@ export function createDragScrollController(getElement: () => DragScrollElement |
       const element = getElement();
       if (!element) return;
 
-      session = startDragScroll(event.pointerId, event.clientY, element.scrollTop);
+      session = startDragScroll(event.pointerId, clientPos(event), readScroll(element));
       suppressClick = false;
     },
 
@@ -105,10 +129,10 @@ export function createDragScrollController(getElement: () => DragScrollElement |
       const element = getElement();
       if (!element) return;
 
-      const next = applyDragScrollMove(session, event.clientY);
+      const next = applyDragScrollMove(session, clientPos(event));
       if (!next.moved) return;
 
-      element.scrollTop = next.scrollTop;
+      writeScroll(element, next.scrollTop);
       // Capture only after the gesture is a drag. Capturing on finger-down
       // retargets the click to the list, so row taps never open details.
       try {
