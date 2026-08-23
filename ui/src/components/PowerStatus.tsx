@@ -23,11 +23,20 @@ function BatteryIcon({ status }: { status: PowerStatusData }) {
   );
 }
 
-export function PowerIndicator({ status }: { status: PowerStatusData }) {
+export function PowerIndicator({
+  status,
+  variant = 'chip',
+}: {
+  status: PowerStatusData;
+  /** `chrome` sits in the footer next to units. */
+  variant?: 'chip' | 'chrome';
+}) {
   const { t } = useI18n();
   const percentage = status.battery_percent === null ? '--' : `${Math.round(status.battery_percent)}%`;
   const source = status.external_power ? t('power.pluggedIn') : t('power.onBattery');
-  const label = status.available ? t('power.label', { source, percent: percentage }) : t('power.unavailable');
+  const label = status.available
+    ? t('power.label', { source, percent: percentage })
+    : t('power.unavailable');
   const detail = status.available
     ? status.battery_voltage_v === null
       ? label
@@ -35,7 +44,12 @@ export function PowerIndicator({ status }: { status: PowerStatusData }) {
     : status.error || label;
 
   return (
-    <div className={`power-status power-status--${status.state}`} aria-label={label} title={detail} role="status">
+    <div
+      className={`power-status power-status--${variant} power-status--${status.state}`}
+      aria-label={label}
+      title={detail}
+      role="status"
+    >
       <BatteryIcon status={status} />
       <span className="power-status__percentage">{percentage}</span>
     </div>
@@ -73,7 +87,13 @@ export function PowerWarning({ level, percentage }: { level: WarningLevel; perce
   );
 }
 
-export function PowerExperience({ status: statusProp }: { status?: PowerStatusData | null }) {
+export function PowerExperience({
+  status: statusProp,
+  variant = 'chip',
+}: {
+  status?: PowerStatusData | null;
+  variant?: 'chip' | 'chrome';
+}) {
   const storeStatus = useSystemStore((state) => state.powerStatus);
   const status = statusProp ?? storeStatus;
   if (!status) return null;
@@ -85,7 +105,7 @@ export function PowerExperience({ status: statusProp }: { status?: PowerStatusDa
 
   return (
     <>
-      <PowerIndicator status={status} />
+      <PowerIndicator status={status} variant={variant} />
       {warningLevel && status.battery_percent !== null ? (
         <PowerWarning key={warningLevel} level={warningLevel} percentage={status.battery_percent} />
       ) : null}

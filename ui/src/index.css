@@ -72,8 +72,9 @@
 }
 
 html {
-  /* Kiosk-readable type: rem sizes (and rem spacing) scale from this. */
-  font-size: 150%;
+  /* 1rem tracks the kiosk: ~117% at 800-wide, 150% at 1024-wide (24px if the
+   * browser default is 16px). Rem type and spacing then follow the screen. */
+  font-size: clamp(112.5%, 2.34vw, 150%);
   color: var(--color-text);
   background-color: var(--color-bg);
   font-family: var(--font-body);

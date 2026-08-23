@@ -29,6 +29,16 @@ export function registerHandlers(io: Server, session: MockSession): void {
     socket.emit('trigger_status', session.triggerStatus());
     socket.emit('radar_config', session.radarConfig);
     socket.emit('camera_status', session.cameraStatus());
+    socket.emit('power_status', {
+      available: true,
+      provider: 'mock',
+      state: 'on_battery',
+      battery_percent: 78,
+      battery_voltage_v: 3.91,
+      external_power: false,
+      updated_at: new Date().toISOString(),
+      error: null,
+    });
 
     socket.on('get_session', () => {
       socket.emit('session_state', session.sessionStatePayload(true));

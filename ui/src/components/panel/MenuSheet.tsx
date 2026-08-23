@@ -8,31 +8,22 @@ import { useUnitPreference } from '../../state/useUnitPreference';
 import { socketService } from '../../services/socketService';
 import { ballDetectionStatusLabel } from '../../utils/ballDetectionStatus';
 import { SegmentedControl } from '../ui/SegmentedControl';
-import { PowerExperience } from '../PowerStatus';
 import { SimStatus } from '../SimStatus';
-import type { PowerStatus } from '../../types/power';
 
 interface MenuSheetProps {
   onClose: () => void;
   onShutdown: () => void;
-  /**
-   * Battery telemetry. Omit to read `useSystemStore`; pass it in tests so SSR
-   * is not stuck with the store's initial `null`.
-   */
-  powerStatus?: PowerStatus | null;
 }
 
 /**
  * The sheet behind the footer logo button (design doc 6a `menuOpen6`).
  *
  * 6a draws Units / Shut down. Players live on their own panel. The System
- * block is an addition: the mockup replaced the old top header, and battery,
- * simulator and ball-detection state had nowhere else to go. Socket connection
- * lives on the panel header LED.
+ * block is an addition: the mockup replaced the old top header, and simulator
+ * and ball-detection state had nowhere else to go. Battery lives in the footer.
+ * Socket connection lives on the panel header LED.
  */
-export function MenuSheet({ onClose, onShutdown, powerStatus: powerStatusProp }: MenuSheetProps) {
-  const storePowerStatus = useSystemStore((state) => state.powerStatus);
-  const powerStatus = powerStatusProp ?? storePowerStatus;
+export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
   const simStatuses = useSystemStore((state) => state.simStatuses);
   const cameraStatus = useCameraStore((state) => state.cameraStatus);
   const { t } = useI18n();
@@ -90,12 +81,6 @@ export function MenuSheet({ onClose, onShutdown, powerStatus: powerStatusProp }:
 
         <section className="menu-sheet__section">
           <span className="menu-sheet__section-title">{t('menu.system')}</span>
-          {powerStatus ? (
-            <div className="menu-sheet__status-row">
-              <span className="menu-sheet__status-label">{t('menu.battery')}</span>
-              <PowerExperience status={powerStatus} />
-            </div>
-          ) : null}
           <div className="menu-sheet__status-row">
             <span className="menu-sheet__status-label">{t('menu.ballDetection')}</span>
             <span className="menu-sheet__status-value">{ballDetectionValue}</span>

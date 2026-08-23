@@ -2,8 +2,13 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { PanelFooter } from './PanelFooter';
 import type { PanelView } from './views';
+import type { PowerStatus } from '../../types/power';
 
-function render(currentView: PanelView = 'live', shotCount = 0) {
+function render(
+  currentView: PanelView = 'live',
+  shotCount = 0,
+  powerStatus: PowerStatus | null | undefined = undefined,
+) {
   return renderToString(
     <PanelFooter
       currentView={currentView}
@@ -14,9 +19,22 @@ function render(currentView: PanelView = 'live', shotCount = 0) {
       cameraStreaming={false}
       ballDetected={false}
       debugRecording={false}
+      powerStatus={powerStatus}
     />
   ).replace(/<!-- -->/g, '');
 }
+
+const batteryStatus = (overrides: Partial<PowerStatus> = {}): PowerStatus => ({
+  available: true,
+  provider: 'geekworm',
+  state: 'on_battery',
+  battery_percent: 64.2,
+  battery_voltage_v: 3.81,
+  external_power: false,
+  updated_at: '2026-08-20T12:00:00+00:00',
+  error: null,
+  ...overrides,
+});
 
 describe('PanelFooter', () => {
   it('puts units on the right of Live without a shot count', () => {
@@ -39,13 +57,41 @@ describe('PanelFooter', () => {
     }
   });
 
-  it('hides units on Players, Camera, and Debug', () => {
+  it('hides units and the meta cluster on Players, Camera, and Debug when there is no battery', () => {
     for (const view of ['players', 'camera', 'debug'] as const) {
-      const html = render(view, 4);
+      const html = render(view, 4, null);
 
       expect(html).not.toContain('panel-footer__meta');
       expect(html).not.toContain('mph / yds');
+      expect(html).not.toContain('power-status');
     }
+  });
+
+  it('hides the battery when telemetry is null', () => {
+    const html = render('live', 0, null);
+
+    expect(html).toContain('panel-footer__units');
+    expect(html).not.toContain('power-status');
+  });
+
+  it('shows live battery percentage to the right of units', () => {
+    const html = render('live', 0, batteryStatus());
+
+    expect(html).toContain('panel-footer__units');
+    expect(html).toContain('power-status--chrome');
+    expect(html).toContain('64%');
+    const unitsAt = html.indexOf('panel-footer__units');
+    const batteryAt = html.indexOf('power-status--chrome');
+    expect(unitsAt).toBeGreaterThan(-1);
+    expect(batteryAt).toBeGreaterThan(unitsAt);
+  });
+
+  it('keeps the battery on Camera when telemetry is present', () => {
+    const html = render('camera', 0, batteryStatus({ battery_percent: 41 }));
+
+    expect(html).toContain('panel-footer__meta');
+    expect(html).not.toContain('mph / yds');
+    expect(html).toContain('41%');
   });
 
   it('marks the active tab pressed', () => {

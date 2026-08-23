@@ -1,23 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { renderToString } from 'react-dom/server';
-import type { PowerStatus } from '../../types/power';
 import { MenuSheet } from './MenuSheet';
+import { useSystemStore } from '../../stores/useSystemStore';
+import type { PowerStatus } from '../../types/power';
 
-function renderMenu(powerStatus?: PowerStatus | null) {
-  return renderToString(<MenuSheet onClose={() => {}} onShutdown={() => {}} powerStatus={powerStatus} />);
+function renderMenu() {
+  return renderToString(<MenuSheet onClose={() => {}} onShutdown={() => {}} />);
 }
-
-const batteryStatus = (overrides: Partial<PowerStatus> = {}): PowerStatus => ({
-  available: true,
-  provider: 'geekworm',
-  state: 'on_battery',
-  battery_percent: 64.2,
-  battery_voltage_v: 3.81,
-  external_power: false,
-  updated_at: '2026-08-20T12:00:00+00:00',
-  error: null,
-  ...overrides,
-});
 
 describe('MenuSheet players', () => {
   it('does not manage players in the menu', () => {
@@ -42,17 +31,26 @@ describe('MenuSheet language', () => {
   });
 });
 
-describe('MenuSheet battery row', () => {
-  it('hides the battery row when no battery is present', () => {
+describe('MenuSheet battery', () => {
+  it('does not show battery in the menu, even when telemetry is present', () => {
+    const powerStatus: PowerStatus = {
+      available: true,
+      provider: 'geekworm',
+      state: 'on_battery',
+      battery_percent: 64.2,
+      battery_voltage_v: 3.81,
+      external_power: false,
+      updated_at: '2026-08-20T12:00:00+00:00',
+      error: null,
+    };
+    useSystemStore.setState({ powerStatus });
+
     const html = renderMenu();
 
     expect(html).not.toContain('menu-sheet__status-label">Battery');
-  });
+    expect(html).not.toContain('power-status');
+    expect(html).not.toContain('64%');
 
-  it('shows the battery row when telemetry is available', () => {
-    const html = renderMenu(batteryStatus());
-
-    expect(html).toContain('menu-sheet__status-label">Battery');
-    expect(html).toContain('On battery, 64% battery');
+    useSystemStore.setState({ powerStatus: null });
   });
 });

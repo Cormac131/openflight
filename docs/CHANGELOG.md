@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Instrument-panel kiosk UI.** The dashboard is a tabbed shell (Live, Stats,
+  Shots, Camera, Players, Debug) instead of the previous stacked shot and stats
+  views. Tap a Live metric to pin it top-left; after a new shot that metric
+  fills the screen for 10 seconds. The footer logo opens units, dark/light
+  theme, language, simulator and ball-detection status, and shutdown. Club
+  (or training implement) selection is a Live header action. See the
+  [UI README](../ui/README.md).
+- **Kiosk languages.** English, Spanish, French, and Portuguese. Choice is
+  stored in `localStorage` (`openflight.locale:v1`).
+- **Dark and light themes.** Toggle in the footer menu; stored as
+  `openflight.theme` (default dark).
 - **Battery and external-power status for Raspberry Pi UPS boards.** OpenFlight
   can now display charging state and battery percentage, issue dismissible 20%
   and 10% warnings while discharging, and record throttled power telemetry in
@@ -92,6 +103,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trusting it.
 
 ### Changed
+- Display mode (`/display`) now uses the same metric cards and theme tokens as
+  the kiosk Live view.
 - The vertical estimator is now a fixed cascade (two_ray → geometry →
   single-frame geometry → naive); it is no longer user-selectable. Launch-angle
   source and confidence semantics changed accordingly.

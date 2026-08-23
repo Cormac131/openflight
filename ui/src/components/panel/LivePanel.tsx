@@ -3,6 +3,7 @@ import type { Shot } from '../../types/shot';
 import { computeSwingSpeedStats, filterShotsByPlayer } from '../../types/shot';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { useI18n } from '../../i18n/useI18n';
+import { useSharedFitFontSize } from '../../hooks/useFitFontSize';
 import { MetricCard, EstimatedMark } from '../ui/MetricCard';
 import { PanelHeader } from './PanelHeader';
 import { buildLiveMetrics, pinSelectedMetric, SPOTLIGHT_DURATION_MS } from './liveMetrics';
@@ -69,6 +70,10 @@ export function LivePanel({
     [displayedShot, unitSystem, swingStats, selectedMetricId, locale]
   );
   const selected = metrics[0] ?? null;
+  const gridRef = useSharedFitFontSize(
+    metrics.length > 0,
+    metrics.map((metric) => `${metric.value}:${metric.unit ?? ''}`).join('|')
+  );
   const showBallWarning = ballDetectionEnabled && !ballDetected;
   const ballWarning = showBallWarning ? (
     <div className="live-panel__ball-warning" role="alert">
@@ -127,7 +132,7 @@ export function LivePanel({
             {selected.subtext ? <span className="live-panel__spotlight-subtext">{selected.subtext}</span> : null}
           </button>
         ) : null}
-        <div className={`live-panel__grid live-panel__grid--of-${metrics.length}`}>
+        <div ref={gridRef} className={`live-panel__grid live-panel__grid--of-${metrics.length}`}>
           {metrics.map((metric) => (
             <MetricCard
               key={metric.id}
