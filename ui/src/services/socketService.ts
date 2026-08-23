@@ -4,7 +4,6 @@ import { useShotStore } from '../stores/useShotStore';
 import { useCameraStore, type CameraStatus } from '../stores/useCameraStore';
 import { useDebugStore } from '../stores/useDebugStore';
 import {
-  isSwingSpeedShot,
   type Shot,
   type SessionStats,
   type SessionState,
@@ -14,8 +13,8 @@ import {
 } from '../types/shot';
 import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
 import type { PowerStatus } from '../types/power';
-import { playSwingCapturedCue } from '../utils/audioCue';
 import { getServerOrigin } from '../utils/serverOrigin';
+import { handleShotMessage } from './handleShotMessage';
 import { ingestSocketPlayerName } from './playerSocketSync';
 
 const SOCKET_URL = getServerOrigin();
@@ -67,11 +66,7 @@ class SocketService {
     });
 
     this.socket.on('shot', (data: { shot: Shot; stats: SessionStats }) => {
-      // Need to get latest state of addShot to prevent stale closures
-      useShotStore.getState().addShot(data.shot);
-      if (isSwingSpeedShot(data.shot)) {
-        playSwingCapturedCue();
-      }
+      handleShotMessage(data);
     });
 
     // Swing-speed mode also emits a normal `shot` event, handled above, so the

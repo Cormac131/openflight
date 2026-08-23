@@ -54,6 +54,9 @@
 
 .metric-card--label-above .metric-card__value-row {
   grid-row: 3;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
   min-height: 1em;
 }
 
@@ -63,6 +66,8 @@
   justify-content: center;
   grid-row: 4;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
   /* One caption line (dots + HIGH / FADE / SPIN-ADJUSTED) even when empty. */
   min-height: 1.125rem;
 }

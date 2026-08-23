@@ -14,6 +14,7 @@
   font-variant-numeric: tabular-nums;
 }
 
+.power-status__icon,
 .power-status__icon {
   position: relative;
   display: inline-flex;
@@ -22,6 +23,7 @@
   height: 14px;
 }
 
+.power-status__battery,
 .power-status__battery {
   position: relative;
   display: block;
@@ -30,9 +32,10 @@
   padding: 2px;
   overflow: visible;
   border: 1.5px solid currentColor;
-  border-radius: var(--radius);
+  border-radius: var(--radius, 0.25rem);
 }
 
+.power-status__battery::after,
 .power-status__battery::after {
   content: '';
   position: absolute;
@@ -40,18 +43,20 @@
   right: -4px;
   width: 2px;
   height: 5px;
-  border-radius: var(--radius);
+  border-radius: var(--radius, 0.25rem);
   background: currentColor;
 }
 
+.power-status__fill,
 .power-status__fill {
   display: block;
   height: 100%;
   min-width: 1px;
-  border-radius: var(--radius);
+  border-radius: var(--radius, 0.25rem);
   background: currentColor;
 }
 
+.power-status__bolt,
 .power-status__bolt {
   position: absolute;
   left: 8px;
@@ -79,6 +84,58 @@
   color: var(--color-danger);
   border-color: rgba(248, 113, 113, 0.4);
   background: rgba(248, 113, 113, 0.1);
+}
+
+/* Footer chrome: same quiet type as units, no chip chrome. */
+.power-status--chrome {
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.power-status--chrome.power-status--plugged_in,
+.power-status--chrome.power-status--low,
+.power-status--chrome.power-status--critical,
+.power-status--chrome.power-status--unavailable {
+  border: none;
+  background: transparent;
+}
+
+.power-status--chrome .power-status__icon,
+.power-status--chrome .power-status__icon {
+  width: 1.35rem;
+  height: 0.7rem;
+}
+
+.power-status--chrome .power-status__battery,
+.power-status--chrome .power-status__battery {
+  width: 1.15rem;
+  height: 0.6rem;
+  padding: 0.1rem;
+  border-width: 1.5px;
+}
+
+.power-status--chrome .power-status__battery::after,
+.power-status--chrome .power-status__battery::after {
+  top: 0.12rem;
+  right: -0.18rem;
+  width: 0.12rem;
+  height: 0.28rem;
+}
+
+.power-status--chrome .power-status__bolt,
+.power-status--chrome .power-status__bolt {
+  left: 0.32rem;
+  top: -0.12rem;
+  width: 0.45rem;
+  height: 0.75rem;
 }
 
 .power-warning-overlay {
@@ -156,7 +213,7 @@
 }
 
 @media (max-height: 500px), (max-width: 760px) {
-  .power-status {
+  .power-status:not(.power-status--chrome) {
     min-width: 58px;
     height: 26px;
     padding: 0 var(--space-xs);

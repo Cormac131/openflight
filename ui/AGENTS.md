@@ -1,8 +1,26 @@
 # OpenFlight UI — agent notes
 
-The production UI is a **1024×600 Raspberry Pi kiosk**. Assume a finger, not a
-mouse. `*` is `touch-action: manipulation`, so native overflow scrolling often
-does not work; Pi displays also report finger motion as mouse drags.
+The production UI is a **1024×600 Raspberry Pi kiosk**. Also ship **800×400**
+and **800×480**. Assume a finger, not a mouse. `*` is
+`touch-action: manipulation`, so native overflow scrolling often does not
+work; Pi displays also report finger motion as mouse drags.
+
+## Type (rem, scales with the screen)
+
+Shot numbers, labels, and UI chrome must use **`rem`**, not `px`, so type
+follows `html` font-size.
+
+- `html` font-size is a **fluid clamp** (`index.css`): about **112.5%** on
+  800-wide kiosks and **150%** at 1024-wide. Do not pin `html` to a fixed
+  `150%`.
+- Live metric values: size the **row** with `clamp(min-rem, min(vw, vh, cqi, cqb), max-rem)`.
+  The unit is `em` so it tracks the number. `useSharedFitFontSize` then applies
+  **one** size to every Live tile so 181 and 2,328 match; it shrinks the whole
+  grid until the widest value + unit fits (`10,000`). Do not shrink tiles
+  independently. No `px` font-size in CSS for those numbers, and no `min-width`
+  breakpoint that jumps the size in one step.
+- Keep `10,000` + unit inside the tile on 800×400, 800×480, and 1024×600
+  (see `tests/e2e/live-metrics-layout.spec.ts`).
 
 ## Overflow + tap (always consider)
 
