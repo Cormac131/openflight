@@ -1,25 +1,29 @@
-import { useRef, type PointerEvent, type MouseEvent } from 'react';
+import { type MouseEvent, type PointerEvent, type RefObject, useRef } from 'react';
 import {
   createDragScrollController,
   type DragScrollAxis,
   type DragScrollTarget,
 } from '../utils/dragScroll';
 
-/** Bind pointer drag-to-scroll onto an overflow container for kiosk touchscreens. */
-export function useDragScroll<T extends HTMLElement>(axis: DragScrollAxis = 'y') {
-  const ref = useRef<T>(null);
+/**
+ * Bind pointer drag-to-scroll onto an overflow container for kiosk touchscreens.
+ * Pass a ref created in the component (`useRef`) so the scroller can use
+ * `ref={scrollRef}` — returning a ref from this hook trips react-hooks/refs.
+ */
+export function useDragScroll<T extends HTMLElement>(
+  ref: RefObject<T | null>,
+  axis: DragScrollAxis = 'y'
+) {
   const controllerRef = useRef<ReturnType<typeof createDragScrollController> | null>(null);
 
-  if (controllerRef.current === null) {
-    controllerRef.current = createDragScrollController(() => ref.current, { axis });
-  }
-
-  const controller = controllerRef.current;
+  const getController = () => {
+    controllerRef.current ??= createDragScrollController(() => ref.current, { axis });
+    return controllerRef.current;
+  };
 
   return {
-    ref,
     onPointerDown: (event: PointerEvent<T>) =>
-      controller.pointerDown({
+      getController().pointerDown({
         button: event.button,
         pointerId: event.pointerId,
         clientX: event.clientX,
@@ -27,15 +31,15 @@ export function useDragScroll<T extends HTMLElement>(axis: DragScrollAxis = 'y')
         target: event.target as DragScrollTarget | null,
       }),
     onPointerMove: (event: PointerEvent<T>) =>
-      controller.pointerMove({
+      getController().pointerMove({
         button: event.button,
         pointerId: event.pointerId,
         clientX: event.clientX,
         clientY: event.clientY,
         target: event.target as DragScrollTarget | null,
       }),
-    onPointerUp: (event: PointerEvent<T>) => controller.pointerUp(event),
-    onPointerCancel: (event: PointerEvent<T>) => controller.pointerCancel(event),
-    onClickCapture: (event: MouseEvent<T>) => controller.clickCapture(event),
+    onPointerUp: (event: PointerEvent<T>) => getController().pointerUp(event),
+    onPointerCancel: (event: PointerEvent<T>) => getController().pointerCancel(event),
+    onClickCapture: (event: MouseEvent<T>) => getController().clickCapture(event),
   };
 }

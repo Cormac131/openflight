@@ -1,7 +1,8 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { PowerStatus } from '../types/power';
-import { PowerIndicator, PowerWarning, batteryTone } from './PowerStatus';
+import { batteryTone } from '../utils/batteryTone';
+import { PowerIndicator, PowerWarning } from './PowerStatus';
 
 const status = (overrides: Partial<PowerStatus> = {}): PowerStatus => ({
   available: true,

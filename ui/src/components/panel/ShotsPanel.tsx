@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { Shot } from '../../types/shot';
 import { filterShotsByPlayer, getSwingSpeedMph, isSwingSpeedShot } from '../../types/shot';
@@ -123,7 +123,8 @@ export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: Shots
   const { unitSystem } = useUnitPreference();
   const { entries, updateEntry, removeEntry } = useValidationStore();
   const [expanded, setExpanded] = useState<string | null>(null);
-  const dragScroll = useDragScroll<HTMLDivElement>();
+  const listRef = useRef<HTMLDivElement>(null);
+  const dragScroll = useDragScroll(listRef);
   const { cloudUploadState, cloudUploadMessage } = useSystemStore(
     useShallow((state) => ({
       cloudUploadState: state.cloudUploadState,
@@ -208,7 +209,7 @@ export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: Shots
         className="panel__body shots-panel__rows"
         role="region"
         aria-label={t('shots.recordedAria')}
-        ref={dragScroll.ref}
+        ref={listRef}
         onPointerDown={dragScroll.onPointerDown}
         onPointerMove={dragScroll.onPointerMove}
         onPointerUp={dragScroll.onPointerUp}

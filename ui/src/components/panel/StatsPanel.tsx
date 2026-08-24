@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Shot } from '../../types/shot';
 import {
   computeStats,
@@ -35,13 +35,14 @@ interface StatTile {
  * drawn), four for a swing-speed one.
  */
 export function StatsPanel({ shots, activeClub, playerName, headerAction }: StatsPanelProps) {
-  const { locale, t } = useI18n();
+  const { t } = useI18n();
   const playerShots = useMemo(() => filterShotsByPlayer(shots, playerName), [shots, playerName]);
   const hasShotsForActiveClub = playerShots.some((shot) => shot.club === activeClub);
   const [selectedClub, setSelectedClub] = useState<string | null>(hasShotsForActiveClub ? activeClub : null);
   const [prevActiveClub, setPrevActiveClub] = useState(activeClub);
   const [prevPlayerName, setPrevPlayerName] = useState(playerName);
-  const chipScroll = useDragScroll<HTMLDivElement>('x');
+  const chipRef = useRef<HTMLDivElement>(null);
+  const chipScroll = useDragScroll(chipRef, 'x');
 
   // Update state during render when the prop changes, rather than in an effect.
   if (activeClub !== prevActiveClub || playerName !== prevPlayerName) {
@@ -129,7 +130,7 @@ export function StatsPanel({ shots, activeClub, playerName, headerAction }: Stat
         value: stats.avg_smash_factor === null ? '—' : stats.avg_smash_factor.toFixed(2),
       },
     ];
-  }, [isSwingSpeedSession, stats, swingStats, unitSystem, speedUnit, distanceUnit, locale]);
+  }, [isSwingSpeedSession, stats, swingStats, unitSystem, speedUnit, distanceUnit, t]);
 
   const clubFilters = (
     <div className="stats-panel__chips" role="group" aria-label={t('stats.filterByClub')}>
@@ -143,7 +144,7 @@ export function StatsPanel({ shots, activeClub, playerName, headerAction }: Stat
       </button>
       <div
         className="panel-chips stats-panel__chip-scroll"
-        ref={chipScroll.ref}
+        ref={chipRef}
         onPointerDown={chipScroll.onPointerDown}
         onPointerMove={chipScroll.onPointerMove}
         onPointerUp={chipScroll.onPointerUp}
