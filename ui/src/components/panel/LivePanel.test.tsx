@@ -191,7 +191,7 @@ describe('LivePanel', () => {
     expect(header).toContain('panel-action');
   });
 
-  it('shows the current player\'s last shot, not the previous player\'s', () => {
+  it("shows the current player's last shot, not the previous player's", () => {
     const james = makeShot({ ball_speed_mph: 90, timestamp: 'a' });
     const alex = makeShot({ player_name: 'Alex', ball_speed_mph: 150, timestamp: 'b' });
     const html = render(alex, [james, alex]);

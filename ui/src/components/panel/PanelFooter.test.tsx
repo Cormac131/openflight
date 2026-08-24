@@ -7,7 +7,7 @@ import type { PowerStatus } from '../../types/power';
 function render(
   currentView: PanelView = 'live',
   shotCount = 0,
-  powerStatus: PowerStatus | null | undefined = undefined,
+  powerStatus: PowerStatus | null | undefined = undefined
 ) {
   return renderToString(
     <PanelFooter

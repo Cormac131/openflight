@@ -14,7 +14,12 @@ export function AddPlayerDialog({ name, onChange, onAdd, onCancel }: AddPlayerDi
 
   return (
     <div className="add-player-modal">
-      <button type="button" className="add-player-modal__scrim" aria-label={t('picker.close', { title: t('menu.addPlayer') })} onClick={onCancel} />
+      <button
+        type="button"
+        className="add-player-modal__scrim"
+        aria-label={t('picker.close', { title: t('menu.addPlayer') })}
+        onClick={onCancel}
+      />
       <div className="add-player-modal__dialog" role="dialog" aria-modal="true" aria-label={t('menu.addPlayer')}>
         <span id="add-player-title" className="add-player-modal__title">
           {t('menu.addPlayer')}

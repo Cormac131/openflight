@@ -1,19 +1,12 @@
 import { type MouseEvent, type PointerEvent, type RefObject, useRef } from 'react';
-import {
-  createDragScrollController,
-  type DragScrollAxis,
-  type DragScrollTarget,
-} from '../utils/dragScroll';
+import { createDragScrollController, type DragScrollAxis, type DragScrollTarget } from '../utils/dragScroll';
 
 /**
  * Bind pointer drag-to-scroll onto an overflow container for kiosk touchscreens.
  * Pass a ref created in the component (`useRef`) so the scroller can use
  * `ref={scrollRef}` — returning a ref from this hook trips react-hooks/refs.
  */
-export function useDragScroll<T extends HTMLElement>(
-  ref: RefObject<T | null>,
-  axis: DragScrollAxis = 'y'
-) {
+export function useDragScroll<T extends HTMLElement>(ref: RefObject<T | null>, axis: DragScrollAxis = 'y') {
   const controllerRef = useRef<ReturnType<typeof createDragScrollController> | null>(null);
 
   const getController = () => {

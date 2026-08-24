@@ -23,13 +23,7 @@ function CameraGlyph() {
   );
 }
 
-function LiveFeed({
-  ballDetected,
-  ballConfidence,
-}: {
-  ballDetected: boolean;
-  ballConfidence: number;
-}) {
+function LiveFeed({ ballDetected, ballConfidence }: { ballDetected: boolean; ballConfidence: number }) {
   const { t } = useI18n();
   const [streamError, setStreamError] = useState(false);
 
@@ -55,9 +49,7 @@ function LiveFeed({
         onError={() => setStreamError(true)}
       />
       <span className={`camera-panel__chip${ballDetected ? ' camera-panel__chip--detected' : ''}`}>
-        {ballDetected
-          ? t('camera.ballPercent', { percent: Math.round(ballConfidence * 100) })
-          : t('camera.searching')}
+        {ballDetected ? t('camera.ballPercent', { percent: Math.round(ballConfidence * 100) }) : t('camera.searching')}
       </span>
     </div>
   );

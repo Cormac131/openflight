@@ -45,9 +45,7 @@ export function PowerIndicator({
   const { t } = useI18n();
   const percentage = status.battery_percent === null ? '--' : `${Math.round(status.battery_percent)}%`;
   const source = status.external_power ? t('power.pluggedIn') : t('power.onBattery');
-  const label = status.available
-    ? t('power.label', { source, percent: percentage })
-    : t('power.unavailable');
+  const label = status.available ? t('power.label', { source, percent: percentage }) : t('power.unavailable');
   const detail = status.available
     ? status.battery_voltage_v === null
       ? label

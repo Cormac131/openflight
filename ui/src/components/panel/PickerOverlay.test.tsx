@@ -12,7 +12,7 @@ describe('PickerOverlay', () => {
         sections={clubSections()}
         onSelect={() => {}}
         onClose={() => {}}
-      />,
+      />
     );
 
     expect(html).toContain('aria-label="Groups"');
@@ -33,7 +33,7 @@ describe('PickerOverlay', () => {
         sections={clubSections()}
         onSelect={() => {}}
         onClose={() => {}}
-      />,
+      />
     );
 
     expect(html).toMatch(/panel-action--primary[^>]*>Irons</);

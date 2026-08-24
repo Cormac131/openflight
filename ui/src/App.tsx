@@ -36,11 +36,7 @@ import { filterShotsByPlayer } from './types/shot';
 import { getClubName } from './data/clubs';
 import { getTrainingImplementLabel } from './data/trainingImplements';
 import { unlockAudioCue } from './utils/audioCue';
-import {
-  useLaunchDaddy,
-  LaunchDaddyOverlay,
-  LaunchDaddyBrand,
-} from './components/LaunchDaddy';
+import { useLaunchDaddy, LaunchDaddyOverlay, LaunchDaddyBrand } from './components/LaunchDaddy';
 
 import { useI18n } from './i18n/useI18n';
 import './components/panel/panel.css';
@@ -225,9 +221,7 @@ function AppContent() {
     </PanelAction>
   );
 
-  const addPlayerAction = (
-    <PanelAction onClick={() => setAddPlayerOpen(true)}>{t('menu.addPlayer')}</PanelAction>
-  );
+  const addPlayerAction = <PanelAction onClick={() => setAddPlayerOpen(true)}>{t('menu.addPlayer')}</PanelAction>;
 
   const clearSessionAction = (
     <PanelAction variant="danger" onClick={() => socketService.clearSession()}>

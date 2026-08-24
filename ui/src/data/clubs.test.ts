@@ -31,4 +31,3 @@ describe('getClubName', () => {
     expect(getClubName('not-a-club')).toBe('not-a-club');
   });
 });
-

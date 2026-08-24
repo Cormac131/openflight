@@ -168,11 +168,7 @@ export function StatsPanel({ shots, activeClub, playerName, headerAction }: Stat
 
   return (
     <div className="panel">
-      <PanelHeader
-        title={t('nav.stats')}
-        subtitle={playerName}
-        actions={headerAction}
-      />
+      <PanelHeader title={t('nav.stats')} subtitle={playerName} actions={headerAction} />
       <div className="panel__body stats-panel">
         {playerShots.length > 0 ? clubFilters : null}
         {playerShots.length === 0 ? (

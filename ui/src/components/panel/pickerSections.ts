@@ -25,10 +25,7 @@ export function trainingImplementSections(): PickerSection[] {
 }
 
 /** Open on the family that already contains the selection (driver → Woods). */
-export function initialPickerSection(
-  sections: ReadonlyArray<PickerSection>,
-  selectedId: string,
-): string {
+export function initialPickerSection(sections: ReadonlyArray<PickerSection>, selectedId: string): string {
   const match = sections.find((section) => section.options.some((option) => option.id === selectedId));
   return match?.name ?? sections[0]?.name ?? '';
 }
@@ -36,10 +33,7 @@ export function initialPickerSection(
 export const PICKER_COLUMNS = 4;
 
 /** Rows needed to show the densest tab at `PICKER_COLUMNS` across, so tile size stays stable. */
-export function pickerGridRows(
-  sections: ReadonlyArray<PickerSection>,
-  columns = PICKER_COLUMNS,
-): number {
+export function pickerGridRows(sections: ReadonlyArray<PickerSection>, columns = PICKER_COLUMNS): number {
   let maxRows = 1;
   for (const section of sections) {
     const rows = Math.ceil(section.options.length / columns);

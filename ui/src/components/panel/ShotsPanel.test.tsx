@@ -139,7 +139,7 @@ describe('ShotsPanel', () => {
     expect(html).toContain('>120<');
   });
 
-  it('lists only the current player\'s shots', () => {
+  it("lists only the current player's shots", () => {
     const html = render([
       makeShot({ timestamp: 'a', ball_speed_mph: 92 }),
       makeShot({ player_name: 'Alex', timestamp: 'b', ball_speed_mph: 140 }),

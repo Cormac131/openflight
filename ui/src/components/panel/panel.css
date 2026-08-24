@@ -1075,7 +1075,7 @@
   max-height: calc(100% - 86px);
   overflow-y: auto;
   background: var(--color-surface);
-  border: 0px ;
+  border: 0px;
   border-radius: var(--radius);
   padding: 18px;
   display: flex;

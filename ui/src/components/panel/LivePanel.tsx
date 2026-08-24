@@ -91,9 +91,7 @@ export function LivePanel({
     return () => clearTimeout(timer);
   }, [spotlightOpen]);
 
-  const header = (
-    <PanelHeader title={t('nav.live')} subtitle={playerName} club={clubLabel} actions={headerAction} />
-  );
+  const header = <PanelHeader title={t('nav.live')} subtitle={playerName} club={clubLabel} actions={headerAction} />;
 
   if (!selected) {
     return (

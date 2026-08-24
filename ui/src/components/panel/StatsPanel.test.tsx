@@ -41,7 +41,9 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
 }
 
 const render = (shots: Shot[], activeClub = 'driver', headerAction?: ReactNode) =>
-  text(renderToString(<StatsPanel shots={shots} activeClub={activeClub} playerName="James" headerAction={headerAction} />));
+  text(
+    renderToString(<StatsPanel shots={shots} activeClub={activeClub} playerName="James" headerAction={headerAction} />)
+  );
 
 describe('StatsPanel', () => {
   it('shows an empty state before any shots', () => {
@@ -108,7 +110,13 @@ describe('StatsPanel', () => {
   });
 
   it('places Clear session in the header', () => {
-    const html = render([], 'driver', <button type="button" className="panel-action">Clear session</button>);
+    const html = render(
+      [],
+      'driver',
+      <button type="button" className="panel-action">
+        Clear session
+      </button>
+    );
     const header = html.match(/<header class="panel-header">[\s\S]*?<\/header>/)?.[0] ?? '';
 
     expect(header).toContain('Clear session');

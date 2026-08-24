@@ -54,9 +54,7 @@ describe('MetricCard', () => {
   });
 
   it('vertically centers label-above content on shared label/value/meta bands', () => {
-    expect(css).toMatch(
-      /\.metric-card--label-above \{[^}]*grid-template-rows: 1fr auto auto auto 1fr/
-    );
+    expect(css).toMatch(/\.metric-card--label-above \{[^}]*grid-template-rows: 1fr auto auto auto 1fr/);
     expect(css).toMatch(/\.metric-card--label-above \.metric-card__label \{[^}]*grid-row: 2/);
     expect(css).toMatch(/\.metric-card--label-above \.metric-card__label \{[^}]*min-height: 16px/);
     expect(css).toMatch(/\.metric-card--label-above \.metric-card__value-row \{[^}]*grid-row: 3/);

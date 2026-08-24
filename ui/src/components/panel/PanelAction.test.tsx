@@ -12,8 +12,6 @@ describe('PanelAction', () => {
 
   it('renders secondary and danger variants', () => {
     expect(renderToString(<PanelAction variant="secondary">Record</PanelAction>)).toContain('panel-action--secondary');
-    expect(renderToString(<PanelAction variant="danger">Clear session</PanelAction>)).toContain(
-      'panel-action--danger'
-    );
+    expect(renderToString(<PanelAction variant="danger">Clear session</PanelAction>)).toContain('panel-action--danger');
   });
 });

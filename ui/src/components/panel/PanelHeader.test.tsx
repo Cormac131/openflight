@@ -63,9 +63,7 @@ describe('PanelHeader', () => {
   });
 
   it('renders right-hand actions', () => {
-    const html = renderToString(
-      <PanelHeader title="Live" actions={<button type="button">Change club</button>} />
-    );
+    const html = renderToString(<PanelHeader title="Live" actions={<button type="button">Change club</button>} />);
 
     expect(html).toContain('panel-header__actions');
     expect(html).toContain('Change club');
