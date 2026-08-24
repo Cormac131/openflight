@@ -14,57 +14,69 @@
   font-variant-numeric: tabular-nums;
 }
 
-.power-status__icon,
 .power-status__icon {
   position: relative;
   display: inline-flex;
   align-items: center;
-  width: 25px;
   height: 14px;
+  overflow: visible;
+  padding-right: 0.15rem;
 }
 
-.power-status__battery,
 .power-status__battery {
   position: relative;
   display: block;
+  box-sizing: border-box;
   width: 21px;
   height: 12px;
-  padding: 2px;
-  overflow: visible;
+  padding: 1px;
+  overflow: hidden;
   border: 1.5px solid currentColor;
   border-radius: var(--radius, 0.25rem);
 }
 
-.power-status__battery::after,
-.power-status__battery::after {
+/* Cap sits in flow after the cell, flush with the outer edge. */
+.power-status__icon::after {
   content: '';
-  position: absolute;
-  top: 3px;
-  right: -4px;
   width: 2px;
-  height: 5px;
-  border-radius: var(--radius, 0.25rem);
+  height: 6px;
+  margin-left: 0.06rem;
+  border-radius: 0 1px 1px 0;
   background: currentColor;
 }
 
-.power-status__fill,
 .power-status__fill {
   display: block;
   height: 100%;
   min-width: 1px;
-  border-radius: var(--radius, 0.25rem);
+  border-radius: 0.08rem;
   background: currentColor;
 }
 
-.power-status__bolt,
 .power-status__bolt {
   position: absolute;
-  left: 8px;
-  top: -2px;
-  width: 9px;
-  height: 15px;
-  color: var(--color-bg);
-  filter: drop-shadow(0 0 1px var(--color-success));
+  z-index: 1;
+  left: 4px;
+  top: -3px;
+  width: 13px;
+  height: 20px;
+  overflow: visible;
+  pointer-events: none;
+  color: inherit;
+}
+
+.power-status__bolt-outline {
+  fill: none;
+  stroke: var(--color-bg);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.power-status__bolt-body {
+  fill: currentColor;
+  stroke: none;
 }
 
 .power-status--plugged_in {
@@ -80,10 +92,19 @@
 }
 
 .power-status--critical,
-.power-status--unavailable {
+.power-status--unavailable,
+.power-status--crit {
   color: var(--color-danger);
   border-color: rgba(248, 113, 113, 0.4);
   background: rgba(248, 113, 113, 0.1);
+}
+
+.power-status--ok {
+  color: var(--color-success);
+}
+
+.power-status--warn {
+  color: var(--color-warning);
 }
 
 /* Footer chrome: same quiet type as units, no chip chrome. */
@@ -98,44 +119,55 @@
   font-size: 0.625rem;
   font-weight: 600;
   letter-spacing: 0.08em;
+  gap: 0.5rem;
 }
 
 .power-status--chrome.power-status--plugged_in,
 .power-status--chrome.power-status--low,
 .power-status--chrome.power-status--critical,
-.power-status--chrome.power-status--unavailable {
+.power-status--chrome.power-status--unavailable,
+.power-status--chrome.power-status--ok,
+.power-status--chrome.power-status--warn,
+.power-status--chrome.power-status--crit {
   border: none;
   background: transparent;
 }
 
-.power-status--chrome .power-status__icon,
-.power-status--chrome .power-status__icon {
-  width: 1.35rem;
-  height: 0.7rem;
+.power-status--chrome.power-status--ok {
+  color: var(--color-success);
 }
 
-.power-status--chrome .power-status__battery,
+.power-status--chrome.power-status--warn {
+  color: var(--color-warning);
+}
+
+.power-status--chrome.power-status--crit,
+.power-status--chrome.power-status--unavailable {
+  color: var(--color-danger);
+}
+
+.power-status--chrome .power-status__icon::after {
+  width: 0.12rem;
+  height: 0.32rem;
+  border-radius: 0 0.08rem 0.08rem 0;
+}
+
+.power-status--chrome .power-status__icon {
+  height: 0.8rem;
+}
+
 .power-status--chrome .power-status__battery {
-  width: 1.15rem;
-  height: 0.6rem;
-  padding: 0.1rem;
+  width: 1.2rem;
+  height: 0.65rem;
+  padding: 0.08rem;
   border-width: 1.5px;
 }
 
-.power-status--chrome .power-status__battery::after,
-.power-status--chrome .power-status__battery::after {
-  top: 0.12rem;
-  right: -0.18rem;
-  width: 0.12rem;
-  height: 0.28rem;
-}
-
-.power-status--chrome .power-status__bolt,
 .power-status--chrome .power-status__bolt {
-  left: 0.32rem;
-  top: -0.12rem;
-  width: 0.45rem;
-  height: 0.75rem;
+  left: 0.12rem;
+  top: -0.28rem;
+  width: 1rem;
+  height: 1.35rem;
 }
 
 .power-warning-overlay {

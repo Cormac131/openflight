@@ -5,6 +5,15 @@ import { useI18n } from '../i18n/useI18n';
 import './PowerStatus.css';
 
 type WarningLevel = 'low' | 'critical';
+export type BatteryTone = 'ok' | 'warn' | 'crit' | 'unknown';
+
+/** Green above 50%, amber from 21-50%, red at 20% and below (backend low). */
+export function batteryTone(percent: number | null): BatteryTone {
+  if (percent === null) return 'unknown';
+  if (percent <= 20) return 'crit';
+  if (percent <= 50) return 'warn';
+  return 'ok';
+}
 
 function BatteryIcon({ status }: { status: PowerStatusData }) {
   const percent = Math.max(0, Math.min(100, status.battery_percent ?? 0));
@@ -15,8 +24,18 @@ function BatteryIcon({ status }: { status: PowerStatusData }) {
         <span className="power-status__fill" style={{ width: `${percent}%` }} />
       </span>
       {status.external_power ? (
-        <svg className="power-status__bolt" viewBox="0 0 12 16" fill="currentColor">
-          <path d="M7.2 0 1 9h4l-.6 7L11 6.4H7.1L7.2 0Z" />
+        <svg className="power-status__bolt" viewBox="-3 -3 18 22" overflow="visible" aria-hidden="true">
+          <path
+            className="power-status__bolt-outline"
+            d="M7.2 0 1 9h4l-.6 7L11 6.4H7.1L7.2 0Z"
+            fill="none"
+            stroke="var(--color-bg)"
+            strokeWidth="3"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+          <path className="power-status__bolt-body" d="M7.2 0 1 9h4l-.6 7L11 6.4H7.1L7.2 0Z" fill="currentColor" />
         </svg>
       ) : null}
     </span>
@@ -42,14 +61,20 @@ export function PowerIndicator({
       ? label
       : t('power.detailVolts', { label, volts: status.battery_voltage_v.toFixed(2) })
     : status.error || label;
+  const tone = batteryTone(status.battery_percent);
+  const charging = Boolean(status.external_power);
+  const className = [
+    'power-status',
+    `power-status--${variant}`,
+    `power-status--${status.state}`,
+    `power-status--${tone}`,
+    charging ? 'power-status--charging' : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return (
-    <div
-      className={`power-status power-status--${variant} power-status--${status.state}`}
-      aria-label={label}
-      title={detail}
-      role="status"
-    >
+    <div className={className} aria-label={label} title={detail} role="status">
       <BatteryIcon status={status} />
       <span className="power-status__percentage">{percentage}</span>
     </div>
