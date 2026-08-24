@@ -7,6 +7,7 @@ export { clubSections, trainingImplementSections, type PickerOption, type Picker
 export { LivePanel } from './LivePanel';
 export { PlayersPanel } from './PlayersPanel';
 export { AddPlayerDialog } from './AddPlayerDialog';
+export { ClearSessionDialog } from './ClearSessionDialog';
 export { SimulateBubble } from './SimulateBubble';
 export { StatsPanel } from './StatsPanel';
 export { ShotsPanel } from './ShotsPanel';

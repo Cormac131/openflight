@@ -87,9 +87,13 @@ export function registerHandlers(io: Server, session: MockSession): void {
       });
     });
 
-    socket.on('clear_session', () => {
-      session.clear();
-      io.emit('session_cleared');
+    socket.on('clear_session', (data?: { player_name?: string }) => {
+      const playerName =
+        typeof data?.player_name === 'string' && data.player_name.trim()
+          ? data.player_name
+          : session.playerName;
+      session.clearPlayer(playerName);
+      io.emit('session_cleared', { player_name: playerName, shots: session.shots });
       io.emit('session_state', session.sessionStatePayload(true));
     });
 

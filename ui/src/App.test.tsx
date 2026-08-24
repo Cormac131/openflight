@@ -65,4 +65,12 @@ describe('App shell', () => {
     expect(html).not.toContain('Shot 00');
     expect(html).not.toContain('panel-footer__count');
   });
+
+  it('does not ask to clear a session until the stats action is used', () => {
+    const html = renderToString(<App />);
+
+    expect(html).not.toContain("Clear Player 1's session?");
+    expect(html).not.toContain('Clear Player 1&#x27;s session?');
+    expect(html).not.toContain('clear-session-title');
+  });
 });

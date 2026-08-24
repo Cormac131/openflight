@@ -63,6 +63,29 @@ export async function waitForEvent<T>(socket: Socket, event: string, timeoutMs =
   });
 }
 
+export async function resetSession(socket: Socket) {
+  const statePromise = waitForEvent<{ shots?: Array<{ player_name?: string }> }>(socket, 'session_state');
+  socket.emit('get_session');
+  const state = await statePromise;
+  const names = [
+    ...new Set((state.shots ?? []).map((shot) => shot.player_name?.trim() || 'Player 1')),
+  ];
+  if (names.length === 0) {
+    const cleared = waitForEvent(socket, 'session_cleared');
+    socket.emit('clear_session');
+    await cleared;
+    return;
+  }
+  for (const playerName of names) {
+    const changed = waitForEvent(socket, 'player_changed');
+    socket.emit('set_player', { player_name: playerName });
+    await changed;
+    const cleared = waitForEvent(socket, 'session_cleared');
+    socket.emit('clear_session', { player_name: playerName });
+    await cleared;
+  }
+}
+
 export async function gotoApp(page: Page, path = '/') {
   await page.goto(`${UI_URL}${path}`);
 }

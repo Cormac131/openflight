@@ -18,6 +18,7 @@ import {
   CameraPanel,
   LivePanel,
   AddPlayerDialog,
+  ClearSessionDialog,
   SimulateBubble,
   MenuSheet,
   PanelFooter,
@@ -108,6 +109,7 @@ function AppContent() {
   const [pickerOpen, setPickerOpen] = useState(true);
   const [addPlayerOpen, setAddPlayerOpen] = useState(false);
   const [newPlayerName, setNewPlayerName] = useState('');
+  const [clearSessionOpen, setClearSessionOpen] = useState(false);
 
   // Reflect a server-pushed club change (e.g. the club changed in the connected
   // simulator) locally without echoing back. Done during render (React's "adjust
@@ -141,6 +143,13 @@ function AppContent() {
     if (!connected || !shouldEchoSelectionToServer('became-connected')) return;
     socketService.setPlayer(usePlayerStore.getState().selectedPlayer);
   }, [connected]);
+
+  useEffect(() => {
+    return socketService.onSessionCleared(() => {
+      setClearSessionOpen(false);
+      setCurrentView('live');
+    });
+  }, []);
 
   // Trigger explosion when a new shot is detected in Launch Daddy mode
   useEffect(() => {
@@ -224,7 +233,7 @@ function AppContent() {
   const addPlayerAction = <PanelAction onClick={() => setAddPlayerOpen(true)}>{t('menu.addPlayer')}</PanelAction>;
 
   const clearSessionAction = (
-    <PanelAction variant="danger" onClick={() => socketService.clearSession()}>
+    <PanelAction variant="danger" onClick={() => setClearSessionOpen(true)}>
       {t('app.clearSession')}
     </PanelAction>
   );
@@ -366,6 +375,14 @@ function AppContent() {
             setNewPlayerName('');
             setAddPlayerOpen(false);
           }}
+        />
+      ) : null}
+
+      {clearSessionOpen ? (
+        <ClearSessionDialog
+          playerName={selectedPlayer}
+          onConfirm={() => socketService.clearSession(selectedPlayer)}
+          onCancel={() => setClearSessionOpen(false)}
         />
       ) : null}
 

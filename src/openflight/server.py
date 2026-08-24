@@ -1788,12 +1788,56 @@ def handle_set_training_implement(data):
     )
 
 
-@socketio.on("clear_session")
-def handle_clear_session():
-    """Clear all recorded shots."""
-    if monitor:
+def _normalize_player_name(name) -> str:
+    """Match UI player scoping: trim, default Player 1, case-insensitive."""
+    text = str(name).strip() if name is not None else ""
+    return (text or "Player 1").lower()
+
+
+def _player_matches(stored_name, player_name: str) -> bool:
+    """True when a shot/event belongs to player_name."""
+    return _normalize_player_name(stored_name) == _normalize_player_name(player_name)
+
+
+def _clear_player_rows(player_name: str) -> None:
+    """Remove one player's shots or swing-speed reps from the active monitor."""
+    from .swing_speed import SwingSpeedMonitor  # pylint: disable=import-outside-toplevel
+
+    if not monitor:
+        return
+
+    if isinstance(monitor, (SwingSpeedMonitor, MockSwingSpeedMonitor)):
+        events = getattr(monitor, "_events", None)
+        if events is not None:
+            events[:] = [
+                event for event in events if not _player_matches(event.player_name, player_name)
+            ]
+        return
+
+    shots = getattr(monitor, "_shots", None)
+    if shots is not None:
+        shots[:] = [
+            shot
+            for shot in shots
+            if not _player_matches(getattr(shot, "player_name", None), player_name)
+        ]
+        return
+
+    if hasattr(monitor, "clear_session"):
         monitor.clear_session()
-        socketio.emit("session_cleared")
+
+
+@socketio.on("clear_session")
+def handle_clear_session(data=None):
+    """Clear recorded shots for the active player only."""
+    raw_name = data.get("player_name") if isinstance(data, dict) else None
+    player_name = str(raw_name).strip()[:40] if raw_name else current_player_name
+    player_name = player_name or current_player_name
+    _clear_player_rows(player_name)
+    socketio.emit(
+        "session_cleared",
+        {"player_name": player_name, "shots": _session_shots()},
+    )
 
 
 @socketio.on("upload_cloud")

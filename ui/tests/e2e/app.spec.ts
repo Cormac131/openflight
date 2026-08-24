@@ -1,5 +1,5 @@
 import { test } from '@playwright/test';
-import { expect, gotoApp, setClub, simulateShot, withControlSocket } from './helpers';
+import { expect, gotoApp, resetSession, setClub, simulateShot, withControlSocket } from './helpers';
 
 /** Dismiss the club picker that opens on every load, keeping the default club. */
 async function dismissPicker(page: import('@playwright/test').Page) {
@@ -13,10 +13,7 @@ async function openMenu(page: import('@playwright/test').Page) {
 
 test.beforeEach(async () => {
   await withControlSocket(async (socket) => {
-    socket.emit('clear_session');
-    await new Promise<void>((resolve) => {
-      socket.once('session_cleared', () => resolve());
-    });
+    await resetSession(socket);
     await setClub(socket, 'driver');
   });
 });
@@ -203,6 +200,48 @@ test('selecting a player opens Live and does not offer delete on the active play
   await page.locator('.players-panel__card').filter({ hasText: 'Player 1' }).click();
   await expect(page.locator('.panel-header__title')).toHaveText('Live');
   await expect(page.locator('.panel-header__subtitle')).toHaveText('Player 1');
+});
+
+test('confirms before clearing and only removes that player, then returns to Live', async ({ page }) => {
+  await withControlSocket(async (socket) => {
+    await simulateShot(socket);
+  });
+
+  await gotoApp(page);
+  await dismissPicker(page);
+
+  await page.getByRole('button', { name: 'Players' }).click();
+  await page.getByRole('button', { name: 'Add player' }).click();
+  await page.getByPlaceholder('Name').fill('Alex');
+  await page.getByRole('dialog', { name: 'Add player' }).getByRole('button', { name: 'Add player' }).click();
+  await expect(page.getByLabel('Remove Alex')).toHaveCount(0);
+
+  await withControlSocket(async (socket) => {
+    await simulateShot(socket);
+  });
+
+  await page.getByRole('button', { name: 'Stats' }).click();
+  await page.locator('.panel-header').getByRole('button', { name: 'Clear session' }).click();
+
+  const dialog = page.getByRole('dialog', { name: "Clear Alex's session?" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("This removes Alex's shots. Other players are kept.");
+
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.panel-header__title')).toHaveText('Stats');
+
+  await page.locator('.panel-header').getByRole('button', { name: 'Clear session' }).click();
+  await page.getByRole('dialog', { name: "Clear Alex's session?" }).getByRole('button', { name: 'Clear session' }).click();
+
+  await expect(page.locator('.panel-header__title')).toHaveText('Live');
+  await expect(page.locator('.panel-header__subtitle')).toHaveText('Alex');
+  await expect(page.getByText('Ready', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Players' }).click();
+  await page.locator('.players-panel__card').filter({ hasText: 'Player 1' }).click();
+  await page.getByRole('button', { name: 'Shots' }).click();
+  await expect(page.locator('.shots-panel__row')).toHaveCount(1);
 });
 
 test('scrolls the shots list by dragging on a row', async ({ page }) => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Shot } from './shot';
-import { filterShotsByPlayer } from './shot';
+import { filterShotsByPlayer, excludeShotsByPlayer } from './shot';
 
 function makeShot(overrides: Partial<Shot> = {}): Shot {
   return {
@@ -44,5 +44,17 @@ describe('filterShotsByPlayer', () => {
     const shots = [makeShot({ timestamp: 'a' }), makeShot({ player_name: 'James', timestamp: 'b' })];
 
     expect(filterShotsByPlayer(shots, 'Player 1').map((shot) => shot.timestamp)).toEqual(['a']);
+  });
+});
+
+describe('excludeShotsByPlayer', () => {
+  it('drops matching shots and keeps everyone else', () => {
+    const shots = [
+      makeShot({ player_name: 'James', timestamp: 'a' }),
+      makeShot({ player_name: 'Alex', timestamp: 'b' }),
+      makeShot({ player_name: 'james', timestamp: 'c' }),
+    ];
+
+    expect(excludeShotsByPlayer(shots, 'James').map((shot) => shot.timestamp)).toEqual(['b']);
   });
 });

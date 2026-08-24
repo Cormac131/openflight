@@ -1392,6 +1392,14 @@
   gap: 10px;
 }
 
+.clear-session-dialog__detail {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+}
+
 .add-player-modal__actions .panel-action {
   flex: 1;
   min-width: 0;

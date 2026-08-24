@@ -139,6 +139,13 @@ export class MockSession {
     return { shot, stats: this.getStats() };
   }
 
+  clearPlayer(playerName: string): void {
+    const key = (playerName.trim() || 'Player 1').toLowerCase();
+    this.shots = this.shots.filter(
+      (shot) => (shot.player_name?.trim() || 'Player 1').toLowerCase() !== key
+    );
+  }
+
   clear(): void {
     this.shots = [];
   }

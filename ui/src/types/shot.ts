@@ -132,6 +132,11 @@ export function filterShotsByPlayer(shots: Shot[], playerName: string): Shot[] {
   return shots.filter((shot) => normalizePlayerName(shot.player_name) === normalized);
 }
 
+export function excludeShotsByPlayer(shots: Shot[], playerName: string): Shot[] {
+  const normalized = normalizePlayerName(playerName);
+  return shots.filter((shot) => normalizePlayerName(shot.player_name) !== normalized);
+}
+
 function normalizeToken(value: string | null | undefined): string {
   return (value?.trim() || '').toLowerCase();
 }

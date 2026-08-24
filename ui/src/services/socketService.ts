@@ -17,11 +17,13 @@ import { getServerOrigin } from '../utils/serverOrigin';
 import { handleShotMessage } from './handleShotMessage';
 import { ingestSocketPlayerName } from './playerSocketSync';
 import { ingestSessionClub } from './sessionClubSync';
+import { remainingShotsAfterClear } from './sessionClear';
 
 const SOCKET_URL = getServerOrigin();
 
 class SocketService {
   private socket: Socket | null = null;
+  private sessionClearedListeners = new Set<() => void>();
 
   connect() {
     if (this.socket) return;
@@ -173,8 +175,14 @@ class SocketService {
       });
     });
 
-    this.socket.on('session_cleared', () => {
-      useShotStore.getState().clearShots();
+    this.socket.on('session_cleared', (data?: { player_name?: string; shots?: Shot[] }) => {
+      const remaining = remainingShotsAfterClear(useShotStore.getState().shots, data);
+      if (remaining.length === 0) {
+        useShotStore.getState().clearShots();
+      } else {
+        useShotStore.getState().setShots(remaining);
+      }
+      this.sessionClearedListeners.forEach((listener) => listener());
     });
 
     this.socket.on('trigger_diagnostic', (data: TriggerDiagnostic) => {
@@ -200,8 +208,15 @@ class SocketService {
   }
 
   // Emitters
-  clearSession() {
-    this.socket?.emit('clear_session');
+  onSessionCleared(listener: () => void) {
+    this.sessionClearedListeners.add(listener);
+    return () => {
+      this.sessionClearedListeners.delete(listener);
+    };
+  }
+
+  clearSession(playerName: string) {
+    this.socket?.emit('clear_session', { player_name: playerName });
   }
 
   uploadCloud() {
