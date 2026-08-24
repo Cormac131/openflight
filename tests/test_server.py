@@ -958,6 +958,44 @@ class TestShotToDict:
         assert result["spin_rejection_reason"] == "SNR too low (2.96, need 3.0)"
 
 
+class TestSessionStateClub:
+    """Connect snapshots must include the active club so a UI reload can restore it."""
+
+    @staticmethod
+    def _connect_session_state(monkeypatch, monitor):
+        emitted = []
+        monkeypatch.setattr(server_module, "monitor", monitor)
+        monkeypatch.setattr(server_module, "mock_mode", True)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "camera", None)
+        monkeypatch.setattr(server_module, "camera_enabled", False)
+        monkeypatch.setattr(server_module, "camera_streaming", False)
+        monkeypatch.setattr(server_module, "ball_detected", False)
+        monkeypatch.setattr(server_module, "power_monitor", None)
+        monkeypatch.setattr(server_module, "_emit_sim_snapshot", lambda: None)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+        server_module.handle_connect()
+        return next(data for name, data in emitted if name == "session_state")
+
+    def test_connect_session_state_includes_current_club(self, monkeypatch):
+        """Reload/dismiss keeps the server club, not a reset to driver."""
+        monitor = MockLaunchMonitor()
+        monitor.set_club(ClubType.IRON_7)
+
+        payload = self._connect_session_state(monkeypatch, monitor)
+
+        assert payload["club"] == "7-iron"
+
+    def test_connect_session_state_defaults_to_driver(self, monkeypatch):
+        """A fresh monitor with no set_club still reports driver."""
+        payload = self._connect_session_state(monkeypatch, MockLaunchMonitor())
+
+        assert payload["club"] == "driver"
+
+
 class TestSwingSpeedMode:
     """Tests for swing speed training server helpers."""
 

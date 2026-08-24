@@ -16,6 +16,7 @@ import type { PowerStatus } from '../types/power';
 import { getServerOrigin } from '../utils/serverOrigin';
 import { handleShotMessage } from './handleShotMessage';
 import { ingestSocketPlayerName } from './playerSocketSync';
+import { ingestSessionClub } from './sessionClubSync';
 
 const SOCKET_URL = getServerOrigin();
 
@@ -96,7 +97,7 @@ class SocketService {
     });
 
     this.socket.on('club_changed', (data: { club: string }) => {
-      useSystemStore.getState().setServerClub(data.club);
+      ingestSessionClub(data.club);
     });
 
     this.socket.on('player_changed', (data: { player_name: string }) => {
@@ -128,6 +129,7 @@ class SocketService {
           systemStore.setDebugMode(data.debug_mode);
         }
         ingestSocketPlayerName('session_state', data.player_name);
+        ingestSessionClub(data.club);
 
         // Update camera status from session state
         if (data.camera_available !== undefined) {

@@ -52,6 +52,7 @@ export interface SessionStats {
 export interface SessionState {
   stats: SessionStats;
   shots: Shot[];
+  club?: string;
 }
 
 export interface TriggerDiagnostic {

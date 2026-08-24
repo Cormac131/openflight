@@ -1,9 +1,14 @@
 import { renderToString } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import App from './App';
 import { PANEL_VIEWS } from './components/panel';
+import { useSystemStore } from './stores/useSystemStore';
 
 describe('App shell', () => {
+  beforeEach(() => {
+    useSystemStore.setState({ serverClub: null });
+  });
+
   it('renders the bottom bar instead of the old top header', () => {
     const html = renderToString(<App />);
 

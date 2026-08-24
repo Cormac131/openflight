@@ -87,6 +87,7 @@ export class MockSession {
       stats: this.getStats(),
       shots: this.shots,
       player_name: this.playerName,
+      club: this.club,
     };
     if (!includeMeta) {
       return base;

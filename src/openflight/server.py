@@ -1606,6 +1606,38 @@ def _get_trigger_status() -> dict:
     }
 
 
+def _current_club_id() -> str:
+    """Club id the kiosk should restore after a reload."""
+    if monitor is None:
+        return ClubType.DRIVER.value
+    club = getattr(monitor, "_current_club", None)
+    if club is None:
+        return ClubType.DRIVER.value
+    return club.value if hasattr(club, "value") else str(club)
+
+
+def _session_state_payload(*, include_runtime_meta: bool = False) -> dict:
+    """Build the session_state event the UI applies on connect and refresh."""
+    payload = {
+        "stats": monitor.get_session_stats() if monitor else {},
+        "shots": _session_shots(),
+        "player_name": current_player_name,
+        "club": _current_club_id(),
+    }
+    if include_runtime_meta:
+        payload.update(
+            {
+                "mock_mode": mock_mode,
+                "debug_mode": debug_mode,
+                "camera_available": camera is not None,
+                "camera_enabled": camera_enabled,
+                "camera_streaming": camera_streaming,
+                "ball_detected": ball_detected,
+            }
+        )
+    return payload
+
+
 def _session_shots() -> list[dict]:
     """Return current session rows in the UI's shot-shaped payload format."""
     from .swing_speed import SwingSpeedMonitor  # pylint: disable=import-outside-toplevel
@@ -1699,21 +1731,7 @@ def handle_connect():
     if power_monitor and power_monitor.status:
         socketio.emit("power_status", power_monitor.status.to_dict())
     if monitor:
-        stats = monitor.get_session_stats()
-        socketio.emit(
-            "session_state",
-            {
-                "stats": stats,
-                "shots": _session_shots(),
-                "mock_mode": mock_mode,
-                "debug_mode": debug_mode,
-                "camera_available": camera is not None,
-                "camera_enabled": camera_enabled,
-                "camera_streaming": camera_streaming,
-                "ball_detected": ball_detected,
-                "player_name": current_player_name,
-            },
-        )
+        socketio.emit("session_state", _session_state_payload(include_runtime_meta=True))
         socketio.emit("trigger_status", _get_trigger_status())
 
 
@@ -1788,11 +1806,7 @@ def handle_upload_cloud():
 def handle_get_session():
     """Get current session data."""
     if monitor:
-        stats = monitor.get_session_stats()
-        socketio.emit(
-            "session_state",
-            {"stats": stats, "shots": _session_shots(), "player_name": current_player_name},
-        )
+        socketio.emit("session_state", _session_state_payload())
 
 
 @socketio.on("delete_shot")
@@ -1805,11 +1819,7 @@ def handle_delete_shot(data):
         socketio.emit("delete_shot_error", {"error": "Shot not found"})
         return
 
-    stats = monitor.get_session_stats() if monitor else {}
-    socketio.emit(
-        "session_state",
-        {"stats": stats, "shots": _session_shots(), "player_name": current_player_name},
-    )
+    socketio.emit("session_state", _session_state_payload())
 
 
 @socketio.on("simulate_shot")
