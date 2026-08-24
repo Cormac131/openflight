@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { CameraStatus } from '../../stores/useCameraStore';
 import { getServerOrigin } from '../../utils/serverOrigin';
 import { PanelHeader } from './PanelHeader';
@@ -23,20 +23,53 @@ function CameraGlyph() {
   );
 }
 
+function LiveFeed({
+  ballDetected,
+  ballConfidence,
+}: {
+  ballDetected: boolean;
+  ballConfidence: number;
+}) {
+  const { t } = useI18n();
+  const [streamError, setStreamError] = useState(false);
+
+  if (streamError) {
+    return (
+      <div className="camera-panel__stage">
+        <CameraGlyph />
+        <span className="camera-panel__title">{t('camera.streamError')}</span>
+        <span className="camera-panel__detail">{t('camera.streamErrorDetail')}</span>
+        <button type="button" className="panel-chip" onClick={() => setStreamError(false)}>
+          {t('camera.retry')}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="camera-panel__stage camera-panel__stage--live">
+      <img
+        src={STREAM_URL}
+        alt={t('camera.feedAlt')}
+        className="camera-panel__video"
+        onError={() => setStreamError(true)}
+      />
+      <span className={`camera-panel__chip${ballDetected ? ' camera-panel__chip--detected' : ''}`}>
+        {ballDetected
+          ? t('camera.ballPercent', { percent: Math.round(ballConfidence * 100) })
+          : t('camera.searching')}
+      </span>
+    </div>
+  );
+}
+
 /**
  * Design doc 7c draws the disabled state. The unavailable, idle, streaming and
  * error states reuse the same hatched stage so the panel reads as one surface.
  */
 export function CameraPanel({ cameraStatus, clubLabel, onToggleCamera, onToggleStream }: CameraPanelProps) {
   const { t } = useI18n();
-  const [streamError, setStreamError] = useState(false);
   const { available, enabled, streaming, ball_detected, ball_confidence } = cameraStatus;
-
-  useEffect(() => {
-    if (streaming) {
-      setStreamError(false);
-    }
-  }, [streaming]);
 
   const subtitle = !available
     ? t('camera.notConnected')
@@ -77,34 +110,7 @@ export function CameraPanel({ cameraStatus, clubLabel, onToggleCamera, onToggleS
       );
     }
 
-    if (streamError) {
-      return (
-        <div className="camera-panel__stage">
-          <CameraGlyph />
-          <span className="camera-panel__title">{t('camera.streamError')}</span>
-          <span className="camera-panel__detail">{t('camera.streamErrorDetail')}</span>
-          <button type="button" className="panel-chip" onClick={() => setStreamError(false)}>
-            {t('camera.retry')}
-          </button>
-        </div>
-      );
-    }
-
-    return (
-      <div className="camera-panel__stage camera-panel__stage--live">
-        <img
-          src={STREAM_URL}
-          alt={t('camera.feedAlt')}
-          className="camera-panel__video"
-          onError={() => setStreamError(true)}
-        />
-        <span className={`camera-panel__chip${ball_detected ? ' camera-panel__chip--detected' : ''}`}>
-          {ball_detected
-            ? t('camera.ballPercent', { percent: Math.round(ball_confidence * 100) })
-            : t('camera.searching')}
-        </span>
-      </div>
-    );
+    return <LiveFeed ballDetected={ball_detected} ballConfidence={ball_confidence} />;
   };
 
   return (

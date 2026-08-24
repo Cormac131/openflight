@@ -13,6 +13,9 @@ function OverlayOnApp({ children }: { children: ReactNode }) {
   const [host, setHost] = useState<Element | null>(null);
 
   useLayoutEffect(() => {
+    // After commit, `.panel-app` is in the document. Looking it up here (not
+    // during render) is how the status dim shares the footer menu's scrim.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- portal host exists only after layout
     setHost(document.querySelector('.panel-app'));
   }, []);
 

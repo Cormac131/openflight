@@ -2,18 +2,10 @@ import { useState } from 'react';
 import { useSystemStore } from '../stores/useSystemStore';
 import type { PowerStatus as PowerStatusData } from '../types/power';
 import { useI18n } from '../i18n/useI18n';
+import { batteryTone } from '../utils/batteryTone';
 import './PowerStatus.css';
 
 type WarningLevel = 'low' | 'critical';
-export type BatteryTone = 'ok' | 'warn' | 'crit' | 'unknown';
-
-/** Green above 50%, amber from 21-50%, red at 20% and below (backend low). */
-export function batteryTone(percent: number | null): BatteryTone {
-  if (percent === null) return 'unknown';
-  if (percent <= 20) return 'crit';
-  if (percent <= 50) return 'warn';
-  return 'ok';
-}
 
 function BatteryIcon({ status }: { status: PowerStatusData }) {
   const percent = Math.max(0, Math.min(100, status.battery_percent ?? 0));

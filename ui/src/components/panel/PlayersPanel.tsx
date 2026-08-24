@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, useRef, type ReactNode } from 'react';
 import type { Shot } from '../../types/shot';
 import { filterShotsByPlayer } from '../../types/shot';
 import { useDragScroll } from '../../hooks/useDragScroll';
@@ -24,7 +24,8 @@ export function PlayersPanel({
   headerAction,
 }: PlayersPanelProps) {
   const { t } = useI18n();
-  const dragScroll = useDragScroll<HTMLDivElement>();
+  const rosterRef = useRef<HTMLDivElement>(null);
+  const dragScroll = useDragScroll(rosterRef);
   const canRemove = players.length > 1;
   const shotCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -41,7 +42,7 @@ export function PlayersPanel({
         className="panel__body players-panel__grid"
         role="region"
         aria-label={t('players.rosterAria')}
-        ref={dragScroll.ref}
+        ref={rosterRef}
         onPointerDown={dragScroll.onPointerDown}
         onPointerMove={dragScroll.onPointerMove}
         onPointerUp={dragScroll.onPointerUp}
