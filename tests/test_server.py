@@ -1520,6 +1520,44 @@ class TestShotToDict:
         assert result["spin_rejection_reason"] == "SNR too low (2.96, need 3.0)"
 
 
+class TestSessionStateClub:
+    """Connect snapshots must include the active club so a UI reload can restore it."""
+
+    @staticmethod
+    def _connect_session_state(monkeypatch, monitor):
+        emitted = []
+        monkeypatch.setattr(server_module, "monitor", monitor)
+        monkeypatch.setattr(server_module, "mock_mode", True)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "camera", None)
+        monkeypatch.setattr(server_module, "camera_enabled", False)
+        monkeypatch.setattr(server_module, "camera_streaming", False)
+        monkeypatch.setattr(server_module, "ball_detected", False)
+        monkeypatch.setattr(server_module, "power_monitor", None)
+        monkeypatch.setattr(server_module, "_emit_sim_snapshot", lambda: None)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+        server_module.handle_connect()
+        return next(data for name, data in emitted if name == "session_state")
+
+    def test_connect_session_state_includes_current_club(self, monkeypatch):
+        """Reload/dismiss keeps the server club, not a reset to driver."""
+        monitor = MockLaunchMonitor()
+        monitor.set_club(ClubType.IRON_7)
+
+        payload = self._connect_session_state(monkeypatch, monitor)
+
+        assert payload["club"] == "7-iron"
+
+    def test_connect_session_state_defaults_to_driver(self, monkeypatch):
+        """A fresh monitor with no set_club still reports driver."""
+        payload = self._connect_session_state(monkeypatch, MockLaunchMonitor())
+
+        assert payload["club"] == "driver"
+
+
 class TestSwingSpeedMode:
     """Tests for swing speed training server helpers."""
 
@@ -2066,6 +2104,124 @@ class TestMockLaunchMonitor:
 
         assert monitor._shots == []
         assert monitor.get_session_stats()["shot_count"] == 0
+
+
+class TestHandleClearSession:
+    """Clear session removes only the active player's shots."""
+
+    def test_removes_only_named_player_shots(self, monkeypatch):
+        """Other players' shots must remain after a clear."""
+        monitor = MockLaunchMonitor()
+        monitor.connect()
+        monitor.start()
+        james = monitor.simulate_shot(ball_speed=140.0)
+        james.player_name = "James"
+        alex = monitor.simulate_shot(ball_speed=150.0)
+        alex.player_name = "Alex"
+
+        emitted = []
+        monkeypatch.setattr(server_module, "monitor", monitor)
+        monkeypatch.setattr(server_module, "current_player_name", "James")
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+
+        server_module.handle_clear_session({"player_name": "James"})
+
+        assert [shot.player_name for shot in monitor.get_shots()] == ["Alex"]
+        _event, payload = next(args for args in emitted if args[0] == "session_cleared")
+        assert payload["player_name"] == "James"
+        assert len(payload["shots"]) == 1
+        assert payload["shots"][0]["player_name"] == "Alex"
+
+    def test_uses_current_player_when_payload_omits_name(self, monkeypatch):
+        """Socket clients that omit player_name still clear the active player."""
+        monitor = MockLaunchMonitor()
+        monitor.connect()
+        monitor.start()
+        first = monitor.simulate_shot()
+        first.player_name = "Alex"
+        second = monitor.simulate_shot()
+        second.player_name = "James"
+
+        monkeypatch.setattr(server_module, "monitor", monitor)
+        monkeypatch.setattr(server_module, "current_player_name", "Alex")
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+        server_module.handle_clear_session()
+
+        assert [shot.player_name for shot in monitor.get_shots()] == ["James"]
+
+    def test_matches_player_name_case_insensitively(self, monkeypatch):
+        """UI and radar casing should not leave a player's shots behind."""
+        monitor = MockLaunchMonitor()
+        monitor.connect()
+        monitor.start()
+        shot = monitor.simulate_shot()
+        shot.player_name = "james"
+        other = monitor.simulate_shot()
+        other.player_name = "Alex"
+
+        monkeypatch.setattr(server_module, "monitor", monitor)
+        monkeypatch.setattr(server_module, "current_player_name", "James")
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+        server_module.handle_clear_session({"player_name": " JAMES "})
+
+        assert [shot.player_name for shot in monitor.get_shots()] == ["Alex"]
+
+    def test_treats_missing_player_name_as_player_1(self, monkeypatch):
+        """Unstamped shots belong to the default player."""
+        monitor = MockLaunchMonitor()
+        monitor.connect()
+        monitor.start()
+        unstamped = monitor.simulate_shot()
+        unstamped.player_name = "Player 1"
+        named = monitor.simulate_shot()
+        named.player_name = "Alex"
+
+        monkeypatch.setattr(server_module, "monitor", monitor)
+        monkeypatch.setattr(server_module, "current_player_name", "Player 1")
+        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
+
+        server_module.handle_clear_session({"player_name": "Player 1"})
+
+        assert [shot.player_name for shot in monitor.get_shots()] == ["Alex"]
+
+    def test_clears_only_that_player_swing_speed_events(self, monkeypatch):
+        """Swing-speed mode stores reps, not ball-flight shots."""
+        monitor = MockSwingSpeedMonitor()
+        james = monitor.simulate_shot(peak_speed=95.0)
+        james.player_name = "James"
+        alex = monitor.simulate_shot(peak_speed=100.0)
+        alex.player_name = "Alex"
+
+        emitted = []
+        monkeypatch.setattr(server_module, "monitor", monitor)
+        monkeypatch.setattr(server_module, "current_player_name", "James")
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+
+        server_module.handle_clear_session({"player_name": "James"})
+
+        assert [event.player_name for event in monitor.get_events()] == ["Alex"]
+        _event, payload = next(args for args in emitted if args[0] == "session_cleared")
+        assert payload["shots"][0]["player_name"] == "Alex"
+
+    def test_emits_cleared_payload_without_monitor(self, monkeypatch):
+        """UI still gets an ack so the confirm dialog can close."""
+        emitted = []
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "current_player_name", "James")
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+
+        server_module.handle_clear_session({"player_name": "James"})
+
+        _event, payload = next(args for args in emitted if args[0] == "session_cleared")
+        assert payload == {"player_name": "James", "shots": []}
 
 
 class TestRadarLaunchGuard:

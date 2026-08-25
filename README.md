@@ -121,7 +121,11 @@ The IWR6843 example values are not universal. Measure the geometry from the
 antenna center and follow the [operator guide](docs/iwr6843/README.md#measure-the-geometry);
 wrong values bias the result instead of producing an obvious startup error.
 
-Then open http://localhost:8080 or use the touchscreen.
+Then open http://localhost:8080 or use the touchscreen. Footer tabs switch
+between Live, Stats, Shots, Camera, Players, and Debug. Tap the footer logo for
+units, theme, and language; the footer power icon opens shutdown confirmation.
+On Live, tap a metric to pin it top-left while keeping all metrics visible. For a TV or tablet, use
+[TV Display Mode](#tv-display-mode).
 
 ### 5. Sync to the cloud (optional)
 

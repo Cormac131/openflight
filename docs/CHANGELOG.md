@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Instrument-panel kiosk UI.** The dashboard is a tabbed shell (Live, Stats,
+  Shots, Camera, Players, Debug) instead of the previous stacked shot and stats
+  views. Tap a Live metric to pin it top-left while keeping all ten metrics
+  visible. The footer logo opens units, dark/light theme, language, simulator,
+  and ball-detection status; a persistent footer power button opens the shutdown
+  confirmation. Club (or training implement) selection is a Live header action.
+  See the [UI README](../ui/README.md).
+- **Kiosk languages.** English, Spanish, French, and Portuguese. Choice is
+  stored in `localStorage` (`openflight.locale:v1`).
+- **Dark and light themes.** Toggle in the footer menu; stored as
+  `openflight.theme` (default dark).
 - **Synchronized OV9281 high-speed camera capture.** OpenFlight can now retain
   pre- and post-impact camera frames from the shared sound trigger, align them
   with OPS243 and IWR6843 captures, and use camera-assisted or camera-only
@@ -98,6 +109,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trusting it.
 
 ### Changed
+- Display mode (`/display`) now uses the same metric cards and theme tokens as
+  the kiosk Live view.
 - The vertical estimator is now a fixed cascade (two_ray → geometry →
   single-frame geometry → naive); it is no longer user-selectable. Launch-angle
   source and confidence semantics changed accordingly.
