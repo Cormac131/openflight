@@ -157,6 +157,35 @@ def test_startup_attempt_limit_requires_lighting_change():
     assert not failed.should_apply
 
 
+def test_lighting_failure_can_recover_with_steady_state_adjustment():
+    policy = AutoExposurePolicy(fps=488.0, startup_max_adjustments=1)
+    dark = observation("too_dark", "brighter", median=18.0, p90=40.0)
+    first = policy.evaluate(dark, exposure_us=250, gain=4.0)
+    failed = policy.evaluate(
+        dark,
+        exposure_us=first.target.exposure_us,
+        gain=first.target.gain,
+    )
+    bright = observation("too_bright", "darker", median=240.0, p90=255.0)
+
+    confirming = policy.evaluate(
+        bright,
+        exposure_us=first.target.exposure_us,
+        gain=first.target.gain,
+    )
+    recovered = policy.evaluate(
+        bright,
+        exposure_us=first.target.exposure_us,
+        gain=first.target.gain,
+    )
+
+    assert failed.status == "lighting_required"
+    assert policy.startup is False
+    assert confirming.status == "calibrating"
+    assert recovered.should_apply
+    assert recovered.target.signal < first.target.signal
+
+
 @pytest.mark.parametrize(
     ("exposure_us", "expected"),
     [(500, "low"), (650, "elevated"), (1000, "high")],

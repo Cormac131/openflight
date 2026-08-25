@@ -227,6 +227,11 @@ class AutoExposurePolicy:
         self._pending_recommendation = "hold"
         self._pending_count = 0
 
+    @property
+    def startup(self) -> bool:
+        """Whether the policy is still using fast startup convergence."""
+        return self._startup
+
     def evaluate(
         self,
         observation: ExposureObservation,
@@ -273,6 +278,7 @@ class AutoExposurePolicy:
         current = self.steps[current_index]
         risk = motion_blur_risk(current.exposure_us)
         if self._startup_adjustments >= self.startup_max_adjustments:
+            self._startup = False
             return AutoExposureDecision(
                 status="lighting_required",
                 analysis_eligible=False,
@@ -283,6 +289,7 @@ class AutoExposurePolicy:
 
         target_index = self._startup_target_index(observation, current_index)
         if target_index == current_index:
+            self._startup = False
             return AutoExposureDecision(
                 status="lighting_required",
                 analysis_eligible=False,

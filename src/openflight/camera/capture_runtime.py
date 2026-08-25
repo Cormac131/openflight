@@ -16,6 +16,13 @@ from typing import Callable, Literal
 
 import numpy as np
 
+from openflight.camera.auto_exposure import (
+    AutoExposureDecision,
+    AutoExposurePolicy,
+    ExposureObservation,
+    measure_exposure,
+    motion_blur_risk,
+)
 from openflight.camera.triggered_buffer import (
     CameraFrame,
     TriggeredCapture,
@@ -32,6 +39,9 @@ CameraCaptureStream = Literal["raw", "main-y"]
 
 RASPBERRY_PI_DIST_PACKAGES = Path("/usr/lib/python3/dist-packages")
 OV9281_VERTICAL_OFFSET_PATH = Path("/sys/module/ov9282/parameters/strip_y_offset")
+AUTO_EXPOSURE_SAMPLE_INTERVAL_S = 5.0
+AUTO_EXPOSURE_STARTUP_SETTLE_S = 0.3
+AUTO_EXPOSURE_ADJUSTMENT_COOLDOWN_S = 10.0
 
 
 def vertical_crop_limits(width: int, height: int) -> dict[str, int] | None:
@@ -60,6 +70,7 @@ class CameraCaptureSettings:
     scaler_crop: tuple[int, int, int, int] | None = None
     gpio_pin: int = 17
     match_tolerance_s: float = 0.75
+    auto_exposure: bool = True
 
     @property
     def pre_frames(self) -> int:
@@ -152,6 +163,25 @@ class CameraCaptureRuntime:
         self._trigger_epochs: queue.Queue[float] = queue.Queue()
         self._camera_control_lock = threading.Lock()
         self._reconfigure_lock = threading.Lock()
+        self._auto_exposure_policy = AutoExposurePolicy(fps=self.settings.fps)
+        self._auto_exposure_stop = threading.Event()
+        self._auto_exposure_worker: threading.Thread | None = None
+        self._auto_exposure_lock = threading.Lock()
+        self._auto_exposure_decision = AutoExposureDecision(
+            status="unavailable",
+            analysis_eligible=not self.settings.auto_exposure,
+            message="Waiting for automatic exposure calibration",
+            observation=ExposureObservation(
+                sample_available=False,
+                status="unavailable",
+                recommendation="hold",
+                message="Waiting for a camera frame",
+            ),
+            motion_blur_risk=motion_blur_risk(self.settings.exposure_us),
+        )
+        self._auto_exposure_last_check_epoch: float | None = None
+        self._auto_exposure_last_adjustment_epoch: float | None = None
+        self._auto_exposure_capture_deferred = False
 
     def start(self) -> None:
         """Start the camera and, optionally, the GPIO edge listener."""
@@ -193,6 +223,8 @@ class CameraCaptureRuntime:
         try:
             self._camera.start()
             self._wait_for_prebuffer()
+            if self.settings.auto_exposure:
+                self._start_auto_exposure()
             if self._use_gpio_trigger:
                 self._start_gpio_trigger()
         except Exception:
@@ -211,6 +243,10 @@ class CameraCaptureRuntime:
     def stop(self) -> None:
         """Stop camera capture and release hardware resources."""
         self._running = False
+        self._auto_exposure_stop.set()
+        if self._auto_exposure_worker is not None:
+            self._auto_exposure_worker.join(timeout=3.0)
+            self._auto_exposure_worker = None
         if self._button is not None:
             self._button.close()
             self._button = None
@@ -265,53 +301,32 @@ class CameraCaptureRuntime:
     def exposure_quality(self) -> dict:
         """Rate exposure in the center-lower hitting zone of the latest frame."""
         frame = self._ring.latest_frame
-        if frame is None:
-            return {
-                "sample_available": False,
-                "status": "unavailable",
-                "recommendation": "hold",
-                "message": "Waiting for a camera frame",
-            }
+        image = frame.image if frame is not None else np.asarray([])
+        return measure_exposure(image).to_dict()
 
-        image = np.asarray(frame.image)
-        height, width = image.shape
-        region = image[
-            round(height * 0.45) : round(height * 0.9),
-            round(width * 0.2) : round(width * 0.8),
-        ]
-        p10, median, p90 = (float(np.percentile(region, value)) for value in (10, 50, 90))
-        clipped_pct = float(np.mean(region >= 250) * 100.0)
-        dark_pct = float(np.mean(region <= 12) * 100.0)
-        contrast = p90 - p10
+    @property
+    def camera_analysis_eligible(self) -> bool:
+        """Whether current lighting permits camera-derived shot metrics."""
+        if not self.settings.auto_exposure:
+            return True
+        with self._auto_exposure_lock:
+            return self._auto_exposure_decision.analysis_eligible
 
-        if clipped_pct >= 8.0 or median >= 205.0:
-            status = "too_bright"
-            recommendation = "darker"
-            message = "Impact area is clipping; move one step darker"
-        elif p90 < 75.0 or median < 28.0 or contrast < 30.0:
-            status = "too_dark"
-            recommendation = "brighter"
-            message = "Club contrast is low; move one step brighter"
-        elif clipped_pct <= 2.0 and 45.0 <= median <= 180.0 and p90 >= 100.0:
-            status = "good"
-            recommendation = "hold"
-            message = "Impact-area exposure and contrast look good"
-        else:
-            status = "marginal"
-            recommendation = "darker" if clipped_pct > 2.0 or median > 180.0 else "brighter"
-            message = f"Usable, but try one step {recommendation}"
-
-        return {
-            "sample_available": True,
-            "status": status,
-            "recommendation": recommendation,
-            "message": message,
-            "median": round(median, 1),
-            "p90": round(p90, 1),
-            "contrast": round(contrast, 1),
-            "clipped_pct": round(clipped_pct, 2),
-            "dark_pct": round(dark_pct, 2),
-        }
+    def auto_exposure_status(self) -> dict:
+        """Return controller state for diagnostics and the operator UI."""
+        with self._auto_exposure_lock:
+            payload = self._auto_exposure_decision.to_dict()
+            payload.update(
+                {
+                    "enabled": self.settings.auto_exposure,
+                    "capture_deferred": self._auto_exposure_capture_deferred,
+                    "last_check_timestamp": self._auto_exposure_last_check_epoch,
+                    "last_adjustment_timestamp": self._auto_exposure_last_adjustment_epoch,
+                }
+            )
+        payload["exposure_us"] = self.settings.exposure_us
+        payload["gain"] = self.settings.gain
+        return payload
 
     def update_image_controls(self, *, exposure_us: int, gain: float) -> dict:
         """Apply exposure and gain without stopping the rolling buffer."""
@@ -426,6 +441,7 @@ class CameraCaptureRuntime:
         self._ring = TriggeredFrameBuffer(self.settings.pre_frames, self.settings.post_frames)
         self._ready = queue.Queue()
         self._trigger_epochs = queue.Queue()
+        self._auto_exposure_policy.reset()
 
     def status(self) -> dict:
         """Return lightweight state for the operator UI."""
@@ -435,6 +451,7 @@ class CameraCaptureRuntime:
             "armed": self._running and buffered_frames >= self.settings.pre_frames,
             "buffered_frames": buffered_frames,
             "required_pre_frames": self.settings.pre_frames,
+            "auto_exposure": self.auto_exposure_status(),
         }
 
     def notify_trigger(self, timestamp: float | None = None) -> bool:
@@ -511,6 +528,77 @@ class CameraCaptureRuntime:
                 "camera produced only "
                 f"{self._ring.buffered_frames}/{self.settings.pre_frames} pre-trigger frames"
             )
+
+    def _start_auto_exposure(self) -> None:
+        """Start non-blocking exposure calibration and monitoring."""
+        self._auto_exposure_policy.reset()
+        self._auto_exposure_stop.clear()
+        self._auto_exposure_worker = threading.Thread(
+            target=self._auto_exposure_loop,
+            name="camera-auto-exposure",
+            daemon=True,
+        )
+        self._auto_exposure_worker.start()
+
+    def _auto_exposure_loop(self) -> None:
+        delay_s = 0.0
+        while self._running and not self._auto_exposure_stop.wait(delay_s):
+            startup = self._auto_exposure_policy.startup
+            try:
+                decision = self._run_auto_exposure_cycle()
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.warning("[CAMERA] Automatic exposure check failed", exc_info=True)
+                delay_s = AUTO_EXPOSURE_SAMPLE_INTERVAL_S
+                continue
+
+            if decision is None:
+                delay_s = 0.1
+            elif decision.should_apply and startup:
+                delay_s = AUTO_EXPOSURE_STARTUP_SETTLE_S
+            elif decision.should_apply:
+                delay_s = AUTO_EXPOSURE_ADJUSTMENT_COOLDOWN_S
+            else:
+                delay_s = AUTO_EXPOSURE_SAMPLE_INTERVAL_S
+
+    def _run_auto_exposure_cycle(self) -> AutoExposureDecision | None:
+        """Measure one stable frame and apply the policy's requested control step."""
+        if self._ring.capture_busy:
+            with self._auto_exposure_lock:
+                self._auto_exposure_capture_deferred = True
+            return None
+
+        frame = self._ring.latest_frame
+        observation = measure_exposure(
+            frame.image if frame is not None else np.asarray([]),
+        )
+        decision = self._auto_exposure_policy.evaluate(
+            observation,
+            exposure_us=self.settings.exposure_us,
+            gain=self.settings.gain,
+        )
+        checked_at = time.time()
+        if decision.should_apply:
+            self.update_image_controls(
+                exposure_us=decision.target.exposure_us,
+                gain=decision.target.gain,
+            )
+            logger.info(
+                "[CAMERA] Auto exposure: %s -> %dus gain %.1f (%s)",
+                observation.status,
+                decision.target.exposure_us,
+                decision.target.gain,
+                decision.message,
+            )
+        elif decision.status == "lighting_required":
+            logger.warning("[CAMERA] %s", decision.message)
+
+        with self._auto_exposure_lock:
+            self._auto_exposure_decision = decision
+            self._auto_exposure_capture_deferred = False
+            self._auto_exposure_last_check_epoch = checked_at
+            if decision.should_apply:
+                self._auto_exposure_last_adjustment_epoch = checked_at
+        return decision
 
     def _on_frame(self, request) -> None:
         try:

@@ -58,12 +58,16 @@ def test_ring_exposes_latest_frame_during_capture():
 
     assert ring.latest_frame is not None
     assert ring.latest_frame.image[0, 0] == 2
+    assert ring.capture_busy is False
 
     assert ring.trigger()
+    assert ring.capture_busy is True
     ring.add_frame(make_frame(3))
 
     assert ring.latest_frame is not None
     assert ring.latest_frame.image[0, 0] == 3
+    ring.add_frame(make_frame(4))
+    assert ring.capture_busy is False
 
 
 def test_ring_rejects_overlapping_trigger():
@@ -230,6 +234,107 @@ def test_live_image_controls_update_camera_without_restarting(tmp_path):
     assert result == {"exposure_us": 750, "gain": 3.5}
     assert runtime.settings.exposure_us == 750
     assert runtime.settings.gain == 3.5
+
+
+def test_auto_exposure_startup_jumps_to_brighter_setting(tmp_path):
+    class FakeCamera:
+        def __init__(self):
+            self.controls = []
+
+        def set_controls(self, controls):
+            self.controls.append(controls)
+
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(fps=488.0, exposure_us=250, gain=4.0),
+    )
+    runtime._camera = FakeCamera()
+    runtime._running = True
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=np.full((200, 320), 18, dtype=np.uint8),
+            sensor_timestamp_ns=1,
+            host_timestamp_ns=2,
+            exposure_us=250,
+            analogue_gain=4.0,
+        )
+    )
+
+    decision = runtime._run_auto_exposure_cycle()
+
+    assert decision is not None
+    assert decision.status == "adjusting"
+    assert runtime._camera.controls
+    assert runtime.settings.exposure_us > 250
+    assert runtime.auto_exposure_status()["analysis_eligible"] is False
+
+
+def test_auto_exposure_defers_control_change_during_trigger_tail(tmp_path):
+    class FakeCamera:
+        def __init__(self):
+            self.controls = []
+
+        def set_controls(self, controls):
+            self.controls.append(controls)
+
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(
+            fps=488.0,
+            pre_ms=1.0,
+            post_ms=10.0,
+            exposure_us=250,
+            gain=4.0,
+        ),
+    )
+    runtime._camera = FakeCamera()
+    runtime._running = True
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=np.full((200, 320), 18, dtype=np.uint8),
+            sensor_timestamp_ns=1,
+            host_timestamp_ns=2,
+            exposure_us=250,
+            analogue_gain=4.0,
+        )
+    )
+    assert runtime._ring.trigger()
+
+    decision = runtime._run_auto_exposure_cycle()
+
+    assert decision is None
+    assert runtime._camera.controls == []
+    assert runtime.auto_exposure_status()["capture_deferred"] is True
+
+
+def test_auto_exposure_acceptable_frame_enables_camera_analysis(tmp_path):
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(fps=488.0, exposure_us=500, gain=12.0),
+    )
+    runtime._camera = object()
+    runtime._running = True
+    image = np.full((200, 320), 110, dtype=np.uint8)
+    image[100:175, 90:230] = np.tile(
+        np.linspace(45, 185, 140, dtype=np.uint8),
+        (75, 1),
+    )
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=image,
+            sensor_timestamp_ns=1,
+            host_timestamp_ns=2,
+            exposure_us=500,
+            analogue_gain=12.0,
+        )
+    )
+
+    decision = runtime._run_auto_exposure_cycle()
+
+    assert decision is not None
+    assert decision.status == "ready"
+    assert runtime.camera_analysis_eligible is True
+    assert runtime.auto_exposure_status()["observation"]["status"] == "good"
 
 
 def test_preview_roll_correction_levels_sloped_line_without_modifying_raw_frame(tmp_path):
