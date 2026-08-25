@@ -33,6 +33,7 @@ describe('CameraReplayDialog', () => {
     );
 
     expect(html).toContain('role="dialog"');
+    expect(html).toContain('class="camera-replay__viewport"');
     expect(html).toContain('<video');
     expect(html).toContain('http://localhost/replay.mp4');
     expect(html).toContain('--replay-impact-position:74.48979591836735%');
@@ -70,5 +71,16 @@ describe('CameraReplayDialog', () => {
 
     expect(css).toMatch(/\.camera-replay__button \{[^}]*min-height: 44px/);
     expect(css).toMatch(/\.camera-replay__scrubber \{[^}]*min-height: 44px/);
+  });
+
+  it('keeps the inset video in a dedicated row above every control', () => {
+    const css = readFileSync(fileURLToPath(new URL('./CameraReplayDialog.css', import.meta.url)), 'utf8');
+
+    expect(css).toMatch(
+      /\.camera-replay__dialog \{[^}]*grid-template-areas:\s*['"]header['"]\s*['"]stage['"]\s*['"]controls['"]/s
+    );
+    expect(css).toMatch(/\.camera-replay__stage \{[^}]*grid-area: stage;[^}]*position: relative;/s);
+    expect(css).toMatch(/\.camera-replay__viewport \{[^}]*position: absolute;[^}]*inset:/s);
+    expect(css).toMatch(/\.camera-replay__controls \{[^}]*grid-area: controls;/s);
   });
 });

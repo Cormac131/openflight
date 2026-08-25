@@ -99,23 +99,25 @@ export function CameraReplayDialog({ replay, state, onClose, onRetry, onPlayback
               </button>
             </header>
             <div className="camera-replay__stage">
-              <video
-                ref={videoRef}
-                src={state.videoUrl}
-                className="camera-replay__video"
-                aria-label={t('replay.video')}
-                autoPlay
-                muted
-                playsInline
-                preload="auto"
-                onClick={togglePlayback}
-                onLoadedMetadata={updateDuration}
-                onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
-                onPlay={() => setPaused(false)}
-                onPause={() => setPaused(true)}
-                onEnded={() => setPaused(true)}
-                onError={() => onPlaybackError?.()}
-              />
+              <div className="camera-replay__viewport">
+                <video
+                  ref={videoRef}
+                  src={state.videoUrl}
+                  className="camera-replay__video"
+                  aria-label={t('replay.video')}
+                  autoPlay
+                  muted
+                  playsInline
+                  preload="auto"
+                  onClick={togglePlayback}
+                  onLoadedMetadata={updateDuration}
+                  onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+                  onPlay={() => setPaused(false)}
+                  onPause={() => setPaused(true)}
+                  onEnded={() => setPaused(true)}
+                  onError={() => onPlaybackError?.()}
+                />
+              </div>
             </div>
             <div className="camera-replay__controls">
               <div className="camera-replay__timeline" style={timelineStyle}>
