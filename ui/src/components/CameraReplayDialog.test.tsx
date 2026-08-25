@@ -39,6 +39,12 @@ describe('CameraReplayDialog', () => {
     expect(html).toContain('--replay-impact-position:74.48979591836735%');
     expect(html).toContain('aria-label="Impact"');
     expect(html).toContain('Replay from start');
+    expect(html).toContain('Playback speed');
+    expect(html).toContain('>1×<');
+    expect(html).toContain('>0.5×<');
+    expect(html).toContain('>0.25×<');
+    expect(html).toContain('>0.1×<');
+    expect(html).toContain('aria-pressed="false">Loop<');
   });
 
   it('offers retry and close after preparation fails', () => {
@@ -73,17 +79,32 @@ describe('CameraReplayDialog', () => {
     expect(css).toMatch(/\.camera-replay__scrubber \{[^}]*min-height: 44px/);
   });
 
-  it('keeps a reduced video viewport in normal flow above every control', () => {
+  it('keeps the scrubber and playback controls in a separate panel beside the video', () => {
+    const html = renderToString(
+      <CameraReplayDialog
+        replay={replay}
+        state={{ kind: 'ready', videoUrl: 'http://localhost/replay.mp4' }}
+        onClose={() => {}}
+        onRetry={() => {}}
+      />
+    );
     const css = readFileSync(fileURLToPath(new URL('./CameraReplayDialog.css', import.meta.url)), 'utf8');
 
-    expect(css).toMatch(
-      /\.camera-replay__dialog \{[^}]*grid-template-areas:\s*['"]header['"]\s*['"]stage['"]\s*['"]controls['"]/s
+    expect(html).toMatch(
+      /class="camera-replay__body">.*class="camera-replay__stage">.*class="camera-replay__controls">/s
     );
+    expect(css).toMatch(/\.camera-replay__body \{[^}]*grid-template-columns: minmax\(0, 1fr\) minmax\(280px, 32%\);/s);
     expect(css).toMatch(/\.camera-replay__stage \{[^}]*grid-area: stage;[^}]*display: grid;[^}]*place-items: center;/s);
     expect(css).toMatch(
-      /\.camera-replay__viewport \{[^}]*position: relative;[^}]*width: min\(82%, 760px\);[^}]*height: 82%;/s
+      /\.camera-replay__viewport \{[^}]*position: relative;[^}]*width: min\(100%, 720px\);[^}]*aspect-ratio: 16 \/ 9;/s
     );
     expect(css).not.toMatch(/\.camera-replay__viewport \{[^}]*position: absolute/s);
-    expect(css).toMatch(/\.camera-replay__controls \{[^}]*grid-area: controls;/s);
+    expect(css).toMatch(/\.camera-replay__controls \{[^}]*grid-area: controls;[^}]*border-left:/s);
+  });
+
+  it('corrects the replay camera mirror without changing captured frames', () => {
+    const css = readFileSync(fileURLToPath(new URL('./CameraReplayDialog.css', import.meta.url)), 'utf8');
+
+    expect(css).toMatch(/\.camera-replay__video \{[^}]*transform: scaleX\(-1\);/s);
   });
 });

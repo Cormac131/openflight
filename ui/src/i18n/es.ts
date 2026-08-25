@@ -40,6 +40,8 @@ export const es: Messages = {
   'replay.play': 'Reproducir',
   'replay.pause': 'Pausa',
   'replay.restart': 'Repetir desde el inicio',
+  'replay.speed': 'Velocidad de reproducción',
+  'replay.loop': 'Repetir',
   'replay.close': 'Cerrar repetición',
   'replay.error': 'No se pudo preparar la repetición',
   'replay.errorDetail': 'Los fotogramas capturados siguen seguros. Inténtalo de nuevo.',

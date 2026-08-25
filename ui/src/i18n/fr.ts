@@ -40,6 +40,8 @@ export const fr: Messages = {
   'replay.play': 'Lecture',
   'replay.pause': 'Pause',
   'replay.restart': 'Reprendre au début',
+  'replay.speed': 'Vitesse de lecture',
+  'replay.loop': 'Boucle',
   'replay.close': 'Fermer le ralenti',
   'replay.error': 'Impossible de préparer le ralenti',
   'replay.errorDetail': 'Les images capturées sont intactes. Réessayez.',

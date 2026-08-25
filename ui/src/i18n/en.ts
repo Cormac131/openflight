@@ -38,6 +38,8 @@ export const en = {
   'replay.play': 'Play',
   'replay.pause': 'Pause',
   'replay.restart': 'Replay from start',
+  'replay.speed': 'Playback speed',
+  'replay.loop': 'Loop',
   'replay.close': 'Close replay',
   'replay.error': 'Could not prepare replay',
   'replay.errorDetail': 'The captured frames are still safe. Try again.',

@@ -14,9 +14,8 @@
   display: grid;
   grid-template-areas:
     'header'
-    'stage'
-    'controls';
-  grid-template-rows: auto minmax(0, 1fr) auto;
+    'body';
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -57,6 +56,15 @@
   text-transform: uppercase;
 }
 
+.camera-replay__body {
+  grid-area: body;
+  min-height: 0;
+  display: grid;
+  grid-template-areas: 'stage controls';
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 32%);
+  overflow: hidden;
+}
+
 .camera-replay__stage {
   grid-area: stage;
   min-height: 0;
@@ -69,8 +77,9 @@
 
 .camera-replay__viewport {
   position: relative;
-  width: min(82%, 760px);
-  height: 82%;
+  width: min(100%, 720px);
+  max-height: 100%;
+  aspect-ratio: 16 / 9;
   display: grid;
   place-items: center;
   min-width: 0;
@@ -85,15 +94,21 @@
   display: block;
   width: 100%;
   height: 100%;
+  transform: scaleX(-1);
   object-fit: contain;
   cursor: pointer;
 }
 
 .camera-replay__controls {
   grid-area: controls;
-  position: relative;
-  padding: 4px 18px 10px;
-  border-top: 1px solid var(--color-border);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  overflow-y: auto;
+  border-left: 1px solid var(--color-border);
   background: var(--color-surface);
 }
 
@@ -126,6 +141,36 @@
   gap: 10px;
 }
 
+.camera-replay__playback-row {
+  display: grid;
+  gap: 10px;
+}
+
+.camera-replay__playback-label {
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.camera-replay__rate-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.camera-replay__rate {
+  min-width: 0;
+  padding-inline: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.camera-replay__loop {
+  width: 100%;
+}
+
 .camera-replay__button {
   min-height: 44px;
   padding: 8px 16px;
@@ -146,6 +191,11 @@
   border-color: var(--color-accent);
   background: var(--color-accent);
   color: #111;
+}
+
+.camera-replay__button--active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
 }
 
 .camera-replay__time {
@@ -188,7 +238,8 @@
   }
 
   .camera-replay__controls {
-    padding-bottom: 5px;
+    gap: 6px;
+    padding: 8px;
   }
 
   .camera-replay__stage {
@@ -196,7 +247,21 @@
   }
 
   .camera-replay__viewport {
-    width: min(86%, 680px);
-    height: 80%;
+    width: min(100%, 620px);
+  }
+}
+
+@media (max-width: 760px) {
+  .camera-replay__body {
+    grid-template-areas:
+      'stage'
+      'controls';
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .camera-replay__controls {
+    border-top: 1px solid var(--color-border);
+    border-left: 0;
   }
 }

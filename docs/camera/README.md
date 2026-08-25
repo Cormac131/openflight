@@ -306,7 +306,10 @@ from the same sound-trigger event used by the radar pipeline.
 A shot with a matched high-speed camera capture exposes **Replay** in the Live
 header and a play control in its Shots row. Replay opens a full-screen,
 touch-friendly 60 FPS slow-motion player with play/pause, restart, scrubbing,
-and an impact marker derived from the recorded trigger frame.
+looping, selectable `1x`, `0.5x`, `0.25x`, and `0.1x` playback speeds, and an
+impact marker derived from the recorded trigger frame. The player corrects the
+operator-facing left/right mirror without modifying the saved capture frames
+used by camera geometry.
 
 The browser-ready H.264 MP4 is intentionally lazy. Shot processing registers
 only the existing `frames.npz`; OpenFlight does not run FFmpeg until the user

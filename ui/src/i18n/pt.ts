@@ -40,6 +40,8 @@ export const pt: Messages = {
   'replay.play': 'Reproduzir',
   'replay.pause': 'Pausa',
   'replay.restart': 'Repetir desde o início',
+  'replay.speed': 'Velocidade de reprodução',
+  'replay.loop': 'Repetir',
   'replay.close': 'Fechar replay',
   'replay.error': 'Não foi possível preparar o replay',
   'replay.errorDetail': 'Os quadros capturados continuam seguros. Tente novamente.',
