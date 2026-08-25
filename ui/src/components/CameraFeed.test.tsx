@@ -27,6 +27,7 @@ const captureSettings: CameraCaptureSettings = {
   exposure_us: 500,
   max_exposure_us: 1666,
   gain: 2,
+  auto_exposure: true,
   rotate_180: true,
   alignment_x_pct: 48,
   alignment_y_pct: 55,
@@ -58,6 +59,8 @@ describe('CameraFeed', () => {
     expect(html).toContain('camera-feed__workspace');
     expect(html).toContain('Camera setup');
     expect(html).toContain('Environment profile');
+    expect(html).toContain('Automatic exposure');
+    expect(html).toMatch(/camera-settings__profile--active[^>]*><strong>Automatic exposure/);
     expect(html).toContain('Exposure check');
     expect(html).toContain('camera-feed__exposure-quality');
     expect(html).toContain('Darker');

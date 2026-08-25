@@ -212,9 +212,13 @@ entire usable area of a compact sensor crop.
 ## Camera Tab Controls
 
 When `--camera-capture` is enabled, the Camera tab keeps the preview visible
-beside an operator-control column. Exposure and analogue gain apply to the
-running Picamera2 pipeline without stopping the rolling buffer. The horizontal
-and vertical alignment controls move the preview guide only.
+beside an operator-control column. Automatic exposure is enabled by default and
+uses libcamera's short-exposure mode, allowing gain and shutter time to adapt
+while the fixed frame-duration limit preserves capture cadence. Selecting an
+environment profile or brightness step switches to manual exposure and gain
+without stopping the rolling buffer. Select **Automatic exposure** to resume
+continuous adjustment. The horizontal and vertical alignment controls move the
+preview guide only.
 
 With the OpenFlight driver and the fixed `320x200` capture mode, **View up** and
 **View down** move the real sensor window in safe 10-pixel steps. Each move
@@ -227,7 +231,7 @@ direction printed on the button.
 Resolution, requested frame rate, and pre/post-trigger timing are shown as
 read-only capture provenance. Changing those values requires a controlled
 camera restart and is intentionally not part of the first live-control pass.
-The UI clamps exposure below the configured frame period.
+The UI clamps manual exposure below the configured frame period.
 
 ## Exposure Calibration
 

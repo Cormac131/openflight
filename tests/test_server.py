@@ -159,6 +159,46 @@ class TestCameraCaptureSettings:
         assert moved == [-20]
         assert emitted[-1][1]["vertical_offset_px"] == -20
 
+    def test_update_enables_auto_exposure_without_manual_values(self, monkeypatch):
+        emitted = []
+        applied = []
+
+        class FakeRuntime:
+            settings = SimpleNamespace(fps=450.0)
+
+            @staticmethod
+            def status():
+                return {"running": True, "armed": True, "auto_exposure": True}
+
+            @staticmethod
+            def update_image_controls(**controls):
+                applied.append(controls)
+                return {"auto_exposure": True, "exposure_us": 500, "gain": 15.0}
+
+            @staticmethod
+            def vertical_crop_status():
+                return {"raw_crop_adjustable": False, "vertical_offset_px": 0}
+
+        config = {
+            "auto_exposure": False,
+            "exposure_us": 500,
+            "gain": 15.0,
+        }
+        monkeypatch.setattr(server_module, "camera_capture_runtime", FakeRuntime())
+        monkeypatch.setattr(server_module, "camera_capture_config", config)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+
+        server_module.handle_set_camera_capture_settings({"auto_exposure": True})
+
+        assert applied == [{"auto_exposure": True}]
+        assert config["auto_exposure"] is True
+        assert emitted[-1][1]["auto_exposure"] is True
+
     def test_update_rejects_out_of_range_alignment(self, monkeypatch):
         emitted = []
         runtime = SimpleNamespace(
@@ -184,6 +224,35 @@ class TestCameraCaptureSettings:
             (
                 "camera_capture_settings_error",
                 {"error": "horizontal alignment must be between 0 and 100 percent"},
+            )
+        ]
+
+    def test_update_reports_unexpected_camera_control_failure(self, monkeypatch):
+        emitted = []
+        runtime = SimpleNamespace(
+            settings=SimpleNamespace(fps=300.0),
+            update_image_controls=lambda **_kwargs: (_ for _ in ()).throw(
+                OSError("camera disconnected")
+            ),
+        )
+        monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
+        monkeypatch.setattr(
+            server_module,
+            "camera_capture_config",
+            {"auto_exposure": True, "exposure_us": 500, "gain": 2.0},
+        )
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+
+        server_module.handle_set_camera_capture_settings({"auto_exposure": True})
+
+        assert emitted == [
+            (
+                "camera_capture_settings_error",
+                {"error": "Camera settings could not be applied"},
             )
         ]
 

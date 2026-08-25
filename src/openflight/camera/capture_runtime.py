@@ -53,6 +53,7 @@ class CameraCaptureSettings:
     post_ms: float = 50.0
     exposure_us: int = 1000
     gain: float = 4.0
+    auto_exposure: bool = True
     stream: CameraCaptureStream = "raw"
     rotate_180: bool = False
     mirror_horizontal: bool = False
@@ -152,6 +153,10 @@ class CameraCaptureRuntime:
         self._trigger_epochs: queue.Queue[float] = queue.Queue()
         self._camera_control_lock = threading.Lock()
         self._reconfigure_lock = threading.Lock()
+        # Tests and non-Pi tooling can exercise control construction without
+        # importing libcamera. start() replaces this with the typed enum before
+        # configuring real hardware.
+        self._short_exposure_mode: object = 1
 
     def start(self) -> None:
         """Start the camera and, optionally, the GPIO edge listener."""
@@ -159,20 +164,26 @@ class CameraCaptureRuntime:
             return
         ensure_picamera2_import_path()
         try:
-            from picamera2 import Picamera2  # pylint: disable=import-error,import-outside-toplevel
+            # pylint: disable=import-error,import-outside-toplevel
+            from libcamera import controls as libcamera_controls
+            from picamera2 import Picamera2
+            # pylint: enable=import-error,import-outside-toplevel
         except ImportError as exc:
-            raise RuntimeError("picamera2 is required for --camera-capture") from exc
+            raise RuntimeError("picamera2 and libcamera are required for --camera-capture") from exc
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._short_exposure_mode = libcamera_controls.AeExposureModeEnum.Short
         self._camera = Picamera2()
         frame_duration_us = round(1_000_000 / self.settings.fps)
         config = self._camera.create_video_configuration(
             main={"size": (self.settings.width, self.settings.height), "format": "YUV420"},
             raw={"size": (self.settings.width, self.settings.height), "format": "R8"},
             controls={
-                "AeEnable": False,
-                "ExposureTime": self.settings.exposure_us,
-                "AnalogueGain": self.settings.gain,
+                **self._exposure_controls(
+                    auto_exposure=self.settings.auto_exposure,
+                    exposure_us=self.settings.exposure_us,
+                    gain=self.settings.gain,
+                ),
                 "FrameDurationLimits": (frame_duration_us, frame_duration_us),
             },
             buffer_count=8,
@@ -313,40 +324,77 @@ class CameraCaptureRuntime:
             "dark_pct": round(dark_pct, 2),
         }
 
-    def update_image_controls(self, *, exposure_us: int, gain: float) -> dict:
-        """Apply exposure and gain without stopping the rolling buffer."""
-        exposure_us = int(exposure_us)
-        gain = float(gain)
+    def update_image_controls(
+        self,
+        *,
+        exposure_us: int | None = None,
+        gain: float | None = None,
+        auto_exposure: bool = False,
+    ) -> dict:
+        """Switch between bounded automatic exposure and explicit manual controls."""
+        if not isinstance(auto_exposure, bool):
+            raise ValueError("camera auto exposure must be true or false")
+        exposure_us = self.settings.exposure_us if exposure_us is None else int(exposure_us)
+        gain = self.settings.gain if gain is None else float(gain)
         frame_period_us = round(1_000_000 / self.settings.fps)
-        if exposure_us <= 0:
-            raise ValueError("camera exposure must be positive")
-        if exposure_us >= frame_period_us:
-            raise ValueError(
-                f"camera exposure must be shorter than the {frame_period_us}us frame period"
-            )
-        if gain <= 0:
-            raise ValueError("camera gain must be positive")
+        if not auto_exposure:
+            if exposure_us <= 0:
+                raise ValueError("camera exposure must be positive")
+            if exposure_us >= frame_period_us:
+                raise ValueError(
+                    f"camera exposure must be shorter than the {frame_period_us}us frame period"
+                )
+            if gain <= 0:
+                raise ValueError("camera gain must be positive")
         if not self._running or self._camera is None:
             raise RuntimeError("camera capture is not running")
 
         with self._camera_control_lock:
             self._camera.set_controls(
-                {
-                    "ExposureTime": exposure_us,
-                    "AnalogueGain": gain,
-                }
+                self._exposure_controls(
+                    auto_exposure=auto_exposure,
+                    exposure_us=exposure_us,
+                    gain=gain,
+                )
             )
         self.settings = replace(
             self.settings,
             exposure_us=exposure_us,
             gain=gain,
+            auto_exposure=auto_exposure,
         )
         logger.info(
-            "[CAMERA] Live controls updated: exposure=%dus gain=%.2f",
+            "[CAMERA] Live controls updated: auto=%s exposure=%dus gain=%.2f",
+            auto_exposure,
             exposure_us,
             gain,
         )
-        return {"exposure_us": exposure_us, "gain": gain}
+        return {
+            "auto_exposure": auto_exposure,
+            "exposure_us": exposure_us,
+            "gain": gain,
+        }
+
+    def _exposure_controls(
+        self,
+        *,
+        auto_exposure: bool,
+        exposure_us: int,
+        gain: float,
+    ) -> dict:
+        """Build one Picamera2 exposure control payload for start and live updates."""
+        if auto_exposure:
+            # libcamera mode 1 favors short shutter times and raises gain instead,
+            # while FrameDurationLimits in start() preserves the requested FPS.
+            return {
+                "AeEnable": True,
+                "AeExposureMode": self._short_exposure_mode,
+            }
+        return {
+            "AeEnable": False,
+            "ExposureTime": exposure_us,
+            "AnalogueGain": gain,
+        }
 
     def vertical_crop_status(self) -> dict:
         """Describe the live sensor-window adjustment available to the UI."""
@@ -430,11 +478,22 @@ class CameraCaptureRuntime:
     def status(self) -> dict:
         """Return lightweight state for the operator UI."""
         buffered_frames = self._ring.buffered_frames
+        exposure_us = self.settings.exposure_us
+        gain = self.settings.gain
+        latest_frame = self._ring.latest_frame
+        if self.settings.auto_exposure and latest_frame is not None:
+            if latest_frame.exposure_us > 0:
+                exposure_us = latest_frame.exposure_us
+            if latest_frame.analogue_gain > 0:
+                gain = latest_frame.analogue_gain
         return {
             "running": self._running,
             "armed": self._running and buffered_frames >= self.settings.pre_frames,
             "buffered_frames": buffered_frames,
             "required_pre_frames": self.settings.pre_frames,
+            "auto_exposure": self.settings.auto_exposure,
+            "exposure_us": exposure_us,
+            "gain": gain,
         }
 
     def notify_trigger(self, timestamp: float | None = None) -> bool:
@@ -640,6 +699,7 @@ class CameraCaptureRuntime:
                     "post_ms": self.settings.post_ms,
                     "exposure_us": self.settings.exposure_us,
                     "gain": self.settings.gain,
+                    "auto_exposure": self.settings.auto_exposure,
                     "stream": self.settings.stream,
                     "rotate_180": self.settings.rotate_180,
                     "mirror_horizontal": self.settings.mirror_horizontal,

@@ -90,7 +90,7 @@ function CaptureSettingsPanel({ settings, error, onUpdate }: CaptureSettingsPane
   const brightnessIndex = brightnessStepIndex(settings);
   const setBrightnessStep = (index: number) => {
     const step = BRIGHTNESS_STEPS[index];
-    onUpdate({ exposure_us: step.exposureUs, gain: step.gain });
+    onUpdate({ auto_exposure: false, exposure_us: step.exposureUs, gain: step.gain });
   };
 
   return (
@@ -139,15 +139,29 @@ function CaptureSettingsPanel({ settings, error, onUpdate }: CaptureSettingsPane
             <small>applies live</small>
           </div>
           <div className="camera-settings__profiles">
+            <button
+              type="button"
+              className={`camera-settings__profile ${settings.auto_exposure ? 'camera-settings__profile--active' : ''}`}
+              disabled={!settings.available}
+              onClick={() => onUpdate({ auto_exposure: true })}
+            >
+              <strong>Automatic exposure</strong>
+              <span>adapts continuously · short shutter</span>
+            </button>
             {CAMERA_PROFILES.map((profile) => {
-              const isActive = settings.exposure_us === profile.exposureUs && settings.gain === profile.gain;
+              const isActive =
+                !settings.auto_exposure &&
+                settings.exposure_us === profile.exposureUs &&
+                settings.gain === profile.gain;
               return (
                 <button
                   key={profile.id}
                   type="button"
                   className={`camera-settings__profile ${isActive ? 'camera-settings__profile--active' : ''}`}
                   disabled={!settings.available}
-                  onClick={() => onUpdate({ exposure_us: profile.exposureUs, gain: profile.gain })}
+                  onClick={() =>
+                    onUpdate({ auto_exposure: false, exposure_us: profile.exposureUs, gain: profile.gain })
+                  }
                 >
                   <strong>{profile.label}</strong>
                   <span>
@@ -180,7 +194,8 @@ function CaptureSettingsPanel({ settings, error, onUpdate }: CaptureSettingsPane
             </button>
           </div>
           <p className="camera-settings__note">
-            Brighter profiles keep the club sharper. Night prioritizes flashlight visibility and may add motion blur.
+            Automatic mode adapts continuously and favors short shutter times. Selecting a profile or brightness step
+            switches to manual exposure.
           </p>
         </section>
 

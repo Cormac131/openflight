@@ -25,6 +25,7 @@ export interface CameraCaptureSettings {
   exposure_us?: number;
   max_exposure_us?: number;
   gain?: number;
+  auto_exposure?: boolean;
   stream?: string;
   rotate_180?: boolean;
   mirror_horizontal?: boolean;

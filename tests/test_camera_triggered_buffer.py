@@ -226,10 +226,65 @@ def test_live_image_controls_update_camera_without_restarting(tmp_path):
 
     result = runtime.update_image_controls(exposure_us=750, gain=3.5)
 
-    assert camera.controls == [{"ExposureTime": 750, "AnalogueGain": 3.5}]
-    assert result == {"exposure_us": 750, "gain": 3.5}
+    assert camera.controls == [{"AeEnable": False, "ExposureTime": 750, "AnalogueGain": 3.5}]
+    assert result == {"auto_exposure": False, "exposure_us": 750, "gain": 3.5}
     assert runtime.settings.exposure_us == 750
     assert runtime.settings.gain == 3.5
+    assert runtime.settings.auto_exposure is False
+
+
+def test_auto_exposure_uses_short_mode_without_manual_controls(tmp_path):
+    short_exposure_mode = object()
+
+    class FakeCamera:
+        def __init__(self):
+            self.controls = []
+
+        def set_controls(self, controls):
+            self.controls.append(controls)
+
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(
+            fps=450.0,
+            exposure_us=500,
+            gain=15.0,
+            auto_exposure=False,
+        ),
+    )
+    camera = FakeCamera()
+    runtime._camera = camera
+    runtime._running = True
+    runtime._short_exposure_mode = short_exposure_mode
+
+    result = runtime.update_image_controls(auto_exposure=True)
+
+    assert camera.controls == [{"AeEnable": True, "AeExposureMode": short_exposure_mode}]
+    assert result == {"auto_exposure": True, "exposure_us": 500, "gain": 15.0}
+    assert runtime.settings.auto_exposure is True
+
+
+def test_auto_exposure_status_reports_actual_frame_controls(tmp_path):
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(auto_exposure=True, exposure_us=500, gain=15.0),
+    )
+    runtime._running = True
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=np.zeros((2, 3), dtype=np.uint8),
+            sensor_timestamp_ns=1,
+            host_timestamp_ns=2,
+            exposure_us=275,
+            analogue_gain=6.5,
+        )
+    )
+
+    status = runtime.status()
+
+    assert status["auto_exposure"] is True
+    assert status["exposure_us"] == 275
+    assert status["gain"] == 6.5
 
 
 def test_preview_roll_correction_levels_sloped_line_without_modifying_raw_frame(tmp_path):

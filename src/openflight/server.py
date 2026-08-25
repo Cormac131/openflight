@@ -1160,6 +1160,7 @@ def init_camera_capture(
             "post_frames": settings.post_frames,
             "exposure_us": settings.exposure_us,
             "gain": settings.gain,
+            "auto_exposure": settings.auto_exposure,
             "stream": settings.stream,
             "rotate_180": settings.rotate_180,
             "mirror_horizontal": settings.mirror_horizontal,
@@ -1700,8 +1701,12 @@ def handle_set_camera_capture_settings(data):
         return
 
     try:
-        exposure_us = int(data.get("exposure_us", camera_capture_config["exposure_us"]))
-        gain = float(data.get("gain", camera_capture_config["gain"]))
+        requested_auto_exposure = data.get(
+            "auto_exposure",
+            camera_capture_config.get("auto_exposure", False),
+        )
+        if not isinstance(requested_auto_exposure, bool):
+            raise ValueError("camera auto exposure must be true or false")
         alignment_x_pct = float(
             data.get("alignment_x_pct", camera_capture_config.get("alignment_x_pct", 50.0))
         )
@@ -1719,10 +1724,15 @@ def handle_set_camera_capture_settings(data):
                 int(data["vertical_offset_px"])
             )
 
-        applied = camera_capture_runtime.update_image_controls(
-            exposure_us=exposure_us,
-            gain=gain,
-        )
+        if requested_auto_exposure:
+            applied = camera_capture_runtime.update_image_controls(auto_exposure=True)
+        else:
+            exposure_us = int(data.get("exposure_us", camera_capture_config["exposure_us"]))
+            gain = float(data.get("gain", camera_capture_config["gain"]))
+            applied = camera_capture_runtime.update_image_controls(
+                exposure_us=exposure_us,
+                gain=gain,
+            )
         camera_capture_config.update(
             {
                 **applied,
@@ -1741,6 +1751,12 @@ def handle_set_camera_capture_settings(data):
     except (KeyError, TypeError, ValueError, RuntimeError) as error:
         logger.warning("[SERVER] Camera settings update rejected: %s", error)
         socketio.emit("camera_capture_settings_error", {"error": str(error)})
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.exception("[SERVER] Unexpected camera settings update failure")
+        socketio.emit(
+            "camera_capture_settings_error",
+            {"error": "Camera settings could not be applied"},
+        )
 
 
 @socketio.on("toggle_camera")
@@ -4422,8 +4438,18 @@ def main():
     parser.add_argument("--camera-capture-fps", type=float, default=300.0)
     parser.add_argument("--camera-capture-pre-ms", type=float, default=150.0)
     parser.add_argument("--camera-capture-post-ms", type=float, default=50.0)
-    parser.add_argument("--camera-capture-exposure-us", type=int, default=1000)
-    parser.add_argument("--camera-capture-gain", type=float, default=4.0)
+    parser.add_argument(
+        "--camera-capture-exposure-us",
+        type=int,
+        default=1000,
+        help="Manual exposure fallback; the Camera tab can switch out of automatic mode.",
+    )
+    parser.add_argument(
+        "--camera-capture-gain",
+        type=float,
+        default=4.0,
+        help="Manual gain fallback; the Camera tab can switch out of automatic mode.",
+    )
     parser.add_argument(
         "--camera-capture-mount-height-m",
         type=float,
