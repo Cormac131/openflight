@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Synchronized OV9281 high-speed camera capture.** OpenFlight can now retain
+  pre- and post-impact camera frames from the shared sound trigger, align them
+  with OPS243 and IWR6843 captures, and use camera-assisted or camera-only
+  fallbacks for horizontal launch, club path, and angle of attack. The Camera
+  tab adds live alignment, crop, orientation, and lighting controls while the
+  rolling buffer remains armed. See [OV9281 Camera](camera/README.md).
 - **Battery and external-power status for Raspberry Pi UPS boards.** OpenFlight
   can now display charging state and battery percentage, issue dismissible 20%
   and 10% warnings while discharging, and record throttled power telemetry in
