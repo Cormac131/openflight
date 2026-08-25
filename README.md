@@ -124,7 +124,10 @@ wrong values bias the result instead of producing an obvious startup error.
 Then open http://localhost:8080 or use the touchscreen. Footer tabs switch
 between Live, Stats, Shots, Camera, Players, and Debug. Tap the footer logo for
 units, theme, and language; the footer power icon opens shutdown confirmation.
-On Live, tap a metric to pin it top-left while keeping all metrics visible. For a TV or tablet, use
+On Live, tap a metric to pin it top-left while keeping all metrics visible. Use
+the Replay action on camera-backed shots to open a touch-friendly slow-motion
+impact clip. The MP4 is generated only when Replay is selected and is cached
+beside the raw camera capture. For a TV or tablet, use
 [TV Display Mode](#tv-display-mode).
 
 ### 5. Sync to the cloud (optional)

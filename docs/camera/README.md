@@ -88,6 +88,10 @@ sudo apt update
 sudo apt install -y rpicam-apps python3-picamera2 ffmpeg
 ```
 
+The main `scripts/setup/setup.sh` installer also installs FFmpeg automatically
+on Raspberry Pi systems when it is missing. Picamera2 remains an operating-
+system package because it must match Raspberry Pi OS and its libcamera stack.
+
 Install OpenFlight's optional camera image-processing dependency from the
 repository root:
 
@@ -96,8 +100,6 @@ uv sync --extra camera
 ```
 
 OpenCV is intentionally not installed for radar-only OpenFlight systems.
-Picamera2 remains an operating-system package because it must match Raspberry
-Pi OS and its installed libcamera stack.
 
 Reboot after enabling or changing camera hardware:
 
@@ -295,6 +297,21 @@ scripts/start-kiosk.sh \
 enabled, OpenFlight keeps a rolling pre-trigger frame buffer and freezes it
 from the same sound-trigger event used by the radar pipeline.
 
+## Shot Replay
+
+A shot with a matched high-speed camera capture exposes **Replay** in the Live
+header and a play control in its Shots row. Replay opens a full-screen,
+touch-friendly 60 FPS slow-motion player with play/pause, restart, scrubbing,
+and an impact marker derived from the recorded trigger frame.
+
+The browser-ready H.264 MP4 is intentionally lazy. Shot processing registers
+only the existing `frames.npz`; OpenFlight does not run FFmpeg until the user
+selects Replay. The first request creates `replay.mp4` atomically beside the raw
+capture, and later requests reuse that file. Closing the player while it is
+preparing does not affect the shot or raw frames. Preparation and playback
+failures are shown as retryable player states, while server-side failures are
+logged without interrupting launch-monitor operation.
+
 ## Saved Artifacts
 
 Camera captures are written under:
@@ -310,6 +327,8 @@ Each capture contains:
 - `first.pgm`: first buffered frame.
 - `trigger.pgm`: frame nearest the hardware trigger.
 - `last.pgm`: final post-trigger frame.
+- `replay.mp4`: optional 60 FPS slow-motion video, created only after the first
+  manual Replay selection and then cached.
 
 The session JSONL contains a `camera_capture` entry linking the shot number to
 the camera directory. Keep the JSONL, OPS capture, IWR6843 dump, and camera

@@ -20,6 +20,7 @@ interface ShotsPanelProps {
   playerName: string;
   clubLabel?: string;
   onDeleteShot: (timestamp: string) => void;
+  onReplayShot?: (shot: Shot) => void;
 }
 
 const COMPARATOR_DEVICES = ['Stack Radar', 'PRGR', 'TrackMan', 'Full Swing', 'Other'];
@@ -118,7 +119,7 @@ function ValidationEditor({
  * inline, so a row expands on tap to reveal them — the mockup's own "make the
  * shot rows tappable to open shot detail" follow-up.
  */
-export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: ShotsPanelProps) {
+export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot, onReplayShot }: ShotsPanelProps) {
   const { t } = useI18n();
   const { unitSystem } = useUnitPreference();
   const { entries, updateEntry, removeEntry } = useValidationStore();
@@ -242,14 +243,26 @@ export function ShotsPanel({ shots, playerName, clubLabel, onDeleteShot }: Shots
                   <span className="shots-panel__num shots-panel__value">{spin}</span>
                   <span className="shots-panel__num shots-panel__value shots-panel__value--accent">{carry}</span>
                 </button>
-                <button
-                  type="button"
-                  className="shots-panel__delete"
-                  aria-label={t('shots.delete', { n: shotNumber })}
-                  onClick={() => handleDelete(shot.timestamp)}
-                >
-                  {t('shots.deleteShort')}
-                </button>
+                <div className="shots-panel__actions">
+                  {shot.camera_replay && onReplayShot ? (
+                    <button
+                      type="button"
+                      className="shots-panel__replay"
+                      aria-label={t('replay.shot', { n: shotNumber })}
+                      onClick={() => onReplayShot(shot)}
+                    >
+                      <span aria-hidden="true">▶</span>
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="shots-panel__delete"
+                    aria-label={t('shots.delete', { n: shotNumber })}
+                    onClick={() => handleDelete(shot.timestamp)}
+                  >
+                    {t('shots.deleteShort')}
+                  </button>
+                </div>
               </div>
               {isOpen ? <ValidationEditor shot={shot} entry={entry} onUpdate={updateEntry} /> : null}
             </div>

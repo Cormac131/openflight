@@ -1,5 +1,13 @@
 export type SpinQuality = 'high' | 'medium' | 'low' | 'experimental' | 'withheld';
 
+export interface CameraReplay {
+  id: string;
+  frame_count: number;
+  trigger_frame: number;
+  playback_fps: number;
+  duration_seconds: number;
+}
+
 export interface Shot {
   mode?: 'rolling-buffer' | 'mock' | 'swing-speed';
   ball_speed_mph: number;
@@ -53,6 +61,7 @@ export interface Shot {
   swing_speed_trigger_mph?: number;
   training_implement?: string;
   training_implement_label?: string;
+  camera_replay?: CameraReplay | null;
 }
 
 export interface SessionStats {

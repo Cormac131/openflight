@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useSocket } from './hooks/useSocket';
 import { useSystemStore } from './stores/useSystemStore';
@@ -14,6 +14,7 @@ import { DisplayMode } from './components/DisplayMode';
 import { SimShotBadges } from './components/SimShotBadges';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
+import { CameraReplayDialog, type CameraReplayDialogState } from './components/CameraReplayDialog';
 import {
   CameraPanel,
   LivePanel,
@@ -33,7 +34,8 @@ import {
   type PanelView,
 } from './components/panel';
 import { shouldEnableLiveBallWarning } from './components/panel/liveMetrics';
-import { filterShotsByPlayer } from './types/shot';
+import { filterShotsByPlayer, type CameraReplay } from './types/shot';
+import { prepareCameraReplay, ReplayPreparationRequestError } from './services/cameraReplay';
 import { getClubName } from './data/clubs';
 import { getTrainingImplementLabel } from './data/trainingImplements';
 import { unlockAudioCue } from './utils/audioCue';
@@ -41,6 +43,11 @@ import { useLaunchDaddy, LaunchDaddyOverlay, LaunchDaddyBrand } from './componen
 
 import { useI18n } from './i18n/useI18n';
 import './components/panel/panel.css';
+
+interface ActiveCameraReplay {
+  replay: CameraReplay;
+  state: CameraReplayDialogState;
+}
 
 function AppContent() {
   const { t } = useI18n();
@@ -116,6 +123,8 @@ function AppContent() {
   const [addPlayerOpen, setAddPlayerOpen] = useState(false);
   const [newPlayerName, setNewPlayerName] = useState('');
   const [clearSessionOpen, setClearSessionOpen] = useState(false);
+  const [activeReplay, setActiveReplay] = useState<ActiveCameraReplay | null>(null);
+  const replayRequestRef = useRef<AbortController | null>(null);
 
   // Reflect a server-pushed club change (e.g. the club changed in the connected
   // simulator) locally without echoing back. Done during render (React's "adjust
@@ -156,6 +165,8 @@ function AppContent() {
       setCurrentView('live');
     });
   }, []);
+
+  useEffect(() => () => replayRequestRef.current?.abort(), []);
 
   // Trigger explosion when a new shot is detected in Launch Daddy mode
   useEffect(() => {
@@ -220,6 +231,36 @@ function AppContent() {
     setShutdownState('confirm');
   };
 
+  const openReplay = (replay: CameraReplay) => {
+    replayRequestRef.current?.abort();
+    const controller = new AbortController();
+    replayRequestRef.current = controller;
+    setActiveReplay({ replay, state: { kind: 'preparing' } });
+
+    void prepareCameraReplay(replay.id, controller.signal)
+      .then((prepared) => {
+        if (replayRequestRef.current !== controller || controller.signal.aborted) return;
+        setActiveReplay({ replay, state: { kind: 'ready', videoUrl: prepared.videoUrl } });
+      })
+      .catch((error: unknown) => {
+        if (replayRequestRef.current !== controller || controller.signal.aborted) return;
+        setActiveReplay({
+          replay,
+          state: {
+            kind: 'error',
+            stage: 'preparation',
+            message: error instanceof ReplayPreparationRequestError ? error.message : undefined,
+          },
+        });
+      });
+  };
+
+  const closeReplay = () => {
+    replayRequestRef.current?.abort();
+    replayRequestRef.current = null;
+    setActiveReplay(null);
+  };
+
   const playerShots = filterShotsByPlayer(shots, selectedPlayer);
   const playerLatestShot = playerShots[playerShots.length - 1] ?? null;
   const playerIsNewShot = Boolean(
@@ -234,6 +275,18 @@ function AppContent() {
     <PanelAction onClick={() => setPickerOpen(true)}>
       {isSwingSpeedMode ? t('app.changeImplement') : t('app.changeClub')}
     </PanelAction>
+  );
+  const latestReplay = playerLatestShot?.camera_replay;
+
+  const liveHeaderActions = (
+    <>
+      {latestReplay ? (
+        <PanelAction variant="secondary" onClick={() => openReplay(latestReplay)}>
+          {t('replay.open')}
+        </PanelAction>
+      ) : null}
+      {changeClubAction}
+    </>
   );
 
   const addPlayerAction = <PanelAction onClick={() => setAddPlayerOpen(true)}>{t('menu.addPlayer')}</PanelAction>;
@@ -270,6 +323,20 @@ function AppContent() {
         <ShutdownDialog state={shutdownState} onConfirm={handleShutdown} onCancel={closeShutdown} />
       ) : null}
 
+      {activeReplay ? (
+        <CameraReplayDialog
+          replay={activeReplay.replay}
+          state={activeReplay.state}
+          onClose={closeReplay}
+          onRetry={() => openReplay(activeReplay.replay)}
+          onPlaybackError={() => {
+            setActiveReplay((current) =>
+              current ? { replay: current.replay, state: { kind: 'error', stage: 'playback' } } : current
+            );
+          }}
+        />
+      ) : null}
+
       <main className="panel-app__main">
         {currentView === 'live' && (
           <>
@@ -286,7 +353,7 @@ function AppContent() {
                 isNewShot={playerIsNewShot}
                 ballDetectionEnabled={shouldEnableLiveBallWarning(currentView, cameraStatus)}
                 ballDetected={cameraStatus.ball_detected}
-                headerAction={changeClubAction}
+                headerAction={liveHeaderActions}
               />
             </ShotProcessingArea>
             {debugMode && <SimShotBadges latestSimShots={latestSimShots} />}
@@ -316,6 +383,9 @@ function AppContent() {
             playerName={selectedPlayer}
             clubLabel={activeImplementLabel}
             onDeleteShot={(timestamp) => socketService.deleteShot(timestamp)}
+            onReplayShot={(shot) => {
+              if (shot.camera_replay) openReplay(shot.camera_replay);
+            }}
           />
         )}
         {currentView === 'camera' && (
