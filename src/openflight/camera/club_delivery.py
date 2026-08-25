@@ -211,6 +211,12 @@ class ReferenceBallTracker:
             return anchor, "session_anchor"
         return resolved, "warming" if source == "detected" else source
 
+    def fallback(self) -> ReferenceBall | None:
+        """Return an established session anchor without adding an observation."""
+        if len(self._samples) < self.min_fallback_samples:
+            return None
+        return self._anchor()
+
 
 def _pixels_to_world(
     points_px: np.ndarray,
