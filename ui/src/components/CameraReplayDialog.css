@@ -58,19 +58,19 @@
 }
 
 .camera-replay__stage {
-  --replay-stage-inset-x: clamp(12px, 2vw, 24px);
-  --replay-stage-inset-y: clamp(8px, 2vh, 14px);
-
   grid-area: stage;
-  position: relative;
   min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(12px, 2vh, 20px) clamp(18px, 3vw, 32px);
   overflow: hidden;
   background: #0b0b0b;
 }
 
 .camera-replay__viewport {
-  position: absolute;
-  inset: var(--replay-stage-inset-y) var(--replay-stage-inset-x);
+  position: relative;
+  width: min(82%, 760px);
+  height: 82%;
   display: grid;
   place-items: center;
   min-width: 0;
@@ -192,7 +192,11 @@
   }
 
   .camera-replay__stage {
-    --replay-stage-inset-x: 10px;
-    --replay-stage-inset-y: 6px;
+    padding: 8px 12px;
+  }
+
+  .camera-replay__viewport {
+    width: min(86%, 680px);
+    height: 80%;
   }
 }
