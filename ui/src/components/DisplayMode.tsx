@@ -46,6 +46,11 @@ function formatSpin(value: number | null): string {
   return value.toLocaleString(getHtmlLang(), { maximumFractionDigits: 0 });
 }
 
+function experimentalStatus(status: string | null | undefined): string {
+  if (!status || status === 'candidate_available') return 'experimental candidate';
+  return `experimental · ${status.replace(/^rejected_/, 'rejected: ').replaceAll('_', ' ')}`;
+}
+
 function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric', t: Translate): DisplayMetric[] {
   if (!shot) {
     return [
@@ -56,11 +61,13 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric', t: T
       { label: t('display.launch'), value: '--', unit: 'deg' },
       { label: t('metric.spin'), value: '--', unit: 'rpm' },
       { label: t('display.clubPath'), value: '--', unit: 'deg' },
+      { label: t('metric.clubAoa'), value: '--', unit: 'deg' },
       { label: t('metric.hLaunch'), value: '--', unit: 'deg' },
     ];
   }
 
   const carryYards = shot.carry_spin_adjusted ?? shot.estimated_carry_yards;
+  const fusedDeliveryAttempted = shot.experimental_fused_status != null;
 
   return [
     {
@@ -97,13 +104,62 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric', t: T
     },
     {
       label: t('display.clubPath'),
-      value: formatOptionalNumber(shot.club_path_deg, 1, true),
-      unit: shot.club_path_deg === null ? undefined : 'deg',
+      value: formatOptionalNumber(
+        shot.club_path_deg ??
+          shot.experimental_fused_club_path_deg ??
+          (!fusedDeliveryAttempted ? shot.experimental_club_path_deg : null) ??
+          null,
+        1,
+        true
+      ),
+      unit:
+        shot.club_path_deg == null &&
+        shot.experimental_fused_club_path_deg == null &&
+        (fusedDeliveryAttempted || shot.experimental_club_path_deg == null)
+          ? undefined
+          : 'deg',
+      detail:
+        shot.club_path_deg != null
+          ? undefined
+          : fusedDeliveryAttempted
+            ? shot.experimental_fused_club_path_deg != null
+              ? 'camera fused (exp.)'
+              : experimentalStatus(shot.experimental_fused_status)
+            : shot.experimental_club_path_deg != null || shot.experimental_club_path_status != null
+              ? experimentalStatus(shot.experimental_club_path_status)
+              : undefined,
+    },
+    {
+      label: t('metric.clubAoa'),
+      value: formatOptionalNumber(
+        shot.club_angle_deg ??
+          shot.experimental_fused_attack_angle_deg ??
+          (!fusedDeliveryAttempted ? shot.experimental_attack_angle_deg : null) ??
+          null
+      ),
+      unit:
+        shot.club_angle_deg == null &&
+        shot.experimental_fused_attack_angle_deg == null &&
+        (fusedDeliveryAttempted || shot.experimental_attack_angle_deg == null)
+          ? undefined
+          : 'deg',
+      detail:
+        shot.club_angle_deg != null
+          ? undefined
+          : fusedDeliveryAttempted
+            ? shot.experimental_fused_attack_angle_deg != null
+              ? 'camera fused (exp.)'
+              : experimentalStatus(shot.experimental_fused_status)
+            : shot.experimental_attack_angle_deg != null || shot.experimental_attack_angle_status != null
+              ? experimentalStatus(shot.experimental_attack_angle_status)
+              : undefined,
     },
     {
       label: t('metric.hLaunch'),
       value: formatOptionalNumber(shot.launch_angle_horizontal, 1, true),
       unit: shot.launch_angle_horizontal === null ? undefined : 'deg',
+      detail:
+        shot.launch_angle_horizontal_source === 'camera_assisted_experimental' ? 'camera assisted (exp.)' : undefined,
     },
   ];
 }

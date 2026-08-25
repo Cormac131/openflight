@@ -126,16 +126,13 @@ describe('LivePanel', () => {
     expect(html).toMatch(/metric-card--selected[\s\S]*?>Ball speed</);
   });
 
-  it('shows the selected metric full-screen after a new shot', () => {
+  it('keeps every metric visible after a new shot', () => {
     const html = render(makeShot(), undefined, 'spin', true);
 
-    expect(html).toContain('live-panel__spotlight');
-    expect(html).toContain('live-panel__spotlight-label">Spin');
-    expect(html).toContain('live-panel__spotlight-value">2,650<');
+    expect(html).not.toContain('live-panel__spotlight');
     expect(html).toContain('live-panel__grid--of-10');
-    expect(html).toMatch(/<button[^>]*live-panel__spotlight/);
-    expect(html).toContain('aria-label="Hide shot overlay"');
-    expect(html.indexOf('shot-flash')).toBeLessThan(html.indexOf('live-panel__spotlight-value'));
+    expect(html.match(/metric-card--interactive/g)).toHaveLength(10);
+    expect(html).toContain('shot-flash');
   });
 
   it('does not show the spotlight for a restored session shot', () => {

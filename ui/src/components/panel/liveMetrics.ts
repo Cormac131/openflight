@@ -18,6 +18,8 @@ export interface LiveMetric {
   /** True when the value is modeled rather than measured. Rendered as an icon. */
   estimated?: boolean;
   confidence?: SpinQuality | null;
+  /** Override confidence copy while preserving its dot level. */
+  confidenceLabel?: string;
 }
 
 /**
@@ -30,9 +32,6 @@ export const LIVE_METRIC_COUNT = 10;
 
 /** Metric count for a swing-speed session: a single 5-tile row. */
 export const SWING_METRIC_COUNT = 5;
-
-/** How long the selected metric occupies the Live panel after a new shot. */
-export const SPOTLIGHT_DURATION_MS = 10_000;
 
 function formatOptionalAngle(value: number | null, signed = false): string {
   if (value === null) return NO_VALUE;
@@ -67,11 +66,39 @@ function markEstimated(isEstimated: boolean): true | undefined {
   return isEstimated ? true : undefined;
 }
 
+function experimentalStatus(status: string | null | undefined): string {
+  if (!status || status === 'candidate_available') return 'candidate';
+  return status.replace(/^rejected_/, 'rejected: ').replaceAll('_', ' ');
+}
+
 function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[] {
   const speedUnit = getSpeedUnit(unitSystem);
   const carry = shot.carry_spin_adjusted ?? shot.estimated_carry_yards;
   const angleConfidence = launchAngleQuality(shot.launch_angle_confidence);
   const angleEstimated = shot.angle_source === 'estimated';
+  const fusedDeliveryAttempted = shot.experimental_fused_status != null;
+  const attackAngle =
+    shot.club_angle_deg ??
+    shot.experimental_fused_attack_angle_deg ??
+    (!fusedDeliveryAttempted ? shot.experimental_attack_angle_deg : null) ??
+    null;
+  const attackIsExperimental =
+    shot.club_angle_deg === null &&
+    (shot.experimental_fused_attack_angle_deg != null ||
+      shot.experimental_fused_status != null ||
+      shot.experimental_attack_angle_deg != null ||
+      shot.experimental_attack_angle_status != null);
+  const clubPath =
+    shot.club_path_deg ??
+    shot.experimental_fused_club_path_deg ??
+    (!fusedDeliveryAttempted ? shot.experimental_club_path_deg : null) ??
+    null;
+  const clubPathIsExperimental =
+    shot.club_path_deg === null &&
+    (shot.experimental_fused_club_path_deg != null ||
+      shot.experimental_fused_status != null ||
+      shot.experimental_club_path_deg != null ||
+      shot.experimental_club_path_status != null);
 
   return [
     {
@@ -112,6 +139,10 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       label: t('metric.hLaunch'),
       value: formatOptionalAngle(shot.launch_angle_horizontal, true),
       unit: angleUnit(shot.launch_angle_horizontal),
+      subtext:
+        shot.launch_angle_horizontal_source === 'camera_assisted_experimental'
+          ? 'camera assisted (experimental)'
+          : undefined,
       estimated: markEstimated(shot.launch_angle_horizontal !== null && angleEstimated),
       confidence: shot.launch_angle_horizontal === null ? null : angleConfidence,
     },
@@ -133,14 +164,38 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
     {
       id: 'club_path',
       label: t('metric.clubPath'),
-      value: formatOptionalAngle(shot.club_path_deg, true),
-      unit: angleUnit(shot.club_path_deg),
+      value: formatOptionalAngle(clubPath, true),
+      unit: angleUnit(clubPath),
+      subtext:
+        shot.club_path_deg !== null
+          ? undefined
+          : fusedDeliveryAttempted
+            ? shot.experimental_fused_club_path_deg != null
+              ? 'camera fused (experimental)'
+              : experimentalStatus(shot.experimental_fused_status)
+            : clubPathIsExperimental
+              ? experimentalStatus(shot.experimental_club_path_status)
+              : undefined,
+      confidence: clubPathIsExperimental ? (shot.experimental_fused_club_path_confidence ?? 'experimental') : null,
+      confidenceLabel: shot.experimental_fused_club_path_confidence ? 'experimental' : undefined,
     },
     {
       id: 'club_aoa',
       label: t('metric.clubAoa'),
-      value: formatOptionalAngle(shot.club_angle_deg, true),
-      unit: angleUnit(shot.club_angle_deg),
+      value: formatOptionalAngle(attackAngle, true),
+      unit: angleUnit(attackAngle),
+      subtext:
+        shot.club_angle_deg !== null
+          ? undefined
+          : fusedDeliveryAttempted
+            ? shot.experimental_fused_attack_angle_deg != null
+              ? 'camera fused (experimental)'
+              : experimentalStatus(shot.experimental_fused_status)
+            : attackIsExperimental
+              ? experimentalStatus(shot.experimental_attack_angle_status)
+              : undefined,
+      confidence: attackIsExperimental ? (shot.experimental_fused_attack_angle_confidence ?? 'experimental') : null,
+      confidenceLabel: shot.experimental_fused_attack_angle_confidence ? 'experimental' : undefined,
     },
   ];
 }

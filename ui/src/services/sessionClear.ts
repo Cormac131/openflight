@@ -7,10 +7,7 @@ export interface SessionClearedPayload {
 }
 
 /** Remaining shots after a clear. Prefer the server list; otherwise drop one player. */
-export function remainingShotsAfterClear(
-  currentShots: Shot[],
-  payload?: SessionClearedPayload | null
-): Shot[] {
+export function remainingShotsAfterClear(currentShots: Shot[], payload?: SessionClearedPayload | null): Shot[] {
   if (payload?.shots) {
     return payload.shots;
   }

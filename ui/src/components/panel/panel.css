@@ -365,6 +365,106 @@
   border-right: 1px solid var(--color-border);
 }
 
+.panel-footer__meta > .power-status--chrome {
+  padding-right: 0.9vw;
+  border-right: 1px solid var(--color-border);
+}
+
+.panel-footer__power {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.panel-footer__power:hover,
+.panel-footer__power:focus-visible {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.panel-footer__power svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Shutdown confirmation is app chrome, so it lives with the panel shell. */
+.shutdown-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--color-bg) 70%, transparent);
+}
+
+.shutdown-dialog {
+  min-width: 280px;
+  padding: 2rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  text-align: center;
+}
+
+.shutdown-dialog p {
+  margin: 0 0 1.5rem;
+  color: var(--color-text);
+  font-size: 1.125rem;
+}
+
+.shutdown-dialog--pending {
+  min-width: 320px;
+}
+
+.shutdown-dialog__error {
+  display: block;
+  margin: -0.75rem 0 1.25rem;
+  color: var(--color-danger);
+  font-size: 0.8125rem;
+}
+
+.shutdown-dialog__buttons {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.shutdown-dialog__confirm,
+.shutdown-dialog__cancel {
+  min-height: 44px;
+  padding: 0.625rem 1.5rem;
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 0.9375rem;
+  cursor: pointer;
+}
+
+.shutdown-dialog__confirm {
+  border: 1px solid var(--color-danger);
+  background: var(--color-danger);
+  color: var(--color-accent-fg);
+  font-weight: 600;
+}
+
+.shutdown-dialog__cancel {
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+}
+
 .panel-action {
   height: 44px;
   padding: 0 22px;
@@ -462,25 +562,6 @@
   }
 }
 
-.live-panel__spotlight {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 0 32px;
-  border: none;
-  background: var(--color-bg);
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  -webkit-appearance: none;
-  appearance: none;
-}
-
 .live-panel__ball-warning {
   position: absolute;
   inset: 0;
@@ -508,63 +589,6 @@
   font-weight: 600;
   font-size: clamp(0.85rem, 2.4vh, 1.25rem);
   letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
-}
-
-.live-panel__spotlight-label {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  font-weight: 700;
-  font-size: 1.8rem;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--color-accent);
-}
-
-.live-panel__spotlight .metric-card__estimated {
-  letter-spacing: 0;
-}
-
-.live-panel__spotlight .metric-card__estimated svg {
-  width: 28px;
-  height: 18px;
-}
-
-.live-panel__spotlight-value-row {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: baseline;
-  justify-content: center;
-  gap: 16px;
-}
-
-.live-panel__spotlight-value {
-  font-weight: 700;
-  font-size: clamp(10.5rem, 52vh, 20rem);
-  line-height: 0.95;
-  letter-spacing: -0.03em;
-  color: var(--color-text);
-}
-
-.live-panel__spotlight-unit {
-  font-weight: 500;
-  font-size: 3rem;
-  color: var(--color-text);
-}
-
-.live-panel__spotlight-subtext {
-  position: relative;
-  z-index: 1;
-  margin-top: 16px;
-  font-weight: 600;
-  font-size: 1.5rem;
-  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--color-text-muted);
 }
@@ -1446,7 +1470,6 @@
     gap: 14px;
   }
 
-  .live-panel__spotlight,
   .live-panel__empty {
     padding-inline: 18px;
   }

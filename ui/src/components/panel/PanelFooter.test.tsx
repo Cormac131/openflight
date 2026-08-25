@@ -20,6 +20,7 @@ function render(
       ballDetected={false}
       debugRecording={false}
       powerStatus={powerStatus}
+      onShutdown={() => {}}
     />
   ).replace(/<!-- -->/g, '');
 }
@@ -57,13 +58,14 @@ describe('PanelFooter', () => {
     }
   });
 
-  it('hides units and the meta cluster on Players, Camera, and Debug when there is no battery', () => {
+  it('hides units and battery on Players, Camera, and Debug while keeping shutdown visible', () => {
     for (const view of ['players', 'camera', 'debug'] as const) {
       const html = render(view, 4, null);
 
-      expect(html).not.toContain('panel-footer__meta');
+      expect(html).toContain('panel-footer__meta');
       expect(html).not.toContain('mph / yds');
       expect(html).not.toContain('power-status');
+      expect(html).toContain('panel-footer__power');
     }
   });
 
@@ -92,6 +94,15 @@ describe('PanelFooter', () => {
     expect(html).toContain('panel-footer__meta');
     expect(html).not.toContain('mph / yds');
     expect(html).toContain('41%');
+  });
+
+  it('keeps the shutdown power control visible on every panel without battery telemetry', () => {
+    for (const view of ['live', 'stats', 'shots', 'camera', 'players', 'debug'] as const) {
+      const html = render(view, 0, null);
+
+      expect(html).toContain('panel-footer__power');
+      expect(html).toContain('aria-label="Shut down"');
+    }
   });
 
   it('marks the active tab pressed', () => {

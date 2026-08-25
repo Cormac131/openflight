@@ -66,6 +66,13 @@ describe('App shell', () => {
     expect(html).not.toContain('panel-footer__count');
   });
 
+  it('keeps the shutdown power control in the footer', () => {
+    const html = renderToString(<App />);
+
+    expect(html).toContain('panel-footer__power');
+    expect(html).toContain('aria-label="Shut down"');
+  });
+
   it('does not ask to clear a session until the stats action is used', () => {
     const html = renderToString(<App />);
 

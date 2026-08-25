@@ -1,15 +1,19 @@
 import { useState } from 'react';
-import type { CameraStatus } from '../../stores/useCameraStore';
+import type { CameraCaptureSettings, CameraStatus } from '../../stores/useCameraStore';
 import { getServerOrigin } from '../../utils/serverOrigin';
+import { CameraFeed } from '../CameraFeed';
 import { PanelHeader } from './PanelHeader';
 import { PanelAction } from './PanelAction';
 import { useI18n } from '../../i18n/useI18n';
 
 interface CameraPanelProps {
   cameraStatus: CameraStatus;
+  captureSettings: CameraCaptureSettings;
+  captureSettingsError: string | null;
   clubLabel?: string;
   onToggleCamera: () => void;
   onToggleStream: () => void;
+  onUpdateCaptureSettings: (settings: Partial<CameraCaptureSettings>) => void;
 }
 
 const STREAM_URL = `${getServerOrigin()}/camera/stream`;
@@ -59,9 +63,34 @@ function LiveFeed({ ballDetected, ballConfidence }: { ballDetected: boolean; bal
  * Design doc 7c draws the disabled state. The unavailable, idle, streaming and
  * error states reuse the same hatched stage so the panel reads as one surface.
  */
-export function CameraPanel({ cameraStatus, clubLabel, onToggleCamera, onToggleStream }: CameraPanelProps) {
+export function CameraPanel({
+  cameraStatus,
+  captureSettings,
+  captureSettingsError,
+  clubLabel,
+  onToggleCamera,
+  onToggleStream,
+  onUpdateCaptureSettings,
+}: CameraPanelProps) {
   const { t } = useI18n();
   const { available, enabled, streaming, ball_detected, ball_confidence } = cameraStatus;
+
+  if (captureSettings.available) {
+    return (
+      <div className="panel camera-panel camera-panel--capture">
+        <div className="panel__body camera-panel__body camera-panel__body--capture">
+          <CameraFeed
+            cameraStatus={cameraStatus}
+            captureSettings={captureSettings}
+            captureSettingsError={captureSettingsError}
+            onToggleCamera={onToggleCamera}
+            onToggleStream={onToggleStream}
+            onUpdateCaptureSettings={onUpdateCaptureSettings}
+          />
+        </div>
+      </div>
+    );
+  }
 
   const subtitle = !available
     ? t('camera.notConnected')

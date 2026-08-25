@@ -17,6 +17,8 @@ export interface MetricCardProps {
   /** Modeled value. Shown as an ≈ mark; measured values have no mark. */
   estimated?: boolean;
   confidence?: SpinQuality | null;
+  /** Override confidence copy while preserving its dot level. */
+  confidenceLabel?: string;
   /** Renders the card as a button. Used by 6a's tap-a-tile-to-promote-it grid. */
   onClick?: () => void;
   /** Marks an interactive card as the currently promoted one (`aria-pressed`). */
@@ -44,6 +46,7 @@ export function MetricCard({
   size = 'standard',
   labelPosition = 'below',
   confidence,
+  confidenceLabel,
   onClick,
   selected,
   estimated,
@@ -77,7 +80,7 @@ export function MetricCard({
               <span className={`dot ${confidence === 'high' ? 'filled' : ''}`} />
             </span>
           ) : null}
-          <span className="metric-card__confidence-label">{confidence}</span>
+          <span className="metric-card__confidence-label">{confidenceLabel ?? confidence}</span>
         </div>
       ) : null}
     </>

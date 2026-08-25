@@ -15,6 +15,7 @@ interface PanelFooterProps {
   currentView: PanelView;
   onChangeView: (view: PanelView) => void;
   onOpenMenu: () => void;
+  onShutdown: () => void;
   menuOpen: boolean;
   shotCount: number;
   cameraStreaming: boolean;
@@ -42,6 +43,7 @@ export function PanelFooter({
   currentView,
   onChangeView,
   onOpenMenu,
+  onShutdown,
   menuOpen,
   shotCount,
   cameraStreaming,
@@ -56,7 +58,6 @@ export function PanelFooter({
   const showUnits = VIEWS_WITH_UNITS.has(currentView);
   const storePowerStatus = useSystemStore((state) => state.powerStatus);
   const powerStatus = powerStatusProp !== undefined ? powerStatusProp : storePowerStatus;
-  const showMeta = showUnits || powerStatus !== null;
   const options = PANEL_VIEWS.map((view) => {
     const label = t(`nav.${view.id}` as MessageKey);
     switch (view.id) {
@@ -109,12 +110,22 @@ export function PanelFooter({
         />
       </div>
 
-      {showMeta ? (
-        <div className="panel-footer__meta">
-          {showUnits ? <span className="panel-footer__units">{unitsLabel}</span> : null}
-          {powerStatus ? <PowerExperience status={powerStatus} variant="chrome" /> : null}
-        </div>
-      ) : null}
+      <div className="panel-footer__meta">
+        {showUnits ? <span className="panel-footer__units">{unitsLabel}</span> : null}
+        {powerStatus ? <PowerExperience status={powerStatus} variant="chrome" /> : null}
+        <button
+          type="button"
+          className="panel-footer__power"
+          onClick={onShutdown}
+          aria-label={t('menu.shutdown')}
+          title={t('menu.shutdown')}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+            <line x1="12" y1="2" x2="12" y2="12" />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }

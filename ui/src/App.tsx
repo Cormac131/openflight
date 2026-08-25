@@ -63,7 +63,13 @@ function AppContent() {
       shotVersion: state.shotVersion,
     }))
   );
-  const cameraStatus = useCameraStore((state) => state.cameraStatus);
+  const { cameraStatus, captureSettings, captureSettingsError } = useCameraStore(
+    useShallow((state) => ({
+      cameraStatus: state.cameraStatus,
+      captureSettings: state.captureSettings,
+      captureSettingsError: state.captureSettingsError,
+    }))
+  );
   const { selectedPlayer, players, selectPlayer, addPlayer, removePlayer } = usePlayerStore(
     useShallow((state) => ({
       selectedPlayer: state.selectedPlayer,
@@ -316,8 +322,11 @@ function AppContent() {
           <CameraPanel
             cameraStatus={cameraStatus}
             clubLabel={activeImplementLabel}
+            captureSettings={captureSettings}
+            captureSettingsError={captureSettingsError}
             onToggleCamera={() => socketService.toggleCamera()}
             onToggleStream={() => socketService.toggleCameraStream()}
+            onUpdateCaptureSettings={(settings) => socketService.setCameraCaptureSettings(settings)}
           />
         )}
         {currentView === 'debug' && (
@@ -407,6 +416,10 @@ function AppContent() {
         ballDetected={cameraStatus.ball_detected}
         debugRecording={debugMode}
         brand={isLaunchDaddyMode ? <LaunchDaddyBrand /> : undefined}
+        onShutdown={() => {
+          setShutdownState('confirm');
+          setShowShutdown(true);
+        }}
       />
     </div>
   );

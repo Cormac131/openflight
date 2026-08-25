@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import type { Shot } from '../../types/shot';
 import { computeSwingSpeedStats, filterShotsByPlayer } from '../../types/shot';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { useI18n } from '../../i18n/useI18n';
 import { useSharedFitFontSize } from '../../hooks/useFitFontSize';
-import { MetricCard, EstimatedMark } from '../ui/MetricCard';
+import { MetricCard } from '../ui/MetricCard';
 import { PanelHeader } from './PanelHeader';
-import { buildLiveMetrics, pinSelectedMetric, SPOTLIGHT_DURATION_MS } from './liveMetrics';
+import { buildLiveMetrics, pinSelectedMetric } from './liveMetrics';
 
 interface LivePanelProps {
   shot: Shot | null;
@@ -15,7 +15,7 @@ interface LivePanelProps {
   clubLabel: string;
   /** Undefined outside swing-speed mode. Scopes the swing stats to one implement. */
   activeTrainingImplement?: string;
-  /** Metric pinned top-left and shown full-screen after a new shot. */
+  /** Metric pinned top-left while the full table remains visible. */
   selectedMetricId?: string | null;
   onSelectMetric?: (id: string) => void;
   /** True for a freshly captured shot (not a restored session). */
@@ -29,9 +29,8 @@ interface LivePanelProps {
 }
 
 /**
- * Ten-metric table. Tapping a tile selects it: the title turns accent yellow,
- * the tile moves to the top-left, and that metric fills the screen for
- * {@link SPOTLIGHT_DURATION_MS} after the next shot (tap to dismiss early).
+ * Ten-metric table. Tapping a tile selects it: the title turns accent yellow
+ * and the tile moves to the top-left without hiding the remaining metrics.
  */
 export function LivePanel({
   shot,
@@ -51,11 +50,6 @@ export function LivePanel({
   const playerShots = useMemo(() => filterShotsByPlayer(shots, playerName), [shots, playerName]);
   const displayedShot = playerShots[playerShots.length - 1] ?? null;
   const isPlayersNewShot = Boolean(isNewShot && shot && displayedShot && shot.timestamp === displayedShot.timestamp);
-  // App remounts this panel on `shotVersion`, so a new shot starts with the
-  // spotlight open. The effect only hides it after 10s — it must not call
-  // setState synchronously, and it must not depend on `isNewShot` (that flag
-  // clears at 2.5s).
-  const [spotlightOpen, setSpotlightOpen] = useState(isPlayersNewShot);
 
   const swingStats = useMemo(
     () => computeSwingSpeedStats(playerShots, { playerName, trainingImplement: activeTrainingImplement }),
@@ -82,15 +76,6 @@ export function LivePanel({
     </div>
   ) : null;
 
-  useEffect(() => {
-    if (!spotlightOpen) {
-      return;
-    }
-
-    const timer = setTimeout(() => setSpotlightOpen(false), SPOTLIGHT_DURATION_MS);
-    return () => clearTimeout(timer);
-  }, [spotlightOpen]);
-
   const header = <PanelHeader title={t('nav.live')} subtitle={playerName} club={clubLabel} actions={headerAction} />;
 
   if (!selected) {
@@ -111,25 +96,7 @@ export function LivePanel({
       {header}
       <div className="panel__body live-panel__body">
         {ballWarning}
-        {spotlightOpen ? (
-          <button
-            type="button"
-            className="live-panel__spotlight"
-            aria-label={t('live.hideOverlay')}
-            onClick={() => setSpotlightOpen(false)}
-          >
-            {isPlayersNewShot ? <div className="shot-flash" /> : null}
-            <span className="live-panel__spotlight-label">
-              {selected.label} · {clubLabel}
-              {selected.estimated ? <EstimatedMark /> : null}
-            </span>
-            <div className="live-panel__spotlight-value-row">
-              <span className="live-panel__spotlight-value">{selected.value}</span>
-              {selected.unit ? <span className="live-panel__spotlight-unit">{selected.unit}</span> : null}
-            </div>
-            {selected.subtext ? <span className="live-panel__spotlight-subtext">{selected.subtext}</span> : null}
-          </button>
-        ) : null}
+        {isPlayersNewShot ? <div className="shot-flash" /> : null}
         <div ref={gridRef} className={`live-panel__grid live-panel__grid--of-${metrics.length}`}>
           {metrics.map((metric) => (
             <MetricCard
@@ -140,6 +107,7 @@ export function LivePanel({
               subtext={metric.subtext}
               estimated={metric.estimated}
               confidence={metric.confidence}
+              confidenceLabel={metric.confidenceLabel}
               labelPosition="above"
               selected={metric.id === selected.id}
               onClick={onSelectMetric ? () => onSelectMetric(metric.id) : undefined}

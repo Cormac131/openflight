@@ -10,15 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Instrument-panel kiosk UI.** The dashboard is a tabbed shell (Live, Stats,
   Shots, Camera, Players, Debug) instead of the previous stacked shot and stats
-  views. Tap a Live metric to pin it top-left; after a new shot that metric
-  fills the screen for 10 seconds. The footer logo opens units, dark/light
-  theme, language, simulator and ball-detection status, and shutdown. Club
-  (or training implement) selection is a Live header action. See the
-  [UI README](../ui/README.md).
+  views. Tap a Live metric to pin it top-left while keeping all ten metrics
+  visible. The footer logo opens units, dark/light theme, language, simulator,
+  and ball-detection status; a persistent footer power button opens the shutdown
+  confirmation. Club (or training implement) selection is a Live header action.
+  See the [UI README](../ui/README.md).
 - **Kiosk languages.** English, Spanish, French, and Portuguese. Choice is
   stored in `localStorage` (`openflight.locale:v1`).
 - **Dark and light themes.** Toggle in the footer menu; stored as
   `openflight.theme` (default dark).
+- **Synchronized OV9281 high-speed camera capture.** OpenFlight can now retain
+  pre- and post-impact camera frames from the shared sound trigger, align them
+  with OPS243 and IWR6843 captures, and use camera-assisted or camera-only
+  fallbacks for horizontal launch, club path, and angle of attack. The Camera
+  tab adds live alignment, crop, orientation, and lighting controls while the
+  rolling buffer remains armed. See [OV9281 Camera](camera/README.md).
 - **Battery and external-power status for Raspberry Pi UPS boards.** OpenFlight
   can now display charging state and battery percentage, issue dismissible 20%
   and 10% warnings while discharging, and record throttled power telemetry in

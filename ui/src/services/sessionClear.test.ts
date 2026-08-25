@@ -34,15 +34,13 @@ describe('remainingShotsAfterClear', () => {
   const alex = makeShot({ player_name: 'Alex', timestamp: 'a' });
 
   it('prefers the remaining shot list from the server', () => {
-    expect(remainingShotsAfterClear([james, alex], { player_name: 'James', shots: [alex] })).toEqual([
-      alex,
-    ]);
+    expect(remainingShotsAfterClear([james, alex], { player_name: 'James', shots: [alex] })).toEqual([alex]);
   });
 
   it('drops one player when the server only names who was cleared', () => {
-    expect(
-      remainingShotsAfterClear([james, alex], { player_name: 'james' }).map((shot) => shot.timestamp)
-    ).toEqual(['a']);
+    expect(remainingShotsAfterClear([james, alex], { player_name: 'james' }).map((shot) => shot.timestamp)).toEqual([
+      'a',
+    ]);
   });
 
   it('clears everything when given a legacy empty payload', () => {

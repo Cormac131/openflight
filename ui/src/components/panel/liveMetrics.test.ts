@@ -153,6 +153,72 @@ describe('buildLiveMetrics', () => {
     expect(byId(low, 'launch_v').confidence).toBe('low');
   });
 
+  it('preserves camera-fused club delivery values and confidence', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({
+        club_angle_deg: null,
+        club_path_deg: null,
+        experimental_fused_attack_angle_deg: -4.2,
+        experimental_fused_attack_angle_confidence: 'medium',
+        experimental_fused_club_path_deg: 3.1,
+        experimental_fused_club_path_confidence: 'high',
+        experimental_fused_status: 'approach_mixed',
+      }),
+      'imperial',
+      emptySwingStats
+    );
+
+    expect(byId(metrics, 'club_aoa')).toMatchObject({
+      value: '-4.2',
+      unit: '°',
+      subtext: 'camera fused (experimental)',
+      confidence: 'medium',
+      confidenceLabel: 'experimental',
+    });
+    expect(byId(metrics, 'club_path')).toMatchObject({
+      value: '+3.1',
+      unit: '°',
+      subtext: 'camera fused (experimental)',
+      confidence: 'high',
+      confidenceLabel: 'experimental',
+    });
+  });
+
+  it('keeps camera-fusion rejection status but hides superseded radar candidates', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({
+        club_angle_deg: null,
+        club_path_deg: null,
+        experimental_attack_angle_deg: -32.2,
+        experimental_club_path_deg: 130.9,
+        experimental_fused_status: 'rejected_no_impact',
+      }),
+      'imperial',
+      emptySwingStats
+    );
+
+    expect(byId(metrics, 'club_aoa')).toMatchObject({
+      value: NO_VALUE,
+      subtext: 'rejected: no impact',
+      confidence: 'experimental',
+    });
+    expect(byId(metrics, 'club_path')).toMatchObject({
+      value: NO_VALUE,
+      subtext: 'rejected: no impact',
+      confidence: 'experimental',
+    });
+  });
+
+  it('labels camera-assisted horizontal launch', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({ launch_angle_horizontal_source: 'camera_assisted_experimental' }),
+      'imperial',
+      emptySwingStats
+    );
+
+    expect(byId(metrics, 'launch_h').subtext).toBe('camera assisted (experimental)');
+  });
+
   it('marks estimated launch and spin with a flag, not provenance subtext', () => {
     const measured = buildLiveMetrics(makeShot(), 'imperial', emptySwingStats);
     expect(byId(measured, 'launch_v').subtext).toBeUndefined();

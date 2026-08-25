@@ -29,6 +29,16 @@ describe('MetricCard', () => {
     expect(html).not.toContain('metric-card__confidence-dots');
   });
 
+  it('keeps measured confidence dots while labeling camera-fused data experimental', () => {
+    const html = renderToString(
+      <MetricCard value="3.1" unit="°" label="Club path" confidence="high" confidenceLabel="experimental" />
+    );
+
+    expect(html).toContain('metric-card__confidence--high');
+    expect(html).toContain('metric-card__confidence-dots');
+    expect(html).toContain('metric-card__confidence-label">experimental<');
+  });
+
   it('shows an estimated mark on the title, not beside the value', () => {
     const estimated = renderToString(
       <MetricCard value="8.9" unit="°" label="V. launch" labelPosition="above" estimated />

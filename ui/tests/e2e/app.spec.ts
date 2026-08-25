@@ -78,11 +78,19 @@ test('renders live shot data and mock-mode simulate flow', async ({ page }) => {
   await page.getByRole('button', { name: 'Simulate shot' }).click();
 
   await expect(page.getByText('Ready', { exact: true })).toBeHidden();
-  await expect(page.locator('.live-panel__spotlight-value')).not.toHaveText('—');
   await expect(page.locator('.live-panel__grid .metric-card')).toHaveCount(10);
-
-  await page.getByRole('button', { name: 'Hide shot overlay' }).click();
   await expect(page.locator('.live-panel__spotlight')).toHaveCount(0);
+});
+
+test('keeps shutdown visible and asks for confirmation', async ({ page }) => {
+  await gotoApp(page);
+  await dismissPicker(page);
+
+  await page.getByRole('button', { name: 'Shut down' }).click();
+
+  await expect(page.getByRole('dialog', { name: 'Shut down OpenFlight?' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Shut Down', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cancel' })).toBeVisible();
 });
 
 test('does not keep the previous metric title yellow after selecting a new hero', async ({ page }) => {

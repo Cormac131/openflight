@@ -4,7 +4,7 @@ const STORAGE_KEY = 'openflight.hero-metric';
 
 /**
  * Which Live metric is selected: yellow title, top-left of the table, and the
- * value that fills the screen for 10s after a shot. Persisted so a player who
+ * value that stays pinned in the table's top-left slot. Persisted so a player who
  * cares about club speed keeps that choice across restarts.
  *
  * Stored as a plain metric id; an id that no longer exists is handled by

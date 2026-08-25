@@ -87,9 +87,10 @@ The app is entirely client-side. Everything flows through one socket connection.
 
 **Kiosk shell.** Footer tabs switch views. The footer logo opens a sheet for
 units (MPH/YDS vs KMH/M), dark/light theme, language, simulator and
-ball-detection status, and shutdown. Change club (or training implement) lives
-on the Live header. Tap a Live metric to pin it top-left; after a new shot that
-metric fills the screen for 10 seconds (tap to dismiss). The pin is stored in
+ball-detection status. The footer power icon is always visible and opens a
+shutdown confirmation. Change club (or training implement) lives on the Live
+header. Tap a Live metric to pin it top-left while keeping all metrics visible.
+The pin is stored in
 `localStorage` under `openflight.hero-metric`. Theme is stored under
 `openflight.theme` (default dark).
 

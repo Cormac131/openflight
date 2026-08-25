@@ -1,13 +1,13 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { CameraStatus } from '../../stores/useCameraStore';
+import type { CameraCaptureSettings, CameraStatus } from '../../stores/useCameraStore';
 import { CameraPanel } from './CameraPanel';
 
 function text(html: string): string {
   return html.replace(/<!-- -->/g, '');
 }
 
-function render(status: Partial<CameraStatus>) {
+function render(status: Partial<CameraStatus>, captureSettings: CameraCaptureSettings = { available: false }) {
   const cameraStatus: CameraStatus = {
     available: true,
     enabled: false,
@@ -18,7 +18,16 @@ function render(status: Partial<CameraStatus>) {
   };
 
   return text(
-    renderToString(<CameraPanel cameraStatus={cameraStatus} onToggleCamera={() => {}} onToggleStream={() => {}} />)
+    renderToString(
+      <CameraPanel
+        cameraStatus={cameraStatus}
+        captureSettings={captureSettings}
+        captureSettingsError={null}
+        onToggleCamera={() => {}}
+        onToggleStream={() => {}}
+        onUpdateCaptureSettings={() => {}}
+      />
+    )
   );
 }
 
@@ -67,5 +76,14 @@ describe('CameraPanel', () => {
     expect(html).toContain('Camera unavailable');
     expect(html).toContain('--camera');
     expect(html).not.toContain('Enable camera');
+  });
+
+  it('preserves the high-speed camera workspace when capture is available', () => {
+    const html = render({}, { available: true, running: true, armed: true, width: 320, height: 200, fps: 600 });
+
+    expect(html).toContain('camera-panel--capture');
+    expect(html).toContain('camera-feed__workspace');
+    expect(html).toContain('Camera setup');
+    expect(html).toContain('rolling buffer');
   });
 });
