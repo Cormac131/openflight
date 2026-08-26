@@ -39,17 +39,24 @@ class TestCameraCaptureSettings:
             "status": "good",
             "recommendation": "hold",
         }
-        runtime = SimpleNamespace(exposure_quality=lambda: expected)
+        auto_exposure = {
+            "enabled": True,
+            "status": "ready",
+            "analysis_eligible": True,
+        }
+        runtime = SimpleNamespace(
+            exposure_quality=lambda: dict(expected),
+            auto_exposure_status=lambda: auto_exposure,
+        )
         monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
 
         response = server_module.app.test_client().get("/api/camera/exposure-quality")
 
         assert response.status_code == 200
-        assert response.get_json() == expected
+        assert response.get_json() == {**expected, "auto_exposure": auto_exposure}
 
-    def test_update_applies_controls_and_alignment(self, monkeypatch):
+    def test_update_applies_alignment_without_manual_exposure(self, monkeypatch):
         emitted = []
-        applied = []
 
         class FakeRuntime:
             settings = SimpleNamespace(fps=600.0)
@@ -62,11 +69,6 @@ class TestCameraCaptureSettings:
                     "buffered_frames": 90,
                     "required_pre_frames": 90,
                 }
-
-            @staticmethod
-            def update_image_controls(*, exposure_us, gain):
-                applied.append((exposure_us, gain))
-                return {"exposure_us": exposure_us, "gain": gain}
 
             @staticmethod
             def vertical_crop_status():
@@ -96,20 +98,44 @@ class TestCameraCaptureSettings:
 
         server_module.handle_set_camera_capture_settings(
             {
-                "exposure_us": 650,
-                "gain": 3.0,
                 "alignment_x_pct": 47,
                 "alignment_y_pct": 58,
             }
         )
 
-        assert applied == [(650, 3.0)]
         assert config["alignment_x_pct"] == 47.0
         assert config["alignment_y_pct"] == 58.0
         assert emitted[-1][0] == "camera_capture_settings"
         assert emitted[-1][1]["max_exposure_us"] == 1666
         assert emitted[-1][1]["raw_crop_adjustable"] is True
         assert emitted[-1][1]["vertical_offset_px"] == -10
+
+    def test_update_rejects_manual_exposure_override(self, monkeypatch):
+        emitted = []
+        runtime = SimpleNamespace(
+            settings=SimpleNamespace(fps=488.0),
+            status=lambda: {"running": True, "armed": True},
+        )
+        monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
+        monkeypatch.setattr(
+            server_module,
+            "camera_capture_config",
+            {"exposure_us": 500, "gain": 12.0},
+        )
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+
+        server_module.handle_set_camera_capture_settings({"exposure_us": 650})
+
+        assert emitted == [
+            (
+                "camera_capture_settings_error",
+                {"error": "Camera exposure and gain are managed automatically"},
+            )
+        ]
 
     def test_update_moves_real_sensor_crop(self, monkeypatch):
         emitted = []
@@ -159,46 +185,6 @@ class TestCameraCaptureSettings:
         assert moved == [-20]
         assert emitted[-1][1]["vertical_offset_px"] == -20
 
-    def test_update_enables_auto_exposure_without_manual_values(self, monkeypatch):
-        emitted = []
-        applied = []
-
-        class FakeRuntime:
-            settings = SimpleNamespace(fps=450.0)
-
-            @staticmethod
-            def status():
-                return {"running": True, "armed": True, "auto_exposure": True}
-
-            @staticmethod
-            def update_image_controls(**controls):
-                applied.append(controls)
-                return {"auto_exposure": True, "exposure_us": 500, "gain": 15.0}
-
-            @staticmethod
-            def vertical_crop_status():
-                return {"raw_crop_adjustable": False, "vertical_offset_px": 0}
-
-        config = {
-            "auto_exposure": False,
-            "exposure_us": 500,
-            "gain": 15.0,
-        }
-        monkeypatch.setattr(server_module, "camera_capture_runtime", FakeRuntime())
-        monkeypatch.setattr(server_module, "camera_capture_config", config)
-        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
-        monkeypatch.setattr(
-            server_module.socketio,
-            "emit",
-            lambda event, payload: emitted.append((event, payload)),
-        )
-
-        server_module.handle_set_camera_capture_settings({"auto_exposure": True})
-
-        assert applied == [{"auto_exposure": True}]
-        assert config["auto_exposure"] is True
-        assert emitted[-1][1]["auto_exposure"] is True
-
     def test_update_rejects_out_of_range_alignment(self, monkeypatch):
         emitted = []
         runtime = SimpleNamespace(
@@ -226,36 +212,6 @@ class TestCameraCaptureSettings:
                 {"error": "horizontal alignment must be between 0 and 100 percent"},
             )
         ]
-
-    def test_update_reports_unexpected_camera_control_failure(self, monkeypatch):
-        emitted = []
-        runtime = SimpleNamespace(
-            settings=SimpleNamespace(fps=300.0),
-            update_image_controls=lambda **_kwargs: (_ for _ in ()).throw(
-                OSError("camera disconnected")
-            ),
-        )
-        monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
-        monkeypatch.setattr(
-            server_module,
-            "camera_capture_config",
-            {"auto_exposure": True, "exposure_us": 500, "gain": 2.0},
-        )
-        monkeypatch.setattr(
-            server_module.socketio,
-            "emit",
-            lambda event, payload: emitted.append((event, payload)),
-        )
-
-        server_module.handle_set_camera_capture_settings({"auto_exposure": True})
-
-        assert emitted == [
-            (
-                "camera_capture_settings_error",
-                {"error": "Camera settings could not be applied"},
-            )
-        ]
-
 
 class TestCameraReplayAPI:
     """Camera replay is prepared only through the explicit HTTP action."""
@@ -1681,6 +1637,51 @@ class TestShotToDict:
         assert len(fused_archives) == 2
         assert fused_archives[0] is fused_archives[1]
         assert fused_archives[0]["frames"].shape == (8, 4, 4)
+
+    def test_live_camera_fusion_withholds_dark_frames_and_preserves_iwr(self, monkeypatch):
+        runtime = SimpleNamespace(camera_analysis_eligible=False)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
+        monkeypatch.setattr(
+            server_module,
+            "_load_camera_capture_archive",
+            lambda _capture: pytest.fail("dark camera frames should not be decoded"),
+        )
+        shot = Shot(
+            ball_speed_mph=110.0,
+            timestamp=datetime.now(),
+            launch_angle_horizontal=-1.8,
+            launch_angle_horizontal_confidence=0.8,
+            launch_angle_horizontal_source="radar",
+            iwr6843_horizontal_deg=-1.8,
+            iwr6843_horizontal_confidence=0.8,
+        )
+
+        server_module._fuse_camera_measurements(shot, SimpleNamespace(valid=True))
+
+        assert shot.launch_angle_horizontal == -1.8
+        assert shot.launch_angle_horizontal_source == "radar"
+        assert shot.experimental_camera_horizontal_status == "rejected_lighting_quality"
+        assert shot.experimental_fused_status == "rejected_lighting_quality"
+        assert shot.experimental_fused_attack_angle_deg is None
+        assert shot.experimental_fused_club_path_deg is None
+
+    def test_camera_fusion_uses_capture_time_exposure_state(self, monkeypatch):
+        runtime = SimpleNamespace(camera_analysis_eligible=True)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", runtime)
+        monkeypatch.setattr(
+            server_module,
+            "_load_camera_capture_archive",
+            lambda _capture: pytest.fail("ineligible capture should not be decoded"),
+        )
+        shot = Shot(ball_speed_mph=110.0, timestamp=datetime.now())
+        capture = SimpleNamespace(
+            valid=True,
+            metadata={"auto_exposure": {"analysis_eligible": False}},
+        )
+
+        server_module._fuse_camera_measurements(shot, capture)
+
+        assert shot.experimental_fused_status == "rejected_lighting_quality"
 
     def test_angle_source_none_by_default(self):
         """Shot without angle source should have None."""
