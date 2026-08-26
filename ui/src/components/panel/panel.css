@@ -610,7 +610,8 @@
 .shot-flash {
   position: absolute;
   inset: 0;
-  z-index: 0;
+  /* Above the timed/hold metric overlay so a new shot still flashes. */
+  z-index: 3;
   pointer-events: none;
   animation: shot-impact 0.65s ease-out forwards;
 }

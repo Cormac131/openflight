@@ -31,8 +31,8 @@ export function useShotSpotlight(mode: LiveViewMode, durationMs: number, isNewSh
   const [controller] = useState(() => createSpotlightController(mode, durationMs, isNewShot, () => setOpen(false)));
 
   useEffect(() => {
-    return controllerRef.current?.start();
-  }, []);
+    return controller.start();
+  }, [controller]);
 
   return { open, dismiss: () => setOpen(false) };
 }

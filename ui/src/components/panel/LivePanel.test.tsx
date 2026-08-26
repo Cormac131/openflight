@@ -142,16 +142,28 @@ describe('LivePanel', () => {
     const html = render(makeShot(), undefined, 'spin', true, 'timed');
 
     expect(html).toContain('live-panel__spotlight');
+    expect(html).toContain('shot-flash');
     expect(html).toContain('aria-label="Hide shot overlay"');
     expect(html).toContain('>2,650<');
     expect(html).toContain('live-panel__grid--of-10');
     expect(html.match(/metric-card--interactive/g)).toHaveLength(10);
   });
 
+  it('plays the shot flash above the single-metric overlay', () => {
+    const css = readFileSync(fileURLToPath(new URL('./panel.css', import.meta.url)), 'utf8');
+    const spotlight = css.match(/\.live-panel__spotlight \{[^}]*z-index:\s*(\d+)/);
+    const flash = css.match(/\.shot-flash \{[^}]*z-index:\s*(\d+)/);
+
+    expect(spotlight?.[1]).toBeTruthy();
+    expect(flash?.[1]).toBeTruthy();
+    expect(Number(flash?.[1])).toBeGreaterThan(Number(spotlight?.[1]));
+  });
+
   it('overlays the selected metric after a new shot in sticky mode', () => {
     const html = render(makeShot(), undefined, 'spin', true, 'sticky');
 
     expect(html).toContain('live-panel__spotlight');
+    expect(html).toContain('shot-flash');
     expect(html).toContain('live-panel__grid--of-10');
   });
 
