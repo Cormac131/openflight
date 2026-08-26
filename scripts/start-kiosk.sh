@@ -87,6 +87,9 @@ AIR_TEMP_C=""
 SEA_LEVEL_PRESSURE_HPA=""
 RELATIVE_HUMIDITY_PCT=""
 CARRY_NORMALIZATION_DENSITY=""
+BAROMETER=false
+BAROMETER_TEMP_OFFSET_C=""
+BAROMETER_ADDRESS=""
 SWING_SPEED=false
 SWING_SPEED_THRESHOLD=""
 SWING_SPEED_MIN_READINGS=""
@@ -150,6 +153,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --carry-normalization-density)
             CARRY_NORMALIZATION_DENSITY="$2"
+            shift 2
+            ;;
+        --barometer)
+            BAROMETER=true
+            shift
+            ;;
+        --barometer-temp-offset-c)
+            BAROMETER_TEMP_OFFSET_C="$2"
+            shift 2
+            ;;
+        --barometer-address)
+            BAROMETER_ADDRESS="$2"
             shift 2
             ;;
         --debug|-d)
@@ -659,6 +674,9 @@ fi
 [ -n "$SEA_LEVEL_PRESSURE_HPA" ] && SERVER_CMD="$SERVER_CMD --sea-level-pressure-hpa $SEA_LEVEL_PRESSURE_HPA"
 [ -n "$RELATIVE_HUMIDITY_PCT" ] && SERVER_CMD="$SERVER_CMD --relative-humidity-pct $RELATIVE_HUMIDITY_PCT"
 [ -n "$CARRY_NORMALIZATION_DENSITY" ] && SERVER_CMD="$SERVER_CMD --carry-normalization-density $CARRY_NORMALIZATION_DENSITY"
+[ "$BAROMETER" = true ] && SERVER_CMD="$SERVER_CMD --barometer"
+[ -n "$BAROMETER_TEMP_OFFSET_C" ] && SERVER_CMD="$SERVER_CMD --barometer-temp-offset-c $BAROMETER_TEMP_OFFSET_C"
+[ -n "$BAROMETER_ADDRESS" ] && SERVER_CMD="$SERVER_CMD --barometer-address $BAROMETER_ADDRESS"
 
 if [ "$BALLISTICS" = false ]; then
     SERVER_CMD="$SERVER_CMD --no-ballistics"

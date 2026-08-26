@@ -101,6 +101,22 @@ tilt when the rig is placed on uneven ground.
 See the **[LIS3DH Inclinometer Setup Guide](inclinometer/README.md)** for wiring,
 mounting, calibration, startup flags, and troubleshooting.
 
+### Optional Barometer
+
+A BMP580 lets OpenFlight measure air density instead of assuming it, so carry
+reflects the weather as well as the site elevation. It shares the I2C bus with
+the inclinometer (`0x47` vs `0x18`).
+
+| Part | Description | Link | ~Price |
+|------|-------------|------|--------|
+| **Adafruit BMP580 breakout** | Precision barometric pressure and temperature sensor with STEMMA QT connectors | [Adafruit product 6413](https://www.adafruit.com/product/6413) | $13 |
+| **JST-SH cable kit** | Same solderless STEMMA QT/Qwiic kit as the inclinometer | [Amazon](https://www.amazon.com/Connector-Compatible-Development-Sensors-Drivers/dp/B0GJPRX4YT) | ~$10 |
+
+Fit this last. Configuring `--elevation-ft` and `--air-temp-c` captures most of
+the density error for free; the sensor adds the weather term, worth about
+±1 yd of driver carry. See the **[BMP580 Barometer Setup Guide](barometer/README.md)**
+for the full sensitivity analysis, wiring, mounting, and calibration.
+
 ---
 
 ## Angle Radar (K-LD7) — DEPRECATED

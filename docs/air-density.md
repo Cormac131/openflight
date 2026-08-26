@@ -72,6 +72,10 @@ Implausible values are rejected at startup rather than silently shifting every
 carry — a mistyped elevation is worth 14 yd, which is far too large to let
 through quietly.
 
+Add `--barometer` to measure pressure and temperature instead of configuring
+them; the flags above then act as the fallback when the sensor is missing or
+its reading goes stale. See [docs/barometer/README.md](barometer/README.md).
+
 ### Matching TrackMan "Flat"
 
 `scripts/analysis/validate_ballistics.py` validates against TrackMan "Flat"
@@ -82,37 +86,19 @@ carry, which is normalized to no wind, 0 ft, and 77 °F — 1.184 kg/m³, not
 ## On barometers
 
 A barometer measures **station pressure**, which with temperature gives density
-directly. That is the right measurement and the reason to fit one.
+directly. That is the right measurement and the reason to fit one — though it
+buys only the weather term (±1 to 2.5 yd of driver carry) over a configured
+elevation and temperature.
 
-What a barometer does *not* measure is altitude. Breakout drivers (BMP280,
-BMP390, BMP580) expose an `altitude` property, but it is computed from the
-measured pressure by assuming a sea-level reference — the drivers hardcode ISA
-1013.25 hPa. A sensor that never moves therefore reports an altitude that
-wanders by over 1500 ft as weather systems pass:
+What a barometer does *not* measure is altitude. Breakout drivers expose an
+`altitude` property, but it is computed from the measured pressure by assuming a
+sea-level reference — the drivers hardcode ISA 1013.25 hPa — so a stationary
+sensor reports an altitude that wanders over 1500 ft as weather passes.
+OpenFlight uses the raw pressure and never routes it through an altitude.
 
-| Actual sea-level pressure | Reported "altitude" | True ρ at 15 °C |
-|---|---|---|
-| 980 hPa | +920 ft | 1.185 |
-| 995 hPa | +502 ft | 1.203 |
-| 1013.25 hPa | 0 ft | 1.225 |
-| 1025 hPa | −319 ft | 1.239 |
-| 1035 hPa | −589 ft | 1.251 |
-
-The density column is exact at every row. Routing pressure → altitude → ISA →
-back to pressure reintroduces precisely the error the sensor was fitted to
-remove. Use `AirConditions.from_sensor()` with the raw pressure and ignore the
-driver's altitude.
-
-Two practical notes if you fit one:
-
-- **Precision is not the constraint.** The BMP580's ±0.06 hPa relative accuracy
-  works out to 0.006% density, about 0.002 yd of carry. A ±1 hPa sensor gives
-  0.3 yd. Any barometer is far more precise than this application needs.
-- **Mounting is the constraint.** A sensor die sharing an enclosure with a
-  Raspberry Pi reads several degrees warm from self-heating, and 3 °C of
-  temperature error is about 1% density — comparable to the entire benefit of
-  measuring pressure at all. Mount it in moving ambient air, outside the warm
-  enclosure, or calibrate the offset.
+See **[docs/barometer/README.md](barometer/README.md)** for the hardware,
+wiring, mounting, calibration, and troubleshooting, including why mounting
+temperature matters far more than sensor precision.
 
 ## Implementation notes
 

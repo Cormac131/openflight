@@ -1,6 +1,7 @@
 """Tests for altitude-aware carry wiring in the server shot pipeline."""
 
 import argparse
+import time
 from datetime import datetime
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from openflight import server as server_module
 from openflight.air_density import AirConditions
 from openflight.ballistics import AIR_DENSITY_STD
+from openflight.barometer import BarometerService, PressureSample
 from openflight.launch_monitor import ClubType, Shot
 from openflight.server import on_shot_detected, shot_to_dict
 
@@ -26,6 +28,7 @@ def _quiet_pipeline(monkeypatch):
     monkeypatch.setattr(server_module, "debug_mode", False)
     monkeypatch.setattr(server_module, "sim_connectors", [])
     monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+    monkeypatch.setattr(server_module, "barometer_service", None)
     monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
     return monkeypatch
 
@@ -44,29 +47,25 @@ def _shot(**kwargs) -> Shot:
     return Shot(**defaults)
 
 
-class TestActualAirDiffers:
+class TestAirDiffersFromNormalization:
     def test_standard_conditions_do_not_differ(self, monkeypatch):
-        monkeypatch.setattr(server_module, "air_conditions", AirConditions.standard())
         monkeypatch.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
-        assert server_module._actual_air_differs() is False
+        assert (
+            server_module._air_differs_from_normalization(AirConditions.standard()) is False
+        )
 
     def test_denver_differs(self, monkeypatch):
-        monkeypatch.setattr(server_module, "air_conditions", DENVER)
         monkeypatch.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
-        assert server_module._actual_air_differs() is True
+        assert server_module._air_differs_from_normalization(DENVER) is True
 
     def test_sub_threshold_difference_is_ignored(self, monkeypatch):
         # 0.05% — far below anything visible in a rounded yardage.
         nudged = AIR_DENSITY_STD * 1.0005
-        monkeypatch.setattr(
-            server_module,
-            "air_conditions",
-            AirConditions.from_sensor(
-                pressure_pa=nudged * 287.0528 * 288.15, temperature_c=15.0
-            ),
+        conditions = AirConditions.from_sensor(
+            pressure_pa=nudged * 287.0528 * 288.15, temperature_c=15.0
         )
         monkeypatch.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
-        assert server_module._actual_air_differs() is False
+        assert server_module._air_differs_from_normalization(conditions) is False
 
 
 class TestBallisticCarryPath:
@@ -252,3 +251,104 @@ class TestResolveAirConditions:
             server_module._resolve_air_conditions(
                 self._args(elevation_ft=0.0, sea_level_pressure_hpa=101325.0)
             )
+
+
+class _StubBarometerSensor:
+    """Barometer stub returning one fixed pressure/temperature."""
+
+    def __init__(self, pressure_pa, temperature_c):
+        self.pressure_pa = pressure_pa
+        self.temperature_c = temperature_c
+
+    def initialize(self):
+        """No hardware to configure."""
+
+    def read(self, *, timestamp=None):
+        return PressureSample(
+            timestamp=time.time() if timestamp is None else timestamp,
+            pressure_pa=self.pressure_pa,
+            temperature_c=self.temperature_c,
+        )
+
+    def close(self):
+        """No hardware to release."""
+
+
+def _loaded_barometer(pressure_pa, temperature_c, **kwargs):
+    """A service already holding one usable reading, without starting a thread."""
+    service = BarometerService(
+        _StubBarometerSensor(pressure_pa, temperature_c), window_samples=1, **kwargs
+    )
+    service.add_sample(service.sensor.read())
+    return service
+
+
+class TestSensorPreferredOverConfig:
+    def test_sensor_reading_overrides_configured_conditions(self, monkeypatch):
+        monkeypatch.setattr(server_module, "air_conditions", DENVER)
+        # Denver elevation but a live 98000 Pa reading: the measurement wins.
+        monkeypatch.setattr(
+            server_module, "barometer_service", _loaded_barometer(98000.0, 15.0)
+        )
+
+        conditions = server_module.current_air_conditions()
+        assert conditions.source == "sensor"
+        assert conditions.pressure_pa == pytest.approx(98000.0)
+
+    def test_falls_back_to_config_when_no_sensor_is_fitted(self, monkeypatch):
+        monkeypatch.setattr(server_module, "air_conditions", DENVER)
+        monkeypatch.setattr(server_module, "barometer_service", None)
+
+        assert server_module.current_air_conditions() is DENVER
+
+    def test_falls_back_to_config_when_the_reading_is_stale(self, monkeypatch):
+        stale = _loaded_barometer(98000.0, 15.0, max_reading_age_s=0.001)
+        time.sleep(0.01)
+        monkeypatch.setattr(server_module, "air_conditions", DENVER)
+        monkeypatch.setattr(server_module, "barometer_service", stale)
+
+        # A slightly out-of-date elevation beats silently reverting to sea level.
+        assert server_module.current_air_conditions() is DENVER
+
+    def test_falls_back_to_config_when_the_sensor_never_read(self, monkeypatch):
+        empty = BarometerService(_StubBarometerSensor(98000.0, 15.0), window_samples=3)
+        monkeypatch.setattr(server_module, "air_conditions", DENVER)
+        monkeypatch.setattr(server_module, "barometer_service", empty)
+
+        assert server_module.current_air_conditions() is DENVER
+
+    def test_shot_carries_sensor_provenance(self, quiet_pipeline):
+        quiet_pipeline.setattr(server_module, "air_conditions", AirConditions.standard())
+        quiet_pipeline.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+        quiet_pipeline.setattr(server_module, "ballistics_enabled", True)
+        quiet_pipeline.setattr(
+            server_module, "barometer_service", _loaded_barometer(83400.0, 20.0)
+        )
+
+        shot = _shot()
+        on_shot_detected(shot)
+
+        assert shot.air_conditions_source == "sensor"
+        assert shot.carry_actual_yards > shot.carry_spin_adjusted
+
+    def test_temperature_offset_changes_the_resulting_carry(self, quiet_pipeline):
+        quiet_pipeline.setattr(server_module, "air_conditions", AirConditions.standard())
+        quiet_pipeline.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+        quiet_pipeline.setattr(server_module, "ballistics_enabled", True)
+
+        quiet_pipeline.setattr(
+            server_module, "barometer_service", _loaded_barometer(101325.0, 25.0)
+        )
+        uncorrected = _shot()
+        on_shot_detected(uncorrected)
+
+        # A die reading 5 C warm makes the air look thinner than it is.
+        quiet_pipeline.setattr(
+            server_module,
+            "barometer_service",
+            _loaded_barometer(101325.0, 25.0, temperature_offset_c=-5.0),
+        )
+        corrected = _shot()
+        on_shot_detected(corrected)
+
+        assert corrected.carry_actual_yards < uncorrected.carry_actual_yards

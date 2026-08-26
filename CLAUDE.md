@@ -157,6 +157,7 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
                               │                └── SoundTrigger (SEN-14262 → HOST_INT)
                               │
                               ├── IWR6843Runtime (optional, 60 GHz → launch angle & club path)
+                              ├── BarometerService (optional, BMP580 → live air density)
                               ├── KLD7Tracker (vertical/horizontal, deprecated)
                               ├── Ballistics Simulator (RK4 trajectory & carry)
                               ├── SimConnectors (OpenGolfSim, GSPro, E6, etc.)
@@ -185,6 +186,7 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
 - `club_data.py` - Canonical club physics parameters, lofts, typical speeds, and optimal spin
 - `iwr6843/` - TI IWR6843 mmWave radar driver, L3 raw dump parser, LCMF-v1 launch angle & club path
 - `inclinometer.py` - LIS3DH accelerometer tilt compensation service
+- `barometer/` - BMP580 I2C driver and sampling service for live air density
 - `sim/` - Simulator connectors (OpenGolfSim, GSPro, E6 Connect, Garmin) and network transports
 - `cloud/` - Telemetry, cloud configuration, session upload, and push error handling
 - `rolling_buffer/` - Trigger strategies, I/Q processor, spin detection

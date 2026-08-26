@@ -138,6 +138,10 @@ camera_ball_flight_reference_tracker = None
 inclinometer_service = None
 inclinometer_runtime_config: dict = {"enabled": False}
 
+# Optional BMP580 barometer supplying live air density for carry.
+barometer_service = None
+barometer_runtime_config: dict = {"enabled": False}
+
 # Ballistic model toggle. Shot carry comes from the physics simulator whenever
 # a vertical launch angle is available. Operators can explicitly disable it;
 # missing launch inputs always fall back to the legacy table estimator.
@@ -158,9 +162,27 @@ air_conditions: AirConditions = AirConditions.standard()
 carry_normalization_density: float = AIR_DENSITY_STD
 
 
-def _actual_air_differs() -> bool:
+def current_air_conditions() -> AirConditions:
     """
-    True when the site's air is far enough from the normalization air to matter.
+    The atmospheric state to score this shot in.
+
+    A live barometer reading wins when one is available, because it captures
+    the weather on top of the elevation and temperature the operator
+    configured. When the sensor is absent, failing, or its last reading has
+    gone stale, this falls back to the configured conditions rather than
+    dropping the correction entirely — a slightly out-of-date density beats
+    silently reverting a Denver rig to sea level.
+    """
+    if barometer_service is not None:
+        measured = barometer_service.current_conditions()
+        if measured is not None:
+            return measured
+    return air_conditions
+
+
+def _air_differs_from_normalization(conditions: AirConditions) -> bool:
+    """
+    True when the air is far enough from the normalization air to matter.
 
     The 0.1% threshold is deliberately well below anything visible: at typical
     carries it is under a tenth of a yard, so crossing it means the difference
@@ -169,7 +191,7 @@ def _actual_air_differs() -> bool:
     exactly the payload it did before.
     """
     return (
-        abs(air_conditions.density_kg_m3 - carry_normalization_density)
+        abs(conditions.density_kg_m3 - carry_normalization_density)
         / carry_normalization_density
         > 0.001
     )
@@ -244,6 +266,8 @@ def _cleanup_hardware_for_shutdown() -> bool:
         _run_shutdown_step("K-LD7 horizontal stop", kld7_horizontal.stop)
     if inclinometer_service:
         _run_shutdown_step("inclinometer stop", inclinometer_service.stop)
+    if barometer_service:
+        _run_shutdown_step("barometer stop", barometer_service.stop)
     if iwr6843_runtime:
         _run_shutdown_step("IWR6843 stop", iwr6843_runtime.stop)
     if power_monitor:
@@ -910,6 +934,7 @@ def _session_start_config() -> dict:
     config["iwr6843"] = dict(iwr6843_runtime_config)
     config["camera_capture"] = dict(camera_capture_config)
     config["inclinometer"] = dict(inclinometer_runtime_config)
+    config["barometer"] = dict(barometer_runtime_config)
     config["power"] = {
         "enabled": battery_provider is not None,
         "provider": battery_provider,
@@ -1329,6 +1354,90 @@ def init_iwr6843(
         )
         iwr6843_runtime = None
         iwr6843_runtime_config = {"enabled": False, "error": str(error)}
+        return False
+
+
+def init_barometer(
+    *,
+    temperature_offset_c: float = 0.0,
+    bus_number: int = 1,
+    address: int = 0x47,
+    sample_hz: float = 0.5,
+) -> bool:
+    """Start the optional BMP580 service without risking radar availability."""
+    global barometer_service  # pylint: disable=global-statement
+    global barometer_runtime_config  # pylint: disable=global-statement
+
+    service = None
+    try:
+        from .barometer import BMP580, BarometerService  # pylint: disable=import-outside-toplevel
+
+        service = BarometerService(
+            BMP580(bus_number=bus_number, address=address),
+            temperature_offset_c=temperature_offset_c,
+            elevation_m=air_conditions.elevation_m,
+            sample_hz=sample_hz,
+        )
+        service.start()
+        # One full sample window plus slack, so a healthy sensor reports its
+        # startup reading rather than "waiting".
+        startup = service.wait_for_reading(
+            timeout_s=(service.window_samples + 2) / sample_hz
+        )
+        barometer_service = service
+        barometer_runtime_config = {
+            "enabled": True,
+            "sensor": "bmp580",
+            "i2c_bus": bus_number,
+            "i2c_address": f"0x{address:02x}",
+            "sample_hz": sample_hz,
+            "temperature_offset_c": temperature_offset_c,
+            "startup": startup.to_dict(),
+        }
+        if startup.snapshot is None:
+            logger.warning(
+                "[SERVER] BMP580 initialized but has no usable startup reading (%s)",
+                startup.status,
+            )
+            print(f"Barometer enabled, waiting for a reading ({startup.status})")
+            return True
+
+        snapshot = startup.snapshot
+        print(
+            "Barometer enabled "
+            f"({snapshot.pressure_pa / 100.0:.2f} hPa, {snapshot.temperature_c:+.1f}C, "
+            f"rho {snapshot.density_kg_m3:.4f} kg/m3)"
+        )
+        # Config-derived density is what the sensor replaces; showing both makes
+        # a miscalibrated temperature offset obvious on the first run.
+        print(
+            f"Air density: configured {air_conditions.density_kg_m3:.4f}, "
+            f"measured {snapshot.density_kg_m3:.4f} kg/m3"
+        )
+        return True
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        if service is not None:
+            try:
+                service.stop()
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.debug("Failed to close BMP580 after initialization error", exc_info=True)
+        logger.warning("[SERVER] Barometer initialization failed: %s", error, exc_info=True)
+        log_session_error(
+            "Barometer initialization failed",
+            component="barometer",
+            context={"i2c_bus": bus_number, "i2c_address": f"0x{address:02x}"},
+            exc=error,
+        )
+        barometer_service = None
+        barometer_runtime_config = {
+            "enabled": False,
+            "requested": True,
+            "sensor": "bmp580",
+            "i2c_bus": bus_number,
+            "i2c_address": f"0x{address:02x}",
+            "temperature_offset_c": temperature_offset_c,
+            "error": str(error),
+        }
         return False
 
 
@@ -3387,6 +3496,10 @@ def on_shot_detected(shot: Shot):
     # angle missing → resolve_launch returns None).
     _MIN_RELIABLE_SPIN_CONF = 0.6
     if shot.carry_spin_adjusted is None and shot.mode != "mock":
+        # Resolved once so both carry paths, the provenance stamp, and the log
+        # line all describe the same air.
+        shot_air = current_air_conditions()
+        air_differs = _air_differs_from_normalization(shot_air)
         conditions = resolve_launch(shot) if ballistics_enabled else None
         if conditions is not None:
             trajectory = simulate(conditions, air_density=carry_normalization_density)
@@ -3397,9 +3510,9 @@ def on_shot_detected(shot: Shot):
                 conditions.spin_rpm,
                 conditions.spin_source,
             )
-            if _actual_air_differs():
+            if air_differs:
                 shot.carry_actual_yards = simulate(
-                    conditions, air_density=air_conditions.density_kg_m3
+                    conditions, air_density=shot_air.density_kg_m3
                 ).carry_yards
         else:
             has_reliable_spin = (
@@ -3419,7 +3532,7 @@ def on_shot_detected(shot: Shot):
                 shot.club,
                 club_speed_mph=shot.club_speed_mph,
             )
-            if _actual_air_differs():
+            if air_differs:
                 # The table estimator has no launch angle to simulate, so scale
                 # it by the ratio the RK4 model predicts for a club-typical
                 # flight. Keeps both carry paths consistent under the same air.
@@ -3427,7 +3540,7 @@ def on_shot_detected(shot: Shot):
                     shot.ball_speed_mph,
                     shot.club,
                     spin_for_carry,
-                    actual_density=air_conditions.density_kg_m3,
+                    actual_density=shot_air.density_kg_m3,
                     reference_density=carry_normalization_density,
                 )
             reason = "ballistics disabled" if not ballistics_enabled else "no launch angle"
@@ -3440,14 +3553,14 @@ def on_shot_detected(shot: Shot):
             )
 
         if shot.carry_actual_yards is not None:
-            shot.air_density_kg_m3 = air_conditions.density_kg_m3
-            shot.air_conditions_source = air_conditions.source
+            shot.air_density_kg_m3 = shot_air.density_kg_m3
+            shot.air_conditions_source = shot_air.source
             logger.info(
                 "[SERVER] Actual-conditions carry: %.0f yds (rho %.4f kg/m3 from %s, "
                 "normalized at %.4f)",
                 shot.carry_actual_yards,
-                air_conditions.density_kg_m3,
-                air_conditions.source,
+                shot_air.density_kg_m3,
+                shot_air.source,
                 carry_normalization_density,
             )
     if shot.spin_rejection_reason:
@@ -3821,6 +3934,14 @@ def start_monitor(
                 baud=0,
                 address=inclinometer_runtime_config.get("i2c_address", "0x18"),
                 sample_hz=inclinometer_runtime_config.get("sample_hz", 10.0),
+            )
+        if not mock and barometer_service is not None:
+            session_logger.log_connection(
+                device="bmp580",
+                port=f"i2c-{barometer_runtime_config.get('i2c_bus', 1)}",
+                baud=0,
+                address=barometer_runtime_config.get("i2c_address", "0x47"),
+                sample_hz=barometer_runtime_config.get("sample_hz", 0.5),
             )
 
     if swing_speed_mode:
@@ -4337,6 +4458,50 @@ def _add_air_arguments(parser):
         help=(
             "Relative humidity, 0-100. Worth 0.7 yd of driver carry at 20 °C "
             "saturated and 1.4 yd at 35 °C; safe to omit in temperate air."
+        ),
+    )
+    group.add_argument(
+        "--barometer",
+        action="store_true",
+        help=(
+            "Read live station pressure and temperature from a BMP580 on I2C, "
+            "overriding the configured pressure and temperature for every shot. "
+            "Adds the weather term (about +/-1 yd of driver carry) on top of "
+            "the elevation and temperature above. Falls back to the configured "
+            "values if the sensor is missing or its reading goes stale."
+        ),
+    )
+    group.add_argument(
+        "--barometer-address",
+        type=lambda value: int(value, 0),
+        default=0x47,
+        help="BMP580 I2C address (default: 0x47; 0x46 when SDO is tied low)",
+    )
+    group.add_argument(
+        "--barometer-i2c-bus",
+        type=int,
+        default=1,
+        help="I2C bus number for the BMP580 (default: 1)",
+    )
+    group.add_argument(
+        "--barometer-sample-hz",
+        type=float,
+        default=0.5,
+        help=(
+            "BMP580 sampling rate (default: 0.5). Air density moves over "
+            "minutes, so faster sampling buys nothing."
+        ),
+    )
+    group.add_argument(
+        "--barometer-temp-offset-c",
+        type=float,
+        default=0.0,
+        help=(
+            "Degrees added to the BMP580's temperature reading. The die "
+            "self-heats several degrees inside a Pi enclosure, and 3 C of "
+            "error is about 1%% density -- roughly a yard of driver carry, "
+            "which is the whole benefit of fitting the sensor. Calibrate with "
+            "scripts/hardware-test/calibrate_bmp580.py."
         ),
     )
     group.add_argument(
@@ -5175,6 +5340,15 @@ def main():
     if args.inclinometer:
         if not init_inclinometer(zero_offset_deg=args.inclinometer_zero_offset):
             print("WARNING: Inclinometer unavailable; continuing with configured IWR6843 tilt")
+
+    if args.barometer:
+        if not init_barometer(
+            temperature_offset_c=args.barometer_temp_offset_c,
+            bus_number=args.barometer_i2c_bus,
+            address=args.barometer_address,
+            sample_hz=args.barometer_sample_hz,
+        ):
+            print("WARNING: Barometer unavailable; continuing with configured air conditions")
 
     # Initialize K-LD7 angle radars (if enabled)
     if args.kld7:

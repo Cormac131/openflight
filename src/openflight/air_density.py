@@ -65,9 +65,7 @@ _BAROMETRIC_EXPONENT = (
 
 # Density of dry air at ISA sea level, 1.225 kg/m³. Kept as a derived value
 # rather than a literal so the constant can never drift from the formula.
-STANDARD_AIR_DENSITY = STANDARD_PRESSURE_PA / (
-    R_DRY_AIR * (STANDARD_TEMPERATURE_C + 273.15)
-)
+STANDARD_AIR_DENSITY = STANDARD_PRESSURE_PA / (R_DRY_AIR * (STANDARD_TEMPERATURE_C + 273.15))
 
 FEET_PER_METRE = 3.280839895
 PA_PER_HPA = 100.0
@@ -95,8 +93,7 @@ def _require_range(value: float, low: float, high: float, name: str, unit: str) 
         raise AirConditionsError(f"{name} must be a finite number, got {value!r}")
     if not low <= value <= high:
         raise AirConditionsError(
-            f"{name} of {value:g} {unit} is outside the supported range "
-            f"{low:g} to {high:g} {unit}"
+            f"{name} of {value:g} {unit} is outside the supported range {low:g} to {high:g} {unit}"
         )
     return float(value)
 
@@ -139,9 +136,7 @@ def air_density(
     Raises:
         AirConditionsError: If any input is outside its plausible range.
     """
-    pressure_pa = _require_range(
-        pressure_pa, MIN_PRESSURE_PA, MAX_PRESSURE_PA, "pressure", "Pa"
-    )
+    pressure_pa = _require_range(pressure_pa, MIN_PRESSURE_PA, MAX_PRESSURE_PA, "pressure", "Pa")
     temperature_c = _require_range(
         temperature_c, MIN_TEMPERATURE_C, MAX_TEMPERATURE_C, "temperature", "°C"
     )
@@ -150,9 +145,7 @@ def air_density(
     if relative_humidity is None:
         return pressure_pa / (R_DRY_AIR * kelvin)
 
-    relative_humidity = _require_range(
-        relative_humidity, 0.0, 1.0, "relative_humidity", "fraction"
-    )
+    relative_humidity = _require_range(relative_humidity, 0.0, 1.0, "relative_humidity", "fraction")
     # Partial pressures: vapour takes its share, dry air holds the remainder.
     vapour_pa = relative_humidity * saturation_vapour_pressure_pa(temperature_c)
     dry_pa = pressure_pa - vapour_pa
@@ -173,9 +166,7 @@ def station_pressure_pa(
     pressure reading if one is available, otherwise the ISA default carries a
     typical ±1 yd of driver-carry uncertainty.
     """
-    elevation_m = _require_range(
-        elevation_m, MIN_ELEVATION_M, MAX_ELEVATION_M, "elevation", "m"
-    )
+    elevation_m = _require_range(elevation_m, MIN_ELEVATION_M, MAX_ELEVATION_M, "elevation", "m")
     sea_level_pressure_pa = _require_range(
         sea_level_pressure_pa,
         MIN_PRESSURE_PA,
@@ -205,9 +196,7 @@ def temperature_at_elevation_c(
     15 °C at 5000 ft, but it is still a guess: real temperature swings dominate
     it, which is why an explicit `temperature_c` always wins.
     """
-    elevation_m = _require_range(
-        elevation_m, MIN_ELEVATION_M, MAX_ELEVATION_M, "elevation", "m"
-    )
+    elevation_m = _require_range(elevation_m, MIN_ELEVATION_M, MAX_ELEVATION_M, "elevation", "m")
     return sea_level_temperature_c - ISA_LAPSE_RATE_K_PER_M * elevation_m
 
 
@@ -224,9 +213,7 @@ def pressure_altitude_m(
     the pressure that was already measured; routing it through here and back
     would only add the error this module exists to avoid.
     """
-    pressure_pa = _require_range(
-        pressure_pa, MIN_PRESSURE_PA, MAX_PRESSURE_PA, "pressure", "Pa"
-    )
+    pressure_pa = _require_range(pressure_pa, MIN_PRESSURE_PA, MAX_PRESSURE_PA, "pressure", "Pa")
     sea_level_pressure_pa = _require_range(
         sea_level_pressure_pa,
         MIN_PRESSURE_PA,
@@ -260,9 +247,7 @@ class AirConditions:
         # shot of a session.
         air_density(self.pressure_pa, self.temperature_c, self.relative_humidity)
         if self.elevation_m is not None:
-            _require_range(
-                self.elevation_m, MIN_ELEVATION_M, MAX_ELEVATION_M, "elevation", "m"
-            )
+            _require_range(self.elevation_m, MIN_ELEVATION_M, MAX_ELEVATION_M, "elevation", "m")
 
     @property
     def density_kg_m3(self) -> float:
@@ -305,13 +290,16 @@ class AirConditions:
                 known from a local forecast. Defaults to ISA 1013.25.
             relative_humidity_pct: Optional 0-100 humidity.
         """
-        elevation_m = _require_range(
-            elevation_ft,
-            MIN_ELEVATION_M * FEET_PER_METRE,
-            MAX_ELEVATION_M * FEET_PER_METRE,
-            "elevation",
-            "ft",
-        ) / FEET_PER_METRE
+        elevation_m = (
+            _require_range(
+                elevation_ft,
+                MIN_ELEVATION_M * FEET_PER_METRE,
+                MAX_ELEVATION_M * FEET_PER_METRE,
+                "elevation",
+                "ft",
+            )
+            / FEET_PER_METRE
+        )
 
         sea_level_pa = (
             STANDARD_PRESSURE_PA
@@ -327,17 +315,12 @@ class AirConditions:
         )
 
         resolved_temp = (
-            temperature_at_elevation_c(elevation_m)
-            if temperature_c is None
-            else temperature_c
+            temperature_at_elevation_c(elevation_m) if temperature_c is None else temperature_c
         )
         humidity = (
             None
             if relative_humidity_pct is None
-            else _require_range(
-                relative_humidity_pct, 0.0, 100.0, "relative_humidity", "%"
-            )
-            / 100.0
+            else _require_range(relative_humidity_pct, 0.0, 100.0, "relative_humidity", "%") / 100.0
         )
         return cls(
             pressure_pa=station_pressure_pa(elevation_m, sea_level_pa),
@@ -374,9 +357,7 @@ class AirConditions:
             relative_humidity=(
                 None
                 if relative_humidity_pct is None
-                else _require_range(
-                    relative_humidity_pct, 0.0, 100.0, "relative_humidity", "%"
-                )
+                else _require_range(relative_humidity_pct, 0.0, 100.0, "relative_humidity", "%")
                 / 100.0
             ),
             elevation_m=elevation_m,
@@ -390,12 +371,8 @@ class AirConditions:
             "pressure_pa": round(self.pressure_pa, 1),
             "temperature_c": round(self.temperature_c, 2),
             "relative_humidity_pct": (
-                None
-                if self.relative_humidity is None
-                else round(self.relative_humidity * 100.0, 1)
+                None if self.relative_humidity is None else round(self.relative_humidity * 100.0, 1)
             ),
-            "elevation_ft": (
-                None if self.elevation_ft is None else round(self.elevation_ft, 1)
-            ),
+            "elevation_ft": (None if self.elevation_ft is None else round(self.elevation_ft, 1)),
             "source": self.source,
         }
