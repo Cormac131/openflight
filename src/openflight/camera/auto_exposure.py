@@ -215,6 +215,11 @@ class AutoExposurePolicy:
         self.steps = exposure_steps_for_fps(fps)
         self.startup_max_adjustments = startup_max_adjustments
         self.steady_confirmations = steady_confirmations
+        self._fast_reacquire_armed = False
+        self._reset_startup_state()
+
+    def _reset_startup_state(self) -> None:
+        """Enter startup convergence without rearming scene-change detection."""
         self._startup = True
         self._startup_adjustments = 0
         self._pending_recommendation: ExposureRecommendation = "hold"
@@ -222,10 +227,8 @@ class AutoExposurePolicy:
 
     def reset(self) -> None:
         """Restart fast convergence after a material scene change."""
-        self._startup = True
-        self._startup_adjustments = 0
-        self._pending_recommendation = "hold"
-        self._pending_count = 0
+        self._reset_startup_state()
+        self._fast_reacquire_armed = False
 
     @property
     def startup(self) -> bool:
@@ -258,6 +261,7 @@ class AutoExposurePolicy:
             self._startup_adjustments = 0
             self._pending_recommendation = "hold"
             self._pending_count = 0
+            self._fast_reacquire_armed = True
             return AutoExposureDecision(
                 status="ready",
                 analysis_eligible=True,
@@ -268,7 +272,23 @@ class AutoExposurePolicy:
 
         if self._startup:
             return self._startup_decision(observation, current_index)
+        if self._fast_reacquire_armed and self._is_material_change(
+            observation,
+            current_index,
+        ):
+            self._reset_startup_state()
+            self._fast_reacquire_armed = False
+            return self._startup_decision(observation, current_index)
         return self._steady_decision(observation, current_index)
+
+    def _is_material_change(
+        self,
+        observation: ExposureObservation,
+        current_index: int,
+    ) -> bool:
+        """Return whether the measured scene needs a multi-step correction."""
+        target_index = self._startup_target_index(observation, current_index)
+        return abs(target_index - current_index) >= 2
 
     def _startup_decision(
         self,

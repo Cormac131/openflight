@@ -108,16 +108,32 @@ def test_acceptable_startup_observation_marks_analysis_ready():
 
 def test_steady_state_requires_confirmation_and_moves_one_step():
     policy = AutoExposurePolicy(fps=488.0, steady_confirmations=2)
-    policy.evaluate(observation("good", "hold"), exposure_us=500, gain=12.0)
-    bad = observation("too_dark", "brighter", median=20.0, p90=50.0)
+    policy.evaluate(observation("good", "hold"), exposure_us=650, gain=15.0)
+    bad = observation("too_dark", "brighter", median=70.0, p90=74.0)
 
-    first = policy.evaluate(bad, exposure_us=500, gain=12.0)
-    second = policy.evaluate(bad, exposure_us=500, gain=12.0)
+    first = policy.evaluate(bad, exposure_us=650, gain=15.0)
+    second = policy.evaluate(bad, exposure_us=650, gain=15.0)
 
     assert first.status == "calibrating"
     assert not first.should_apply
     assert second.status == "adjusting"
-    assert second.target == EXPOSURE_STEPS[9]
+    assert second.target == EXPOSURE_STEPS[11]
+
+
+def test_material_steady_state_change_reenters_fast_convergence():
+    policy = AutoExposurePolicy(fps=488.0, steady_confirmations=2)
+    policy.evaluate(observation("good", "hold"), exposure_us=500, gain=12.0)
+
+    decision = policy.evaluate(
+        observation("too_dark", "brighter", median=18.0, p90=40.0),
+        exposure_us=500,
+        gain=12.0,
+    )
+
+    assert decision.status == "adjusting"
+    assert decision.should_apply
+    assert decision.target.signal > EXPOSURE_STEPS[9].signal
+    assert policy.startup is True
 
 
 def test_ladder_limit_requires_lighting_but_recovers_automatically():

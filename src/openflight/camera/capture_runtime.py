@@ -552,7 +552,6 @@ class CameraCaptureRuntime:
     def _auto_exposure_loop(self) -> None:
         delay_s = 0.0
         while self._running and not self._auto_exposure_stop.wait(delay_s):
-            startup = self._auto_exposure_policy.startup
             try:
                 decision = self._run_auto_exposure_cycle()
             except Exception:  # pylint: disable=broad-exception-caught
@@ -562,7 +561,7 @@ class CameraCaptureRuntime:
 
             if decision is None:
                 delay_s = 0.1
-            elif decision.should_apply and startup:
+            elif decision.should_apply and self._auto_exposure_policy.startup:
                 delay_s = AUTO_EXPOSURE_STARTUP_SETTLE_S
             elif decision.should_apply:
                 delay_s = AUTO_EXPOSURE_ADJUSTMENT_COOLDOWN_S
