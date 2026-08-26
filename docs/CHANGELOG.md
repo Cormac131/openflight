@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Software-adjustable sound trigger sensitivity.** An optional X9C104 digital
+  potentiometer fitted to the SEN-14262's `R17` pads puts the detector's preamp
+  gain under software control, replacing the soldered resistor. Tune it with the
+  **Sound Trigger Sensitivity** slider on **Debug → Tuning**; the readout shows
+  the applied percentage, the resistance `R17` now presents, and the resulting
+  preamp leg. Enable with `--sound-sensitivity` (default GPIOs: BCM22 `CS`,
+  BCM23 `INC`, BCM24 `U/D`). The setting persists to
+  `~/.config/openflight/sound_sensitivity.json` and is re-applied on every start;
+  the chip's own non-volatile memory is never written. A build with a soldered
+  `R17` is unaffected. See
+  [Sound Trigger Wiring](sound-trigger-wiring.md#optional-software-controlled-sensitivity-x9c104-digital-pot).
 - **Instrument-panel kiosk UI.** The dashboard is a tabbed shell (Live, Stats,
   Shots, Camera, Players, Debug) instead of the previous stacked shot and stats
   views. Tap a Live metric to pin it top-left while keeping all ten metrics

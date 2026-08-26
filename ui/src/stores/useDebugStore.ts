@@ -1,11 +1,13 @@
 import { create } from 'zustand';
 import type { IWR6843Diagnostic, TriggerDiagnostic, TriggerDiagnosticUpdate, TriggerStatus } from '../types/shot';
-import type { DebugReading, RadarConfig, DebugShotLog } from '../types/socket';
+import type { DebugReading, RadarConfig, DebugShotLog, SoundSensitivity } from '../types/socket';
 
 interface DebugState {
   debugReadings: DebugReading[];
   debugShotLogs: DebugShotLog[];
   radarConfig: RadarConfig;
+  soundSensitivity: SoundSensitivity;
+  soundSensitivityError: string | null;
   triggerDiagnostics: TriggerDiagnostic[];
   triggerStatus: TriggerStatus;
   iwr6843Alert: IWR6843Diagnostic | null;
@@ -15,6 +17,8 @@ interface DebugState {
   addDebugShotLog: (log: DebugShotLog) => void;
   clearDebugData: () => void;
   setRadarConfig: (config: RadarConfig) => void;
+  setSoundSensitivity: (sensitivity: SoundSensitivity) => void;
+  setSoundSensitivityError: (error: string | null) => void;
   addTriggerDiagnostic: (diagnostic: TriggerDiagnostic) => void;
   updateTriggerDiagnostic: (update: TriggerDiagnosticUpdate) => void;
   dismissIWR6843Alert: () => void;
@@ -31,6 +35,22 @@ export const useDebugStore = create<DebugState>((set) => ({
     min_magnitude: 0,
     transmit_power: 0,
   },
+  soundSensitivity: {
+    // Placeholder until the server answers `get_sound_sensitivity`, which
+    // replaces every field including the bounds. Assuming no digipot is fitted
+    // is the common case and reads better than a slider that briefly pretends
+    // to work.
+    enabled: false,
+    position: null,
+    max_position: 99,
+    default_position: 46,
+    sensitivity_percent: null,
+    resistance_ohms: null,
+    preamp_feedback_ohms: null,
+    simulated: false,
+    error: null,
+  },
+  soundSensitivityError: null,
   triggerDiagnostics: [],
   triggerStatus: {
     mode: 'rolling-buffer',
@@ -59,6 +79,13 @@ export const useDebugStore = create<DebugState>((set) => ({
   clearDebugData: () => set({ debugReadings: [], debugShotLogs: [] }),
 
   setRadarConfig: (config) => set({ radarConfig: config }),
+
+  // A fresh state is authoritative, so it clears any error left over from an
+  // earlier rejected move.
+  setSoundSensitivity: (sensitivity) =>
+    set({ soundSensitivity: sensitivity, soundSensitivityError: sensitivity.error }),
+
+  setSoundSensitivityError: (error) => set({ soundSensitivityError: error }),
 
   addTriggerDiagnostic: (diagnostic) =>
     set((state) => {

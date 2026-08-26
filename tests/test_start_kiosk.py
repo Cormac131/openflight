@@ -407,3 +407,44 @@ def test_iwr6843_horizontal_phase_reference_is_forwarded():
 def test_iwr6843_horizontal_phase_reference_is_omitted_by_default():
     command = _dry_run("--iwr6843").stdout.strip()
     assert "--iwr6843-horizontal-phase-reference-rad" not in command
+
+
+def test_sound_sensitivity_is_off_unless_asked_for():
+    command_arguments = _dry_run().stdout.strip().split()
+
+    assert "--sound-sensitivity" not in command_arguments
+
+
+def test_sound_sensitivity_flag_is_forwarded():
+    command_arguments = _dry_run("--sound-sensitivity").stdout.strip().split()
+
+    assert "--sound-sensitivity" in command_arguments
+
+
+def test_sound_sensitivity_pins_and_position_are_forwarded():
+    command_arguments = (
+        _dry_run(
+            "--sound-sensitivity",
+            "--sound-sensitivity-cs-pin",
+            "5",
+            "--sound-sensitivity-inc-pin",
+            "12",
+            "--sound-sensitivity-ud-pin",
+            "13",
+            "--sound-sensitivity-position",
+            "33",
+        )
+        .stdout.strip()
+        .split()
+    )
+
+    assert command_arguments[command_arguments.index("--sound-sensitivity-cs-pin") + 1] == "5"
+    assert command_arguments[command_arguments.index("--sound-sensitivity-inc-pin") + 1] == "12"
+    assert command_arguments[command_arguments.index("--sound-sensitivity-ud-pin") + 1] == "13"
+    assert command_arguments[command_arguments.index("--sound-sensitivity-position") + 1] == "33"
+
+
+def test_sound_sensitivity_pins_are_not_forwarded_without_the_flag():
+    command_arguments = _dry_run("--sound-sensitivity-cs-pin", "5").stdout.strip().split()
+
+    assert "--sound-sensitivity-cs-pin" not in command_arguments

@@ -1,6 +1,6 @@
 import { memo, useState } from 'react';
 import type { CameraStatus } from '../stores/useCameraStore';
-import type { DebugReading, RadarConfig, DebugShotLog } from '../types/socket';
+import type { DebugReading, RadarConfig, DebugShotLog, SoundSensitivity } from '../types/socket';
 import type { TriggerDiagnostic, TriggerStatus } from '../types/shot';
 import './DebugPanel.css';
 
@@ -15,6 +15,10 @@ interface DebugPanelProps {
   onUpdateConfig: (config: Partial<RadarConfig>) => void;
   triggerDiagnostics: TriggerDiagnostic[];
   triggerStatus: TriggerStatus;
+  soundSensitivity: SoundSensitivity;
+  soundSensitivityError: string | null;
+  onUpdateSoundSensitivity: (position: number) => void;
+  onRecalibrateSoundSensitivity: () => void;
 }
 
 const REASON_DISPLAY: Record<string, string> = {
@@ -300,6 +304,101 @@ function LastTriggerCard({ diag }: { diag: TriggerDiagnostic | null }) {
   );
 }
 
+function formatOhms(ohms: number | null): string {
+  if (ohms === null) return '--';
+  return ohms >= 1000 ? `${(ohms / 1000).toFixed(1)} kΩ` : `${Math.round(ohms)} Ω`;
+}
+
+interface SoundSensitivityControlProps {
+  sensitivity: SoundSensitivity;
+  error: string | null;
+  onUpdate: (position: number) => void;
+  onRecalibrate: () => void;
+}
+
+/**
+ * Wiper control for the X9C104 fitted to the sound detector's R17 pad.
+ *
+ * Every number shown here comes from the server. The chip has no readback, so
+ * the server's tracked position is the only source of truth, and re-deriving
+ * resistance in the browser would mean maintaining the same formula twice.
+ */
+export function SoundSensitivityControl({
+  sensitivity,
+  error,
+  onUpdate,
+  onRecalibrate,
+}: SoundSensitivityControlProps) {
+  const { enabled, position, max_position: maxPosition } = sensitivity;
+
+  return (
+    <div className="debug-panel__section">
+      <h4>Sound Trigger Sensitivity</h4>
+
+      {!enabled && (
+        <p className="debug-panel__hint">
+          No X9C104 digital pot detected. Start the server with{' '}
+          <code>--sound-sensitivity</code> once one is fitted to the detector&apos;s R17 pad, or keep
+          using a soldered resistor.
+        </p>
+      )}
+
+      {enabled && sensitivity.simulated && (
+        <p className="debug-panel__mock-warning">Mock mode: the wiper is simulated, not driven</p>
+      )}
+
+      {error && <p className="debug-panel__mock-warning">{error}</p>}
+
+      {enabled && (
+        <>
+          <div className="debug-panel__controls">
+            <SliderControl
+              label="Sensitivity"
+              value={position ?? sensitivity.default_position}
+              min={0}
+              max={maxPosition}
+              onChange={onUpdate}
+            />
+          </div>
+
+          <div className="sensitivity-readout">
+            <div className="sensitivity-readout__item">
+              <span className="sensitivity-readout__label">Applied</span>
+              <span className="sensitivity-readout__value">
+                {sensitivity.sensitivity_percent === null
+                  ? '--'
+                  : `${sensitivity.sensitivity_percent.toFixed(0)}%`}
+              </span>
+            </div>
+            <div className="sensitivity-readout__item">
+              <span className="sensitivity-readout__label">R17</span>
+              <span className="sensitivity-readout__value">
+                {formatOhms(sensitivity.resistance_ohms)}
+              </span>
+            </div>
+            <div className="sensitivity-readout__item">
+              <span className="sensitivity-readout__label">Preamp</span>
+              <span className="sensitivity-readout__value">
+                {formatOhms(sensitivity.preamp_feedback_ohms)}
+              </span>
+            </div>
+          </div>
+
+          <button type="button" className="sensitivity-recalibrate" onClick={onRecalibrate}>
+            Recalibrate wiper
+          </button>
+
+          <p className="debug-panel__hint">
+            Higher = more gain, so the detector fires on quieter impacts. Turn it down if the trigger
+            fires on ambient noise, up if it misses strikes. Recalibrate re-homes the wiper if the
+            reading and the real chip have drifted apart.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 type DebugTab = 'status' | 'history' | 'tuning';
 
 export function DebugPanel({
@@ -308,6 +407,10 @@ export function DebugPanel({
   onUpdateConfig,
   triggerDiagnostics,
   triggerStatus,
+  soundSensitivity,
+  soundSensitivityError,
+  onUpdateSoundSensitivity,
+  onRecalibrateSoundSensitivity,
 }: DebugPanelProps) {
   const [activeTab, setActiveTab] = useState<DebugTab>('status');
   const isRollingBuffer = triggerStatus.mode === 'rolling-buffer';
@@ -441,6 +544,15 @@ export function DebugPanel({
                 : 'TX Power: 0 = max range, 7 = min range'}
             </p>
           </div>
+        )}
+
+        {activeTab === 'tuning' && (
+          <SoundSensitivityControl
+            sensitivity={soundSensitivity}
+            error={soundSensitivityError}
+            onUpdate={onUpdateSoundSensitivity}
+            onRecalibrate={onRecalibrateSoundSensitivity}
+          />
         )}
       </div>
     </div>

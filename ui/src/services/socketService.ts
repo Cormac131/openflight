@@ -11,7 +11,14 @@ import {
   type TriggerDiagnosticUpdate,
   type TriggerStatus,
 } from '../types/shot';
-import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
+import type {
+  DebugReading,
+  RadarConfig,
+  DebugShotLog,
+  SimShotInfo,
+  SimStatus,
+  SoundSensitivity,
+} from '../types/socket';
 import type { PowerStatus } from '../types/power';
 import { getServerOrigin } from '../utils/serverOrigin';
 import { handleShotMessage } from './handleShotMessage';
@@ -51,6 +58,7 @@ class SocketService {
       this.socket?.emit('get_session');
       this.socket?.emit('get_trigger_status');
       this.socket?.emit('get_radar_config');
+      this.socket?.emit('get_sound_sensitivity');
       this.socket?.emit('get_camera_capture_settings');
     });
 
@@ -165,6 +173,14 @@ class SocketService {
       useDebugStore.getState().setRadarConfig(data);
     });
 
+    this.socket.on('sound_sensitivity', (data: SoundSensitivity) => {
+      useDebugStore.getState().setSoundSensitivity(data);
+    });
+
+    this.socket.on('sound_sensitivity_error', (data: { error: string }) => {
+      useDebugStore.getState().setSoundSensitivityError(data.error);
+    });
+
     this.socket.on('camera_status', (data: CameraStatus) => {
       useCameraStore.getState().setCameraStatus(data);
     });
@@ -259,6 +275,14 @@ class SocketService {
 
   setRadarConfig(config: Partial<RadarConfig>) {
     this.socket?.emit('set_radar_config', config);
+  }
+
+  setSoundSensitivity(position: number) {
+    this.socket?.emit('set_sound_sensitivity', { position });
+  }
+
+  recalibrateSoundSensitivity() {
+    this.socket?.emit('recalibrate_sound_sensitivity');
   }
 
   toggleCamera() {

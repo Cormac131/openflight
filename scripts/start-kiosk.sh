@@ -57,6 +57,11 @@ IWR6843_AZIMUTH_OFFSET=""
 IWR6843_HORIZONTAL_PHASE_REFERENCE_RAD=""
 INCLINOMETER=false
 INCLINOMETER_ZERO_OFFSET=""
+SOUND_SENSITIVITY=false
+SOUND_SENSITIVITY_CS_PIN=""
+SOUND_SENSITIVITY_INC_PIN=""
+SOUND_SENSITIVITY_UD_PIN=""
+SOUND_SENSITIVITY_POSITION=""
 KLD7=false
 KLD7_PORT=""
 KLD7_ANGLE_OFFSET=""
@@ -297,6 +302,26 @@ while [[ $# -gt 0 ]]; do
             ;;
         --inclinometer-zero-offset)
             INCLINOMETER_ZERO_OFFSET="$2"
+            shift 2
+            ;;
+        --sound-sensitivity)
+            SOUND_SENSITIVITY=true
+            shift
+            ;;
+        --sound-sensitivity-cs-pin)
+            SOUND_SENSITIVITY_CS_PIN="$2"
+            shift 2
+            ;;
+        --sound-sensitivity-inc-pin)
+            SOUND_SENSITIVITY_INC_PIN="$2"
+            shift 2
+            ;;
+        --sound-sensitivity-ud-pin)
+            SOUND_SENSITIVITY_UD_PIN="$2"
+            shift 2
+            ;;
+        --sound-sensitivity-position)
+            SOUND_SENSITIVITY_POSITION="$2"
             shift 2
             ;;
         --kld7)
@@ -733,6 +758,14 @@ fi
 if [ "$INCLINOMETER" = true ]; then
     SERVER_CMD="$SERVER_CMD --inclinometer"
     [ -n "$INCLINOMETER_ZERO_OFFSET" ] && SERVER_CMD="$SERVER_CMD --inclinometer-zero-offset $INCLINOMETER_ZERO_OFFSET"
+fi
+
+if [ "$SOUND_SENSITIVITY" = true ]; then
+    SERVER_CMD="$SERVER_CMD --sound-sensitivity"
+    [ -n "$SOUND_SENSITIVITY_CS_PIN" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-cs-pin $SOUND_SENSITIVITY_CS_PIN"
+    [ -n "$SOUND_SENSITIVITY_INC_PIN" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-inc-pin $SOUND_SENSITIVITY_INC_PIN"
+    [ -n "$SOUND_SENSITIVITY_UD_PIN" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-ud-pin $SOUND_SENSITIVITY_UD_PIN"
+    [ -n "$SOUND_SENSITIVITY_POSITION" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-position $SOUND_SENSITIVITY_POSITION"
 fi
 
 if [ "$EXPERIMENTAL_KLD7_RAW_RADC_LOGGING" = true ]; then

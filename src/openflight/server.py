@@ -137,6 +137,11 @@ camera_ball_flight_reference_tracker = None
 inclinometer_service = None
 inclinometer_runtime_config: dict = {"enabled": False}
 
+# Optional X9C104 digital pot fitted to the SEN-14262 R17 pad, letting the
+# Debug page set sound-trigger sensitivity instead of swapping resistors.
+sound_sensitivity_service = None
+sound_sensitivity_runtime_config: dict = {"enabled": False}
+
 # Ballistic model toggle. Shot carry comes from the physics simulator whenever
 # a vertical launch angle is available. Operators can explicitly disable it;
 # missing launch inputs always fall back to the legacy table estimator.
@@ -211,6 +216,8 @@ def _cleanup_hardware_for_shutdown() -> bool:
         _run_shutdown_step("K-LD7 horizontal stop", kld7_horizontal.stop)
     if inclinometer_service:
         _run_shutdown_step("inclinometer stop", inclinometer_service.stop)
+    if sound_sensitivity_service:
+        _run_shutdown_step("sound sensitivity stop", sound_sensitivity_service.stop)
     if iwr6843_runtime:
         _run_shutdown_step("IWR6843 stop", iwr6843_runtime.stop)
     if power_monitor:
@@ -877,6 +884,7 @@ def _session_start_config() -> dict:
     config["iwr6843"] = dict(iwr6843_runtime_config)
     config["camera_capture"] = dict(camera_capture_config)
     config["inclinometer"] = dict(inclinometer_runtime_config)
+    config["sound_sensitivity"] = dict(sound_sensitivity_runtime_config)
     config["power"] = {
         "enabled": battery_provider is not None,
         "provider": battery_provider,
@@ -1362,6 +1370,72 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
             "zero_offset_deg": zero_offset_deg,
             "error": str(error),
         }
+        return False
+
+
+def init_sound_sensitivity(
+    *,
+    cs_pin: int,
+    inc_pin: int,
+    ud_pin: int,
+    position: Optional[int] = None,
+    simulated: bool = False,
+) -> bool:
+    """Bring up the X9C104 that sets SEN-14262 preamp gain.
+
+    Sensitivity control is a convenience, never a prerequisite for detecting a
+    shot: a build with a hand-soldered R17 works exactly as before. So a
+    failure here is logged and reported to the UI rather than fatal.
+
+    Args:
+        cs_pin, inc_pin, ud_pin: BCM GPIOs wired to the pot's control lines.
+        position: Wiper tap to force for this run, without rewriting the saved
+            setting. Defaults to the saved setting, falling back to the tap
+            matching the guide's 47k resistor.
+        simulated: Use the in-memory pot so ``--mock`` can drive the UI control
+            with no hardware attached.
+    """
+    global sound_sensitivity_service  # pylint: disable=global-statement
+    global sound_sensitivity_runtime_config  # pylint: disable=global-statement
+
+    from .sensitivity import (  # pylint: disable=import-outside-toplevel
+        X9C104,
+        MockX9C104,
+        SoundSensitivityService,
+    )
+
+    requested = {
+        "requested": True,
+        "device": "x9c104",
+        "simulated": simulated,
+        "cs_pin_bcm": cs_pin,
+        "inc_pin_bcm": inc_pin,
+        "ud_pin_bcm": ud_pin,
+    }
+    service = None
+    try:
+        pot = MockX9C104() if simulated else X9C104(cs_pin=cs_pin, inc_pin=inc_pin, ud_pin=ud_pin)
+        service = SoundSensitivityService(pot, simulated=simulated)
+        state = service.start(force_position=position)
+        sound_sensitivity_service = service
+        sound_sensitivity_runtime_config = {**requested, "enabled": True, "state": state.to_dict()}
+        print(
+            "Sound sensitivity control enabled "
+            f"(X9C104 position {state.position}, ~{state.resistance_ohms:.0f} ohm R17)"
+        )
+        return True
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        if service is not None:
+            service.stop()
+        logger.warning("[SERVER] Sound sensitivity initialization failed: %s", error, exc_info=True)
+        log_session_error(
+            "Sound sensitivity initialization failed",
+            component="sound_sensitivity",
+            context={"cs_pin": cs_pin, "inc_pin": inc_pin, "ud_pin": ud_pin},
+            exc=error,
+        )
+        sound_sensitivity_service = None
+        sound_sensitivity_runtime_config = {**requested, "enabled": False, "error": str(error)}
         return False
 
 
@@ -2237,6 +2311,97 @@ def handle_set_radar_config(data):
             exc=e,
         )
         socketio.emit("radar_config_error", {"error": str(e)})
+
+
+def _sound_sensitivity_payload() -> dict:
+    """Return the current sensitivity state, or a disabled state if unfitted."""
+    if sound_sensitivity_service is None:
+        from .sensitivity import disabled_state  # pylint: disable=import-outside-toplevel
+
+        return disabled_state(sound_sensitivity_runtime_config.get("error")).to_dict()
+    return sound_sensitivity_service.state().to_dict()
+
+
+def _emit_sound_sensitivity(payload: Optional[dict] = None) -> dict:
+    """Broadcast the sensitivity state and keep the session config in step."""
+    payload = payload if payload is not None else _sound_sensitivity_payload()
+    if sound_sensitivity_service is not None:
+        sound_sensitivity_runtime_config["state"] = payload
+    socketio.emit("sound_sensitivity", payload)
+    return payload
+
+
+@socketio.on("get_sound_sensitivity")
+def handle_get_sound_sensitivity():
+    """Send the sound detector's current sensitivity to the Debug page."""
+    _emit_sound_sensitivity()
+
+
+@socketio.on("set_sound_sensitivity")
+def handle_set_sound_sensitivity(data):
+    """Move the X9C104 wiper to the requested position.
+
+    Out-of-range values are clamped rather than rejected; the echoed state
+    always reports the tap that was actually applied.
+    """
+    if sound_sensitivity_service is None:
+        socketio.emit(
+            "sound_sensitivity_error",
+            {"error": "Sound sensitivity control is not enabled on this build"},
+        )
+        return
+
+    position = (data or {}).get("position")
+    if position is None:
+        socketio.emit("sound_sensitivity_error", {"error": "No position provided"})
+        return
+
+    try:
+        state = sound_sensitivity_service.set_position(position)
+    except Exception as error:  # pylint: disable=broad-except
+        logger.warning("[SERVER] Error setting sound sensitivity: %s", error, exc_info=True)
+        log_session_error(
+            "Sound sensitivity update failed",
+            component="sound_sensitivity",
+            context={"stage": "set_sound_sensitivity", "requested": position},
+            exc=error,
+        )
+        socketio.emit("sound_sensitivity_error", {"error": str(error)})
+        _emit_sound_sensitivity()
+        return
+
+    _emit_sound_sensitivity(state.to_dict())
+
+
+@socketio.on("recalibrate_sound_sensitivity")
+def handle_recalibrate_sound_sensitivity():
+    """Re-home the wiper at 0 and restore the current position.
+
+    The X9C104 has no readback, so the tracked position is only a model of the
+    chip. This is the escape hatch when the two have drifted apart.
+    """
+    if sound_sensitivity_service is None:
+        socketio.emit(
+            "sound_sensitivity_error",
+            {"error": "Sound sensitivity control is not enabled on this build"},
+        )
+        return
+
+    try:
+        state = sound_sensitivity_service.recalibrate()
+    except Exception as error:  # pylint: disable=broad-except
+        logger.warning("[SERVER] Error recalibrating sound sensitivity: %s", error, exc_info=True)
+        log_session_error(
+            "Sound sensitivity recalibration failed",
+            component="sound_sensitivity",
+            context={"stage": "recalibrate_sound_sensitivity"},
+            exc=error,
+        )
+        socketio.emit("sound_sensitivity_error", {"error": str(error)})
+        _emit_sound_sensitivity()
+        return
+
+    _emit_sound_sensitivity(state.to_dict())
 
 
 @socketio.on("shutdown")
@@ -4495,6 +4660,41 @@ def main():
         help="Degrees added to raw LIS3DH pitch (default: 0)",
     )
     parser.add_argument(
+        "--sound-sensitivity",
+        action="store_true",
+        help=(
+            "Enable X9C104 digital-pot control of SEN-14262 preamp gain "
+            "(fitted to the detector's R17 pad); tune it on the Debug page"
+        ),
+    )
+    parser.add_argument(
+        "--sound-sensitivity-cs-pin",
+        type=int,
+        default=22,
+        help="BCM GPIO wired to X9C104 CS (default: 22)",
+    )
+    parser.add_argument(
+        "--sound-sensitivity-inc-pin",
+        type=int,
+        default=23,
+        help="BCM GPIO wired to X9C104 INC (default: 23)",
+    )
+    parser.add_argument(
+        "--sound-sensitivity-ud-pin",
+        type=int,
+        default=24,
+        help="BCM GPIO wired to X9C104 U/D (default: 24)",
+    )
+    parser.add_argument(
+        "--sound-sensitivity-position",
+        type=int,
+        default=None,
+        help=(
+            "Force the X9C104 wiper to this tap (0-99) at startup, overriding "
+            "the saved setting. 0 is least sensitive, 99 most"
+        ),
+    )
+    parser.add_argument(
         "--iwr6843-port", default=None, help="TI serial port (auto-detect by default)"
     )
     parser.add_argument(
@@ -4781,6 +4981,26 @@ def main():
         parser.error("--iwr6843 already owns BCM GPIO; use the default --trigger sound")
     if args.iwr6843 and (args.iwr6843_tee_m <= 0 or args.iwr6843_net_m <= 0):
         parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
+    if args.sound_sensitivity:
+        digipot_pins = [
+            args.sound_sensitivity_cs_pin,
+            args.sound_sensitivity_inc_pin,
+            args.sound_sensitivity_ud_pin,
+        ]
+        # Three lines sharing a GPIO would step the wiper on every CS change,
+        # and stealing the trigger pin would silently kill shot detection.
+        if len(set(digipot_pins)) != len(digipot_pins):
+            parser.error("--sound-sensitivity CS, INC and U/D must be three distinct BCM GPIOs")
+        if args.iwr6843_trigger_pin in digipot_pins:
+            parser.error(
+                f"--sound-sensitivity cannot use BCM{args.iwr6843_trigger_pin}; "
+                "that GPIO carries the sound-trigger edge"
+            )
+        if args.sound_sensitivity_position is not None:
+            from .sensitivity import MAX_POSITION  # pylint: disable=import-outside-toplevel
+
+            if not 0 <= args.sound_sensitivity_position <= MAX_POSITION:
+                parser.error(f"--sound-sensitivity-position must be within 0..{MAX_POSITION}")
     if args.camera_capture and (
         args.camera_capture_width <= 0
         or args.camera_capture_height <= 0
@@ -4995,6 +5215,19 @@ def main():
     if args.inclinometer:
         if not init_inclinometer(zero_offset_deg=args.inclinometer_zero_offset):
             print("WARNING: Inclinometer unavailable; continuing with configured IWR6843 tilt")
+
+    if args.sound_sensitivity:
+        if not init_sound_sensitivity(
+            cs_pin=args.sound_sensitivity_cs_pin,
+            inc_pin=args.sound_sensitivity_inc_pin,
+            ud_pin=args.sound_sensitivity_ud_pin,
+            position=args.sound_sensitivity_position,
+            simulated=args.mock,
+        ):
+            print(
+                "WARNING: Sound sensitivity control unavailable; the detector keeps "
+                "whatever gain its R17 pad is set to"
+            )
 
     # Initialize K-LD7 angle radars (if enabled)
     if args.kld7:

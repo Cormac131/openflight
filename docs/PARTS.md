@@ -30,6 +30,36 @@ The sound trigger detects club impact to precisely time radar captures. Essentia
 
 > **R17 resistor:** The SEN-14262 is rated for 5V but runs at 3.3V in this setup, which can cause the GATE output to stick high. Soldering a resistor into the R17 through-hole position (in parallel with the onboard 100kΩ R3) reduces preamp gain and fixes this. Start with 47kΩ; use a lower value (e.g. 33kΩ) if the sensor is still too sensitive for your environment.
 
+### Optional: Software-Adjustable Sensitivity (X9C104 Digital Pot)
+
+A fixed R17 resistor locks the detector at one gain. Fitting an **X9C104**
+100 kΩ digital potentiometer to the R17 pads instead makes that resistance
+software-controlled, so you tune sensitivity with a slider on the **Debug →
+Tuning** page rather than with a soldering iron. Useful if you hit in more than
+one place — a garage, a range bay, and a quiet basement all want different gain.
+
+This is entirely optional. A build with a soldered R17 works exactly as before.
+
+| Part | Description | Link | ~Price |
+|------|-------------|------|--------|
+| **Renesas X9C104P** | 100 kΩ, 100-tap digital potentiometer, 8-pin DIP | [Mouser](https://www.mouser.com/c/?q=X9C104P) | $2 |
+| **Jumper Wires** | 5 wires: CS/INC/U-D → Pi GPIO, VCC → Pi 5V, GND → Pi GND | Any | $2 |
+| **Wire pigtails** | 2 short leads from the pot's RW/RL to the R17 pads | Any | $1 |
+
+> **Get the -104, not a sibling.** The X9C family shares a pinout across
+> resistance values: X9C102 is 1 kΩ, X9C103 is 10 kΩ, X9C503 is 50 kΩ. Only the
+> **X9C104** covers the 0–100 kΩ span R17 needs; a smaller part cannot reach the
+> 47 kΩ starting point the wiring guide recommends.
+
+> **Power it from 5V.** The X9C104's DC characteristics are specified at 5V, and
+> the Pi has 5V on header pins 2 and 4. Its logic inputs need only 2.0V to read
+> high, so the Pi's 3.3V GPIOs drive CS, INC and U/D directly — no level
+> shifter. The resistor network itself only ever sees the detector's 3.3V rail,
+> which is safely inside the pot's 0–5V analog range.
+
+Wiring, GPIO assignments, and setup are in
+[sound-trigger-wiring.md](sound-trigger-wiring.md#optional-software-controlled-sensitivity-x9c104-digital-pot).
+
 ### Sound Trigger Wiring
 
 ```
@@ -154,6 +184,7 @@ camera; the standard setup does not install its optional software dependencies.
 |----------|--------|
 | Core (OPS243, Pi 5, Display) | $355 |
 | Sound Trigger (SEN-14262 + resistor + wires) | $18 |
+| Software sensitivity control (X9C104 + wires) — **optional** | $5 |
 | Power & Accessories | $27 |
 | **Subtotal, no angle radar** | **~$400** |
 | Angle Radar (IWR6843LEVM + cable + wire) — **current** | $156 |

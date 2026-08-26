@@ -87,6 +87,8 @@ function AppContent() {
     debugReadings,
     debugShotLogs,
     radarConfig,
+    soundSensitivity,
+    soundSensitivityError,
     triggerDiagnostics,
     triggerStatus,
     iwr6843Alert,
@@ -96,6 +98,8 @@ function AppContent() {
       debugReadings: state.debugReadings,
       debugShotLogs: state.debugShotLogs,
       radarConfig: state.radarConfig,
+      soundSensitivity: state.soundSensitivity,
+      soundSensitivityError: state.soundSensitivityError,
       triggerDiagnostics: state.triggerDiagnostics,
       triggerStatus: state.triggerStatus,
       iwr6843Alert: state.iwr6843Alert,
@@ -348,6 +352,10 @@ function AppContent() {
                 onUpdateConfig={(config) => socketService.setRadarConfig(config)}
                 triggerDiagnostics={triggerDiagnostics}
                 triggerStatus={triggerStatus}
+                soundSensitivity={soundSensitivity}
+                soundSensitivityError={soundSensitivityError}
+                onUpdateSoundSensitivity={(position) => socketService.setSoundSensitivity(position)}
+                onRecalibrateSoundSensitivity={() => socketService.recalibrateSoundSensitivity()}
               />
             </div>
           </div>

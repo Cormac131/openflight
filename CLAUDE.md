@@ -136,12 +136,16 @@ uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 ```bash
 scripts/start-kiosk.sh              # Default: rolling buffer + sound trigger
 scripts/start-kiosk.sh --mock       # Development mode without hardware
+scripts/start-kiosk.sh --sound-sensitivity             # With the optional X9C104 digipot on SEN-14262 R17
 scripts/start-kiosk.sh --kld7                          # With K-LD7 angle radars (deprecated; auto-detects horizontal)
 ```
 
 ### Sound Trigger Testing
 
 ```bash
+# Sweep the optional X9C104 sensitivity pot (stop the server first)
+uv run python scripts/hardware-test/test_x9c104.py --sweep
+
 # Test persistent rolling buffer + hardware trigger (recommended)
 uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 
@@ -155,6 +159,7 @@ uv run python scripts/hardware-test/test_sound_trigger_hardware.py
 React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ──► OPS243Radar
                               │                │
                               │                └── SoundTrigger (SEN-14262 → HOST_INT)
+                              │                     └── SoundSensitivityService (X9C104 digipot on R17, optional)
                               │
                               ├── IWR6843Runtime (optional, 60 GHz → launch angle & club path)
                               ├── KLD7Tracker (vertical/horizontal, deprecated)
@@ -184,6 +189,7 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
 - `club_data.py` - Canonical club physics parameters, lofts, typical speeds, and optimal spin
 - `iwr6843/` - TI IWR6843 mmWave radar driver, L3 raw dump parser, LCMF-v1 launch angle & club path
 - `inclinometer.py` - LIS3DH accelerometer tilt compensation service
+- `sensitivity/` - X9C104 digital pot on the SEN-14262 R17 pad; UI-controlled sound-trigger sensitivity
 - `sim/` - Simulator connectors (OpenGolfSim, GSPro, E6 Connect, Garmin) and network transports
 - `cloud/` - Telemetry, cloud configuration, session upload, and push error handling
 - `rolling_buffer/` - Trigger strategies, I/Q processor, spin detection
@@ -229,6 +235,8 @@ SEN-14262 GND  → Pi GND (shared with OPS243-A)
 ```
 
 A through-hole resistor must be soldered into **R17** on the SEN-14262 to reduce preamp gain at 3.3V (47kΩ recommended, lower for noisy environments).
+
+**Optional X9C104 digital pot:** fitting one to the R17 pads instead of a fixed resistor makes sensitivity adjustable from the Debug page. Wiper position 0 is least sensitive, 99 most; the default tap 46 matches the 47kΩ resistor. Enabled with `--sound-sensitivity`; claims BCM22 (CS), BCM23 (INC), BCM24 (U/D). The setting persists to `~/.config/openflight/sound_sensitivity.json` — the chip's own NVM is never written.
 
 See [docs/sound-trigger-wiring.md](docs/sound-trigger-wiring.md) for full instructions.
 

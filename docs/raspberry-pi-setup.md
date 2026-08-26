@@ -132,6 +132,24 @@ above.
 
 </details>
 
+### Sound Trigger Sensitivity (Optional X9C104 Digital Pot)
+
+If you fitted an **X9C104** digital potentiometer to the SEN-14262's `R17` pads
+instead of a soldered resistor, the setup script does not configure it — there
+is nothing to configure on the hardware side. Start the server with
+`--sound-sensitivity` and tune it from **Debug → Tuning** at runtime:
+
+```bash
+./scripts/start-kiosk.sh --sound-sensitivity
+```
+
+The pot claims **BCM22** (CS), **BCM23** (INC) and **BCM24** (U/D) by default.
+The setting is saved to `~/.config/openflight/sound_sensitivity.json` and
+re-applied on every start; the chip's own non-volatile memory is never written.
+
+Wiring and bench-testing are in the
+**[Sound Trigger Wiring Guide](sound-trigger-wiring.md#optional-software-controlled-sensitivity-x9c104-digital-pot)**.
+
 ### IWR6843 Angle Radar
 
 The setup script does not configure the IWR6843 — it needs custom firmware
@@ -238,8 +256,9 @@ sudo systemctl restart openflight
 ### Kiosk Mode (Fullscreen — Recommended)
 
 ```bash
-./scripts/start-kiosk.sh        # Default: rolling buffer + sound trigger
-./scripts/start-kiosk.sh --mock # Mock mode (no hardware needed)
+./scripts/start-kiosk.sh                      # Default: rolling buffer + sound trigger
+./scripts/start-kiosk.sh --mock               # Mock mode (no hardware needed)
+./scripts/start-kiosk.sh --sound-sensitivity  # With the optional X9C104 sensitivity control
 ```
 
 Use the [IWR6843 Operator Guide](iwr6843/README.md#start-openflight) or
@@ -285,6 +304,15 @@ uv run python scripts/hardware-test/diagnose.py --ops-port /dev/ttyAMA0
 ### Sound Trigger Not Working
 
 See the [Sound Trigger Wiring Guide — Troubleshooting](sound-trigger-wiring.md#troubleshooting).
+That section also covers the optional X9C104 digital pot: GPIO claim failures, a
+slider that moves nothing, and an inverted sensitivity direction.
+
+To sweep the pot with a meter (stop the server first — it holds the same GPIO
+lines):
+
+```bash
+uv run python scripts/hardware-test/test_x9c104.py --sweep
+```
 
 ### K-LD7 Not Connecting
 

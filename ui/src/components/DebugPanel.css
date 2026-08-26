@@ -587,3 +587,64 @@
     font-size: 0.5625rem;
   }
 }
+
+/* Sound trigger sensitivity (X9C104 digital pot on the SEN-14262 R17 pad) */
+.sensitivity-readout {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+}
+
+.sensitivity-readout__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.sensitivity-readout__label {
+  font-size: 0.5625rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.sensitivity-readout__value {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text);
+  /* Resistance strings change width as the slider moves; clip rather than
+     reflow the three-column grid on an 800px kiosk. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sensitivity-recalibrate {
+  margin-top: var(--space-md);
+  width: 100%;
+  /* Finger-sized: the kiosk has no mouse. */
+  min-height: 2.75rem;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-surface-raised, var(--color-surface));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.sensitivity-recalibrate:active {
+  background: var(--color-accent-block);
+  color: var(--color-bg);
+}
+
+@media (max-height: 500px) {
+  .sensitivity-recalibrate {
+    min-height: 2.25rem;
+  }
+}
