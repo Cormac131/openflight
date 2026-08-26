@@ -15,7 +15,9 @@ Three modes, in the order you want them during bring-up:
     moved, which the meter alone cannot tell you.
 
 ``--position N``
-    Parks the wiper at one tap.
+    Parks the wiper at one tap. Add ``--hold`` to keep it there: the position
+    only lasts as long as something drives the control lines, so without it the
+    wiper walks away the moment this script exits.
 
 Wiring (BCM numbering; see docs/sound-trigger-wiring.md):
     X9C104 pin 7 CS  -> Pi BCM22 (physical 15)
@@ -32,6 +34,9 @@ Usage:
 
     # Finer and slower: every tap, five seconds each (~8 minutes)
     uv run python scripts/hardware-test/test_x9c104.py --sweep --sweep-step 1 --sweep-dwell 5
+
+    # Park at one tap and HOLD it while you measure (see --hold below)
+    uv run python scripts/hardware-test/test_x9c104.py --position 46 --hold
 
     # Find where ambient noise starts triggering, in a quiet room
     uv run python scripts/hardware-test/test_x9c104.py --noise-floor
@@ -259,6 +264,44 @@ def validate_args(parser, args) -> None:
         parser.error("--trigger-pin cannot be one of the digipot's own control lines")
 
 
+def hold_after_parking(hold: bool) -> None:
+    """Keep the control lines driven, or explain why the wiper will not stay.
+
+    Releasing the GPIOs is what makes a parked position evaporate: BCM 9-27
+    default to a pull-down, so once this process exits and the lines float, CS
+    is pulled low -- selecting the chip -- while INC falls with it. That falling
+    edge is a step command, and the now-selected chip will keep taking steps
+    from any noise on the line. The wiper walks away from wherever it was
+    parked, usually toward RL.
+
+    Nothing in software can outlive the process holding those lines, so the
+    options are to stay alive while you measure, or to fit the pull-up on CS
+    that the wiring guide describes.
+    """
+    if hold:
+        print(
+            "\nHolding: the lines stay driven, so the wiper stays put. "
+            "Measure now, then press Enter to release."
+        )
+        try:
+            input()
+        except (EOFError, KeyboardInterrupt):
+            print()
+    else:
+        print(
+            "\nNOTE: this position will NOT survive the script exiting. Releasing "
+            "the GPIOs lets CS fall low and the wiper steps away from it. Re-run "
+            "with --hold to keep it parked while you measure, or fit the pull-up "
+            "on CS described in docs/sound-trigger-wiring.md."
+        )
+    print(
+        "\nNothing was written to the chip's non-volatile memory, so a power "
+        "cycle restores whatever it held before. To make a setting stick, set it "
+        "in Debug > Sound with the server running -- the server holds the lines "
+        "for as long as it runs."
+    )
+
+
 def main() -> None:
     """Parse arguments and run the requested bring-up mode."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -300,6 +343,12 @@ def main() -> None:
         type=float,
         default=0.3,
         help="Seconds to let the preamp settle after each step (default: 0.3)",
+    )
+    parser.add_argument(
+        "--hold",
+        action="store_true",
+        help="Keep the control lines driven after parking, until you press Enter, "
+        "so the wiper stays put while you measure",
     )
     parser.add_argument(
         "--margin",
@@ -345,11 +394,7 @@ def main() -> None:
             target = DEFAULT_POSITION
         pot.set_position(target)
         print(f"\nParked at {describe(target)}")
-        print(
-            "\nNothing was written to the chip's non-volatile memory, so a power "
-            "cycle restores whatever it held before. To make a setting stick, set "
-            "it in Debug > Tuning with the server running."
-        )
+        hold_after_parking(args.hold)
     finally:
         pot.close()
 

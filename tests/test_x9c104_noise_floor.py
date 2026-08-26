@@ -248,3 +248,56 @@ class TestValidateArgs:
         parser, args = self._parser_and_args(noise_floor=False, trigger_pin=23)
 
         script.validate_args(parser, args)
+
+
+class TestHoldAfterParking:
+    """A parked wiper only lasts while something drives the lines, so the script
+    has to either stay alive or say plainly that the value will not survive."""
+
+    def test_hold_waits_for_the_user_before_releasing(self, monkeypatch, capsys):
+        waited = []
+        monkeypatch.setattr("builtins.input", lambda *_a: waited.append(True) or "")
+
+        script.hold_after_parking(True)
+
+        assert waited == [True]
+        assert "stays put" in capsys.readouterr().out
+
+    def test_hold_survives_a_closed_stdin(self, monkeypatch):
+        def raise_eof(*_args):
+            raise EOFError
+
+        monkeypatch.setattr("builtins.input", raise_eof)
+
+        script.hold_after_parking(True)
+
+    def test_hold_survives_a_ctrl_c(self, monkeypatch):
+        def raise_interrupt(*_args):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("builtins.input", raise_interrupt)
+
+        script.hold_after_parking(True)
+
+    def test_without_hold_the_user_is_warned_and_nothing_blocks(self, monkeypatch, capsys):
+        def fail(*_args):
+            raise AssertionError("must not block without --hold")
+
+        monkeypatch.setattr("builtins.input", fail)
+
+        script.hold_after_parking(False)
+
+        out = capsys.readouterr().out
+        assert "will NOT survive" in out
+        assert "--hold" in out
+
+    def test_both_paths_explain_that_nvm_was_untouched(self, monkeypatch, capsys):
+        monkeypatch.setattr("builtins.input", lambda *_a: "")
+
+        script.hold_after_parking(True)
+        held = capsys.readouterr().out
+        script.hold_after_parking(False)
+        unheld = capsys.readouterr().out
+
+        assert "non-volatile memory" in held
+        assert "non-volatile memory" in unheld

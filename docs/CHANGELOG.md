@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the chip's own non-volatile memory is never written. A build with a soldered
   `R17` is unaffected. See
   [Sound Trigger Wiring](sound-trigger-wiring.md#optional-software-controlled-sensitivity-x9c104-digital-pot).
+- **X9C104 `CS` pull-up.** The wiring guide now calls for a 10 kΩ pull-up from
+  `CS` to the Pi's **3.3 V** (not the pot's 5 V rail — Pi GPIOs are not 5 V
+  tolerant). Without it the wiper only holds while a process drives the lines:
+  releasing them lets `CS` fall to the Pi's default pull-down, selecting the
+  chip, and the accompanying edge on `INC` steps the wiper off its setting.
 - **Debug page tuning split.** The Debug panel's single **Tuning** tab is now
   **Radar** and **Sound**, so radar filters and sound-trigger sensitivity no
   longer share one scrolling column.

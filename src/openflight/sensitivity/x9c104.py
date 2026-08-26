@@ -253,7 +253,16 @@ class X9C104:
         return position
 
     def close(self) -> None:
-        """Release the GPIO lines. Idempotent, and safe to call after a failure."""
+        """Release the GPIO lines. Idempotent, and safe to call after a failure.
+
+        The wiper only stays put while something drives these lines. BCM 9-27
+        default to a pull-down, so once released CS falls low -- selecting the
+        chip -- and INC falls with it, which is a step command. A selected chip
+        then keeps stepping on line noise. The wiring guide's 10k pull-up on CS
+        to 3.3V is what makes a position survive this process; without it, the
+        setting only lasts as long as the server runs, which is why the saved
+        position is re-applied at every startup.
+        """
         for line in (self._cs, self._inc, self._ud):
             if line is not None:
                 _close_quietly(line)

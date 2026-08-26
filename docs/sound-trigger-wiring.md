@@ -250,6 +250,36 @@ in one block. Ground is **pin 20**, not pin 14: on a build with the OPS243 on
 the GPIO UART, [that migration's diagram](ops243-uart-migration.md) already has
 pin 14 carrying the radar's ground return.
 
+### Strongly Recommended: A Pull-Up on CS
+
+Add a **10 kΩ resistor from `CS` (pin 7) to the Pi's 3.3 V** (header pin 1 or
+17).
+
+Without it, the wiper only stays where you put it for as long as some process
+is driving the GPIOs. BCM 9–27 default to a pull-down, so the moment the lines
+are released — a bench script exiting, the server stopping — `CS` is pulled
+**low**, which *selects* the chip, and `INC` falls with it. That falling edge is
+a step command, and a selected chip keeps taking steps from any noise on the
+line. The wiper walks away from its setting.
+
+The pull-up holds `CS` high whenever the Pi is not actively driving it, so an
+unselected chip ignores everything and the wiper freezes.
+
+**Pull up to 3.3 V, not to the pot's 5 V rail.** A pull-up to 5 V would put
+~4.2 V on that node whenever the Pi released the line, and Pi GPIOs are **not**
+5 V tolerant — that damages the Pi. 3.3 V is still comfortably above the
+X9C104's 2.0 V logic-high threshold, so the chip reads it as deselected.
+
+```
+   Pi 3.3V (header pin 1 or 17)
+        │
+       10kΩ
+        │
+        ├────────── X9C104 pin 7 (CS)
+        │
+   Pi BCM22 (header pin 15)
+```
+
 **Power it from 5V, not 3.3V.** The X9C104's DC characteristics are specified at
 5V. Its logic inputs read high from 2.0V, so the Pi's 3.3V GPIOs drive `CS`,
 `INC` and `U/D` directly with no level shifter. The resistor element only ever
@@ -473,6 +503,7 @@ including `scripts/start-kiosk.sh` — sets it correctly.
 - [ ] X9C104 pin 7 (CS) → Pi BCM22 (physical pin 15)
 - [ ] X9C104 pin 1 (INC) → Pi BCM23 (physical pin 16)
 - [ ] X9C104 pin 2 (U/D) → Pi BCM24 (physical pin 18)
+- [ ] 10 kΩ from X9C104 pin 7 (CS) to Pi **3.3 V** — not to 5 V
 - [ ] X9C104 pin 3 (RH) linked to pin 5 (RW)
 - [ ] RH+RW pair → one R17 pad; pin 6 (RL) → the other R17 pad
 - [ ] No fixed resistor left soldered in R17 (it would parallel the pot)
@@ -513,6 +544,28 @@ The server could not claim the GPIO lines.
 2. Confirm the user is in the `gpio` group: `groups | grep gpio`.
 3. If this Pi exposes the header on a different gpiochip, set
    `OPENFLIGHT_GPIO_CHIP`.
+
+### Digital pot: a parked position does not hold
+
+Symptom: `--position N` sets the wiper, but the resistance reverts as soon as
+the command finishes.
+
+This is expected without the [pull-up on `CS`](#strongly-recommended-a-pull-up-on-cs).
+Releasing the GPIOs lets `CS` fall to the Pi's default pull-down, which selects
+the chip, and the accompanying fall on `INC` is a step command. A selected chip
+then keeps stepping on line noise, so the wiper drifts off the parked value.
+
+Two fixes, and you want both eventually:
+
+- **Now, to measure:** re-run with `--hold`. The script stays alive with the
+  lines driven until you press Enter, so the wiper stays put.
+  ```bash
+  uv run python scripts/hardware-test/test_x9c104.py --position 46 --hold
+  ```
+- **Permanently:** fit the 10 kΩ `CS` pull-up to 3.3 V.
+
+Note this does not affect normal operation. The server holds the lines for as
+long as it runs, and re-applies the saved position at every startup.
 
 ### Digital pot: meter readings do not track the tap
 
