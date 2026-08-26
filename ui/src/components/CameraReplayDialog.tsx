@@ -31,7 +31,7 @@ export function CameraReplayDialog({ replay, state, onClose, onRetry, onPlayback
   const videoRef = useRef<HTMLVideoElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(replay.duration_seconds);
-  const [paused, setPaused] = useState(false);
+  const [paused, setPaused] = useState(true);
   const [playbackRate, setPlaybackRate] = useState<(typeof PLAYBACK_RATES)[number]>(1);
   const [loopEnabled, setLoopEnabled] = useState(false);
   const impactPosition = replay.frame_count > 1 ? (replay.trigger_frame / (replay.frame_count - 1)) * 100 : 0;
