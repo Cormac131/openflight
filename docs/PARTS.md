@@ -42,10 +42,10 @@ This is entirely optional. A build with a soldered R17 works exactly as before.
 
 | Part | Description | Link | ~Price |
 |------|-------------|------|--------|
-| **Renesas X9C104P** | 100 kΩ, 100-tap digital potentiometer, 8-pin DIP | [Mouser](https://www.mouser.com/c/?q=X9C104P) | $2 |
+| **X9C104** | 100 kΩ, 100-tap digital potentiometer. Either the bare 8-pin DIP (`X9C104P`) or a breakout module — see the [pin mapping](sound-trigger-wiring.md#bare-chip-or-breakout-module) | [Mouser](https://www.mouser.com/c/?q=X9C104P) | $2 |
 | **Jumper Wires** | 5 wires: CS/INC/U-D → Pi GPIO, VCC → Pi 5V, GND → Pi GND | Any | $2 |
 | **10 kΩ resistor** | Pull-up from `CS` to Pi 3.3V, so the wiper holds when the Pi is not driving it | Any electronics supplier | $1 |
-| **100 nF ceramic capacitor** | **Required.** Decoupling across the pot's `VCC`/`VSS`, at the chip. Without it the supply rings on every switching event and the wiper's counter miscounts | Any electronics supplier | $1 |
+| **100 nF ceramic capacitor** | **Required** for a bare DIP — decoupling across the pot's `VCC`/`VSS`, at the chip. Breakout modules usually have one fitted already | Any electronics supplier | $1 |
 | **3× 100–330 Ω resistors** | Series damping on `CS`/`INC`/`U-D`. Without them long leads ring and the chip counts one pulse as several | Any electronics supplier | $1 |
 | **Wire pigtails** | 2 short leads from the pot's RW/RL to the R17 pads | Any | $1 |
 
@@ -54,11 +54,10 @@ This is entirely optional. A build with a soldered R17 works exactly as before.
 > **X9C104** covers the 0–100 kΩ span R17 needs; a smaller part cannot reach the
 > 47 kΩ starting point the wiring guide recommends.
 
-> **Power it from 5V.** The X9C104's DC characteristics are specified at 5V, and
-> the Pi has 5V on header pins 2 and 4. Its logic inputs need only 2.0V to read
-> high, so the Pi's 3.3V GPIOs drive CS, INC and U/D directly — no level
-> shifter. The resistor network itself only ever sees the detector's 3.3V rail,
-> which is safely inside the pot's 0–5V analog range.
+> **3.3V or 5V both work.** The X9C104's supply range is 2.7–5.5V, so the Pi's
+> 3.3V rail is in spec, and it keeps the whole subsystem single-rail. Its logic
+> inputs need only 2.0V to read high, so the Pi's 3.3V GPIOs drive CS, INC and
+> U/D directly either way — no level shifter.
 
 Wiring and setup are in
 [sound-trigger-wiring.md](sound-trigger-wiring.md#optional-software-controlled-sensitivity-x9c104-digital-pot);
