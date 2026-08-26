@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Software-adjustable sound trigger sensitivity.** An optional X9C104 digital
   potentiometer fitted to the SEN-14262's `R17` pads puts the detector's preamp
   gain under software control, replacing the soldered resistor. Tune it with the
-  **Sound Trigger Sensitivity** slider on **Debug → Tuning**; the readout shows
+  **Sound Trigger Sensitivity** slider on **Debug → Sound**; the readout shows
   the applied percentage, the resistance `R17` now presents, and the resulting
   preamp leg. Enable with `--sound-sensitivity` (default GPIOs: BCM22 `CS`,
   BCM23 `INC`, BCM24 `U/D`; 5V on physical pin 2, ground on physical pin 20).
@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the chip's own non-volatile memory is never written. A build with a soldered
   `R17` is unaffected. See
   [Sound Trigger Wiring](sound-trigger-wiring.md#optional-software-controlled-sensitivity-x9c104-digital-pot).
+- **Debug page tuning split.** The Debug panel's single **Tuning** tab is now
+  **Radar** and **Sound**, so radar filters and sound-trigger sensitivity no
+  longer share one scrolling column.
 - **Instrument-panel kiosk UI.** The dashboard is a tabbed shell (Live, Stats,
   Shots, Camera, Players, Debug) instead of the previous stacked shot and stats
   views. Tap a Live metric to pin it top-left while keeping all ten metrics

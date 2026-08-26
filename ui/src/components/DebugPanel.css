@@ -29,6 +29,9 @@
 /* Sub-tabs */
 .debug-tabs {
   display: flex;
+  /* Four tabs fit one row on a 1024px kiosk; wrapping rather than clipping is
+     the safe failure on the narrower 800px builds. */
+  flex-wrap: wrap;
   gap: var(--space-xs);
   flex-shrink: 0;
   margin-bottom: var(--space-md);

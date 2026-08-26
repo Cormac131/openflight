@@ -137,7 +137,7 @@ above.
 If you fitted an **X9C104** digital potentiometer to the SEN-14262's `R17` pads
 instead of a soldered resistor, the setup script does not configure it — there
 is nothing to configure on the hardware side. Start the server with
-`--sound-sensitivity` and tune it from **Debug → Tuning** at runtime:
+`--sound-sensitivity` and tune it from **Debug → Sound** at runtime:
 
 ```bash
 ./scripts/start-kiosk.sh --sound-sensitivity
@@ -318,7 +318,11 @@ To sweep the pot with a meter (stop the server first — it holds the same GPIO
 lines):
 
 ```bash
+# Sweep the wiper against a multimeter on the R17 pads
 uv run python scripts/hardware-test/test_x9c104.py --sweep
+
+# Sweep while counting GATE edges, to find where room noise starts triggering
+uv run python scripts/hardware-test/test_x9c104.py --noise-floor
 ```
 
 ### K-LD7 Not Connecting

@@ -399,7 +399,7 @@ export function SoundSensitivityControl({
   );
 }
 
-type DebugTab = 'status' | 'history' | 'tuning';
+type DebugTab = 'status' | 'history' | 'radar' | 'sound';
 
 export function DebugPanel({
   radarConfig,
@@ -443,10 +443,16 @@ export function DebugPanel({
           </button>
         )}
         <button
-          className={`debug-tabs__tab ${activeTab === 'tuning' ? 'debug-tabs__tab--active' : ''}`}
-          onClick={() => setActiveTab('tuning')}
+          className={`debug-tabs__tab ${activeTab === 'radar' ? 'debug-tabs__tab--active' : ''}`}
+          onClick={() => setActiveTab('radar')}
         >
-          Tuning
+          Radar
+        </button>
+        <button
+          className={`debug-tabs__tab ${activeTab === 'sound' ? 'debug-tabs__tab--active' : ''}`}
+          onClick={() => setActiveTab('sound')}
+        >
+          Sound
         </button>
       </div>
 
@@ -478,7 +484,7 @@ export function DebugPanel({
           </div>
         )}
 
-        {activeTab === 'tuning' && (
+        {activeTab === 'radar' && (
           <div className="debug-panel__section">
             <h4>Radar Tuning</h4>
             {tuningDisabled && <p className="debug-panel__mock-warning">Radar tuning disabled in mock mode</p>}
@@ -546,7 +552,7 @@ export function DebugPanel({
           </div>
         )}
 
-        {activeTab === 'tuning' && (
+        {activeTab === 'sound' && (
           <SoundSensitivityControl
             sensitivity={soundSensitivity}
             error={soundSensitivityError}

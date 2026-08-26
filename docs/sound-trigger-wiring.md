@@ -152,7 +152,7 @@ Make a sound near the sensor... (Ctrl+C to quit)
 
 A soldered R17 fixes the detector's gain at one value. Swapping it for an
 **X9C104** 100 kΩ digital potentiometer puts that resistance under software
-control, so sensitivity becomes a slider on the **Debug → Tuning** page instead
+control, so sensitivity becomes a slider on the **Debug → Sound** page instead
 of a trip to the bench. Everything else about the trigger is unchanged: `GATE`
 still drives `HOST_INT` directly, and the ~10 µs hardware latency is untouched.
 
@@ -315,7 +315,7 @@ Useful flags:
 | `--sound-sensitivity-inc-pin N` | Move `INC` off BCM23 |
 | `--sound-sensitivity-ud-pin N` | Move `U/D` off BCM24 |
 
-### Step 4: Verify with a Meter
+### Step 4: Verify the Resistance with a Meter
 
 Stop the server first — it holds the same GPIO lines — then sweep the wiper with
 a multimeter across the R17 pads:
@@ -331,9 +331,51 @@ You should see the pad-to-pad resistance climb from a few tens of ohms to about
 uv run python scripts/hardware-test/test_x9c104.py --position 46
 ```
 
-### Step 5: Tune from the UI
+### Step 5: Find the Ceiling for Your Room
 
-Open **Debug → Tuning** and use the **Sound Trigger Sensitivity** slider. The
+A meter proves the resistance moved. It cannot tell you whether *sensitivity*
+moved, which is the thing you actually care about. For that, sweep the wiper
+while counting `GATE` edges on the trigger line:
+
+```bash
+uv run python scripts/hardware-test/test_x9c104.py --noise-floor
+```
+
+Run it in the room you hit in, with the room as quiet as it gets during play,
+and do not hit anything while it runs. Each tap gets a dwell window:
+
+```
+  tap        R17   edges    high  verdict
+  ---  ---------  ------  ------  ---------
+    0       0.0k       0      0%  quiet
+   10      10.1k       0      0%  quiet
+   20      20.2k       0      0%  quiet
+   30      30.3k       0      0%  quiet
+   40      40.4k       3      2%  active
+   ...
+
+Ambient noise started firing the trigger at tap 40; backing off 5 taps lands on 35.
+```
+
+The tap where `active` first appears is where room noise alone fires the
+trigger — the **ceiling**. The script backs off a few taps and parks the wiper
+there.
+
+Two verdicts other than `quiet` are worth knowing:
+
+- **`active`** — the GATE is pulsing. Ambient noise is getting through.
+- **`saturated`** — the GATE is high essentially the whole window. That is the
+  classic over-gain failure, and it is invisible to an edge count alone: a
+  latched-high line produces *no* transitions, so counting edges would rank the
+  worst case as the quietest. If tap 0 is already saturated, gain is not the
+  problem — go back to the wiring checks.
+
+This only finds the ceiling. The **floor** — the tap below which real strikes
+stop registering — needs actual strikes, which is Step 6.
+
+### Step 6: Tune from the UI
+
+Open **Debug → Sound** and use the **Sound Trigger Sensitivity** slider. The
 readout under it shows the applied percentage, the resistance R17 now presents,
 and the resulting preamp leg.
 
@@ -343,6 +385,16 @@ and the resulting preamp leg.
   **up**.
 - **GATE LED stuck on** at every setting — the gain is not the problem; go back
   to the wiring checks below.
+
+To find the **floor**, start at the ceiling Step 5 gave you and walk down while
+hitting shots, until strikes stop registering. Your working setting is between
+the two. Watch **Debug → Status** while you do it: the trigger counters and
+Last Trigger card show whether each strike was accepted, which is a faster
+signal than waiting for a shot to appear.
+
+If the two ends cross — ambient noise fires the trigger at a tap *below* where
+strikes reliably register — no setting will work, and gain is not the lever.
+Move the detector away from the noise source, or damp it.
 
 **Recalibrate wiper** re-homes the wiper against the `RL` end and steps back to
 the current position. The X9C104 cannot be read back, so the position OpenFlight
@@ -411,6 +463,14 @@ The server could not claim the GPIO lines.
 2. Confirm the user is in the `gpio` group: `groups | grep gpio`.
 3. If this Pi exposes the header on a different gpiochip, set
    `OPENFLIGHT_GPIO_CHIP`.
+
+### Digital pot: the sweep never leaves "quiet" at any tap
+
+Ambient noise never reaches the trigger even at full gain. That is a fine
+result in a quiet room — take the top of the range and confirm strikes still
+register. If strikes do not register either, the GATE path is the problem, not
+the gain: check `GATE` → `HOST_INT`, and that the detector's LED flashes when
+you clap.
 
 ### Digital pot: slider moves but the detector does not change
 

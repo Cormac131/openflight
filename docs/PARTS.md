@@ -35,7 +35,7 @@ The sound trigger detects club impact to precisely time radar captures. Essentia
 A fixed R17 resistor locks the detector at one gain. Fitting an **X9C104**
 100 kΩ digital potentiometer to the R17 pads instead makes that resistance
 software-controlled, so you tune sensitivity with a slider on the **Debug →
-Tuning** page rather than with a soldering iron. Useful if you hit in more than
+Sound** page rather than with a soldering iron. Useful if you hit in more than
 one place — a garage, a range bay, and a quiet basement all want different gain.
 
 This is entirely optional. A build with a soldered R17 works exactly as before.
