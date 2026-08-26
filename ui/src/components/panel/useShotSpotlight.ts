@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { LiveViewMode } from '../../stores/useLiveViewStore';
 
 export function shouldOpenSpotlight(mode: LiveViewMode, isNewShot: boolean): boolean {
@@ -25,15 +25,17 @@ export function createSpotlightController(
 }
 
 export function useShotSpotlight(mode: LiveViewMode, durationMs: number, isNewShot: boolean) {
-  const [open, setOpen] = useState(() => shouldOpenSpotlight(mode, isNewShot));
+  const hideRef = useRef(() => {});
+  const controllerRef = useRef<ReturnType<typeof createSpotlightController> | null>(null);
+  if (controllerRef.current === null) {
+    // Freeze mode/duration for this hook instance. LivePanel remounts on a new
+    // shot, so menu changes apply then; an overlay already on screen is left alone.
+    controllerRef.current = createSpotlightController(mode, durationMs, isNewShot, () => hideRef.current());
+  }
+  const [open, setOpen] = useState(controllerRef.current.openInitially);
+  hideRef.current = () => setOpen(false);
 
-  useEffect(() => {
-    if (!open || mode !== 'timed') {
-      return;
-    }
-    const timer = setTimeout(() => setOpen(false), durationMs);
-    return () => clearTimeout(timer);
-  }, [open, mode, durationMs]);
+  useEffect(() => controllerRef.current?.start(), []);
 
   return { open, dismiss: () => setOpen(false) };
 }

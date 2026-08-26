@@ -209,12 +209,9 @@ export function OnboardingFlow({
 
         {step === 'done' ? (
           <div className="onboarding__welcome">
-            <h1
-              id="onboarding-title"
-              className="onboarding__title"
-              // renderToString encodes ASCII apostrophes; SSR tests match You're ready.
-              dangerouslySetInnerHTML={{ __html: t('onboarding.doneTitle') }}
-            />
+            <h1 id="onboarding-title" className="onboarding__title">
+              {t('onboarding.doneTitle')}
+            </h1>
             <p className="onboarding__detail">{t('onboarding.doneDetail')}</p>
           </div>
         ) : null}

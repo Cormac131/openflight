@@ -67,6 +67,21 @@ describe('useLiveViewStore', () => {
     expect(useLiveViewStore.getState().durationMs).toBe(10000);
   });
 
+  it('restores mixed-validity storage per field', async () => {
+    installBrowser({ [STORAGE_KEY]: JSON.stringify({ mode: 'sticky', durationMs: 2500 }) });
+    const useLiveViewStore = await loadStore();
+
+    expect(useLiveViewStore.getState().mode).toBe('sticky');
+    expect(useLiveViewStore.getState().durationMs).toBe(10000);
+
+    vi.resetModules();
+    installBrowser({ [STORAGE_KEY]: JSON.stringify({ mode: 'hero', durationMs: 5000 }) });
+    const useLiveViewStoreAgain = await loadStore();
+
+    expect(useLiveViewStoreAgain.getState().mode).toBe('tiles');
+    expect(useLiveViewStoreAgain.getState().durationMs).toBe(5000);
+  });
+
   it('persists mode without clearing duration', async () => {
     const store = installBrowser();
     const useLiveViewStore = await loadStore();

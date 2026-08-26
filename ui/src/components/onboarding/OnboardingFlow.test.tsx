@@ -53,7 +53,7 @@ describe('OnboardingFlow', () => {
 
   it('uses Start on the done screen', () => {
     const html = render('done');
-    expect(html).toContain("You're ready");
+    expect(html).toContain('You&#x27;re ready');
     expect(html).toContain('Start');
     expect(html).not.toContain('Continue');
   });

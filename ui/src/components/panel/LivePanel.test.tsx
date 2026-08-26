@@ -177,26 +177,6 @@ describe('LivePanel', () => {
     expect(html).not.toContain('>radar<');
   });
 
-  it('marks experimental tiles with a flask icon instead of caption text', () => {
-    const html = render(
-      makeShot({
-        club_angle_deg: null,
-        club_path_deg: null,
-        launch_angle_horizontal_source: 'camera_assisted_experimental',
-        experimental_fused_attack_angle_deg: -4.2,
-        experimental_fused_club_path_deg: 3.1,
-        experimental_fused_status: 'approach_mixed',
-      })
-    );
-
-    expect(html).toContain('metric-card__experimental');
-    expect(html).toMatch(/metric-card__subtext[^>]*>Fused</);
-    expect(html).toMatch(/metric-card__subtext[^>]*>Camera</);
-    expect(html).not.toContain('camera fused');
-    expect(html).not.toContain('camera assisted');
-    expect(html).not.toMatch(/metric-card__confidence-label">experimental</i);
-  });
-
   it('makes every tile a pressable button so it can be selected', () => {
     const html = render(makeShot());
 

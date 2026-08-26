@@ -41,4 +41,18 @@ describe('createSpotlightController', () => {
     vi.advanceTimersByTime(60_000);
     expect(hide).not.toHaveBeenCalled();
   });
+
+  it('keeps mode and duration frozen on the instance', () => {
+    vi.useFakeTimers();
+    const hide = vi.fn();
+    const { openInitially, start } = createSpotlightController('timed', 10000, true, hide);
+    expect(openInitially).toBe(true);
+    start();
+    // A later store change to 5s / sticky is never passed into this instance.
+    createSpotlightController('sticky', 5000, true, hide);
+    vi.advanceTimersByTime(5000);
+    expect(hide).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(5000);
+    expect(hide).toHaveBeenCalledTimes(1);
+  });
 });
