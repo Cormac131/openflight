@@ -822,7 +822,7 @@
 }
 
 .shots-panel__columns {
-  grid-template-columns: 52px 92px repeat(5, 1fr) 64px;
+  grid-template-columns: 52px 92px repeat(5, 1fr) 126px;
   padding: 9px 26px 7px;
   border-top: 1px solid var(--color-border);
   flex-shrink: 0;
@@ -912,9 +912,19 @@
   color: var(--color-accent);
 }
 
+.shots-panel__actions {
+  flex-shrink: 0;
+  width: 126px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+}
+
+.shots-panel__replay,
 .shots-panel__delete {
   flex-shrink: 0;
-  width: 64px;
+  height: 44px;
   padding: 7px 8px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
@@ -927,6 +937,16 @@
   text-transform: uppercase;
   cursor: pointer;
   touch-action: none;
+}
+
+.shots-panel__replay {
+  width: 52px;
+  color: var(--color-accent);
+  font-size: 0.75rem;
+}
+
+.shots-panel__delete {
+  width: 64px;
 }
 
 .shots-panel__delete:hover {

@@ -40,7 +40,7 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
 }
 
 const render = (shots: Shot[]) =>
-  text(renderToString(<ShotsPanel shots={shots} playerName="James" onDeleteShot={() => {}} />));
+  text(renderToString(<ShotsPanel shots={shots} playerName="James" onDeleteShot={() => {}} onReplayShot={() => {}} />));
 
 describe('ShotsPanel', () => {
   it('shows an empty state before any shots', () => {
@@ -120,6 +120,26 @@ describe('ShotsPanel', () => {
 
     expect(html.match(/shots-panel__delete/g)).toHaveLength(2);
     expect(html).toContain('aria-label="Delete shot 2"');
+  });
+
+  it('shows replay only for shots backed by a camera capture', () => {
+    const html = render([
+      makeShot({ timestamp: 'a' }),
+      makeShot({
+        timestamp: 'b',
+        camera_replay: {
+          id: 'replay-123',
+          frame_count: 99,
+          trigger_frame: 73,
+          playback_fps: 60,
+          duration_seconds: 1.65,
+          display_mirror_horizontal: true,
+        },
+      }),
+    ]);
+
+    expect(html.match(/shots-panel__replay/g)).toHaveLength(1);
+    expect(html).toContain('aria-label="Replay shot 2"');
   });
 
   it('labels a swing-speed row with its implement', () => {
