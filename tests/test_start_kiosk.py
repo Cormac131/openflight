@@ -450,3 +450,48 @@ def test_sound_sensitivity_options_are_not_forwarded_without_the_flag():
     command_arguments = _dry_run("--sound-sensitivity-i2c-bus", "3").stdout.strip().split()
 
     assert "--sound-sensitivity-i2c-bus" not in command_arguments
+
+
+def test_sound_sensitivity_auto_is_off_unless_asked_for():
+    command_arguments = _dry_run("--sound-sensitivity").stdout.strip().split()
+
+    assert "--sound-sensitivity-auto" not in command_arguments
+
+
+def test_sound_sensitivity_auto_options_are_forwarded():
+    command_arguments = (
+        _dry_run(
+            "--sound-sensitivity",
+            "--sound-sensitivity-auto",
+            "--sound-sensitivity-envelope-address",
+            "0x49",
+            "--sound-sensitivity-envelope-channel",
+            "2",
+            "--sound-sensitivity-detector-volts",
+            "5.0",
+            "--sound-sensitivity-target-low",
+            "0.65",
+            "--sound-sensitivity-target-high",
+            "0.75",
+        )
+        .stdout.strip()
+        .split()
+    )
+
+    assert "--sound-sensitivity-auto" in command_arguments
+    index = command_arguments.index
+    assert command_arguments[index("--sound-sensitivity-envelope-address") + 1] == "0x49"
+    assert command_arguments[index("--sound-sensitivity-envelope-channel") + 1] == "2"
+    assert command_arguments[index("--sound-sensitivity-detector-volts") + 1] == "5.0"
+    assert command_arguments[index("--sound-sensitivity-target-low") + 1] == "0.65"
+    assert command_arguments[index("--sound-sensitivity-target-high") + 1] == "0.75"
+
+
+def test_auto_options_are_not_forwarded_without_the_auto_flag():
+    command_arguments = (
+        _dry_run("--sound-sensitivity", "--sound-sensitivity-envelope-address", "0x49")
+        .stdout.strip()
+        .split()
+    )
+
+    assert "--sound-sensitivity-envelope-address" not in command_arguments

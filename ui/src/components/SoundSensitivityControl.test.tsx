@@ -16,18 +16,23 @@ function sensitivity(overrides: Partial<SoundSensitivity> = {}): SoundSensitivit
     preamp_feedback_ohms: 27557,
     series_ohms: 33000,
     simulated: false,
+    auto_available: false,
+    auto_enabled: false,
+    last_peak: null,
+    last_decision: null,
     error: null,
     ...overrides,
   };
 }
 
 function render(overrides: Partial<SoundSensitivity> = {}, error: string | null = null) {
-  return renderToString(
-    <SoundSensitivityControl
-      sensitivity={sensitivity(overrides)}
-      error={error}
-      onUpdate={noop}
-    />
+  return (
+    renderToString(
+      <SoundSensitivityControl sensitivity={sensitivity(overrides)} error={error} onUpdate={noop} onToggleAuto={noop} />
+    )
+      // renderToString separates adjacent text nodes with an empty comment;
+      // it carries no meaning and would break every multi-part assertion.
+      .replace(/<!-- -->/g, '')
   );
 }
 
@@ -75,5 +80,64 @@ describe('SoundSensitivityControl', () => {
     const html = render({ position: 0, sensitivity_percent: 0, resistance_ohms: 820 });
 
     expect(html).toContain('820 Ω');
+  });
+});
+
+describe('SoundSensitivityControl auto gain', () => {
+  const peak = { volts: 2.3, fraction_of_full_scale: 0.7, sample_count: 40, clipped: false };
+  const decision = {
+    action: 'hold' as const,
+    position: 64,
+    next_position: 64,
+    reason: 'Median peak 70% is inside the 60%-80% band.',
+    committed: false,
+    median_fraction: 0.7,
+    shots_considered: 5,
+  };
+
+  it('hides the auto controls when no envelope ADC is fitted', () => {
+    const html = render({ auto_available: false });
+
+    expect(html).not.toContain('Auto gain');
+  });
+
+  it('offers the toggle when the ADC is present', () => {
+    const html = render({ auto_available: true, auto_enabled: false });
+
+    expect(html).toContain('Auto gain: OFF');
+    expect(html).toContain('aria-pressed="false"');
+  });
+
+  it('reflects the loop running', () => {
+    const html = render({ auto_available: true, auto_enabled: true });
+
+    expect(html).toContain('Auto gain: ON');
+    expect(html).toContain('aria-pressed="true"');
+  });
+
+  it('shows the last envelope peak as a percentage', () => {
+    const html = render({ auto_available: true, last_peak: peak });
+
+    expect(html).toContain('70%');
+  });
+
+  it('flags a clipped peak', () => {
+    // Clipping means the measurement is a floor, not a value -- worth calling out.
+    const html = render({ auto_available: true, last_peak: { ...peak, clipped: true } });
+
+    expect(html).toContain('CLIPPED');
+  });
+
+  it('explains what the loop just decided', () => {
+    const html = render({ auto_available: true, auto_enabled: true, last_decision: decision });
+
+    expect(html).toContain('Holding');
+    expect(html).toContain('inside the 60%-80% band');
+  });
+
+  it('hides the decision while the loop is off', () => {
+    const html = render({ auto_available: true, auto_enabled: false, last_decision: decision });
+
+    expect(html).not.toContain('Holding');
   });
 });

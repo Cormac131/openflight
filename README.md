@@ -120,6 +120,10 @@ scripts/start-kiosk.sh --battery geekworm
 # With the optional DS3502 digital pot on the sound detector's R17 pads,
 # so trigger sensitivity is a slider on the Debug page
 scripts/start-kiosk.sh --sound-sensitivity
+
+# ...and with an ADS1115 on the detector's ENVELOPE output, so the gain
+# tunes itself between shots
+scripts/start-kiosk.sh --sound-sensitivity --sound-sensitivity-auto
 ```
 
 The IWR6843 example values are not universal. Measure the geometry from the

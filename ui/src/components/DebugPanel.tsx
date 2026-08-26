@@ -18,6 +18,7 @@ interface DebugPanelProps {
   soundSensitivity: SoundSensitivity;
   soundSensitivityError: string | null;
   onUpdateSoundSensitivity: (position: number) => void;
+  onToggleSoundSensitivityAuto: (enabled: boolean) => void;
 }
 
 const REASON_DISPLAY: Record<string, string> = {
@@ -312,6 +313,7 @@ interface SoundSensitivityControlProps {
   sensitivity: SoundSensitivity;
   error: string | null;
   onUpdate: (position: number) => void;
+  onToggleAuto: (enabled: boolean) => void;
 }
 
 /**
@@ -321,12 +323,29 @@ interface SoundSensitivityControlProps {
  * from the chip. Re-deriving resistance in the browser would mean maintaining
  * the same formula twice, and it would not know the series resistor fitted.
  */
+const AUTO_ACTION_LABEL: Record<string, string> = {
+  waiting: 'Collecting shots',
+  hold: 'Holding',
+  raise: 'Raising gain',
+  lower: 'Lowering gain',
+  at_limit: 'Out of travel',
+};
+
 export function SoundSensitivityControl({
   sensitivity,
   error,
   onUpdate,
+  onToggleAuto,
 }: SoundSensitivityControlProps) {
-  const { enabled, position, max_position: maxPosition } = sensitivity;
+  const {
+    enabled,
+    position,
+    max_position: maxPosition,
+    auto_available: autoAvailable,
+    auto_enabled: autoEnabled,
+    last_peak: lastPeak,
+    last_decision: lastDecision,
+  } = sensitivity;
 
   return (
     <div className="debug-panel__section">
@@ -386,6 +405,44 @@ export function SoundSensitivityControl({
             fires on ambient noise, up if it misses strikes. The setting is stored on the pot itself,
             so it survives a power cycle.
           </p>
+
+          {autoAvailable && (
+            <div className="auto-gain">
+              <button
+                type="button"
+                className={`auto-gain__toggle ${autoEnabled ? 'auto-gain__toggle--on' : ''}`}
+                onClick={() => onToggleAuto(!autoEnabled)}
+                aria-pressed={autoEnabled}
+              >
+                Auto gain: {autoEnabled ? 'ON' : 'OFF'}
+              </button>
+
+              {lastPeak && (
+                <div className="auto-gain__peak">
+                  <span className="auto-gain__label">Last envelope peak</span>
+                  <span
+                    className={`auto-gain__value ${lastPeak.clipped ? 'auto-gain__value--clipped' : ''}`}
+                  >
+                    {(lastPeak.fraction_of_full_scale * 100).toFixed(0)}%
+                    {lastPeak.clipped ? ' — CLIPPED' : ''}
+                  </span>
+                </div>
+              )}
+
+              {autoEnabled && lastDecision && (
+                <p className="auto-gain__decision">
+                  <strong>{AUTO_ACTION_LABEL[lastDecision.action] ?? lastDecision.action}</strong>
+                  {' — '}
+                  {lastDecision.reason}
+                </p>
+              )}
+
+              <p className="debug-panel__hint">
+                Auto gain trims the pot between shots from the detector&apos;s ENVELOPE output.
+                Moving the slider by hand turns it off.
+              </p>
+            </div>
+          )}
         </>
       )}
     </div>
@@ -403,6 +460,7 @@ export function DebugPanel({
   soundSensitivity,
   soundSensitivityError,
   onUpdateSoundSensitivity,
+  onToggleSoundSensitivityAuto,
 }: DebugPanelProps) {
   const [activeTab, setActiveTab] = useState<DebugTab>('status');
   const isRollingBuffer = triggerStatus.mode === 'rolling-buffer';
@@ -549,6 +607,7 @@ export function DebugPanel({
             sensitivity={soundSensitivity}
             error={soundSensitivityError}
             onUpdate={onUpdateSoundSensitivity}
+            onToggleAuto={onToggleSoundSensitivityAuto}
           />
         )}
       </div>

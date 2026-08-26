@@ -62,6 +62,12 @@ SOUND_SENSITIVITY_I2C_BUS=""
 SOUND_SENSITIVITY_ADDRESS=""
 SOUND_SENSITIVITY_SERIES_OHMS=""
 SOUND_SENSITIVITY_POSITION=""
+SOUND_SENSITIVITY_AUTO=false
+SOUND_SENSITIVITY_ENVELOPE_ADDRESS=""
+SOUND_SENSITIVITY_ENVELOPE_CHANNEL=""
+SOUND_SENSITIVITY_DETECTOR_VOLTS=""
+SOUND_SENSITIVITY_TARGET_LOW=""
+SOUND_SENSITIVITY_TARGET_HIGH=""
 KLD7=false
 KLD7_PORT=""
 KLD7_ANGLE_OFFSET=""
@@ -322,6 +328,30 @@ while [[ $# -gt 0 ]]; do
             ;;
         --sound-sensitivity-position)
             SOUND_SENSITIVITY_POSITION="$2"
+            shift 2
+            ;;
+        --sound-sensitivity-auto)
+            SOUND_SENSITIVITY_AUTO=true
+            shift
+            ;;
+        --sound-sensitivity-envelope-address)
+            SOUND_SENSITIVITY_ENVELOPE_ADDRESS="$2"
+            shift 2
+            ;;
+        --sound-sensitivity-envelope-channel)
+            SOUND_SENSITIVITY_ENVELOPE_CHANNEL="$2"
+            shift 2
+            ;;
+        --sound-sensitivity-detector-volts)
+            SOUND_SENSITIVITY_DETECTOR_VOLTS="$2"
+            shift 2
+            ;;
+        --sound-sensitivity-target-low)
+            SOUND_SENSITIVITY_TARGET_LOW="$2"
+            shift 2
+            ;;
+        --sound-sensitivity-target-high)
+            SOUND_SENSITIVITY_TARGET_HIGH="$2"
             shift 2
             ;;
         --kld7)
@@ -766,6 +796,14 @@ if [ "$SOUND_SENSITIVITY" = true ]; then
     [ -n "$SOUND_SENSITIVITY_ADDRESS" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-address $SOUND_SENSITIVITY_ADDRESS"
     [ -n "$SOUND_SENSITIVITY_SERIES_OHMS" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-series-ohms $SOUND_SENSITIVITY_SERIES_OHMS"
     [ -n "$SOUND_SENSITIVITY_POSITION" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-position $SOUND_SENSITIVITY_POSITION"
+    if [ "$SOUND_SENSITIVITY_AUTO" = true ]; then
+        SERVER_CMD="$SERVER_CMD --sound-sensitivity-auto"
+        [ -n "$SOUND_SENSITIVITY_ENVELOPE_ADDRESS" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-envelope-address $SOUND_SENSITIVITY_ENVELOPE_ADDRESS"
+        [ -n "$SOUND_SENSITIVITY_ENVELOPE_CHANNEL" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-envelope-channel $SOUND_SENSITIVITY_ENVELOPE_CHANNEL"
+        [ -n "$SOUND_SENSITIVITY_DETECTOR_VOLTS" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-detector-volts $SOUND_SENSITIVITY_DETECTOR_VOLTS"
+        [ -n "$SOUND_SENSITIVITY_TARGET_LOW" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-target-low $SOUND_SENSITIVITY_TARGET_LOW"
+        [ -n "$SOUND_SENSITIVITY_TARGET_HIGH" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-target-high $SOUND_SENSITIVITY_TARGET_HIGH"
+    fi
 fi
 
 if [ "$EXPERIMENTAL_KLD7_RAW_RADC_LOGGING" = true ]; then

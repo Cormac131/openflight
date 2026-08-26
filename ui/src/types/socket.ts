@@ -52,6 +52,26 @@ export interface RadarConfig {
  * figure (`sensitivity_percent`, the resistances) is computed server-side from
  * that step so the maths lives in exactly one place.
  */
+/** The envelope peak measured for one shot, via the ADS1115. */
+export interface EnvelopePeak {
+  volts: number;
+  /** Share of the detector's own supply, which is where it clips. */
+  fraction_of_full_scale: number;
+  sample_count: number;
+  clipped: boolean;
+}
+
+/** What the closed gain loop concluded from the most recent shot. */
+export interface AutoGainDecision {
+  action: 'waiting' | 'hold' | 'raise' | 'lower' | 'at_limit';
+  position: number;
+  next_position: number;
+  reason: string;
+  committed: boolean;
+  median_fraction: number | null;
+  shots_considered: number;
+}
+
 export interface SoundSensitivity {
   enabled: boolean;
   position: number | null;
@@ -65,6 +85,11 @@ export interface SoundSensitivity {
   /** The fixed resistor in series with the wiper, which sets where the span sits. */
   series_ohms: number;
   simulated: boolean;
+  /** Whether the envelope ADC is fitted, and whether the closed loop is running. */
+  auto_available: boolean;
+  auto_enabled: boolean;
+  last_peak: EnvelopePeak | null;
+  last_decision: AutoGainDecision | null;
   error: string | null;
 }
 

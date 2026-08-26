@@ -281,6 +281,10 @@ class SocketService {
     this.socket?.emit('set_sound_sensitivity', { position });
   }
 
+  setSoundSensitivityAuto(enabled: boolean) {
+    this.socket?.emit('set_sound_sensitivity_auto', { enabled });
+  }
+
 
   toggleCamera() {
     this.socket?.emit('toggle_camera');

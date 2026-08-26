@@ -1380,6 +1380,12 @@ def init_sound_sensitivity(
     series_ohms: float = 33_000.0,
     position: Optional[int] = None,
     simulated: bool = False,
+    auto: bool = False,
+    envelope_address: int = 0x48,
+    envelope_channel: int = 0,
+    detector_volts: float = 3.3,
+    target_low: float = 0.60,
+    target_high: float = 0.80,
 ) -> bool:
     """Bring up the DS3502 that sets SEN-14262 preamp gain.
 
@@ -1397,12 +1403,24 @@ def init_sound_sensitivity(
             chip restored from its own EEPROM is left alone.
         simulated: Use the in-memory pot so ``--mock`` can drive the UI control
             with no hardware attached.
+        auto: Also bring up the ADS1115 envelope monitor and the closed-loop
+            gain controller, and start with the loop running.
+        envelope_address: ADS1115 address, 0x48-0x4b per its ADDR pin.
+        envelope_channel: ADS1115 single-ended input the detector's ENVELOPE
+            output is wired to.
+        detector_volts: The SEN-14262's own supply. Peaks are judged against
+            this, not the ADC's wider range, because it is where the detector
+            clips.
     """
     global sound_sensitivity_service  # pylint: disable=global-statement
     global sound_sensitivity_runtime_config  # pylint: disable=global-statement
 
     from .sensitivity import (  # pylint: disable=import-outside-toplevel
+        ADS1115,
         DS3502,
+        AutoGainController,
+        EnvelopeMonitor,
+        MockADS1115,
         MockDS3502,
         SoundSensitivityService,
     )
@@ -1414,18 +1432,41 @@ def init_sound_sensitivity(
         "i2c_bus": bus_number,
         "i2c_address": f"0x{address:02x}",
         "series_ohms": series_ohms,
+        "auto_gain": auto,
     }
+    if auto:
+        requested["envelope_address"] = f"0x{envelope_address:02x}"
+        requested["envelope_channel"] = envelope_channel
+        requested["detector_volts"] = detector_volts
     service = None
     try:
         pot_cls = MockDS3502 if simulated else DS3502
         pot = pot_cls(bus_number=bus_number, address=address, series_ohms=series_ohms)
-        service = SoundSensitivityService(pot, simulated=simulated)
+        envelope = None
+        controller = None
+        if auto:
+            adc_cls = MockADS1115 if simulated else ADS1115
+            envelope = EnvelopeMonitor(
+                adc_cls(bus_number=bus_number, address=envelope_address, channel=envelope_channel),
+                full_scale_volts=detector_volts,
+            )
+            controller = AutoGainController(
+                series_ohms=series_ohms, target_low=target_low, target_high=target_high
+            )
+        service = SoundSensitivityService(
+            pot,
+            simulated=simulated,
+            envelope=envelope,
+            controller=controller,
+            auto_enabled=auto,
+        )
         state = service.start(force_position=position)
         sound_sensitivity_service = service
         sound_sensitivity_runtime_config = {**requested, "enabled": True, "state": state.to_dict()}
         print(
             "Sound sensitivity control enabled "
-            f"(DS3502 step {state.position}, ~{state.resistance_ohms:.0f} ohm R17)"
+            f"(DS3502 step {state.position}, ~{state.resistance_ohms:.0f} ohm R17"
+            f"{', auto gain from ENVELOPE' if auto else ''})"
         )
         return True
     except Exception as error:  # pylint: disable=broad-exception-caught
@@ -2335,6 +2376,40 @@ def _emit_sound_sensitivity(payload: Optional[dict] = None) -> dict:
     return payload
 
 
+def _trim_sound_sensitivity_for_shot(shot: Shot) -> None:
+    """Let the closed loop trim the detector's gain from this shot's envelope.
+
+    Runs between shots by construction: it is called once the shot exists, and
+    only ever reads a peak the sampler already captured. Failures are swallowed
+    inside the service -- a sensitivity trim must never cost the user a shot.
+    """
+    if sound_sensitivity_service is None or shot.mode == "mock":
+        return
+    impact_timestamp = shot.impact_timestamp or shot.timestamp.timestamp()
+    decision = sound_sensitivity_service.observe_shot(impact_timestamp)
+    if decision is not None:
+        _emit_sound_sensitivity()
+
+
+@socketio.on("set_sound_sensitivity_auto")
+def handle_set_sound_sensitivity_auto(data):
+    """Turn the closed gain loop on or off from the Debug page."""
+    if sound_sensitivity_service is None:
+        socketio.emit(
+            "sound_sensitivity_error",
+            {"error": "Sound sensitivity control is not enabled on this build"},
+        )
+        return
+    try:
+        state = sound_sensitivity_service.set_auto_enabled(bool((data or {}).get("enabled")))
+    except Exception as error:  # pylint: disable=broad-except
+        logger.warning("[SERVER] Error toggling auto gain: %s", error, exc_info=True)
+        socketio.emit("sound_sensitivity_error", {"error": str(error)})
+        _emit_sound_sensitivity()
+        return
+    _emit_sound_sensitivity(state.to_dict())
+
+
 @socketio.on("get_sound_sensitivity")
 def handle_get_sound_sensitivity():
     """Send the sound detector's current sensitivity to the Debug page."""
@@ -2361,6 +2436,10 @@ def handle_set_sound_sensitivity(data):
         return
 
     try:
+        # A hand-set value and a running loop would fight each other, and the
+        # loop would win. Standing it down makes the override stick.
+        if sound_sensitivity_service.auto_enabled:
+            sound_sensitivity_service.set_auto_enabled(False)
         state = sound_sensitivity_service.set_position(position)
     except Exception as error:  # pylint: disable=broad-except
         logger.warning("[SERVER] Error setting sound sensitivity: %s", error, exc_info=True)
@@ -3092,6 +3171,7 @@ def on_shot_detected(shot: Shot):
     # Snapshot orientation before IWR capture can block, and select only data
     # timestamped before impact so impact vibration cannot bias the geometry.
     _snapshot_inclinometer_for_shot(shot)
+    _trim_sound_sensitivity_for_shot(shot)
     iwr6843_ms = _process_iwr6843_angle(shot)
     kld7_ms = None
     camera_capture_ms = None
@@ -4660,6 +4740,50 @@ def main():
         ),
     )
     parser.add_argument(
+        "--sound-sensitivity-auto",
+        action="store_true",
+        help=(
+            "Close the loop: read the detector's ENVELOPE output through an "
+            "ADS1115 and trim the pot between shots to keep peaks in band"
+        ),
+    )
+    parser.add_argument(
+        "--sound-sensitivity-target-low",
+        type=float,
+        default=0.60,
+        help=(
+            "Bottom of the envelope-peak target band, as a fraction of the "
+            "detector supply (default: 0.60)"
+        ),
+    )
+    parser.add_argument(
+        "--sound-sensitivity-target-high",
+        type=float,
+        default=0.80,
+        help="Top of the envelope-peak target band (default: 0.80)",
+    )
+    parser.add_argument(
+        "--sound-sensitivity-envelope-address",
+        type=lambda value: int(value, 0),
+        default=0x48,
+        help="ADS1115 I2C address, 0x48-0x4b per its ADDR pin (default: 0x48)",
+    )
+    parser.add_argument(
+        "--sound-sensitivity-envelope-channel",
+        type=int,
+        default=0,
+        help="ADS1115 single-ended input carrying ENVELOPE, 0-3 (default: 0)",
+    )
+    parser.add_argument(
+        "--sound-sensitivity-detector-volts",
+        type=float,
+        default=3.3,
+        help=(
+            "The SEN-14262's own supply, which is where it clips. Envelope "
+            "peaks are judged against this (default: 3.3)"
+        ),
+    )
+    parser.add_argument(
         "--sound-sensitivity-position",
         type=int,
         default=None,
@@ -4971,6 +5095,25 @@ def main():
             0 <= args.sound_sensitivity_position <= MAX_POSITION
         ):
             parser.error(f"--sound-sensitivity-position must be within 0..{MAX_POSITION}")
+        if args.sound_sensitivity_auto:
+            from .sensitivity import (  # pylint: disable=import-outside-toplevel
+                validate_envelope_address,
+            )
+
+            try:
+                validate_envelope_address(args.sound_sensitivity_envelope_address)
+            except ValueError as error:
+                parser.error(str(error))
+            if not 0 <= args.sound_sensitivity_envelope_channel <= 3:
+                parser.error("--sound-sensitivity-envelope-channel must be within 0..3")
+            if args.sound_sensitivity_detector_volts <= 0:
+                parser.error("--sound-sensitivity-detector-volts must be positive")
+            if not (
+                0.0 < args.sound_sensitivity_target_low < args.sound_sensitivity_target_high < 1.0
+            ):
+                parser.error("--sound-sensitivity-target-low/-high must satisfy 0 < low < high < 1")
+    elif args.sound_sensitivity_auto:
+        parser.error("--sound-sensitivity-auto requires --sound-sensitivity")
     if args.camera_capture and (
         args.camera_capture_width <= 0
         or args.camera_capture_height <= 0
@@ -5193,6 +5336,12 @@ def main():
             series_ohms=args.sound_sensitivity_series_ohms,
             position=args.sound_sensitivity_position,
             simulated=args.mock,
+            auto=args.sound_sensitivity_auto,
+            envelope_address=args.sound_sensitivity_envelope_address,
+            envelope_channel=args.sound_sensitivity_envelope_channel,
+            detector_volts=args.sound_sensitivity_detector_volts,
+            target_low=args.sound_sensitivity_target_low,
+            target_high=args.sound_sensitivity_target_high,
         ):
             print(
                 "WARNING: Sound sensitivity control unavailable; the detector keeps "

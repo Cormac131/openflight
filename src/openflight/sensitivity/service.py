@@ -15,6 +15,7 @@ import logging
 import threading
 from typing import Optional, Protocol
 
+from .autogain import AutoGainController
 from .ds3502 import (
     DEFAULT_SERIES_OHMS,
     MAX_POSITION,
@@ -23,6 +24,7 @@ from .ds3502 import (
     resistance_ohms,
     sensitivity_percent,
 )
+from .envelope import EnvelopeMonitor
 from .models import SensitivityState
 
 logger = logging.getLogger(__name__)
@@ -79,11 +81,88 @@ class SoundSensitivityService:
         pot: DigitalPotentiometer,
         *,
         simulated: bool = False,
+        envelope: Optional[EnvelopeMonitor] = None,
+        controller: Optional[AutoGainController] = None,
+        auto_enabled: bool = False,
     ):
         self.pot = pot
         self.simulated = simulated
+        self.envelope = envelope
+        self.controller = controller
+        # Auto-gain needs an envelope to measure and a controller to decide;
+        # asking for it without both is a configuration error, not a mode.
+        self._auto_enabled = auto_enabled and envelope is not None and controller is not None
         self._lock = threading.Lock()
         self._last_error: Optional[str] = None
+        self._last_decision = None
+        self._last_peak = None
+
+    @property
+    def auto_available(self) -> bool:
+        """True when an envelope monitor and controller are both present."""
+        return self.envelope is not None and self.controller is not None
+
+    @property
+    def auto_enabled(self) -> bool:
+        """True when the loop is allowed to move the wiper."""
+        return self._auto_enabled
+
+    def set_auto_enabled(self, enabled: bool) -> SensitivityState:
+        """Turn the closed loop on or off.
+
+        Raises:
+            RuntimeError: if asked to enable it without the hardware for it.
+        """
+        if enabled and not self.auto_available:
+            raise RuntimeError(
+                "Auto gain needs the envelope ADC; start the server with --sound-sensitivity-auto"
+            )
+        with self._lock:
+            self._auto_enabled = bool(enabled)
+            if self.controller is not None:
+                # Whatever was learned before is about a gain the user may
+                # since have overridden by hand.
+                self.controller.reset()
+            logger.info("[SENSITIVITY] Auto gain %s", "enabled" if enabled else "disabled")
+            return self._state_locked()
+
+    def observe_shot(self, impact_timestamp: float):
+        """Fold one shot's envelope peak into the loop and act on it.
+
+        Returns the decision taken, or None when there is nothing to act on --
+        no auto-gain configured, the loop switched off, or no envelope samples
+        around that impact. Never raises into the shot pipeline: a sensitivity
+        adjustment failing must not cost the user their shot.
+        """
+        if not self._auto_enabled or self.envelope is None or self.controller is None:
+            return None
+        try:
+            peak = self.envelope.peak_for_impact(impact_timestamp)
+            if peak is None:
+                return None
+            with self._lock:
+                self._last_peak = peak
+                position = self.pot.position
+                if position is None:
+                    return None
+                decision = self.controller.observe(
+                    peak.fraction_of_full_scale, position, clipped=peak.clipped
+                )
+                self._last_decision = decision
+                if decision.changed:
+                    # Volatile: at an EEPROM write per adjustment the part's
+                    # endurance would not last a season. The controller asks
+                    # for a commit separately, once a setting has settled.
+                    self.pot.set_position(decision.next_position, store=False)
+                elif decision.commit:
+                    self.pot.set_position(decision.position, store=True)
+                logger.info("[SENSITIVITY] Auto gain: %s", decision.reason)
+                return decision
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.warning("[SENSITIVITY] Auto gain step failed: %s", error, exc_info=True)
+            with self._lock:
+                self._last_error = str(error)
+            return None
 
     @property
     def series_ohms(self) -> float:
@@ -107,6 +186,8 @@ class SoundSensitivityService:
                 caller's to decide on — the server logs it and carries on
                 without sensitivity control.
         """
+        if self.envelope is not None:
+            self.envelope.start()
         with self._lock:
             self.pot.open()
             if force_position is not None:
@@ -160,7 +241,12 @@ class SoundSensitivityService:
             return self._state_locked()
 
     def stop(self) -> None:
-        """Release the I2C bus. Safe to call more than once."""
+        """Release the I2C bus and stop sampling. Safe to call more than once."""
+        if self.envelope is not None:
+            try:
+                self.envelope.stop()
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.debug("[SENSITIVITY] Failed to stop the envelope monitor", exc_info=True)
         with self._lock:
             try:
                 self.pot.close()
@@ -189,6 +275,12 @@ class SoundSensitivityService:
             ),
             series_ohms=series,
             simulated=self.simulated,
+            auto_available=self.auto_available,
+            auto_enabled=self._auto_enabled,
+            last_peak=self._last_peak.to_dict() if self._last_peak is not None else None,
+            last_decision=(
+                self._last_decision.to_dict() if self._last_decision is not None else None
+            ),
             error=self._last_error,
         )
 
@@ -209,5 +301,9 @@ def disabled_state(error: Optional[str] = None) -> SensitivityState:
         preamp_feedback_ohms=None,
         series_ohms=DEFAULT_SERIES_OHMS,
         simulated=False,
+        auto_available=False,
+        auto_enabled=False,
+        last_peak=None,
+        last_decision=None,
         error=error,
     )

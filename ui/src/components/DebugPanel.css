@@ -623,3 +623,71 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Closed-loop auto gain (ADS1115 envelope feedback) */
+.auto-gain {
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--color-border);
+}
+
+.auto-gain__toggle {
+  width: 100%;
+  /* Finger-sized: the kiosk has no mouse. */
+  min-height: 2.75rem;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-surface-raised, var(--color-surface));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-text-muted);
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.auto-gain__toggle--on {
+  background: var(--color-accent-block);
+  border-color: var(--color-accent-block);
+  color: var(--color-accent-fg);
+}
+
+.auto-gain__peak {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+
+.auto-gain__label {
+  font-size: 0.5625rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.auto-gain__value {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.auto-gain__value--clipped {
+  color: var(--color-warning);
+}
+
+.auto-gain__decision {
+  margin: var(--space-sm) 0 0;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+@media (max-height: 500px) {
+  .auto-gain__toggle {
+    min-height: 2.25rem;
+  }
+}

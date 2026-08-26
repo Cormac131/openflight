@@ -163,6 +163,7 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
                               │                │
                               │                └── SoundTrigger (SEN-14262 → HOST_INT)
                               │                     └── SoundSensitivityService (DS3502 digipot on R17, optional)
+                              │                          └── AutoGainController (ADS1115 on ENVELOPE, optional)
                               │
                               ├── IWR6843Runtime (optional, 60 GHz → launch angle & club path)
                               ├── KLD7Tracker (vertical/horizontal, deprecated)
@@ -240,6 +241,8 @@ SEN-14262 GND  → Pi GND (shared with OPS243-A)
 A through-hole resistor must be soldered into **R17** on the SEN-14262 to reduce preamp gain at 3.3V (47kΩ recommended, lower for noisy environments).
 
 **Optional DS3502 digital pot:** fitting one to the R17 pads instead of a fixed resistor makes sensitivity adjustable from the Debug page (Sound tab). Step 0 is least sensitive, 127 most. Enabled with `--sound-sensitivity`; it is I2C at 0x28 on the existing bus and claims **no GPIOs**. The DS3502 is only 10kΩ end-to-end, so a fixed series resistor (33kΩ default, `--sound-sensitivity-series-ohms`) shifts its span onto R17's 33–47kΩ operating range. The chip reads its wiper back and stores it in its own EEPROM, so there is no calibration and no config file.
+
+**Optional closed-loop auto gain:** with `--sound-sensitivity-auto`, an ADS1115 (0x48) on the detector's `ENVELOPE` output lets the server trim the pot between shots to hold envelope peaks in a target band (60–80% of the detector supply by default). It decides on a median of recent shots, clears that history on every move, and acts immediately on clipping. Note this is a **trim, not a wide-range AGC**: R17 works against the fixed 100kΩ R3, so the pot's whole travel is only ~1.2× of gain with the 33kΩ series resistor — less than the default band spans, so the loop warns at startup and mostly holds unless the band is narrowed or the series resistor reduced.
 
 See [docs/sound-trigger-wiring.md](docs/sound-trigger-wiring.md) for full instructions.
 

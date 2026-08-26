@@ -58,6 +58,23 @@ This is entirely optional. A build with a soldered R17 works exactly as before.
 > STEMMA QT cable covers power and I2C — but `V+` still needs its own wire, as
 > the JST cable does not carry it.
 
+#### Optional: Closed-Loop Auto Gain
+
+Adding an **ADS1115** ADC on the detector's `ENVELOPE` output lets the software
+tune the gain itself, adjusting the pot between shots to keep envelope peaks in
+a target band. It chains off the same STEMMA QT cable and sits at 0x48.
+
+| Part | Description | Link | ~Price |
+|------|-------------|------|--------|
+| **ADS1115 breakout** | 16-bit I2C ADC reading the SEN-14262 `ENVELOPE` output | [Adafruit product 1085](https://www.adafruit.com/product/1085) | $15 |
+| **Jumper wire** | 1 wire: `ENVELOPE` → ADS1115 `A0` | Any | $1 |
+
+> **It is a trim, not a wide-range AGC.** R17 works against the fixed 100 kΩ R3,
+> so the pot's whole travel moves the gain by only ~1.2× with the default 33 kΩ
+> series resistor — less than the default 60–80% target band spans. Give the
+> loop authority by narrowing the band or fitting a smaller series resistor;
+> the wiring guide has the numbers.
+
 Wiring and setup are in
 [sound-trigger-wiring.md](sound-trigger-wiring.md#optional-software-controlled-sensitivity-ds3502-digital-pot).
 
@@ -170,6 +187,7 @@ camera; the standard setup does not install its optional software dependencies.
 | Core (OPS243, Pi 5, Display) | $355 |
 | Sound Trigger (SEN-14262 + resistor + wires) | $18 |
 | Software sensitivity control (DS3502 + resistor + wiring) — **optional** | $7 |
+| Closed-loop auto gain (ADS1115 + wire) — **optional** | $16 |
 | Power & Accessories | $27 |
 | **Subtotal, no angle radar** | **~$400** |
 | Angle Radar (IWR6843LEVM + cable + wire) — **current** | $156 |

@@ -27,6 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   way `V+` needs its own wire and its jumper to `RH` cut. A build with a
   soldered `R17` is unaffected. See
   [Sound Trigger Wiring](sound-trigger-wiring.md#optional-software-controlled-sensitivity-ds3502-digital-pot).
+- **Closed-loop sound trigger gain.** With an **ADS1115** on the detector's
+  `ENVELOPE` output (`--sound-sensitivity-auto`), OpenFlight reads each shot's
+  envelope peak and trims the DS3502 between shots to hold peaks in a target
+  band — 60–80% of the detector's supply by default. It decides on a median of
+  recent shots so one thinned strike cannot move the gain, clears that history
+  whenever it moves, damps each correction, and acts immediately on clipping.
+  The settled value is committed to EEPROM once, after ten stable shots.
+  **Debug → Sound** gains an Auto gain toggle, the last envelope peak, and the
+  reasoning behind the last decision; moving the slider by hand stands the loop
+  down. This is a trim rather than a wide-range AGC — the pot's whole travel is
+  only ~1.2× of gain with the default series resistor, so the loop warns at
+  startup when the target band is wider than the range it can actually reach.
+  See [What It Can and Cannot Fix](sound-trigger-wiring.md#what-it-can-and-cannot-fix).
 - **Debug page tuning split.** The Debug panel's single **Tuning** tab is now
   **Radar** and **Sound**, so radar filters and sound-trigger sensitivity no
   longer share one scrolling column.

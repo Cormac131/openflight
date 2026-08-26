@@ -1,10 +1,12 @@
 """Server wiring for X9C104 sound-detector sensitivity control."""
 
 import sys
+from datetime import datetime
 
 import pytest
 
 from openflight import server as server_module
+from openflight.launch_monitor import Shot
 from openflight.sensitivity import MAX_POSITION, MockDS3502, SoundSensitivityService
 
 
@@ -211,3 +213,102 @@ class TestArgumentValidation:
 
         assert error.code == 2
         assert "--sound-sensitivity-position must be within" in capsys.readouterr().err
+
+
+class TestAutoGain:
+    """The closed loop runs from the shot pipeline, so its failure modes must
+    never reach the shot: a sensitivity trim is worth less than a captured
+    shot, every time."""
+
+    @pytest.fixture(name="auto_service")
+    def fixture_auto_service(self, monkeypatch):
+        from openflight.sensitivity import (
+            AutoGainController,
+            EnvelopeMonitor,
+            MockADS1115,
+            MockDS3502,
+        )
+
+        monitor = EnvelopeMonitor(MockADS1115(), full_scale_volts=3.3)
+        service = SoundSensitivityService(
+            MockDS3502(),
+            envelope=monitor,
+            controller=AutoGainController(),
+            auto_enabled=True,
+        )
+        service.pot.open()
+        monkeypatch.setattr(server_module, "sound_sensitivity_service", service)
+        monkeypatch.setattr(server_module, "sound_sensitivity_runtime_config", {"enabled": True})
+        return service
+
+    def _shot(self, timestamp=1000.0, mode="rolling-buffer"):
+        shot = Shot(ball_speed_mph=120.0, timestamp=datetime.now(), impact_timestamp=timestamp)
+        shot.mode = mode
+        return shot
+
+    def test_a_shot_feeds_its_envelope_peak_to_the_loop(self, auto_service, emitted):
+        auto_service.envelope.add_sample(2.3, timestamp=1000.0)
+
+        server_module._trim_sound_sensitivity_for_shot(self._shot())
+
+        assert auto_service.state().last_peak["fraction_of_full_scale"] == pytest.approx(
+            0.697, rel=1e-2
+        )
+        assert only(emitted, "sound_sensitivity")
+
+    def test_a_shot_with_no_envelope_samples_is_a_no_op(self, auto_service, emitted):
+        server_module._trim_sound_sensitivity_for_shot(self._shot())
+
+        assert only(emitted, "sound_sensitivity") == []
+
+    def test_mock_shots_are_ignored(self, auto_service, emitted):
+        # A simulated shot has no real envelope behind it; letting it steer the
+        # gain would detune a working detector from the Debug page.
+        auto_service.envelope.add_sample(2.3, timestamp=1000.0)
+
+        server_module._trim_sound_sensitivity_for_shot(self._shot(mode="mock"))
+
+        assert only(emitted, "sound_sensitivity") == []
+
+    def test_a_failing_loop_never_raises_into_the_shot_pipeline(self, auto_service, emitted):
+        auto_service.envelope.add_sample(2.3, timestamp=1000.0)
+        auto_service.pot.set_position = lambda *a, **k: (_ for _ in ()).throw(OSError("bus gone"))
+
+        server_module._trim_sound_sensitivity_for_shot(self._shot())
+
+    def test_the_loop_does_nothing_while_switched_off(self, auto_service, emitted):
+        auto_service.set_auto_enabled(False)
+        auto_service.envelope.add_sample(2.3, timestamp=1000.0)
+
+        server_module._trim_sound_sensitivity_for_shot(self._shot())
+
+        assert only(emitted, "sound_sensitivity") == []
+
+    def test_the_toggle_turns_the_loop_on_and_off(self, auto_service, emitted):
+        server_module.handle_set_sound_sensitivity_auto({"enabled": False})
+
+        assert only(emitted, "sound_sensitivity")[-1]["auto_enabled"] is False
+
+        server_module.handle_set_sound_sensitivity_auto({"enabled": True})
+
+        assert only(emitted, "sound_sensitivity")[-1]["auto_enabled"] is True
+
+    def test_enabling_without_the_adc_explains_why(self, service, emitted):
+        # `service` is the plain fixture: a pot with no envelope monitor.
+        server_module.handle_set_sound_sensitivity_auto({"enabled": True})
+
+        assert "--sound-sensitivity-auto" in only(emitted, "sound_sensitivity_error")[-1]["error"]
+
+    def test_a_manual_move_stands_the_loop_down(self, auto_service, emitted):
+        # Otherwise the loop would quietly undo the override on the next shot.
+        server_module.handle_set_sound_sensitivity({"position": 20})
+
+        payload = only(emitted, "sound_sensitivity")[-1]
+        assert payload["position"] == 20
+        assert payload["auto_enabled"] is False
+
+    def test_the_state_advertises_whether_auto_is_available(self, auto_service):
+        assert auto_service.state().auto_available is True
+
+    def test_a_pot_without_an_adc_says_auto_is_unavailable(self, service):
+        assert service.state().auto_available is False

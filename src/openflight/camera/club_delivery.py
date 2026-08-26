@@ -316,9 +316,7 @@ def combine_approach_estimates(
     if preferred_path_estimate is not None:
         path_deg = preferred_path_estimate.path_deg
         values = np.asarray([estimate.path_deg for estimate in path_candidates])
-        path_mad = (
-            float(np.median(np.abs(values - path_deg))) if len(values) else None
-        )
+        path_mad = float(np.median(np.abs(values - path_deg))) if len(values) else None
         preferred_quality = (
             CHAINED_SPEED_RATIO_RANGE[0]
             <= preferred_path_estimate.speed_ratio_ops
@@ -329,9 +327,7 @@ def combine_approach_estimates(
             <= CHAINED_PATH_RANGE_DEG[1]
         )
         if preferred_quality and timing_plausible:
-            path_confidence = (
-                "high" if path_mad is not None and path_mad <= 2.0 else "medium"
-            )
+            path_confidence = "high" if path_mad is not None and path_mad <= 2.0 else "medium"
         else:
             path_confidence = "low"
     elif len(path_candidates) >= APPROACH_MIN_PATH_WINDOWS:

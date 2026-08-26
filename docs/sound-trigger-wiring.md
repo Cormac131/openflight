@@ -400,6 +400,109 @@ If the two ends cross — ambient noise fires the trigger *below* where strikes
 reliably register — no setting will work, and gain is not the lever. Move the
 detector away from the noise source, or damp it.
 
+### Optional: Closed-Loop Auto Gain (ADS1115)
+
+Everything above tunes the gain by hand. The detector's **`ENVELOPE`** output —
+the analogue amplitude the preamp actually saw, as opposed to `GATE`'s bare
+"loud enough" — lets the software do it instead. The Pi has no analogue input,
+so this needs a small ADC.
+
+```
+  SEN-14262 ──GATE──────────────────────────► OPS243-A HOST_INT
+      │
+      └──────ENVELOPE──► ADS1115 ──I2C──► Pi ──I2C──► DS3502 ──► R17
+                                                                  │
+      ▲───────────────────────────────────────────────────────────┘
+```
+
+After each shot the server reads the envelope peak from that shot and nudges
+the pot **between shots, never during one**:
+
+| Peak vs the target band | Action |
+|-------------------------|--------|
+| At or near the rail (clipping) | Drop gain immediately, without waiting |
+| Above the band | Lower gain |
+| Inside the band (60–80% by default) | Hold |
+| Below the band | Raise gain |
+
+It decides on the **median of the last few shots**, not the last one, so a
+thinned strike does not move the gain on its own; it clears that history
+whenever it moves, because peaks measured at the old gain say nothing about the
+new one; and it steps only part of the way toward the correction, because the
+envelope is only approximately linear in gain.
+
+#### What It Can and Cannot Fix
+
+**This is a trim, not a wide-range AGC — and with the default series resistor it
+has almost no authority at all.** R17 works against the board's fixed 100 kΩ R3,
+so the pot's whole travel moves the preamp leg very little:
+
+| Series resistor | Gain range, end to end | Wider than a 60–80% band (1.33×)? |
+|-----------------|------------------------|-----------------------------------|
+| 5 kΩ | 2.74× | yes |
+| 10 kΩ | 1.83× | yes |
+| 20 kΩ | 1.38× | yes |
+| 27 kΩ | 1.27× | **no** |
+| **33 kΩ (default)** | **1.21×** | **no** |
+| 39 kΩ | 1.17× | **no** |
+
+A 60–80% band spans a ratio of 1.33×. With 33 kΩ fitted, that band is **wider
+than the entire adjustment range**, so once a peak is inside it no reachable
+wiper step can push it out — the loop holds forever and looks broken when it is
+simply out of travel. The server logs a warning at startup when that is the
+case.
+
+Two ways to give it authority, and you want one of them:
+
+- **Narrow the band**, e.g. `--sound-sensitivity-target-low 0.68
+  --sound-sensitivity-target-high 0.76` (1.12×, comfortably inside 1.21×).
+- **Fit a smaller series resistor**, which widens the relative range at the cost
+  of lower absolute gain.
+
+Either way the series resistor still sets the *window*; auto gain only trims
+within it. If your detector is badly placed, no setting in the loop will save
+it, and the controller will say so rather than sitting at an end stop.
+
+#### Parts and Wiring
+
+One **ADS1115** breakout — Adafruit's has STEMMA QT, so it chains off the same
+cable as the DS3502.
+
+| ADS1115 | Connect to |
+|---------|------------|
+| `VDD` | Pi 3.3 V (or the QT chain) |
+| `GND` | Pi GND |
+| `SDA` / `SCL` | Pi physical 3 / 5 (or the QT chain) |
+| `A0` | SEN-14262 **`ENVELOPE`** |
+
+The ADC sits at **0x48** by default (`ADDR` selects 0x48–0x4b), clear of the
+DS3502 at 0x28, the inclinometer at 0x18 and any UPS gauge at 0x36. Unlike the
+DS3502 it has no `V+` to worry about.
+
+```bash
+i2cdetect -y 1                                   # expect 48 as well as 28
+scripts/start-kiosk.sh --sound-sensitivity --sound-sensitivity-auto
+```
+
+| Flag | Purpose |
+|------|---------|
+| `--sound-sensitivity-auto` | Enable the loop (requires `--sound-sensitivity`) |
+| `--sound-sensitivity-target-low/-high` | Target band, as fractions (default 0.60/0.80) |
+| `--sound-sensitivity-envelope-address N` | ADS1115 address, 0x48–0x4b |
+| `--sound-sensitivity-envelope-channel N` | Which single-ended input carries `ENVELOPE` (default 0) |
+| `--sound-sensitivity-detector-volts N` | The detector's own supply, which is where it clips (default 3.3) |
+
+#### Using It
+
+**Debug → Sound** gains an **Auto gain** toggle, the last envelope peak as a
+percentage, and a line saying what the loop just decided and why. Moving the
+slider by hand switches the loop off — a manual value and a running loop would
+fight, and the loop would win.
+
+Auto adjustments are **volatile**. The settled value is committed to the pot's
+EEPROM once it has held for ten shots, so a session starts near the right place
+without spending a write per shot on a part with finite endurance.
+
 ### Where the Setting Lives
 
 **On the chip.** Every change from the UI is committed to the DS3502's own
@@ -423,6 +526,13 @@ without writing EEPROM, so it never overwrites what you deliberately stored.
 - [ ] DS3502 `RL` → the other R17 pad; `RH` left unconnected
 - [ ] No fixed resistor left soldered in R17 (it would parallel the pot)
 - [ ] `--sound-sensitivity` passed to the server, with `--sound-sensitivity-series-ohms` if not 33 kΩ
+
+For the optional closed loop:
+
+- [ ] ADS1115 powered and on the bus (`i2cdetect -y 1` shows `48`)
+- [ ] SEN-14262 `ENVELOPE` → ADS1115 `A0`
+- [ ] `--sound-sensitivity-auto` passed
+- [ ] Target band narrower than the gain range your series resistor allows
 
 ---
 
@@ -488,6 +598,21 @@ problem is on the resistor side.
 3. Confirm `--sound-sensitivity-series-ohms` matches what you actually fitted.
    A mismatch does not change behaviour, but every number the UI shows will be
    wrong, which makes a working pot look broken.
+
+### Auto gain never moves — it always says "Holding"
+
+Almost certainly the target band is wider than the gain range your series
+resistor allows, so every peak is inside it by construction. The server logs a
+warning at startup saying exactly this. Narrow the band or fit a smaller series
+resistor; see
+[What It Can and Cannot Fix](#what-it-can-and-cannot-fix).
+
+### Auto gain says "Out of travel"
+
+The loop wants a gain it cannot reach. That is the controller working
+correctly — the series resistor has put the window in the wrong place, or the
+detector is too far from the ball. Change the series resistor (larger for more
+gain, smaller for less) rather than looking for a software setting.
 
 ### Digital pot: the range feels wrong at both ends
 

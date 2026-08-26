@@ -16,6 +16,10 @@ const soundSensitivity: SoundSensitivity = {
   preamp_feedback_ohms: 27557,
   series_ohms: 33000,
   simulated: false,
+  auto_available: false,
+  auto_enabled: false,
+  last_peak: null,
+  last_decision: null,
   error: null,
 };
 
@@ -51,6 +55,7 @@ function render(status: TriggerStatus = triggerStatus) {
       soundSensitivity={soundSensitivity}
       soundSensitivityError={null}
       onUpdateSoundSensitivity={noop}
+      onToggleSoundSensitivityAuto={noop}
     />
   );
 }

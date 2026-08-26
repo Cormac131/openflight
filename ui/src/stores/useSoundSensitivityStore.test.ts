@@ -13,6 +13,10 @@ const applied: SoundSensitivity = {
   preamp_feedback_ohms: 29013,
   series_ohms: 33000,
   simulated: false,
+  auto_available: false,
+  auto_enabled: false,
+  last_peak: null,
+  last_decision: null,
   error: null,
 };
 

@@ -24,6 +24,12 @@ class SensitivityState:
     preamp_feedback_ohms: Optional[float]
     series_ohms: float
     simulated: bool = False
+    #: Whether the envelope ADC and controller are present at all, and whether
+    #: the closed loop is currently allowed to move the wiper.
+    auto_available: bool = False
+    auto_enabled: bool = False
+    last_peak: Optional[dict] = None
+    last_decision: Optional[dict] = None
     error: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -44,5 +50,9 @@ class SensitivityState:
             ),
             "series_ohms": round(self.series_ohms),
             "simulated": self.simulated,
+            "auto_available": self.auto_available,
+            "auto_enabled": self.auto_enabled,
+            "last_peak": self.last_peak,
+            "last_decision": self.last_decision,
             "error": self.error,
         }
