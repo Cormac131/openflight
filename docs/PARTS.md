@@ -45,6 +45,7 @@ This is entirely optional. A build with a soldered R17 works exactly as before.
 | **Renesas X9C104P** | 100 kΩ, 100-tap digital potentiometer, 8-pin DIP | [Mouser](https://www.mouser.com/c/?q=X9C104P) | $2 |
 | **Jumper Wires** | 5 wires: CS/INC/U-D → Pi GPIO, VCC → Pi 5V, GND → Pi GND | Any | $2 |
 | **10 kΩ resistor** | Pull-up from `CS` to Pi 3.3V, so the wiper holds when the Pi is not driving it | Any electronics supplier | $1 |
+| **100 nF ceramic capacitor** | **Required.** Decoupling across the pot's `VCC`/`VSS`, at the chip. Without it the supply rings on every switching event and the wiper's counter miscounts | Any electronics supplier | $1 |
 | **3× 100–330 Ω resistors** | Series damping on `CS`/`INC`/`U-D`. Without them long leads ring and the chip counts one pulse as several | Any electronics supplier | $1 |
 | **Wire pigtails** | 2 short leads from the pot's RW/RL to the R17 pads | Any | $1 |
 

@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the chip's own non-volatile memory is never written. A build with a soldered
   `R17` is unaffected. See
   [Sound Trigger Wiring](sound-trigger-wiring.md#optional-software-controlled-sensitivity-x9c104-digital-pot).
+- **X9C104 decoupling capacitor.** The wiring guide now requires a 100 nF
+  ceramic across the pot's `VCC`/`VSS` at the chip. Without local decoupling the
+  supply rings on every internal switching event and the wiper's counter
+  miscounts, advancing several taps per commanded pulse.
 - **X9C104 series damping resistors.** The wiring guide now calls for 100–330 Ω
   in series on `INC` (and ideally `CS`/`U-D`). Long jumper leads ring on the
   Pi's fast edges, and the X9C104 has no input filtering, so it counts each

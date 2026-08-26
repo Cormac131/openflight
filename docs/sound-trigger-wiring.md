@@ -250,6 +250,25 @@ in one block. Ground is **pin 20**, not pin 14: on a build with the OPS243 on
 the GPIO UART, [that migration's diagram](ops243-uart-migration.md) already has
 pin 14 carrying the radar's ground return.
 
+### Required: A Decoupling Capacitor
+
+Fit a **100 nF (0.1 µF) ceramic capacitor directly across pin 8 (`VCC`) and
+pin 4 (`VSS`)**, with the shortest leads you can manage — at the chip, not back
+at the Pi header.
+
+This is not optional and not a debugging step. The X9C104 is a CMOS part, and
+without local decoupling its supply dips and rings on every internal switching
+event. On the long jumper leads this build uses, that is enough for the wiper's
+counter to miscount, so one commanded pulse advances the wiper several taps.
+
+The signature is a **consistent overshoot that does not respond to anything you
+do to the signal line**: unchanged by the supply rail, and barely changed by a
+series resistor on `INC`. Both of those leave supply integrity untouched, which
+is what points at decoupling.
+
+Keep the `GND` lead short and direct for the same reason — ground bounce on a
+long return has the same effect.
+
 ### Strongly Recommended: Series Resistors on the Control Lines
 
 Put **100–330 Ω in series on `INC`**, in the wire at the Pi end, and ideally on
@@ -530,6 +549,7 @@ including `scripts/start-kiosk.sh` — sets it correctly.
 - [ ] X9C104 pin 1 (INC) → Pi BCM23 (physical pin 16)
 - [ ] X9C104 pin 2 (U/D) → Pi BCM24 (physical pin 18)
 - [ ] 10 kΩ from X9C104 pin 7 (CS) to Pi **3.3 V** — not to 5 V
+- [ ] 100 nF ceramic across X9C104 pin 8 (`VCC`) and pin 4 (`VSS`), short leads, at the chip
 - [ ] 100–330 Ω in series on `INC` (and ideally `CS` and `U/D`), at the Pi end
 - [ ] `INC` lead short, and not bundled against `CS`/`U/D`
 - [ ] X9C104 pin 3 (RH) linked to pin 5 (RW)
@@ -596,9 +616,14 @@ Two causes, in the order worth testing:
    3.3 V output never reaches — the input hovers at its switching point and each
    transition crosses it several times. At a 3.3 V supply the threshold drops to
    2.31 V and the Pi drives it cleanly.
-2. **Ringing on the `INC` edge** — by far the more common cause, and the one to
-   assume when the multiplier is *consistent* across repeated runs. Fit
+2. **No local decoupling** — check this first when the overshoot is consistent
+   *and* does not respond to the supply rail or to a series resistor on `INC`.
+   Both of those leave supply integrity untouched. Fit the
+   [100 nF capacitor](#required-a-decoupling-capacitor) at the chip.
+3. **Ringing or crosstalk on `INC`.** Fit
    [series resistors](#strongly-recommended-series-resistors-on-the-control-lines).
+   A series resistor at the Pi end cannot help coupling picked up near the chip;
+   for that, add 100 pF from `INC` to GND at the chip end.
 
 `--step-delay-us` does **not** test for this. It changes the gap between pulses,
 not the edge rate, and the ringing is over long before the next pulse starts.
