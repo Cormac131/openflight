@@ -197,6 +197,7 @@ class TestValidateArgs:
             "cs_pin": 22,
             "inc_pin": 23,
             "ud_pin": 24,
+            "step_delay_us": None,
         }
         parser = argparse.ArgumentParser()
         return parser, SimpleNamespace(**{**defaults, **overrides})
@@ -239,6 +240,16 @@ class TestValidateArgs:
     @pytest.mark.parametrize("position", [-1, MAX_POSITION + 1])
     def test_an_out_of_range_position_is_refused(self, position):
         self._expect_error(position=position)
+
+    def test_a_custom_step_delay_is_accepted(self):
+        parser, args = self._parser_and_args(step_delay_us=500.0)
+
+        script.validate_args(parser, args)
+
+    @pytest.mark.parametrize("delay", [0, -1.0])
+    def test_a_non_positive_step_delay_is_refused(self, delay):
+        # A zero half-period would violate the chip's 1us INC timing outright.
+        self._expect_error(step_delay_us=delay)
 
     def test_the_trigger_pin_cannot_be_a_digipot_line(self):
         self._expect_error(noise_floor=True, trigger_pin=23)

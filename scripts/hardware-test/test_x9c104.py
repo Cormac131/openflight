@@ -260,6 +260,8 @@ def validate_args(parser, args) -> None:
         parser.error("--sweep-dwell cannot be negative")
     if args.settle < 0:
         parser.error("--settle cannot be negative")
+    if args.step_delay_us is not None and args.step_delay_us <= 0:
+        parser.error("--step-delay-us must be positive")
     if args.noise_floor and args.trigger_pin in (args.cs_pin, args.inc_pin, args.ud_pin):
         parser.error("--trigger-pin cannot be one of the digipot's own control lines")
 
@@ -345,6 +347,14 @@ def main() -> None:
         help="Seconds to let the preamp settle after each step (default: 0.3)",
     )
     parser.add_argument(
+        "--step-delay-us",
+        type=float,
+        default=None,
+        help="Half-period of each INC pulse in microseconds (default: 50). Raise it "
+        "if the wiper moves further than commanded, which suggests the chip is "
+        "seeing more edges than are sent",
+    )
+    parser.add_argument(
         "--hold",
         action="store_true",
         help="Keep the control lines driven after parking, until you press Enter, "
@@ -359,10 +369,16 @@ def main() -> None:
     args = parser.parse_args()
     validate_args(parser, args)
 
-    pot = X9C104(cs_pin=args.cs_pin, inc_pin=args.inc_pin, ud_pin=args.ud_pin)
+    pot_kwargs = {}
+    if args.step_delay_us is not None:
+        pot_kwargs["step_delay_s"] = args.step_delay_us / 1e6
+    pot = X9C104(cs_pin=args.cs_pin, inc_pin=args.inc_pin, ud_pin=args.ud_pin, **pot_kwargs)
     suggested = None
     try:
-        print(f"Claiming CS=BCM{args.cs_pin}, INC=BCM{args.inc_pin}, U/D=BCM{args.ud_pin}")
+        print(
+            f"Claiming CS=BCM{args.cs_pin}, INC=BCM{args.inc_pin}, U/D=BCM{args.ud_pin} "
+            f"(INC half-period {pot.step_delay_s * 1e6:.0f}us)"
+        )
         pot.open()
 
         # The chip has no readback, so the only way to know where the wiper is
