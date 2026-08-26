@@ -87,8 +87,8 @@ The app is entirely client-side. Everything flows through one socket connection.
 
 **Kiosk shell.** Footer tabs switch views. The footer logo opens a sheet for
 units (MPH/YDS vs KMH/M), dark/light theme, language, simulator and
-ball-detection status. The footer power icon is always visible and opens a
-shutdown confirmation. Change club (or training implement) lives on the Live
+ball-detection status. The header power icon is always visible on the right and
+opens a shutdown confirmation. Change club (or training implement) lives on the Live
 header. Tap a Live metric to pin it top-left while keeping all metrics visible;
 timed or sticky Live view can optionally show a large preview of that metric
 after each new shot. The pin is stored in
@@ -97,7 +97,7 @@ after each new shot. The pin is stored in
 (language, units, theme, Live view). Completing it writes
 `openflight.onboarding.completed:v1`. Live view mode is
 `openflight.live-view:v1` (`tiles` | `timed` | `sticky`, duration 5/10/15s).
-Change those later in the footer menu. Shut down is the footer power button only.
+Change those later in the footer menu. Shut down is the header power button.
 
 **Display mode** lives at `/display`: a compact, fullscreen-friendly dashboard
 for mounted screens and TVs. The [root README](../README.md#tv-display-mode)

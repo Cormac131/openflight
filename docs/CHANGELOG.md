@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shot. Choices persist and remain in the footer menu. Live can show the
   selected metric full-screen after a new shot; tap or the chosen duration
   returns to the tile grid. Shut down was removed from the menu sheet; use
-  the footer power button.
+  the header power button.
 - **Automatic OV9281 exposure control.** High-speed camera capture now measures
   the impact area every five seconds, restores the last known-good setting at
   startup, and selects a shutter/gain combination that preserves club contrast
@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Shots, Camera, Players, Debug) instead of the previous stacked shot and stats
   views. Tap a Live metric to pin it top-left while keeping all ten metrics
   visible. The footer logo opens units, dark/light theme, language, simulator,
-  and ball-detection status; a persistent footer power button opens the shutdown
+  and ball-detection status; a persistent header power button opens the shutdown
   confirmation. Club (or training implement) selection is a Live header action.
   See the [UI README](../ui/README.md).
 - **Kiosk languages.** English, Spanish, French, and Portuguese. Choice is

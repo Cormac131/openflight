@@ -406,40 +406,6 @@
   border-right: 1px solid var(--color-border);
 }
 
-.panel-footer__meta > .power-status--chrome {
-  padding-right: 0.9vw;
-  border-right: 1px solid var(--color-border);
-}
-
-.panel-footer__power {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 44px;
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--color-text-muted);
-  cursor: pointer;
-}
-
-.panel-footer__power:hover,
-.panel-footer__power:focus-visible {
-  border-color: var(--color-danger);
-  color: var(--color-danger);
-}
-
-.panel-footer__power svg {
-  width: 1.05rem;
-  height: 1.05rem;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 /* Shutdown confirmation is app chrome, so it lives with the panel shell. */
 .shutdown-overlay {
   position: fixed;

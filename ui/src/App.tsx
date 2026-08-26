@@ -109,11 +109,12 @@ function AppContent() {
   // because renderToString uses Zustand's initial snapshot, not later setState.
   useOnboardingStore((state) => state.completed);
   const onboardingCompleted = useOnboardingStore.getState().completed;
+  useSystemStore((state) => state.shutdownDialogOpen);
+  const shutdownDialogOpen = useSystemStore.getState().shutdownDialogOpen;
   const [currentView, setCurrentView] = useState<PanelView>('live');
   const [selectedClub, setSelectedClub] = useState('driver');
   const [selectedTrainingImplement, setSelectedTrainingImplement] = useState('driver');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [showShutdown, setShowShutdown] = useState(false);
   const [shutdownState, setShutdownState] = useState<ShutdownState>('confirm');
   // Open on later launches after onboarding so the club is confirmed before
   // the first shot; first-run starts closed because the wizard replaces the
@@ -223,7 +224,7 @@ function AppContent() {
   };
 
   const closeShutdown = () => {
-    setShowShutdown(false);
+    useSystemStore.getState().closeShutdownDialog();
     setShutdownState('confirm');
   };
 
@@ -277,7 +278,7 @@ function AppContent() {
         </div>
       )}
 
-      {showShutdown ? (
+      {shutdownDialogOpen ? (
         <ShutdownDialog state={shutdownState} onConfirm={handleShutdown} onCancel={closeShutdown} />
       ) : null}
 
@@ -420,10 +421,6 @@ function AppContent() {
         ballDetected={cameraStatus.ball_detected}
         debugRecording={debugMode}
         brand={isLaunchDaddyMode ? <LaunchDaddyBrand /> : undefined}
-        onShutdown={() => {
-          setShutdownState('confirm');
-          setShowShutdown(true);
-        }}
       />
     </div>
   );

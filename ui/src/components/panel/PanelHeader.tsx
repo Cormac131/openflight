@@ -47,9 +47,11 @@ function IdentityPart({ children, className }: { children: ReactNode; className:
 }
 
 /**
- * Page chrome: title plus a connection LED. Tapping the LED and title opens a
- * status menu (server, radar, ball detection). Five taps still toggle Launch
- * Daddy, which used to live on this LED alone.
+ * Page chrome: title plus a connection LED on the left, and shutdown on the
+ * right. Tapping the LED and title opens a status menu (server, radar, ball
+ * detection). Five taps still toggle Launch Daddy, which used to live on this
+ * LED alone. Header actions sit to the left of shutdown, separated by a
+ * hairline divider.
  */
 export function PanelHeader({
   title,
@@ -99,7 +101,26 @@ export function PanelHeader({
         {subtitle ? <IdentityPart className="panel-header__subtitle">{subtitle}</IdentityPart> : null}
         {club ? <IdentityPart className="panel-header__club">{club}</IdentityPart> : null}
       </div>
-      {actions ? <div className="panel-header__actions">{actions}</div> : null}
+      <div className="panel-header__actions">
+        {actions ? (
+          <>
+            {actions}
+            <span className="panel-header__divider" aria-hidden="true" />
+          </>
+        ) : null}
+        <button
+          type="button"
+          className="panel-header__power"
+          onClick={() => useSystemStore.getState().openShutdownDialog()}
+          aria-label={t('menu.shutdown')}
+          title={t('menu.shutdown')}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+            <line x1="12" y1="2" x2="12" y2="12" />
+          </svg>
+        </button>
+      </div>
       {menuOpen ? (
         <StatusMenu
           connected={connected}

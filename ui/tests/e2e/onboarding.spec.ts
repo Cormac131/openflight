@@ -48,7 +48,7 @@ test('display route never shows onboarding', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Get started' })).toHaveCount(0);
 });
 
-test('menu has live view and no shutdown; footer still shuts down', async ({ page }) => {
+test('menu has live view and no shutdown; header still shuts down', async ({ page }) => {
   await gotoApp(page);
   await page.getByRole('button', { name: 'Close Select club' }).click();
   await page.getByRole('button', { name: 'Open menu' }).click();
@@ -56,7 +56,7 @@ test('menu has live view and no shutdown; footer still shuts down', async ({ pag
   await expect(menu.getByText('Live view', { exact: true })).toBeVisible();
   await expect(menu.getByRole('button', { name: 'Shut down' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Close menu' }).click();
-  await page.locator('.panel-footer__power').click();
+  await page.locator('.panel-header__power').click();
   await expect(page.getByRole('dialog', { name: 'Shut down OpenFlight?' })).toBeVisible();
 });
 

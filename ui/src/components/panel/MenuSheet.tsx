@@ -21,7 +21,8 @@ interface MenuSheetProps {
  * 6a draws Units / Shut down. Players live on their own panel. The System
  * block is an addition: the mockup replaced the old top header, and simulator
  * and ball-detection state had nowhere else to go. Battery lives in the footer.
- * Socket connection lives on the panel header LED. Shutdown is footer power.
+ * Socket connection lives on the panel header LED. Shutdown is the header power
+ * button.
  */
 export function MenuSheet({ onClose }: MenuSheetProps) {
   const simStatuses = useSystemStore((state) => state.simStatuses);

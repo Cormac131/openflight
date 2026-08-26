@@ -13,6 +13,7 @@ interface SystemState {
   serverClub: string | null;
   serverPlayerName: string | null;
   powerStatus: PowerStatus | null;
+  shutdownDialogOpen: boolean;
   setConnected: (connected: boolean) => void;
   setMockMode: (mockMode: boolean) => void;
   setDebugMode: (debugMode: boolean) => void;
@@ -22,6 +23,8 @@ interface SystemState {
   setServerClub: (club: string | null) => void;
   setServerPlayerName: (playerName: string | null) => void;
   setPowerStatus: (status: PowerStatus) => void;
+  openShutdownDialog: () => void;
+  closeShutdownDialog: () => void;
 }
 
 export const useSystemStore = create<SystemState>((set) => ({
@@ -35,6 +38,7 @@ export const useSystemStore = create<SystemState>((set) => ({
   serverClub: null,
   serverPlayerName: null,
   powerStatus: null,
+  shutdownDialogOpen: false,
   setConnected: (connected) => set({ connected }),
   setMockMode: (mockMode) => set({ mockMode }),
   setDebugMode: (debugMode) => set({ debugMode }),
@@ -50,4 +54,6 @@ export const useSystemStore = create<SystemState>((set) => ({
   setServerClub: (serverClub) => set({ serverClub }),
   setServerPlayerName: (serverPlayerName) => set({ serverPlayerName }),
   setPowerStatus: (status) => set({ powerStatus: status }),
+  openShutdownDialog: () => set({ shutdownDialogOpen: true }),
+  closeShutdownDialog: () => set({ shutdownDialogOpen: false }),
 }));

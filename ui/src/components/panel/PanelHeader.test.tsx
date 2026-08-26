@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { PanelHeader } from './PanelHeader';
@@ -67,5 +69,39 @@ describe('PanelHeader', () => {
 
     expect(html).toContain('panel-header__actions');
     expect(html).toContain('Change club');
+  });
+
+  it('pins shutdown on the right with a divider after other actions', () => {
+    const html = renderToString(<PanelHeader title="Live" actions={<button type="button">Change club</button>} />);
+    const actions = html.match(/panel-header__actions[\s\S]*<\/div>/)?.[0];
+
+    expect(html).toContain('panel-header__power');
+    expect(html).toContain('aria-label="Shut down"');
+    expect(actions).toBeDefined();
+    expect(actions).toContain('Change club');
+    expect(actions).toContain('panel-header__divider');
+    expect(actions!.indexOf('Change club')).toBeLessThan(actions!.indexOf('panel-header__divider'));
+    expect(actions!.indexOf('panel-header__divider')).toBeLessThan(actions!.indexOf('panel-header__power'));
+  });
+
+  it('keeps shutdown on the right without a divider when there are no other actions', () => {
+    const html = renderToString(<PanelHeader title="Live" />);
+
+    expect(html).toContain('panel-header__power');
+    expect(html).toContain('aria-label="Shut down"');
+    expect(html).not.toContain('panel-header__divider');
+  });
+
+  it('sizes the power control to the same header chip as panel actions', () => {
+    const css = readFileSync(fileURLToPath(new URL('./panel.css', import.meta.url)), 'utf8');
+    const power = css.match(/\.panel-header__power \{[^}]+\}/)?.[0];
+    const headerAction = css.match(/\.panel-header__actions \.panel-action \{[^}]+\}/)?.[0];
+
+    expect(power).toContain('height: var(--panel-control-height, 32px)');
+    expect(power).toContain('width: var(--panel-control-height, 32px)');
+    expect(power).toContain('border-radius: 8px');
+    expect(headerAction).toContain('height: var(--panel-control-height, 32px)');
+    expect(css).toMatch(/\n\.panel-action \{[^}]*border-radius: 8px/);
+    expect(power).not.toContain('height: 44px');
   });
 });

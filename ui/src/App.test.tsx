@@ -7,7 +7,7 @@ import { useSystemStore } from './stores/useSystemStore';
 
 describe('App shell', () => {
   beforeEach(() => {
-    useSystemStore.setState({ serverClub: null });
+    useSystemStore.setState({ serverClub: null, shutdownDialogOpen: false });
     useOnboardingStore.setState({ completed: true });
   });
 
@@ -68,11 +68,20 @@ describe('App shell', () => {
     expect(html).not.toContain('panel-footer__count');
   });
 
-  it('keeps the shutdown power control in the footer', () => {
+  it('keeps the shutdown power control in the header, not the footer', () => {
     const html = renderToString(<App />);
 
-    expect(html).toContain('panel-footer__power');
+    expect(html).toContain('panel-header__power');
+    expect(html).not.toContain('panel-footer__power');
     expect(html).toContain('aria-label="Shut down"');
+    expect(html).not.toContain('Shut down OpenFlight?');
+  });
+
+  it('opens the shutdown dialog when the header power control requests it', () => {
+    useSystemStore.setState({ shutdownDialogOpen: true });
+    const html = renderToString(<App />);
+
+    expect(html).toContain('Shut down OpenFlight?');
   });
 
   it('does not ask to clear a session until the stats action is used', () => {

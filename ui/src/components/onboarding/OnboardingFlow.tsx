@@ -1,4 +1,4 @@
-import { useState, type MouseEventHandler } from 'react';
+import { useState, type MouseEventHandler, type ReactNode } from 'react';
 import { LOCALES } from '../../i18n';
 import { useI18n } from '../../i18n/useI18n';
 import Logo from '../../logo/Logo';
@@ -36,26 +36,73 @@ const LIVE_MODES: ReadonlyArray<{
   { id: 'sticky', label: 'onboarding.liveHold', detail: 'onboarding.liveHoldDetail' },
 ];
 
+function MiniGrid() {
+  return (
+    <span className="onboarding__mini-grid">
+      {Array.from({ length: 6 }, (_, index) => (
+        <span
+          key={index}
+          className={`onboarding__mini-cell${index === 0 ? ' onboarding__mini-cell--selected' : ''}`}
+        />
+      ))}
+    </span>
+  );
+}
+
+function ThemeSwatch({ appearance }: { appearance: 'dark' | 'light' }) {
+  return (
+    <span className={`onboarding__theme-swatch onboarding__theme-swatch--${appearance}`} aria-hidden="true">
+      <MiniGrid />
+    </span>
+  );
+}
+
+function LiveViewDemo({ mode }: { mode: LiveViewMode }) {
+  return (
+    <span className={`onboarding__live-demo onboarding__live-demo--${mode}`} aria-hidden="true">
+      <MiniGrid />
+      {mode === 'tiles' ? null : (
+        <span className="onboarding__live-overlay">
+          <span className="onboarding__live-overlay-label">mph</span>
+          <span className="onboarding__live-overlay-value">167</span>
+          {mode === 'sticky' ? <span className="onboarding__live-tap" /> : null}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function Tile({
   selected,
   onClick,
   label,
   detail,
+  appearance,
+  preview,
 }: {
   selected: boolean;
   onClick: MouseEventHandler<HTMLButtonElement>;
   label: string;
   detail?: string;
+  appearance?: 'dark' | 'light';
+  preview?: ReactNode;
 }) {
+  const classes = [
+    'onboarding__tile',
+    selected ? 'onboarding__tile--selected' : '',
+    appearance ? `onboarding__tile--${appearance}` : '',
+    preview ? 'onboarding__tile--preview' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   return (
-    <button
-      type="button"
-      className={`onboarding__tile${selected ? ' onboarding__tile--selected' : ''}`}
-      aria-pressed={selected}
-      onClick={onClick}
-    >
-      <span className="onboarding__tile-label">{label}</span>
-      {detail ? <span className="onboarding__tile-detail">{detail}</span> : null}
+    <button type="button" className={classes} aria-pressed={selected} onClick={onClick}>
+      {preview}
+      <span className="onboarding__tile-copy">
+        <span className="onboarding__tile-label">{label}</span>
+        {detail ? <span className="onboarding__tile-detail">{detail}</span> : null}
+      </span>
     </button>
   );
 }
@@ -110,8 +157,11 @@ export function OnboardingFlow({
     <div className="onboarding" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
       <div className="onboarding__body">
         {step === 'welcome' ? (
-          <div className="onboarding__welcome">
-            <Logo size="large" />
+          <div className="onboarding__welcome onboarding__welcome--start">
+            <div className="onboarding__mark" aria-hidden="true">
+              <Logo size="large" variant="mono" />
+            </div>
+            <p className="onboarding__eyebrow">{t('onboarding.welcomeEyebrow')}</p>
             <h1 id="onboarding-title" className="onboarding__title">
               {t('onboarding.welcomeTitle')}
             </h1>
@@ -161,12 +211,16 @@ export function OnboardingFlow({
             <div className="onboarding__grid onboarding__grid--theme">
               <Tile
                 selected={theme === 'dark'}
+                appearance="dark"
                 label={t('menu.themeDark')}
+                preview={<ThemeSwatch appearance="dark" />}
                 onClick={() => setTheme('dark')}
               />
               <Tile
                 selected={theme === 'light'}
+                appearance="light"
                 label={t('menu.themeLight')}
+                preview={<ThemeSwatch appearance="light" />}
                 onClick={() => setTheme('light')}
               />
             </div>
@@ -185,6 +239,7 @@ export function OnboardingFlow({
                   selected={mode === option.id}
                   label={t(option.label)}
                   detail={t(option.detail)}
+                  preview={<LiveViewDemo mode={option.id} />}
                   onClick={() => setMode(option.id)}
                 />
               ))}

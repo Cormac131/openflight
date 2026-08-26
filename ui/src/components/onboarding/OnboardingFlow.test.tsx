@@ -15,6 +15,10 @@ describe('OnboardingFlow', () => {
     const html = render();
     expect(html).toContain('Get started');
     expect(html).toContain('OpenFlight');
+    expect(html).toContain('Launch monitor');
+    expect(html).toContain('onboarding__mark');
+    expect(html).toContain('fill="currentColor"');
+    expect(html).not.toContain('#360185');
     expect(html).not.toContain('Continue');
     expect(html).not.toContain('panel-footer');
   });
@@ -35,6 +39,9 @@ describe('OnboardingFlow', () => {
     const html = render('theme');
     expect(html).toContain('Dark');
     expect(html).toContain('Light');
+    expect(html).toContain('onboarding__tile--dark');
+    expect(html).toContain('onboarding__tile--light');
+    expect(html).toContain('onboarding__theme-swatch');
   });
 
   it('hides duration chips unless timed preview is selected', () => {
@@ -49,6 +56,9 @@ describe('OnboardingFlow', () => {
     expect(html).toContain('Tiles');
     expect(html).toContain('Timed preview');
     expect(html).toContain('Hold preview');
+    expect(html).toContain('onboarding__live-demo--tiles');
+    expect(html).toContain('onboarding__live-demo--timed');
+    expect(html).toContain('onboarding__live-demo--sticky');
   });
 
   it('uses Start on the done screen', () => {
