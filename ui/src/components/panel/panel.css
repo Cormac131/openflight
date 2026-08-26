@@ -1184,6 +1184,7 @@
 .menu-sheet__section {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   gap: 8px;
 }
 

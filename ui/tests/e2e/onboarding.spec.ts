@@ -54,6 +54,10 @@ test('menu has live view and no shutdown; header still shuts down', async ({ pag
   await page.getByRole('button', { name: 'Open menu' }).click();
   const menu = page.getByRole('dialog', { name: 'Menu' });
   await expect(menu.getByText('Live view', { exact: true })).toBeVisible();
+  await expect(menu.getByRole('button', { name: 'Tiles', exact: true })).toBeVisible();
+  await expect(menu.getByRole('button', { name: 'Timed', exact: true })).toBeVisible();
+  await expect(menu.getByRole('button', { name: 'Hold', exact: true })).toBeVisible();
+  await expect(menu.getByText('System', { exact: true })).toHaveCount(0);
   await expect(menu.getByRole('button', { name: 'Shut down' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Close menu' }).click();
   await page.locator('.panel-header__power').click();
@@ -71,7 +75,7 @@ test('timed overlay hides after the chosen duration; hold stays until tap', asyn
   await expect(page.locator('.live-panel__spotlight')).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Open menu' }).click();
-  await page.getByRole('button', { name: 'Timed preview' }).click();
+  await page.getByRole('button', { name: 'Timed', exact: true }).click();
   await page.getByRole('button', { name: '5s', exact: true }).click();
   await page.getByRole('button', { name: 'Close menu' }).click();
 
@@ -83,7 +87,7 @@ test('timed overlay hides after the chosen duration; hold stays until tap', asyn
   await expect(page.locator('.live-panel__spotlight')).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Open menu' }).click();
-  await page.getByRole('button', { name: 'Hold preview' }).click();
+  await page.getByRole('button', { name: 'Hold', exact: true }).click();
   await page.getByRole('button', { name: 'Close menu' }).click();
 
   await withControlSocket(async (socket) => {

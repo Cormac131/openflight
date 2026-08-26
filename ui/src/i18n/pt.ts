@@ -165,6 +165,9 @@ export const pt: Messages = {
   'onboarding.doneDetail': 'O driver está selecionado. Troque o taco quando quiser em Ao vivo.',
   'onboarding.step': 'Passo {current} de {total}',
   'menu.liveView': 'Visão ao vivo',
+  'menu.liveTiles': 'Mosaicos',
+  'menu.liveTimed': 'Tempo',
+  'menu.liveHold': 'Fixa',
 
   'app.changeImplement': 'Trocar implemento',
   'app.changeClub': 'Trocar taco',

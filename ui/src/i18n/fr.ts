@@ -165,6 +165,9 @@ export const fr: Messages = {
   'onboarding.doneDetail': 'Le driver est sélectionné. Changez de club depuis Direct à tout moment.',
   'onboarding.step': 'Étape {current} sur {total}',
   'menu.liveView': 'Vue Direct',
+  'menu.liveTiles': 'Tuiles',
+  'menu.liveTimed': 'Minuté',
+  'menu.liveHold': 'Fixe',
 
   'app.changeImplement': 'Changer d’outil',
   'app.changeClub': 'Changer de club',

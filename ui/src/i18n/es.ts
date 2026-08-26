@@ -165,6 +165,9 @@ export const es: Messages = {
   'onboarding.doneDetail': 'Driver está seleccionado. Cambia el palo cuando quieras desde En vivo.',
   'onboarding.step': 'Paso {current} de {total}',
   'menu.liveView': 'Vista en vivo',
+  'menu.liveTiles': 'Mosaicos',
+  'menu.liveTimed': 'Tiempo',
+  'menu.liveHold': 'Fijo',
 
   'app.changeImplement': 'Cambiar implemento',
   'app.changeClub': 'Cambiar palo',

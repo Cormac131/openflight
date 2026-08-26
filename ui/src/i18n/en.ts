@@ -163,6 +163,9 @@ export const en = {
   'onboarding.doneDetail': 'Driver is selected. Change club anytime from Live.',
   'onboarding.step': 'Step {current} of {total}',
   'menu.liveView': 'Live view',
+  'menu.liveTiles': 'Tiles',
+  'menu.liveTimed': 'Timed',
+  'menu.liveHold': 'Hold',
 
   'app.changeImplement': 'Change implement',
   'app.changeClub': 'Change club',

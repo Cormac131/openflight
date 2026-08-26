@@ -63,9 +63,17 @@ describe('MenuSheet live view', () => {
 
     expect(html).toContain('menu-sheet__section-title">Live view');
     expect(html).toContain('>Tiles<');
-    expect(html).toContain('>Timed preview<');
-    expect(html).toContain('>Hold preview<');
+    expect(html).toContain('>Timed<');
+    expect(html).toContain('>Hold<');
     expect(html).not.toContain('>5s<');
+  });
+
+  it('does not show system, ball detection, or simulators', () => {
+    const html = renderMenu();
+
+    expect(html).not.toContain('menu-sheet__section-title">System');
+    expect(html).not.toContain('Ball detection');
+    expect(html).not.toContain('Simulators');
   });
 
   it('shows duration chips when timed is selected', () => {
