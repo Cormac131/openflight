@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { MenuSheet } from './MenuSheet';
 import { useSystemStore } from '../../stores/useSystemStore';
+import { useLiveViewStore } from '../../stores/useLiveViewStore';
 import type { PowerStatus } from '../../types/power';
 
 function renderMenu() {
-  return renderToString(<MenuSheet onClose={() => {}} onShutdown={() => {}} />);
+  return renderToString(<MenuSheet onClose={() => {}} />);
 }
 
 describe('MenuSheet players', () => {
@@ -52,5 +53,35 @@ describe('MenuSheet battery', () => {
     expect(html).not.toContain('64%');
 
     useSystemStore.setState({ powerStatus: null });
+  });
+});
+
+describe('MenuSheet live view', () => {
+  it('offers live view modes and hides duration unless timed', () => {
+    useLiveViewStore.setState({ mode: 'tiles', durationMs: 10000 });
+    const html = renderMenu();
+
+    expect(html).toContain('menu-sheet__section-title">Live view');
+    expect(html).toContain('>Tiles<');
+    expect(html).toContain('>Timed preview<');
+    expect(html).toContain('>Hold preview<');
+    expect(html).not.toContain('>5s<');
+  });
+
+  it('shows duration chips when timed is selected', () => {
+    useLiveViewStore.setState({ mode: 'timed', durationMs: 10000 });
+    const html = renderMenu();
+
+    expect(html).toContain('>5s<');
+    expect(html).toContain('>10s<');
+    expect(html).toContain('>15s<');
+  });
+});
+
+describe('MenuSheet shutdown', () => {
+  it('does not offer shut down in the sheet', () => {
+    const html = renderMenu();
+    expect(html).not.toContain('menu-sheet__shutdown');
+    expect(html).not.toContain('Shut down');
   });
 });

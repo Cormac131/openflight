@@ -45,13 +45,14 @@ import './components/panel/panel.css';
 function AppContent() {
   const { t } = useI18n();
   const { shutdown } = useSocket();
-  const { connected, mockMode, debugMode, latestSimShots, serverClub } = useSystemStore(
+  const { connected, mockMode, debugMode, latestSimShots, serverClub, shutdownDialogOpen } = useSystemStore(
     useShallow((state) => ({
       connected: state.connected,
       mockMode: state.mockMode,
       debugMode: state.debugMode,
       latestSimShots: state.latestSimShots,
       serverClub: state.serverClub,
+      shutdownDialogOpen: state.shutdownDialogOpen,
     }))
   );
   const { latestShot, shots, isNewShot, shotProcessingPhase, shotVersion } = useShotStore(
@@ -107,7 +108,6 @@ function AppContent() {
   const [selectedClub, setSelectedClub] = useState('driver');
   const [selectedTrainingImplement, setSelectedTrainingImplement] = useState('driver');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [showShutdown, setShowShutdown] = useState(false);
   const [shutdownState, setShutdownState] = useState<ShutdownState>('confirm');
   // Open on every app load so the user confirms their club before the first
   // shot; dismissing keeps the default. The /display route returns early below,
@@ -216,7 +216,7 @@ function AppContent() {
   };
 
   const closeShutdown = () => {
-    setShowShutdown(false);
+    useSystemStore.getState().closeShutdownDialog();
     setShutdownState('confirm');
   };
 
@@ -266,7 +266,7 @@ function AppContent() {
         </div>
       )}
 
-      {showShutdown ? (
+      {shutdownDialogOpen ? (
         <ShutdownDialog state={shutdownState} onConfirm={handleShutdown} onCancel={closeShutdown} />
       ) : null}
 
@@ -365,14 +365,7 @@ function AppContent() {
        * 6a draws them over the whole card.
        */}
       {menuOpen ? (
-        <MenuSheet
-          onClose={() => setMenuOpen(false)}
-          onShutdown={() => {
-            setMenuOpen(false);
-            setShutdownState('confirm');
-            setShowShutdown(true);
-          }}
-        />
+        <MenuSheet onClose={() => setMenuOpen(false)} />
       ) : null}
 
       {addPlayerOpen ? (
@@ -416,10 +409,6 @@ function AppContent() {
         ballDetected={cameraStatus.ball_detected}
         debugRecording={debugMode}
         brand={isLaunchDaddyMode ? <LaunchDaddyBrand /> : undefined}
-        onShutdown={() => {
-          setShutdownState('confirm');
-          setShowShutdown(true);
-        }}
       />
     </div>
   );

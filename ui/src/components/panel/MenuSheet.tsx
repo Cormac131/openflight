@@ -4,6 +4,7 @@ import { useSystemStore } from '../../stores/useSystemStore';
 import { useCameraStore } from '../../stores/useCameraStore';
 import { useThemeStore } from '../../stores/useThemeStore';
 import { useLocaleStore } from '../../stores/useLocaleStore';
+import { isLiveViewDurationMs, useLiveViewStore } from '../../stores/useLiveViewStore';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { socketService } from '../../services/socketService';
 import { ballDetectionStatusLabel } from '../../utils/ballDetectionStatus';
@@ -12,7 +13,6 @@ import { SimStatus } from '../SimStatus';
 
 interface MenuSheetProps {
   onClose: () => void;
-  onShutdown: () => void;
 }
 
 /**
@@ -21,15 +21,18 @@ interface MenuSheetProps {
  * 6a draws Units / Shut down. Players live on their own panel. The System
  * block is an addition: the mockup replaced the old top header, and simulator
  * and ball-detection state had nowhere else to go. Battery lives in the footer.
- * Socket connection lives on the panel header LED.
+ * Socket connection lives on the panel header LED. Shutdown is footer power.
  */
-export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
+export function MenuSheet({ onClose }: MenuSheetProps) {
   const simStatuses = useSystemStore((state) => state.simStatuses);
   const cameraStatus = useCameraStore((state) => state.cameraStatus);
   const { t } = useI18n();
   const { unitSystem, setUnitSystem } = useUnitPreference();
   const { theme, setTheme } = useThemeStore();
   const { locale, setLocale } = useLocaleStore();
+  useLiveViewStore((state) => state.mode);
+  useLiveViewStore((state) => state.durationMs);
+  const { mode, durationMs, setMode, setDurationMs } = useLiveViewStore.getState();
 
   const ballDetectionValue = ballDetectionStatusLabel(cameraStatus);
 
@@ -80,6 +83,37 @@ export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
         </section>
 
         <section className="menu-sheet__section">
+          <span className="menu-sheet__section-title">{t('menu.liveView')}</span>
+          <SegmentedControl
+            ariaLabel={t('menu.liveView')}
+            value={mode}
+            options={[
+              { id: 'tiles', label: t('onboarding.liveTiles') },
+              { id: 'timed', label: t('onboarding.liveTimed') },
+              { id: 'sticky', label: t('onboarding.liveHold') },
+            ]}
+            onChange={setMode}
+          />
+          {mode === 'timed' ? (
+            <SegmentedControl
+              ariaLabel={t('onboarding.duration')}
+              value={String(durationMs)}
+              options={[
+                { id: '5000', label: t('onboarding.duration5') },
+                { id: '10000', label: t('onboarding.duration10') },
+                { id: '15000', label: t('onboarding.duration15') },
+              ]}
+              onChange={(id) => {
+                const next = Number(id);
+                if (isLiveViewDurationMs(next)) {
+                  setDurationMs(next);
+                }
+              }}
+            />
+          ) : null}
+        </section>
+
+        <section className="menu-sheet__section">
           <span className="menu-sheet__section-title">{t('menu.system')}</span>
           <div className="menu-sheet__status-row">
             <span className="menu-sheet__status-label">{t('menu.ballDetection')}</span>
@@ -97,10 +131,6 @@ export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
             </div>
           ) : null}
         </section>
-
-        <button type="button" className="menu-sheet__shutdown" onClick={onShutdown}>
-          {t('menu.shutdown')}
-        </button>
       </div>
     </>
   );
