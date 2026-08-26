@@ -8,6 +8,7 @@ import { useDebugStore } from './stores/useDebugStore';
 import { usePlayerStore } from './stores/usePlayerStore';
 import { useHeroMetricStore } from './stores/useHeroMetricStore';
 import { useOnboardingStore } from './stores/useOnboardingStore';
+import { useCameraReplayController } from './hooks/useCameraReplayController';
 import { socketService } from './services/socketService';
 import { shouldEchoSelectionToServer } from './services/playerSocketSync';
 import { DebugPanel } from './components/DebugPanel';
@@ -16,6 +17,7 @@ import { OnboardingFlow } from './components/onboarding';
 import { SimShotBadges } from './components/SimShotBadges';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
+import { CameraReplayDialog } from './components/CameraReplayDialog';
 import {
   CameraPanel,
   LivePanel,
@@ -124,6 +126,7 @@ function AppContent() {
   const [addPlayerOpen, setAddPlayerOpen] = useState(false);
   const [newPlayerName, setNewPlayerName] = useState('');
   const [clearSessionOpen, setClearSessionOpen] = useState(false);
+  const { activeReplay, openReplay, closeReplay, reportPlaybackError } = useCameraReplayController();
 
   // Reflect a server-pushed club change (e.g. the club changed in the connected
   // simulator) locally without echoing back. Done during render (React's "adjust
@@ -247,6 +250,18 @@ function AppContent() {
       {isSwingSpeedMode ? t('app.changeImplement') : t('app.changeClub')}
     </PanelAction>
   );
+  const latestReplay = playerLatestShot?.camera_replay;
+
+  const liveHeaderActions = (
+    <>
+      {latestReplay ? (
+        <PanelAction variant="secondary" onClick={() => openReplay(latestReplay)}>
+          {t('replay.open')}
+        </PanelAction>
+      ) : null}
+      {changeClubAction}
+    </>
+  );
 
   const addPlayerAction = <PanelAction onClick={() => setAddPlayerOpen(true)}>{t('menu.addPlayer')}</PanelAction>;
 
@@ -282,6 +297,16 @@ function AppContent() {
         <ShutdownDialog state={shutdownState} onConfirm={handleShutdown} onCancel={closeShutdown} />
       ) : null}
 
+      {activeReplay ? (
+        <CameraReplayDialog
+          replay={activeReplay.replay}
+          state={activeReplay.state}
+          onClose={closeReplay}
+          onRetry={() => openReplay(activeReplay.replay)}
+          onPlaybackError={reportPlaybackError}
+        />
+      ) : null}
+
       <main className="panel-app__main">
         {currentView === 'live' && (
           <>
@@ -298,7 +323,7 @@ function AppContent() {
                 isNewShot={playerIsNewShot}
                 ballDetectionEnabled={shouldEnableLiveBallWarning(currentView, cameraStatus)}
                 ballDetected={cameraStatus.ball_detected}
-                headerAction={changeClubAction}
+                headerAction={liveHeaderActions}
               />
             </ShotProcessingArea>
             {debugMode && <SimShotBadges latestSimShots={latestSimShots} />}
@@ -328,6 +353,9 @@ function AppContent() {
             playerName={selectedPlayer}
             clubLabel={activeImplementLabel}
             onDeleteShot={(timestamp) => socketService.deleteShot(timestamp)}
+            onReplayShot={(shot) => {
+              if (shot.camera_replay) openReplay(shot.camera_replay);
+            }}
           />
         )}
         {currentView === 'camera' && (

@@ -38,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallbacks for horizontal launch, club path, and angle of attack. The Camera
   tab adds live alignment, crop, orientation, and lighting controls while the
   rolling buffer remains armed. See [OV9281 Camera](camera/README.md).
+- **On-demand camera shot replay.** Camera-backed shots can open a 60 FPS
+  slow-motion impact player from Live or Shots, with touch controls, scrubbing,
+  and a trigger-frame impact marker. MP4 conversion starts only after a manual
+  Replay selection, caches the result beside the raw capture, and reports
+  retryable preparation or playback failures without affecting shot results.
 - **Battery and external-power status for Raspberry Pi UPS boards.** OpenFlight
   can now display charging state and battery percentage, issue dismissible 20%
   and 10% warnings while discharging, and record throttled power telemetry in

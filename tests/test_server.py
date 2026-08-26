@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from openflight import server as server_module
+from openflight.camera.replay import ReplayNotFoundError, ReplayPreparationError
 from openflight.iwr6843 import Calibration
 from openflight.kld7.types import KLD7Angle
 from openflight.launch_monitor import ClubType, Shot
@@ -211,6 +212,157 @@ class TestCameraCaptureSettings:
                 {"error": "horizontal alignment must be between 0 and 100 percent"},
             )
         ]
+
+class TestCameraReplayAPI:
+    """Camera replay is prepared only through the explicit HTTP action."""
+
+    def test_prepare_replay_returns_cached_video_url(self, monkeypatch, tmp_path):
+        video = tmp_path / "replay.mp4"
+        video.write_bytes(b"mp4")
+        calls = []
+
+        class FakeManager:
+            @staticmethod
+            def prepare(replay_id):
+                calls.append(replay_id)
+                return SimpleNamespace(
+                    video_path=video,
+                    payload={
+                        "id": replay_id,
+                        "frame_count": 99,
+                        "trigger_frame": 73,
+                        "playback_fps": 60,
+                        "duration_seconds": 1.65,
+                        "display_mirror_horizontal": True,
+                    },
+                )
+
+        monkeypatch.setattr(server_module, "camera_replay_manager", FakeManager())
+
+        response = server_module.app.test_client().post("/api/camera/replays/replay-123/prepare")
+
+        assert response.status_code == 200
+        assert calls == ["replay-123"]
+        assert response.get_json()["video_url"] == ("/api/camera/replays/replay-123/video")
+        assert response.get_json()["trigger_frame"] == 73
+        assert response.get_json()["display_mirror_horizontal"] is True
+
+    def test_prepare_replay_is_not_available_via_get(self):
+        response = server_module.app.test_client().get("/api/camera/replays/replay-123/prepare")
+
+        assert response.status_code == 405
+
+    @pytest.mark.parametrize(
+        ("error", "status"),
+        [
+            (ReplayNotFoundError("missing"), 404),
+            (ReplayPreparationError("broken capture"), 503),
+        ],
+    )
+    def test_prepare_replay_reports_safe_errors(self, monkeypatch, error, status):
+        manager = SimpleNamespace(prepare=lambda _replay_id: (_ for _ in ()).throw(error))
+        monkeypatch.setattr(server_module, "camera_replay_manager", manager)
+
+        response = server_module.app.test_client().post("/api/camera/replays/replay-123/prepare")
+
+        assert response.status_code == status
+        assert response.get_json() == {"error": str(error)}
+
+    def test_prepare_replay_catches_unexpected_errors_and_logs_them(self, monkeypatch):
+        logged = []
+        manager = SimpleNamespace(
+            prepare=lambda _replay_id: (_ for _ in ()).throw(RuntimeError("private path"))
+        )
+        monkeypatch.setattr(server_module, "camera_replay_manager", manager)
+        monkeypatch.setattr(
+            server_module,
+            "log_session_error",
+            lambda message, **kwargs: logged.append((message, kwargs)),
+        )
+
+        response = server_module.app.test_client().post("/api/camera/replays/replay-123/prepare")
+
+        assert response.status_code == 500
+        assert response.get_json() == {"error": "Camera replay could not be prepared"}
+        assert logged[0][0] == "Camera replay preparation failed"
+        assert logged[0][1]["context"] == {"replay_id": "replay-123"}
+
+    def test_video_endpoint_supports_range_requests(self, monkeypatch, tmp_path):
+        video = tmp_path / "replay.mp4"
+        video.write_bytes(b"0123456789")
+        manager = SimpleNamespace(video_path=lambda _replay_id: video)
+        monkeypatch.setattr(server_module, "camera_replay_manager", manager)
+
+        response = server_module.app.test_client().get(
+            "/api/camera/replays/replay-123/video",
+            headers={"Range": "bytes=2-5"},
+        )
+
+        assert response.status_code == 206
+        assert response.data == b"2345"
+        assert response.mimetype == "video/mp4"
+
+    def test_video_endpoint_reports_storage_error(self, monkeypatch):
+        manager = SimpleNamespace(
+            video_path=lambda _replay_id: (_ for _ in ()).throw(
+                ReplayPreparationError("Camera replay storage is unavailable")
+            )
+        )
+        monkeypatch.setattr(server_module, "camera_replay_manager", manager)
+
+        response = server_module.app.test_client().get("/api/camera/replays/replay-123/video")
+
+        assert response.status_code == 503
+        assert response.get_json() == {"error": "Camera replay storage is unavailable"}
+
+    def test_matching_capture_registers_replay_without_preparing_it(self, monkeypatch, tmp_path):
+        calls = []
+        descriptor = {
+            "id": "replay-123",
+            "frame_count": 99,
+            "trigger_frame": 73,
+            "playback_fps": 60,
+            "duration_seconds": 1.65,
+            "display_mirror_horizontal": True,
+        }
+
+        class FakeManager:
+            @staticmethod
+            def register(path, metadata):
+                calls.append((path, metadata))
+                return descriptor
+
+            @staticmethod
+            def prepare(_replay_id):
+                pytest.fail("matching a shot must not build the MP4")
+
+        monkeypatch.setattr(server_module, "camera_replay_manager", FakeManager())
+        shot = Shot(ball_speed_mph=100.0, timestamp=datetime.now())
+        capture = SimpleNamespace(
+            valid=True,
+            path=tmp_path,
+            metadata={"frame_count": 99, "pre_trigger_frames": 74},
+        )
+
+        server_module._attach_camera_replay(shot, capture)
+
+        assert calls == [(tmp_path, capture.metadata)]
+        assert shot.camera_replay == descriptor
+        assert shot_to_dict(shot)["camera_replay"] == descriptor
+
+    def test_deleting_shot_revokes_replay_access_without_deleting_capture(self, monkeypatch):
+        replay_ids = []
+        manager = SimpleNamespace(unregister=lambda replay_id: replay_ids.append(replay_id))
+        shot = Shot(
+            ball_speed_mph=100.0,
+            timestamp=datetime.now(),
+            camera_replay={"id": "replay-123"},
+        )
+        monkeypatch.setattr(server_module, "camera_replay_manager", manager)
+        monkeypatch.setattr(server_module, "monitor", SimpleNamespace(_shots=[shot]))
+
+        assert server_module._delete_session_row(shot.timestamp.isoformat()) is True
+        assert replay_ids == ["replay-123"]
 
 
 class TestShutdownCleanup:

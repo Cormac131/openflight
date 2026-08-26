@@ -91,7 +91,13 @@ ball-detection status. The header power icon is always visible on the right and
 opens a shutdown confirmation. Change club (or training implement) lives on the Live
 header. Tap a Live metric to pin it top-left while keeping all metrics visible;
 timed or sticky Live view can optionally show a large preview of that metric
-after each new shot. The pin is stored in
+after each new shot. Camera-backed shots add a **Replay** action in the Live header and a play button
+in Shots. Selecting either action asks the backend to lazily create and cache a
+60 FPS MP4; no video conversion runs automatically after a shot. The full-screen
+player includes touch controls, a scrubber, an impact marker, and retryable
+preparation/playback errors.
+
+The pin is stored in
 `localStorage` under `openflight.hero-metric`. Theme is stored under
 `openflight.theme` (default dark). First launch shows a fullscreen setup
 (language, units, theme, Live view). Completing it writes

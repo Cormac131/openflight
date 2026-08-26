@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from flask import Flask, Response, jsonify, send_from_directory
+from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
@@ -130,6 +130,7 @@ iwr6843_runtime = None
 iwr6843_runtime_config: dict = {"enabled": False}
 camera_capture_runtime = None
 camera_capture_config: dict = {"enabled": False}
+camera_replay_manager = None
 camera_reference_ball_tracker = None
 camera_ball_flight_reference_tracker = None
 
@@ -940,6 +941,7 @@ def shot_to_dict(shot: Shot) -> dict:
         ),
         "experimental_camera_horizontal_status": shot.experimental_camera_horizontal_status,
         "experimental_camera_iwr_delta_deg": shot.experimental_camera_iwr_delta_deg,
+        "camera_replay": dict(shot.camera_replay) if shot.camera_replay else None,
         "spin_axis_deg": shot.spin_axis_deg,
         "inclinometer": shot.inclinometer,
         # Spin data from rolling buffer mode
@@ -1108,6 +1110,7 @@ def init_camera_capture(
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
+    global camera_replay_manager  # pylint: disable=global-statement
     global camera_reference_ball_tracker  # pylint: disable=global-statement
     global camera_ball_flight_reference_tracker  # pylint: disable=global-statement
     try:
@@ -1138,6 +1141,9 @@ def init_camera_capture(
         )
         camera_capture_runtime.start()
         settings = camera_capture_runtime.settings
+        from .camera.replay import CameraReplayManager
+
+        camera_replay_manager = CameraReplayManager(output_dir)
         from openflight.camera.club_delivery import (  # noqa: PLC0415
             ReferenceBallTracker,
         )
@@ -1181,6 +1187,7 @@ def init_camera_capture(
             exc=error,
         )
         camera_capture_runtime = None
+        camera_replay_manager = None
         camera_reference_ball_tracker = None
         camera_ball_flight_reference_tracker = None
         camera_capture_config = {"enabled": False, "error": str(error)}
@@ -1581,6 +1588,88 @@ def camera_capture_exposure_quality():
     return jsonify(quality)
 
 
+@app.route("/api/camera/replays/<replay_id>/prepare", methods=["GET", "POST"])
+def prepare_camera_replay(replay_id: str):
+    """Create a cached MP4 only after an explicit replay interaction."""
+    from .camera.replay import ReplayNotFoundError, ReplayPreparationError
+
+    if request.method != "POST":
+        return jsonify({"error": "Use POST to prepare a camera replay"}), 405
+    if camera_replay_manager is None:
+        return jsonify({"error": "Camera replay was not found"}), 404
+    try:
+        prepared = camera_replay_manager.prepare(replay_id)
+    except ReplayNotFoundError as error:
+        return jsonify({"error": str(error)}), 404
+    except ReplayPreparationError as error:
+        logger.warning("[CAMERA] Could not prepare replay %s: %s", replay_id, error)
+        log_session_error(
+            "Camera replay preparation failed",
+            component="camera_capture",
+            context={"replay_id": replay_id},
+            exc=error,
+        )
+        return jsonify({"error": str(error)}), 503
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.exception("[CAMERA] Unexpected replay preparation failure for %s", replay_id)
+        log_session_error(
+            "Camera replay preparation failed",
+            component="camera_capture",
+            context={"replay_id": replay_id},
+            exc=error,
+        )
+        return jsonify({"error": "Camera replay could not be prepared"}), 500
+
+    payload = dict(prepared.payload)
+    payload["video_url"] = f"/api/camera/replays/{replay_id}/video"
+    return jsonify(payload)
+
+
+@app.route("/api/camera/replays/<replay_id>/video")
+def camera_replay_video(replay_id: str):  # pylint: disable=too-many-return-statements
+    """Stream a previously prepared replay with HTTP range support."""
+    from .camera.replay import (
+        ReplayNotFoundError,
+        ReplayNotReadyError,
+        ReplayPreparationError,
+    )
+
+    if camera_replay_manager is None:
+        return jsonify({"error": "Camera replay was not found"}), 404
+    try:
+        video_path = camera_replay_manager.video_path(replay_id)
+    except ReplayNotFoundError as error:
+        return jsonify({"error": str(error)}), 404
+    except ReplayNotReadyError as error:
+        return jsonify({"error": str(error)}), 409
+    except ReplayPreparationError as error:
+        logger.warning("[CAMERA] Could not read replay %s: %s", replay_id, error)
+        return jsonify({"error": str(error)}), 503
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.exception("[CAMERA] Unexpected replay lookup failure for %s", replay_id)
+        log_session_error(
+            "Camera replay lookup failed",
+            component="camera_capture",
+            context={"replay_id": replay_id},
+            exc=error,
+        )
+        return jsonify({"error": "Camera replay video is unavailable"}), 500
+    try:
+        return send_file(video_path, mimetype="video/mp4", conditional=True, etag=True)
+    except OSError as error:
+        logger.warning("[CAMERA] Could not stream replay %s: %s", replay_id, error)
+        return jsonify({"error": "Camera replay video is unavailable"}), 503
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.exception("[CAMERA] Unexpected replay streaming failure for %s", replay_id)
+        log_session_error(
+            "Camera replay streaming failed",
+            component="camera_capture",
+            context={"replay_id": replay_id},
+            exc=error,
+        )
+        return jsonify({"error": "Camera replay video is unavailable"}), 500
+
+
 def _camera_capture_settings_payload() -> dict:
     """Return camera controls and capture state for the Camera tab."""
     payload = dict(camera_capture_config)
@@ -1900,6 +1989,18 @@ def _session_shots() -> list[dict]:
     return [shot_to_dict(shot) for shot in monitor.get_shots()]
 
 
+def _unregister_camera_replay(shot: Shot) -> None:
+    """Revoke live replay access while preserving the session artifacts."""
+    replay = getattr(shot, "camera_replay", None)
+    replay_id = replay.get("id") if isinstance(replay, dict) else None
+    if not replay_id or camera_replay_manager is None:
+        return
+    try:
+        camera_replay_manager.unregister(replay_id)
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[CAMERA] Could not unregister replay %s: %s", replay_id, error)
+
+
 def _delete_session_row(timestamp: str) -> bool:
     """Delete one shot or swing-speed rep by UI timestamp."""
     from .swing_speed import SwingSpeedMonitor  # pylint: disable=import-outside-toplevel
@@ -1922,6 +2023,7 @@ def _delete_session_row(timestamp: str) -> bool:
         return False
     for index, shot in enumerate(shots):
         if shot.timestamp.isoformat() == timestamp:
+            _unregister_camera_replay(shot)
             del shots[index]
             return True
     return False
@@ -2067,11 +2169,18 @@ def _clear_player_rows(player_name: str) -> None:
 
     shots = getattr(monitor, "_shots", None)
     if shots is not None:
+        removed = [
+            shot
+            for shot in shots
+            if _player_matches(getattr(shot, "player_name", None), player_name)
+        ]
         shots[:] = [
             shot
             for shot in shots
             if not _player_matches(getattr(shot, "player_name", None), player_name)
         ]
+        for shot in removed:
+            _unregister_camera_replay(shot)
         return
 
     if hasattr(monitor, "clear_session"):
@@ -2985,6 +3094,30 @@ def _fuse_camera_measurements(shot: Shot, camera_capture) -> None:
     _fuse_camera_club_delivery(shot, camera_capture, camera_archive)
 
 
+def _attach_camera_replay(shot: Shot, camera_capture) -> None:
+    """Expose a matched raw clip without doing any video conversion."""
+    if (
+        camera_replay_manager is None
+        or camera_capture is None
+        or not camera_capture.valid
+        or not camera_capture.path
+    ):
+        return
+    try:
+        shot.camera_replay = camera_replay_manager.register(
+            camera_capture.path,
+            camera_capture.metadata,
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[CAMERA] Replay registration failed: %s", error)
+        log_session_error(
+            "Camera replay registration failed",
+            component="camera_capture",
+            context={"stage": "replay_registration"},
+            exc=error,
+        )
+
+
 def on_shot_detected(shot: Shot):
     """Callback when a shot is detected - emit to all clients."""
     global ball_detected, ball_detection_confidence  # pylint: disable=global-statement
@@ -3348,6 +3481,8 @@ def on_shot_detected(shot: Shot):
             context={"stage": "camera_capture_match", "ball_speed_mph": shot.ball_speed_mph},
             exc=error,
         )
+
+    _attach_camera_replay(shot, camera_capture)
 
     if shot.mode != "mock":
         _fuse_camera_measurements(shot, camera_capture)
@@ -4326,8 +4461,18 @@ def main():
     parser.add_argument("--camera-capture-fps", type=float, default=300.0)
     parser.add_argument("--camera-capture-pre-ms", type=float, default=150.0)
     parser.add_argument("--camera-capture-post-ms", type=float, default=50.0)
-    parser.add_argument("--camera-capture-exposure-us", type=int, default=1000)
-    parser.add_argument("--camera-capture-gain", type=float, default=4.0)
+    parser.add_argument(
+        "--camera-capture-exposure-us",
+        type=int,
+        default=1000,
+        help="Manual exposure fallback; the Camera tab can switch out of automatic mode.",
+    )
+    parser.add_argument(
+        "--camera-capture-gain",
+        type=float,
+        default=4.0,
+        help="Manual gain fallback; the Camera tab can switch out of automatic mode.",
+    )
     parser.add_argument(
         "--camera-capture-mount-height-m",
         type=float,
