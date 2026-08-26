@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Automatic OV9281 exposure control.** High-speed camera capture now measures
+  the impact area every five seconds, restores the last known-good setting at
+  startup, and selects a shutter/gain combination that preserves club contrast
+  without excessive clipping or motion blur. Large lighting changes re-enter
+  fast convergence while smaller changes require confirmation. Camera-derived
+  shot analysis is withheld when lighting is unsuitable, but radar processing
+  and shot display continue normally with an operator-facing lighting warning.
 - **Instrument-panel kiosk UI.** The dashboard is a tabbed shell (Live, Stats,
   Shots, Camera, Players, Debug) instead of the previous stacked shot and stats
   views. Tap a Live metric to pin it top-left while keeping all ten metrics
