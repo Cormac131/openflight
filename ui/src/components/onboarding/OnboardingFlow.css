@@ -1,0 +1,226 @@
+.onboarding {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+  color: var(--color-text);
+  padding: var(--space-xl);
+  min-height: 0;
+}
+
+.onboarding__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: var(--space-md);
+}
+
+.onboarding__welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: var(--space-md);
+}
+
+.onboarding__title {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.onboarding__subtitle {
+  margin: var(--space-sm) 0 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.onboarding__detail {
+  margin: 0;
+  max-width: 28rem;
+  font-size: 0.95rem;
+  color: var(--color-text-muted);
+}
+
+.onboarding__grid {
+  display: grid;
+  gap: var(--space-sm);
+  min-height: 0;
+}
+
+.onboarding__grid--locales {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.onboarding__grid--units,
+.onboarding__grid--theme {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: 1;
+}
+
+.onboarding__grid--live {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  flex: 1;
+}
+
+.onboarding__tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--space-xs);
+  min-height: 2.75rem;
+  min-width: 0;
+  padding: var(--space-md);
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.onboarding__tile-label {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.onboarding__tile-detail {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.onboarding__tile--selected {
+  box-shadow: inset 5px 0 0 var(--color-accent-block);
+}
+
+.onboarding__tile--selected .onboarding__tile-label {
+  color: var(--color-accent);
+}
+
+.onboarding__durations {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.onboarding__chip {
+  min-height: 2.75rem;
+  min-width: 3.5rem;
+  padding: 0 var(--space-md);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text);
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.onboarding__chip--selected {
+  background: var(--color-accent-block);
+  border-color: var(--color-accent-block);
+  color: var(--color-accent-fg);
+}
+
+.onboarding__primary,
+.onboarding__nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  padding: 0 var(--space-lg);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border-radius: var(--radius);
+}
+
+.onboarding__primary,
+.onboarding__nav--primary {
+  background: var(--color-accent-block);
+  border: 1px solid var(--color-accent-block);
+  color: var(--color-accent-fg);
+}
+
+.onboarding__nav--back {
+  background: transparent;
+  border: 1px solid var(--color-accent);
+  color: var(--color-text);
+}
+
+.onboarding__chrome {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: var(--space-sm);
+  padding-top: var(--space-md);
+}
+
+.onboarding__chrome .onboarding__nav--back {
+  justify-self: start;
+}
+
+.onboarding__chrome .onboarding__nav--primary {
+  justify-self: end;
+}
+
+.onboarding__dots {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.onboarding__dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--color-border);
+}
+
+.onboarding__dot--active {
+  background: var(--color-accent-block);
+}
+
+@media (max-height: 500px) {
+  .onboarding {
+    padding: var(--space-sm) var(--space-md);
+  }
+
+  .onboarding__body {
+    gap: var(--space-sm);
+  }
+
+  .onboarding__welcome {
+    gap: var(--space-sm);
+  }
+
+  .onboarding__tile {
+    min-height: 2.375rem;
+    padding: var(--space-sm) var(--space-md);
+  }
+
+  .onboarding__primary,
+  .onboarding__nav,
+  .onboarding__chip {
+    min-height: 2.375rem;
+  }
+
+  .onboarding__chrome {
+    padding-top: var(--space-sm);
+  }
+}
