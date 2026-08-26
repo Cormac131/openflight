@@ -303,16 +303,22 @@ def test_startup_applies_kld7_latency_setup_before_server_start():
 
 
 def test_camera_capture_syncs_optional_camera_dependencies():
-    """Camera startup must preserve OpenCV when uv repairs the environment."""
+    """Camera startup must keep system Python through sync and server launch."""
     from pathlib import Path
 
     repo_root = Path(__file__).resolve().parents[1]
     script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
 
-    assert 'if [ "$CAMERA_CAPTURE" = true ]; then' in script
+    sync_setup_idx = script.index("UV_SYNC_ARGS=(--quiet)")
+    camera_branch_idx = script.index('if [ "$CAMERA_CAPTURE" = true ]; then', sync_setup_idx)
+    camera_else_idx = script.index("\nelse\n", camera_branch_idx)
+    export_idx = script.index("export UV_PYTHON=/usr/bin/python3", camera_branch_idx)
+    server_start_idx = script.index("uv run ${OPENFLIGHT_UV_RUN_ARGS:-} $SERVER_CMD &")
+
     assert "uv venv --clear --system-site-packages --python /usr/bin/python3" in script
     assert "UV_SYNC_ARGS+=(--extra camera)" in script
-    assert 'UV_PYTHON=/usr/bin/python3 uv sync "${UV_SYNC_ARGS[@]}"' in script
+    assert 'uv sync "${UV_SYNC_ARGS[@]}"' in script
+    assert camera_branch_idx < export_idx < camera_else_idx < server_start_idx
 
 
 def test_shutdown_requests_server_cleanup_before_forcing_process_exit():
