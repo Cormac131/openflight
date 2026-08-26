@@ -30,7 +30,9 @@ export function useShotSpotlight(mode: LiveViewMode, durationMs: number, isNewSh
   // shot, so menu changes apply then; an overlay already on screen is left alone.
   const [controller] = useState(() => createSpotlightController(mode, durationMs, isNewShot, () => setOpen(false)));
 
-  useEffect(() => controller.start(), [controller]);
+  useEffect(() => {
+    return controllerRef.current?.start();
+  }, []);
 
   return { open, dismiss: () => setOpen(false) };
 }
