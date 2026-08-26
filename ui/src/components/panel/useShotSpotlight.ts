@@ -35,7 +35,9 @@ export function useShotSpotlight(mode: LiveViewMode, durationMs: number, isNewSh
   const [open, setOpen] = useState(controllerRef.current.openInitially);
   hideRef.current = () => setOpen(false);
 
-  useEffect(() => controllerRef.current?.start(), []);
+  useEffect(() => {
+    return controllerRef.current?.start();
+  }, []);
 
   return { open, dismiss: () => setOpen(false) };
 }
