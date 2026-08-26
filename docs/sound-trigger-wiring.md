@@ -218,6 +218,35 @@ Neither display touches the header: the HMTECH 7" is HDMI plus USB, and the
 Raspberry Pi Touch Display 2 is MIPI DSI. A Geekworm X1202/X1206 reaches the
 header through pogo pins from underneath, so the top of the header stays free.
 
+### Bare Chip or Breakout Module?
+
+The X9C104 is sold both as a bare 8-pin DIP and as a small breakout module
+(common on Amazon/eBay, often branded DollaTek, Reland Sun and similar). Either
+works. This guide numbers the **DIP** pins; on a module the same signals are
+labelled on the headers instead:
+
+| Signal | DIP pin | Module header |
+|--------|---------|---------------|
+| `CS` | 7 | `CS` |
+| `INC` | 1 | `INC` |
+| `U/D` | 2 | `U/D` |
+| `VCC` | 8 | `VCC` |
+| `VSS` / ground | 4 | `GND` |
+| `RH` / `VH` | 3 | `RH` |
+| `RW` / `VW` (wiper) | 5 | `RW` |
+| `RL` / `VL` | 6 | `RL` |
+
+Modules typically break `VCC` and `GND` out on **both** sides of the board — they
+are the same net, so use whichever is convenient and do not feed both.
+
+Two things a module changes:
+
+- **It usually carries its own decoupling capacitor.** Look for a small ceramic
+  beside the chip before adding the 100 nF this guide asks for.
+- **It may add passives of its own** on the control lines. If a module
+  misbehaves in a way a bare chip should not, check that with a meter before
+  concluding the chip is at fault.
+
 ### X9C104 Pinout
 
 ```
@@ -254,7 +283,8 @@ pin 14 carrying the radar's ground return.
 
 Fit a **100 nF (0.1 µF) ceramic capacitor directly across pin 8 (`VCC`) and
 pin 4 (`VSS`)**, with the shortest leads you can manage — at the chip, not back
-at the Pi header.
+at the Pi header. **Breakout modules usually have one already** — check for a
+small ceramic beside the chip before adding another.
 
 This is not optional and not a debugging step. The X9C104 is a CMOS part, and
 without local decoupling its supply dips and rings on every internal switching
@@ -310,10 +340,12 @@ line. The wiper walks away from its setting.
 The pull-up holds `CS` high whenever the Pi is not actively driving it, so an
 unselected chip ignores everything and the wiper freezes.
 
-**Pull up to 3.3 V, not to the pot's 5 V rail.** A pull-up to 5 V would put
-~4.2 V on that node whenever the Pi released the line, and Pi GPIOs are **not**
-5 V tolerant — that damages the Pi. 3.3 V is still comfortably above the
-X9C104's 2.0 V logic-high threshold, so the chip reads it as deselected.
+**Pull up to 3.3 V, never to a 5 V rail.** If you do run the pot from 5V, this
+pull-up must still go to 3.3V: pulled to 5V it would put ~4.2 V on that node
+whenever the Pi released the line, and Pi GPIOs are **not** 5 V tolerant — that
+damages the Pi. 3.3 V is comfortably above the X9C104's 2.0 V logic-high
+threshold, so the chip still reads it as deselected. Running the pot itself from
+3.3V avoids the question entirely.
 
 ```
    Pi 3.3V (header pin 1 or 17)
@@ -325,10 +357,12 @@ X9C104's 2.0 V logic-high threshold, so the chip reads it as deselected.
    Pi BCM22 (header pin 15)
 ```
 
-**Power it from 5V, not 3.3V.** The X9C104's DC characteristics are specified at
-5V. Its logic inputs read high from 2.0V, so the Pi's 3.3V GPIOs drive `CS`,
-`INC` and `U/D` directly with no level shifter. The resistor element only ever
-sees the detector's 3.3V rail, which is well inside the pot's 0–5V analog range.
+**Either 3.3V or 5V works, and 3.3V is preferred.** The X9C104's supply range is
+**2.7V to 5.5V**, so the Pi's 3.3V rail is in spec. It also puts the pot on the
+same rail as the sound detector and lets the `CS` pull-up below share that rail,
+which removes any chance of putting 5V on a Pi GPIO. Logic inputs read high from
+2.0V, so the Pi drives `CS`, `INC` and `U/D` directly either way — no level
+shifter.
 
 See [Where It Sits on the Pi Header](#where-it-sits-on-the-pi-header) above if
 you need to move these.
