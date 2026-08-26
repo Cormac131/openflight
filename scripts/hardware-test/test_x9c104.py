@@ -304,7 +304,12 @@ def main() -> None:
         print(f"  {describe(0)}")
 
         if args.sweep:
-            print("\nSweeping. Put a meter across the R17 pads.\n")
+            print(
+                "\nSweeping. Put a meter across the two pot nodes.\n"
+                "  Pot alone (not yet on the pads): compare the R17 column.\n"
+                "  Soldered across R17: compare the preamp column -- the board's\n"
+                "  own 100k R3 is in parallel, so it tops out near 50k, not 100k.\n"
+            )
             for position in sweep_positions(args.sweep_step):
                 pot.set_position(position)
                 print(f"  {describe(position)}")

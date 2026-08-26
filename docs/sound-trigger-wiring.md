@@ -318,18 +318,48 @@ Useful flags:
 ### Step 4: Verify the Resistance with a Meter
 
 Stop the server first — it holds the same GPIO lines — then sweep the wiper with
-a multimeter across the R17 pads:
+a multimeter on the two nodes:
 
 ```bash
 uv run python scripts/hardware-test/test_x9c104.py --sweep
 ```
 
-You should see the pad-to-pad resistance climb from a few tens of ohms to about
-100 kΩ in step with the printed positions. To park it at one value:
+**Which number you should see depends on whether the pot is in circuit**, and
+the sweep prints both:
+
+| Measuring | Expect | Sweep column |
+|-----------|--------|--------------|
+| Pot alone, leads not yet on the pads | ~40 Ω → ~100 kΩ | `R17` |
+| Soldered across R17, board attached | ~40 Ω → **~50 kΩ** | `preamp` |
+
+In circuit the board's own 100 kΩ `R3` sits in parallel across those same two
+pads, so the meter reads `R17 ∥ R3` — which tops out near 50 kΩ, not 100 kΩ.
+That is correct and expected; it is not a half-broken pot. Measure the pot on
+its own before soldering if you want to see the full 100 kΩ span.
+
+What matters either way is that the reading **moves monotonically** with the
+printed tap. To park it at one value:
 
 ```bash
 uv run python scripts/hardware-test/test_x9c104.py --position 46
 ```
+
+### A Short That Looks Like Correct Wiring
+
+`RH` tied to `RW` is right. What must **not** happen is a wire carrying that
+joined node straight to `RL`, bypassing the pads — that shorts the element end
+to end, and the meter reads a near-constant few tens of ohms at every tap.
+
+The pads have to sit *in* the path:
+
+```
+  RH+RW ──── wire ──── R17 pad A
+                          ⋮  (the SEN-14262 footprint)
+  RL    ──── wire ──── R17 pad B
+```
+
+Two wires leave the pot, and they land on two different pads. If a sweep shows
+a flat reading, this is the first thing to check.
 
 ### Step 5: Find the Ceiling for Your Room
 
@@ -479,7 +509,10 @@ problem is on the resistor side.
 
 1. Stop the server and sweep with a meter across the R17 pads:
    `uv run python scripts/hardware-test/test_x9c104.py --sweep`. A reading stuck
-   at one value means a cold joint on `RW`, `RL`, or an R17 pad.
+   at one value means a cold joint on `RW`, `RL`, or an R17 pad — or the
+   `RH+RW` node wired straight to `RL` instead of through the pads.
+   In circuit the top of the range is ~50 kΩ, not 100 kΩ; that is `R17 ∥ R3`
+   and is expected.
 2. Check no fixed resistor is still soldered into R17 — it parallels the pot and
    flattens its range.
 
