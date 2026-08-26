@@ -308,6 +308,56 @@ def test_auto_exposure_defers_control_change_during_trigger_tail(tmp_path):
     assert runtime.auto_exposure_status()["capture_deferred"] is True
 
 
+def test_trigger_waits_for_in_progress_auto_exposure_update(tmp_path):
+    controls_started = threading.Event()
+    allow_controls = threading.Event()
+    trigger_finished = threading.Event()
+
+    class BlockingCamera:
+        @staticmethod
+        def set_controls(_controls):
+            controls_started.set()
+            assert allow_controls.wait(timeout=1.0)
+
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(
+            fps=488.0,
+            pre_ms=1.0,
+            post_ms=10.0,
+            exposure_us=250,
+            gain=4.0,
+        ),
+    )
+    runtime._camera = BlockingCamera()
+    runtime._running = True
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=np.full((200, 320), 18, dtype=np.uint8),
+            sensor_timestamp_ns=1,
+            host_timestamp_ns=2,
+            exposure_us=250,
+            analogue_gain=4.0,
+        )
+    )
+    exposure_thread = threading.Thread(target=runtime._run_auto_exposure_cycle)
+    trigger_thread = threading.Thread(
+        target=lambda: (runtime.notify_trigger(), trigger_finished.set()),
+    )
+
+    exposure_thread.start()
+    assert controls_started.wait(timeout=1.0)
+    trigger_thread.start()
+    assert not trigger_finished.wait(timeout=0.05)
+    allow_controls.set()
+    exposure_thread.join(timeout=1.0)
+    trigger_thread.join(timeout=1.0)
+
+    assert trigger_finished.is_set()
+    trigger_state = runtime._trigger_auto_exposure.get_nowait()
+    assert trigger_state["exposure_us"] == runtime.settings.exposure_us
+
+
 def test_auto_exposure_acceptable_frame_enables_camera_analysis(tmp_path):
     runtime = CameraCaptureRuntime(
         output_dir=tmp_path,

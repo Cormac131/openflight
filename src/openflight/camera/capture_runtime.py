@@ -171,6 +171,7 @@ class CameraCaptureRuntime:
         self._trigger_epochs: queue.Queue[float] = queue.Queue()
         self._trigger_auto_exposure: queue.Queue[dict] = queue.Queue()
         self._camera_control_lock = threading.Lock()
+        self._trigger_exposure_lock = threading.Lock()
         self._reconfigure_lock = threading.Lock()
         self._auto_exposure_policy = AutoExposurePolicy(fps=self.settings.fps)
         self._auto_exposure_stop = threading.Event()
@@ -469,13 +470,14 @@ class CameraCaptureRuntime:
         if not self._running:
             return False
         trigger_epoch = time.time() if timestamp is None else float(timestamp)
-        accepted = self._ring.trigger(time.monotonic_ns())
-        if not accepted:
-            logger.debug("[CAMERA] Ignoring trigger edge while capture is busy")
-            return False
-        self._trigger_epochs.put(trigger_epoch)
-        self._trigger_auto_exposure.put(self.auto_exposure_status())
-        return True
+        with self._trigger_exposure_lock:
+            accepted = self._ring.trigger(time.monotonic_ns())
+            if not accepted:
+                logger.debug("[CAMERA] Ignoring trigger edge while capture is busy")
+                return False
+            self._trigger_epochs.put(trigger_epoch)
+            self._trigger_auto_exposure.put(self.auto_exposure_status())
+            return True
 
     def capture_for_shot(
         self,
@@ -569,42 +571,43 @@ class CameraCaptureRuntime:
 
     def _run_auto_exposure_cycle(self) -> AutoExposureDecision | None:
         """Measure one stable frame and apply the policy's requested control step."""
-        if self._ring.capture_busy:
-            with self._auto_exposure_lock:
-                self._auto_exposure_capture_deferred = True
-            return None
+        with self._trigger_exposure_lock:
+            if self._ring.capture_busy:
+                with self._auto_exposure_lock:
+                    self._auto_exposure_capture_deferred = True
+                return None
 
-        frame = self._ring.latest_frame
-        observation = measure_exposure(
-            frame.image if frame is not None else np.asarray([]),
-        )
-        decision = self._auto_exposure_policy.evaluate(
-            observation,
-            exposure_us=self.settings.exposure_us,
-            gain=self.settings.gain,
-        )
-        checked_at = time.time()
-        if decision.should_apply:
-            self.update_image_controls(
-                exposure_us=decision.target.exposure_us,
-                gain=decision.target.gain,
+            frame = self._ring.latest_frame
+            observation = measure_exposure(
+                frame.image if frame is not None else np.asarray([]),
             )
-            logger.info(
-                "[CAMERA] Auto exposure: %s -> %dus gain %.1f (%s)",
-                observation.status,
-                decision.target.exposure_us,
-                decision.target.gain,
-                decision.message,
+            decision = self._auto_exposure_policy.evaluate(
+                observation,
+                exposure_us=self.settings.exposure_us,
+                gain=self.settings.gain,
             )
-        elif decision.status == "lighting_required":
-            logger.warning("[CAMERA] %s", decision.message)
-
-        with self._auto_exposure_lock:
-            self._auto_exposure_decision = decision
-            self._auto_exposure_capture_deferred = False
-            self._auto_exposure_last_check_epoch = checked_at
             if decision.should_apply:
-                self._auto_exposure_last_adjustment_epoch = checked_at
+                self.update_image_controls(
+                    exposure_us=decision.target.exposure_us,
+                    gain=decision.target.gain,
+                )
+                logger.info(
+                    "[CAMERA] Auto exposure: %s -> %dus gain %.1f (%s)",
+                    observation.status,
+                    decision.target.exposure_us,
+                    decision.target.gain,
+                    decision.message,
+                )
+            elif decision.status == "lighting_required":
+                logger.warning("[CAMERA] %s", decision.message)
+
+            checked_at = time.time()
+            with self._auto_exposure_lock:
+                self._auto_exposure_decision = decision
+                self._auto_exposure_capture_deferred = False
+                self._auto_exposure_last_check_epoch = checked_at
+                if decision.should_apply:
+                    self._auto_exposure_last_adjustment_epoch = checked_at
         if decision.status == "ready" and observation.status == "good":
             self._persist_auto_exposure_controls()
         return decision
