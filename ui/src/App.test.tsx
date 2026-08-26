@@ -2,11 +2,13 @@ import { renderToString } from 'react-dom/server';
 import { beforeEach, describe, expect, it } from 'vitest';
 import App from './App';
 import { PANEL_VIEWS } from './components/panel';
+import { useOnboardingStore } from './stores/useOnboardingStore';
 import { useSystemStore } from './stores/useSystemStore';
 
 describe('App shell', () => {
   beforeEach(() => {
     useSystemStore.setState({ serverClub: null });
+    useOnboardingStore.setState({ completed: true });
   });
 
   it('renders the bottom bar instead of the old top header', () => {
@@ -79,5 +81,13 @@ describe('App shell', () => {
     expect(html).not.toContain("Clear Player 1's session?");
     expect(html).not.toContain('Clear Player 1&#x27;s session?');
     expect(html).not.toContain('clear-session-title');
+  });
+
+  it('shows onboarding instead of the club picker on first run', () => {
+    useOnboardingStore.setState({ completed: false });
+    const html = renderToString(<App />);
+    expect(html).toContain('Get started');
+    expect(html).not.toContain('aria-label="Select club"');
+    expect(html).not.toContain('panel-footer');
   });
 });

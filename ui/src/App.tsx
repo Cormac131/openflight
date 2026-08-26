@@ -7,10 +7,12 @@ import { useCameraStore } from './stores/useCameraStore';
 import { useDebugStore } from './stores/useDebugStore';
 import { usePlayerStore } from './stores/usePlayerStore';
 import { useHeroMetricStore } from './stores/useHeroMetricStore';
+import { useOnboardingStore } from './stores/useOnboardingStore';
 import { socketService } from './services/socketService';
 import { shouldEchoSelectionToServer } from './services/playerSocketSync';
 import { DebugPanel } from './components/DebugPanel';
 import { DisplayMode } from './components/DisplayMode';
+import { OnboardingFlow } from './components/onboarding';
 import { SimShotBadges } from './components/SimShotBadges';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
@@ -103,16 +105,21 @@ function AppContent() {
     }))
   );
 
+  // Hook subscribe so complete() re-renders on the client. Gate with getState()
+  // because renderToString uses Zustand's initial snapshot, not later setState.
+  useOnboardingStore((state) => state.completed);
+  const onboardingCompleted = useOnboardingStore.getState().completed;
   const [currentView, setCurrentView] = useState<PanelView>('live');
   const [selectedClub, setSelectedClub] = useState('driver');
   const [selectedTrainingImplement, setSelectedTrainingImplement] = useState('driver');
   const [menuOpen, setMenuOpen] = useState(false);
   const [showShutdown, setShowShutdown] = useState(false);
   const [shutdownState, setShutdownState] = useState<ShutdownState>('confirm');
-  // Open on every app load so the user confirms their club before the first
-  // shot; dismissing keeps the default. The /display route returns early below,
-  // so this never appears in the passive TV view.
-  const [pickerOpen, setPickerOpen] = useState(true);
+  // Open on later launches after onboarding so the club is confirmed before
+  // the first shot; first-run starts closed because the wizard replaces the
+  // shell. The /display route returns early below, so this never appears in
+  // the passive TV view.
+  const [pickerOpen, setPickerOpen] = useState(() => useOnboardingStore.getState().completed);
   const [addPlayerOpen, setAddPlayerOpen] = useState(false);
   const [newPlayerName, setNewPlayerName] = useState('');
   const [clearSessionOpen, setClearSessionOpen] = useState(false);
@@ -228,6 +235,10 @@ function AppContent() {
 
   if (isDisplayRoute) {
     return <DisplayMode connected={connected} cameraStatus={cameraStatus} latestShot={latestShot} shots={shots} />;
+  }
+
+  if (!onboardingCompleted) {
+    return <OnboardingFlow onFinished={() => setPickerOpen(false)} />;
   }
 
   const changeClubAction = (
