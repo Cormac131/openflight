@@ -1127,6 +1127,9 @@ def init_camera_capture(
             roll_correction_deg=roll_correction_deg,
             scaler_crop=scaler_crop,
             gpio_pin=gpio_pin,
+            auto_exposure_state_path=(
+                Path.home() / ".config" / "openflight" / "camera-exposure.json"
+            ),
         )
         camera_capture_runtime = CameraCaptureRuntime(
             output_dir=output_dir,
@@ -1134,6 +1137,7 @@ def init_camera_capture(
             use_gpio_trigger=use_gpio_trigger,
         )
         camera_capture_runtime.start()
+        settings = camera_capture_runtime.settings
         from openflight.camera.club_delivery import (  # noqa: PLC0415
             ReferenceBallTracker,
         )
@@ -1154,6 +1158,7 @@ def init_camera_capture(
             "post_frames": settings.post_frames,
             "exposure_us": settings.exposure_us,
             "gain": settings.gain,
+            "auto_exposure_enabled": settings.auto_exposure,
             "stream": settings.stream,
             "rotate_180": settings.rotate_180,
             "mirror_horizontal": settings.mirror_horizontal,
@@ -1568,10 +1573,12 @@ def camera_capture_preview():
 
 @app.route("/api/camera/exposure-quality")
 def camera_capture_exposure_quality():
-    """Exposure guidance derived from the latest raw impact-zone pixels."""
+    """Automatic exposure state derived from the latest impact-zone pixels."""
     if camera_capture_runtime is None:
         return jsonify({"sample_available": False, "status": "unavailable"}), 404
-    return jsonify(camera_capture_runtime.exposure_quality())
+    quality = camera_capture_runtime.exposure_quality()
+    quality["auto_exposure"] = camera_capture_runtime.auto_exposure_status()
+    return jsonify(quality)
 
 
 def _camera_capture_settings_payload() -> dict:
@@ -1583,6 +1590,16 @@ def _camera_capture_settings_payload() -> dict:
     if camera_capture_runtime is not None:
         payload.update(camera_capture_runtime.status())
         payload.update(camera_capture_runtime.vertical_crop_status())
+        payload["exposure_us"] = getattr(
+            camera_capture_runtime.settings,
+            "exposure_us",
+            payload.get("exposure_us"),
+        )
+        payload["gain"] = getattr(
+            camera_capture_runtime.settings,
+            "gain",
+            payload.get("gain"),
+        )
         frame_period_us = round(1_000_000 / camera_capture_runtime.settings.fps)
         payload["max_exposure_us"] = frame_period_us - 1
     return payload
@@ -1611,8 +1628,8 @@ def handle_set_camera_capture_settings(data):
         return
 
     try:
-        exposure_us = int(data.get("exposure_us", camera_capture_config["exposure_us"]))
-        gain = float(data.get("gain", camera_capture_config["gain"]))
+        if "exposure_us" in data or "gain" in data:
+            raise ValueError("Camera exposure and gain are managed automatically")
         alignment_x_pct = float(
             data.get("alignment_x_pct", camera_capture_config.get("alignment_x_pct", 50.0))
         )
@@ -1630,13 +1647,8 @@ def handle_set_camera_capture_settings(data):
                 int(data["vertical_offset_px"])
             )
 
-        applied = camera_capture_runtime.update_image_controls(
-            exposure_us=exposure_us,
-            gain=gain,
-        )
         camera_capture_config.update(
             {
-                **applied,
                 **crop_update,
                 "alignment_x_pct": alignment_x_pct,
                 "alignment_y_pct": alignment_y_pct,
@@ -2885,9 +2897,7 @@ def _fuse_camera_ball_flight(
                                     camera_capture_config.get("roll_correction_deg", 0.0)
                                 ),
                                 horizontal_pixel_sign=(
-                                    -1.0
-                                    if camera_capture_config.get("mirror_horizontal")
-                                    else 1.0
+                                    -1.0 if camera_capture_config.get("mirror_horizontal") else 1.0
                                 ),
                                 image_width_px=int(camera_capture_config["width"]),
                                 image_height_px=int(camera_capture_config["height"]),
@@ -2941,6 +2951,35 @@ def _fuse_camera_ball_flight(
 
 def _fuse_camera_measurements(shot: Shot, camera_capture) -> None:
     """Decode one camera clip and share it across all live estimators."""
+    captured_auto_exposure = (
+        camera_capture.metadata.get("auto_exposure")
+        if camera_capture is not None
+        and isinstance(getattr(camera_capture, "metadata", None), dict)
+        else None
+    )
+    analysis_eligible = (
+        bool(captured_auto_exposure.get("analysis_eligible"))
+        if isinstance(captured_auto_exposure, dict)
+        else (
+            camera_capture_runtime.camera_analysis_eligible
+            if camera_capture_runtime is not None
+            else True
+        )
+    )
+    if not analysis_eligible:
+        shot.experimental_camera_horizontal_status = "rejected_lighting_quality"
+        shot.experimental_camera_horizontal_deg = None
+        shot.experimental_camera_horizontal_confidence = None
+        shot.experimental_camera_iwr_delta_deg = None
+        shot.experimental_fused_attack_angle_deg = None
+        shot.experimental_fused_club_path_deg = None
+        shot.experimental_fused_status = "rejected_lighting_quality"
+        shot.experimental_fused_attack_angle_confidence = "withheld"
+        shot.experimental_fused_club_path_confidence = "withheld"
+        logger.warning(
+            "[SERVER] Camera analysis withheld for lighting quality; using radar fallback"
+        )
+        return
     camera_archive = _load_camera_capture_archive(camera_capture)
     _fuse_camera_ball_flight(shot, camera_capture, camera_archive)
     _fuse_camera_club_delivery(shot, camera_capture, camera_archive)

@@ -1,5 +1,6 @@
 """Tests for the high-speed camera trigger ring."""
 
+import json
 import threading
 
 import numpy as np
@@ -335,6 +336,108 @@ def test_auto_exposure_acceptable_frame_enables_camera_analysis(tmp_path):
     assert decision.status == "ready"
     assert runtime.camera_analysis_eligible is True
     assert runtime.auto_exposure_status()["observation"]["status"] == "good"
+
+
+def test_auto_exposure_restores_last_good_controls_for_same_camera_mode(tmp_path):
+    state_path = tmp_path / "camera-exposure.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "width": 320,
+                "height": 200,
+                "fps": 488.0,
+                "exposure_us": 650,
+                "gain": 15.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(
+            width=320,
+            height=200,
+            fps=488.0,
+            exposure_us=250,
+            gain=4.0,
+            auto_exposure_state_path=state_path,
+        ),
+    )
+
+    assert runtime.settings.exposure_us == 650
+    assert runtime.settings.gain == 15.0
+
+
+def test_auto_exposure_ignores_saved_controls_from_different_mode(tmp_path):
+    state_path = tmp_path / "camera-exposure.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "width": 640,
+                "height": 400,
+                "fps": 300.0,
+                "exposure_us": 1000,
+                "gain": 20.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(
+            width=320,
+            height=200,
+            fps=488.0,
+            exposure_us=250,
+            gain=4.0,
+            auto_exposure_state_path=state_path,
+        ),
+    )
+
+    assert runtime.settings.exposure_us == 250
+    assert runtime.settings.gain == 4.0
+
+
+def test_auto_exposure_persists_good_controls(tmp_path):
+    state_path = tmp_path / "camera-exposure.json"
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(
+            width=320,
+            height=200,
+            fps=488.0,
+            exposure_us=500,
+            gain=12.0,
+            auto_exposure_state_path=state_path,
+        ),
+    )
+    runtime._camera = object()
+    runtime._running = True
+    image = np.full((200, 320), 110, dtype=np.uint8)
+    image[100:175, 90:230] = np.tile(
+        np.linspace(45, 185, 140, dtype=np.uint8),
+        (75, 1),
+    )
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=image,
+            sensor_timestamp_ns=1,
+            host_timestamp_ns=2,
+            exposure_us=500,
+            analogue_gain=12.0,
+        )
+    )
+
+    runtime._run_auto_exposure_cycle()
+
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["exposure_us"] == 500
+    assert saved["gain"] == 12.0
+    assert saved["width"] == 320
 
 
 def test_preview_roll_correction_levels_sloped_line_without_modifying_raw_frame(tmp_path):

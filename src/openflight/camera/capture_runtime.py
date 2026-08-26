@@ -71,6 +71,7 @@ class CameraCaptureSettings:
     gpio_pin: int = 17
     match_tolerance_s: float = 0.75
     auto_exposure: bool = True
+    auto_exposure_state_path: Path | None = None
 
     @property
     def pre_frames(self) -> int:
@@ -151,6 +152,13 @@ class CameraCaptureRuntime:
         self._button_factory = button_factory
         self._use_gpio_trigger = use_gpio_trigger
         self._vertical_offset_path = Path(vertical_offset_path)
+        self._auto_exposure_state_path = (
+            Path(self.settings.auto_exposure_state_path).expanduser()
+            if self.settings.auto_exposure_state_path is not None
+            else None
+        )
+        self._last_persisted_controls: tuple[int, float] | None = None
+        self._restore_auto_exposure_controls()
         self._camera = None
         self._button = None
         self._ring = TriggeredFrameBuffer(self.settings.pre_frames, self.settings.post_frames)
@@ -161,6 +169,7 @@ class CameraCaptureRuntime:
         self._captures: list[SavedCameraCapture] = []
         self._condition = threading.Condition()
         self._trigger_epochs: queue.Queue[float] = queue.Queue()
+        self._trigger_auto_exposure: queue.Queue[dict] = queue.Queue()
         self._camera_control_lock = threading.Lock()
         self._reconfigure_lock = threading.Lock()
         self._auto_exposure_policy = AutoExposurePolicy(fps=self.settings.fps)
@@ -441,6 +450,7 @@ class CameraCaptureRuntime:
         self._ring = TriggeredFrameBuffer(self.settings.pre_frames, self.settings.post_frames)
         self._ready = queue.Queue()
         self._trigger_epochs = queue.Queue()
+        self._trigger_auto_exposure = queue.Queue()
         self._auto_exposure_policy.reset()
 
     def status(self) -> dict:
@@ -459,15 +469,12 @@ class CameraCaptureRuntime:
         if not self._running:
             return False
         trigger_epoch = time.time() if timestamp is None else float(timestamp)
-        self._trigger_epochs.put(trigger_epoch)
         accepted = self._ring.trigger(time.monotonic_ns())
         if not accepted:
-            try:
-                self._trigger_epochs.get_nowait()
-            except queue.Empty:
-                pass
             logger.debug("[CAMERA] Ignoring trigger edge while capture is busy")
             return False
+        self._trigger_epochs.put(trigger_epoch)
+        self._trigger_auto_exposure.put(self.auto_exposure_status())
         return True
 
     def capture_for_shot(
@@ -598,7 +605,63 @@ class CameraCaptureRuntime:
             self._auto_exposure_last_check_epoch = checked_at
             if decision.should_apply:
                 self._auto_exposure_last_adjustment_epoch = checked_at
+        if decision.status == "ready" and observation.status == "good":
+            self._persist_auto_exposure_controls()
         return decision
+
+    def _restore_auto_exposure_controls(self) -> None:
+        """Use the last good setting as the next startup seed for this mode."""
+        path = self._auto_exposure_state_path
+        if not self.settings.auto_exposure or path is None or not path.exists():
+            return
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            same_mode = (
+                saved.get("version") == 1
+                and int(saved["width"]) == self.settings.width
+                and int(saved["height"]) == self.settings.height
+                and math.isclose(float(saved["fps"]), self.settings.fps, rel_tol=0.001)
+            )
+            exposure_us = int(saved["exposure_us"])
+            gain = float(saved["gain"])
+            frame_period_us = round(1_000_000 / self.settings.fps)
+            if same_mode and 0 < exposure_us < frame_period_us and gain > 0:
+                self.settings = replace(
+                    self.settings,
+                    exposure_us=exposure_us,
+                    gain=gain,
+                )
+                self._last_persisted_controls = (exposure_us, gain)
+                logger.info(
+                    "[CAMERA] Restored auto exposure seed: %dus gain %.1f",
+                    exposure_us,
+                    gain,
+                )
+        except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
+            logger.warning("[CAMERA] Ignoring invalid auto exposure state: %s", path)
+
+    def _persist_auto_exposure_controls(self) -> None:
+        """Atomically remember a validated setting without delaying capture."""
+        path = self._auto_exposure_state_path
+        controls = (self.settings.exposure_us, self.settings.gain)
+        if path is None or controls == self._last_persisted_controls:
+            return
+        payload = {
+            "version": 1,
+            "width": self.settings.width,
+            "height": self.settings.height,
+            "fps": self.settings.fps,
+            "exposure_us": controls[0],
+            "gain": controls[1],
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(f"{path.suffix}.tmp")
+            temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            temporary.replace(path)
+            self._last_persisted_controls = controls
+        except OSError:
+            logger.warning("[CAMERA] Could not persist auto exposure state", exc_info=True)
 
     def _on_frame(self, request) -> None:
         try:
@@ -640,10 +703,20 @@ class CameraCaptureRuntime:
             if capture is None:
                 break
             trigger_epoch = self._trigger_epochs.get() if not self._trigger_epochs.empty() else 0.0
+            auto_exposure = (
+                self._trigger_auto_exposure.get()
+                if not self._trigger_auto_exposure.empty()
+                else None
+            )
             self._sequence += 1
             sequence = self._sequence
             try:
-                saved = self._save_capture(sequence, trigger_epoch, capture)
+                saved = self._save_capture(
+                    sequence,
+                    trigger_epoch,
+                    capture,
+                    auto_exposure=auto_exposure,
+                )
             except Exception as exc:  # pylint: disable=broad-except
                 logger.warning("[CAMERA] Capture #%d save failed: %s", sequence, exc, exc_info=True)
                 saved = SavedCameraCapture(
@@ -663,6 +736,8 @@ class CameraCaptureRuntime:
         sequence: int,
         trigger_epoch: float,
         capture: TriggeredCapture,
+        *,
+        auto_exposure: dict | None = None,
     ) -> SavedCameraCapture:
         timestamp = datetime.fromtimestamp(trigger_epoch or time.time()).strftime(
             "%Y%m%d_%H%M%S_%f"
@@ -733,7 +808,9 @@ class CameraCaptureRuntime:
                     "mirror_horizontal": self.settings.mirror_horizontal,
                     "roll_correction_deg": self.settings.roll_correction_deg,
                     "scaler_crop": self.settings.scaler_crop,
+                    "auto_exposure": self.settings.auto_exposure,
                 },
+                "auto_exposure": auto_exposure or self.auto_exposure_status(),
             }
         )
         (shot_dir / "metadata.json").write_text(json.dumps(summary, indent=2) + "\n")
