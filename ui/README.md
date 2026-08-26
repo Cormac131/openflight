@@ -86,9 +86,9 @@ The app is entirely client-side. Everything flows through one socket connection.
   as a no-op by the Node mock).
 
 **Kiosk shell.** Footer tabs switch views. The footer logo opens a sheet for
-units (MPH/YDS vs KMH/M), dark/light theme, language, simulator and
-ball-detection status. The header power icon is always visible on the right and
-opens a shutdown confirmation. Change club (or training implement) lives on the Live
+units (MPH/YDS vs KMH/M), dark/light theme, language, and live view. Simulator
+and ball-detection status live in the header status menu. The header power icon
+is always visible on the right and opens a shutdown confirmation. Change club (or training implement) lives on the Live
 header. Tap a Live metric to pin it top-left while keeping all metrics visible;
 timed or sticky Live view can optionally show a large preview of that metric
 after each new shot. Camera-backed shots add a **Replay** action in the Live header and a play button

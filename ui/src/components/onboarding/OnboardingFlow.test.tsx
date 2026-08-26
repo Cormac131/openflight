@@ -4,10 +4,7 @@ import { OnboardingFlow } from './OnboardingFlow';
 import { useLiveViewStore } from '../../stores/useLiveViewStore';
 
 function render(initialStep?: 'welcome' | 'language' | 'theme' | 'live' | 'done') {
-  return renderToString(<OnboardingFlow onFinished={() => {}} initialStep={initialStep} />).replace(
-    /<!-- -->/g,
-    ''
-  );
+  return renderToString(<OnboardingFlow onFinished={() => {}} initialStep={initialStep} />).replace(/<!-- -->/g, '');
 }
 
 describe('OnboardingFlow', () => {

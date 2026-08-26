@@ -19,12 +19,14 @@ export type OnboardingStep = 'welcome' | 'language' | 'theme' | 'live' | 'done';
 
 const STEPS = ['welcome', 'language', 'theme', 'live', 'done'] as const;
 
-const DURATION_KEYS: Record<LiveViewDurationMs, 'onboarding.duration5' | 'onboarding.duration10' | 'onboarding.duration15'> =
-  {
-    5000: 'onboarding.duration5',
-    10000: 'onboarding.duration10',
-    15000: 'onboarding.duration15',
-  };
+const DURATION_KEYS: Record<
+  LiveViewDurationMs,
+  'onboarding.duration5' | 'onboarding.duration10' | 'onboarding.duration15'
+> = {
+  5000: 'onboarding.duration5',
+  10000: 'onboarding.duration10',
+  15000: 'onboarding.duration15',
+};
 
 const LIVE_MODES: ReadonlyArray<{
   id: LiveViewMode;
@@ -40,10 +42,7 @@ function MiniGrid() {
   return (
     <span className="onboarding__mini-grid">
       {Array.from({ length: 6 }, (_, index) => (
-        <span
-          key={index}
-          className={`onboarding__mini-cell${index === 0 ? ' onboarding__mini-cell--selected' : ''}`}
-        />
+        <span key={index} className={`onboarding__mini-cell${index === 0 ? ' onboarding__mini-cell--selected' : ''}`} />
       ))}
     </span>
   );
@@ -193,16 +192,8 @@ export function OnboardingFlow({
             </div>
             <h2 className="onboarding__subtitle">{t('onboarding.unitsTitle')}</h2>
             <div className="onboarding__grid onboarding__grid--units">
-              <Tile
-                selected={unitSystem === 'imperial'}
-                label="MPH / YDS"
-                onClick={() => setUnitSystem('imperial')}
-              />
-              <Tile
-                selected={unitSystem === 'metric'}
-                label="KMH / M"
-                onClick={() => setUnitSystem('metric')}
-              />
+              <Tile selected={unitSystem === 'imperial'} label="MPH / YDS" onClick={() => setUnitSystem('imperial')} />
+              <Tile selected={unitSystem === 'metric'} label="KMH / M" onClick={() => setUnitSystem('metric')} />
             </div>
           </>
         ) : null}

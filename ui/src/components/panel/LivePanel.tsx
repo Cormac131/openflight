@@ -104,12 +104,7 @@ export function LivePanel({
         {ballWarning}
         {isPlayersNewShot ? <div className="shot-flash" /> : null}
         {spotlightOpen && selected ? (
-          <button
-            type="button"
-            className="live-panel__spotlight"
-            aria-label={t('live.hideOverlay')}
-            onClick={dismiss}
-          >
+          <button type="button" className="live-panel__spotlight" aria-label={t('live.hideOverlay')} onClick={dismiss}>
             <span className="live-panel__spotlight-label">
               {selected.label} · {clubLabel}
               {selected.estimated ? <EstimatedMark /> : null}

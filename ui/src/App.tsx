@@ -404,9 +404,7 @@ function AppContent() {
        * Overlays sit outside <main> so they cover the footer too, matching how
        * 6a draws them over the whole card.
        */}
-      {menuOpen ? (
-        <MenuSheet onClose={() => setMenuOpen(false)} />
-      ) : null}
+      {menuOpen ? <MenuSheet onClose={() => setMenuOpen(false)} /> : null}
 
       {addPlayerOpen ? (
         <AddPlayerDialog

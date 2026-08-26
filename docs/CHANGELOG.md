@@ -24,9 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Instrument-panel kiosk UI.** The dashboard is a tabbed shell (Live, Stats,
   Shots, Camera, Players, Debug) instead of the previous stacked shot and stats
   views. Tap a Live metric to pin it top-left while keeping all ten metrics
-  visible. The footer logo opens units, dark/light theme, language, simulator,
-  and ball-detection status; a persistent header power button opens the shutdown
-  confirmation. Club (or training implement) selection is a Live header action.
+  visible. The footer logo opens units, dark/light theme, language, and live
+  view; simulator and ball-detection status live in the header status menu. A
+  persistent header power button opens the shutdown confirmation. Club (or
+  training implement) selection is a Live header action.
   See the [UI README](../ui/README.md).
 - **Kiosk languages.** English, Spanish, French, and Portuguese. Choice is
   stored in `localStorage` (`openflight.locale:v1`).
