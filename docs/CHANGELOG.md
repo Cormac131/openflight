@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **First-run setup.** A new kiosk walks through language, units, theme, and
+  Live view (tiles, timed large preview, or hold preview) before the first
+  shot. Choices persist and remain in the footer menu. Live can show the
+  selected metric full-screen after a new shot; tap or the chosen duration
+  returns to the tile grid. Shut down was removed from the menu sheet; use
+  the footer power button.
 - **Automatic OV9281 exposure control.** High-speed camera capture now measures
   the impact area every five seconds, restores the last known-good setting at
   startup, and selects a shutter/gain combination that preserves club contrast
