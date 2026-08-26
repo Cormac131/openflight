@@ -144,7 +144,6 @@ export const es: Messages = {
   'onboarding.getStarted': 'Empezar',
   'onboarding.welcomeEyebrow': 'Monitor de lanzamiento',
   'onboarding.welcomeTitle': 'OpenFlight',
-  'onboarding.welcomeDetail': 'Elige idioma, unidades, tema y cómo se muestran los golpes en En vivo.',
   'onboarding.continue': 'Continuar',
   'onboarding.back': 'Atrás',
   'onboarding.start': 'Comenzar',

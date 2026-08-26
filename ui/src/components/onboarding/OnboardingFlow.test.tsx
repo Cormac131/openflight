@@ -53,6 +53,8 @@ describe('OnboardingFlow', () => {
     expect(html).toContain('>5s<');
     expect(html).toContain('>10s<');
     expect(html).toContain('>15s<');
+    expect(html.indexOf('Timed preview')).toBeLessThan(html.indexOf('>5s<'));
+    expect(html.indexOf('>5s<')).toBeLessThan(html.indexOf('Hold preview'));
     expect(html).toContain('Tiles');
     expect(html).toContain('Timed preview');
     expect(html).toContain('Hold preview');

@@ -144,7 +144,6 @@ export const pt: Messages = {
   'onboarding.getStarted': 'Começar',
   'onboarding.welcomeEyebrow': 'Monitor de lançamento',
   'onboarding.welcomeTitle': 'OpenFlight',
-  'onboarding.welcomeDetail': 'Defina idioma, unidades, tema e como as tacadas aparecem em Ao vivo.',
   'onboarding.continue': 'Continuar',
   'onboarding.back': 'Voltar',
   'onboarding.start': 'Iniciar',

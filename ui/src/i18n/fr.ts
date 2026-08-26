@@ -144,7 +144,6 @@ export const fr: Messages = {
   'onboarding.getStarted': 'Commencer',
   'onboarding.welcomeEyebrow': 'Moniteur de lancement',
   'onboarding.welcomeTitle': 'OpenFlight',
-  'onboarding.welcomeDetail': 'Choisissez la langue, les unités, le thème et l’affichage des coups en Direct.',
   'onboarding.continue': 'Continuer',
   'onboarding.back': 'Retour',
   'onboarding.start': 'C’est parti',

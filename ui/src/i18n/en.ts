@@ -142,7 +142,6 @@ export const en = {
   'onboarding.getStarted': 'Get started',
   'onboarding.welcomeEyebrow': 'Launch monitor',
   'onboarding.welcomeTitle': 'OpenFlight',
-  'onboarding.welcomeDetail': 'Set language, units, theme, and how shots appear on Live.',
   'onboarding.continue': 'Continue',
   'onboarding.back': 'Back',
   'onboarding.start': 'Start',

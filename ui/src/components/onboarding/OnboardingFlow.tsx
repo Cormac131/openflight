@@ -79,6 +79,7 @@ function Tile({
   detail,
   appearance,
   preview,
+  footer,
 }: {
   selected: boolean;
   onClick: MouseEventHandler<HTMLButtonElement>;
@@ -86,6 +87,7 @@ function Tile({
   detail?: string;
   appearance?: 'dark' | 'light';
   preview?: ReactNode;
+  footer?: ReactNode;
 }) {
   const classes = [
     'onboarding__tile',
@@ -97,13 +99,16 @@ function Tile({
     .join(' ');
 
   return (
-    <button type="button" className={classes} aria-pressed={selected} onClick={onClick}>
-      {preview}
-      <span className="onboarding__tile-copy">
-        <span className="onboarding__tile-label">{label}</span>
-        {detail ? <span className="onboarding__tile-detail">{detail}</span> : null}
-      </span>
-    </button>
+    <div className={classes}>
+      <button type="button" className="onboarding__tile-hit" aria-pressed={selected} onClick={onClick}>
+        {preview}
+        <span className="onboarding__tile-copy">
+          <span className="onboarding__tile-label">{label}</span>
+          {detail ? <span className="onboarding__tile-detail">{detail}</span> : null}
+        </span>
+      </button>
+      {footer}
+    </div>
   );
 }
 
@@ -165,7 +170,6 @@ export function OnboardingFlow({
             <h1 id="onboarding-title" className="onboarding__title">
               {t('onboarding.welcomeTitle')}
             </h1>
-            <p className="onboarding__detail">{t('onboarding.welcomeDetail')}</p>
             <button type="button" className="onboarding__primary" onClick={goNext}>
               {t('onboarding.getStarted')}
             </button>
@@ -241,24 +245,26 @@ export function OnboardingFlow({
                   detail={t(option.detail)}
                   preview={<LiveViewDemo mode={option.id} />}
                   onClick={() => setMode(option.id)}
+                  footer={
+                    option.id === 'timed' && mode === 'timed' ? (
+                      <div className="onboarding__durations" role="group" aria-label={t('onboarding.duration')}>
+                        {LIVE_VIEW_DURATIONS_MS.map((ms) => (
+                          <button
+                            key={ms}
+                            type="button"
+                            className={`onboarding__chip${durationMs === ms ? ' onboarding__chip--selected' : ''}`}
+                            aria-pressed={durationMs === ms}
+                            onClick={() => handleDuration(String(ms))}
+                          >
+                            {t(DURATION_KEYS[ms])}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null
+                  }
                 />
               ))}
             </div>
-            {mode === 'timed' ? (
-              <div className="onboarding__durations" role="group" aria-label={t('onboarding.duration')}>
-                {LIVE_VIEW_DURATIONS_MS.map((ms) => (
-                  <button
-                    key={ms}
-                    type="button"
-                    className={`onboarding__chip${durationMs === ms ? ' onboarding__chip--selected' : ''}`}
-                    aria-pressed={durationMs === ms}
-                    onClick={() => handleDuration(String(ms))}
-                  >
-                    {t(DURATION_KEYS[ms])}
-                  </button>
-                ))}
-              </div>
-            ) : null}
           </>
         ) : null}
 
