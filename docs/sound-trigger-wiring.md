@@ -337,6 +337,11 @@ pads, so the meter reads `R17 ∥ R3` — which tops out near 50 kΩ, not 100 k�
 That is correct and expected; it is not a half-broken pot. Measure the pot on
 its own before soldering if you want to see the full 100 kΩ span.
 
+**Power the detector down before measuring in circuit**, and treat any reading
+above ~50 kΩ, or any reading that falls as the tap rises, as a bad measurement
+rather than a bad pot — see
+[meter readings do not track the tap](#digital-pot-meter-readings-do-not-track-the-tap).
+
 What matters either way is that the reading **moves monotonically** with the
 printed tap.
 
@@ -508,6 +513,40 @@ The server could not claim the GPIO lines.
 2. Confirm the user is in the `gpio` group: `groups | grep gpio`.
 3. If this Pi exposes the header on a different gpiochip, set
    `OPENFLIGHT_GPIO_CHIP`.
+
+### Digital pot: meter readings do not track the tap
+
+Readings that jump around, fall as the tap rises, or exceed ~50 kΩ in circuit
+are not a miswired pot — they are an invalid measurement. Two hard bounds make
+this easy to spot:
+
+- **In circuit, nothing can read above ~50 kΩ.** The board's 100 kΩ `R3` is
+  across the same two pads, and a parallel combination never exceeds either
+  branch.
+- **The curve must be monotonic.** A pot wired backwards still rises or falls
+  smoothly; a cold joint reads flat. Only an invalid measurement wanders.
+
+The usual cause is measuring with the **SEN-14262 still powered**. R17 is in the
+feedback path around a live op-amp, which drives that node itself, so an
+ohmmeter reads the amplifier's response to room noise rather than a resistance.
+
+Fix the measurement before drawing any conclusion about the wiring:
+
+1. Power the detector down completely — disconnected from 3.3 V, not just idle.
+2. Better still, lift one pot lead off the pads so nothing is in parallel.
+3. Probe the pot's own pins (5 and 6), not the pads.
+
+Then check the two endpoints rather than sweeping. A sweep only means something
+once these are right:
+
+```bash
+uv run python scripts/hardware-test/test_x9c104.py --position 0   # RW-RL ~40 ohm
+uv run python scripts/hardware-test/test_x9c104.py --position 99  # RW-RL ~100 kohm
+```
+
+Tap 0 not reading near zero means the wiper is not moving — a control-line
+fault, not a pad fault. `RH`-`RL` (pins 3 to 6) is a useful third reading: it is
+the whole element, independent of the wiper, and should be ~100 kΩ at every tap.
 
 ### Digital pot: the sweep never leaves "quiet" at any tap
 
