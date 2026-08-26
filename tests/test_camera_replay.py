@@ -1,6 +1,7 @@
 """Tests for lazy, browser-friendly camera replay preparation."""
 
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -15,8 +16,14 @@ from openflight.camera.replay import (
 )
 
 
-def _write_capture(root: Path, *, frame_count: int = 6, pre_trigger_count: int = 4) -> Path:
-    capture_dir = root / "camera_20260825_120000_001"
+def _write_capture(
+    root: Path,
+    *,
+    name: str = "camera_20260825_120000_001",
+    frame_count: int = 6,
+    pre_trigger_count: int = 4,
+) -> Path:
+    capture_dir = root / name
     capture_dir.mkdir()
     frames = np.arange(frame_count * 4 * 6, dtype=np.uint8).reshape(frame_count, 4, 6)
     np.savez(
@@ -53,6 +60,31 @@ def test_registering_capture_does_not_build_video(tmp_path):
     assert replay["trigger_frame"] == 3
     assert replay["playback_fps"] == 60
     assert replay["duration_seconds"] == pytest.approx(0.1)
+    assert replay["display_mirror_horizontal"] is True
+
+
+@pytest.mark.parametrize(
+    ("saved_mirror_horizontal", "display_mirror_horizontal"),
+    [(False, True), (True, False)],
+)
+def test_register_accounts_for_saved_frame_orientation(
+    tmp_path,
+    saved_mirror_horizontal,
+    display_mirror_horizontal,
+):
+    capture_dir = _write_capture(tmp_path)
+    manager = CameraReplayManager(tmp_path, runner=_successful_runner([]))
+
+    replay = manager.register(
+        capture_dir,
+        {
+            "frame_count": 6,
+            "pre_trigger_frames": 4,
+            "settings": {"mirror_horizontal": saved_mirror_horizontal},
+        },
+    )
+
+    assert replay["display_mirror_horizontal"] is display_mirror_horizontal
 
 
 def test_prepare_builds_and_caches_mp4_after_manual_request(tmp_path):
@@ -92,6 +124,39 @@ def test_concurrent_manual_requests_encode_only_once(tmp_path):
 
     assert prepared[0].video_path == prepared[1].video_path
     assert len(calls) == 1
+
+
+def test_different_replays_never_run_ffmpeg_concurrently(tmp_path):
+    first_capture = _write_capture(tmp_path, name="camera_20260825_120000_001")
+    second_capture = _write_capture(tmp_path, name="camera_20260825_120001_002")
+    calls = []
+    active_encoders = 0
+    maximum_active_encoders = 0
+    counter_lock = threading.Lock()
+
+    def tracked_runner(*args, **kwargs):
+        nonlocal active_encoders, maximum_active_encoders
+        with counter_lock:
+            active_encoders += 1
+            maximum_active_encoders = max(maximum_active_encoders, active_encoders)
+        try:
+            time.sleep(0.05)
+            return _successful_runner(calls)(*args, **kwargs)
+        finally:
+            with counter_lock:
+                active_encoders -= 1
+
+    manager = CameraReplayManager(tmp_path, runner=tracked_runner)
+    replay_ids = [
+        manager.register(first_capture, {"frame_count": 6, "pre_trigger_frames": 4})["id"],
+        manager.register(second_capture, {"frame_count": 6, "pre_trigger_frames": 4})["id"],
+    ]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(manager.prepare, replay_ids))
+
+    assert len(calls) == 2
+    assert maximum_active_encoders == 1
 
 
 def test_prepare_rejects_unknown_id(tmp_path):

@@ -71,6 +71,7 @@ class CameraReplayManager:
         self._entries: dict[str, _ReplayEntry] = {}
         self._ids_by_capture: dict[Path, str] = {}
         self._lock = threading.Lock()
+        self._encode_semaphore = threading.BoundedSemaphore(value=1)
 
     def register(self, capture_path: str | Path, metadata: dict) -> dict[str, object]:
         """Advertise an existing raw capture without doing any video work."""
@@ -86,6 +87,12 @@ class CameraReplayManager:
             "pre_trigger_frames",
         )
         trigger_frame = min(frame_count - 1, pre_trigger_count - 1)
+        settings = metadata.get("settings")
+        saved_mirror_horizontal = (
+            settings.get("mirror_horizontal", False) if isinstance(settings, dict) else False
+        )
+        if not isinstance(saved_mirror_horizontal, bool):
+            raise ValueError("camera capture has invalid mirror_horizontal setting")
 
         with self._lock:
             existing_id = self._ids_by_capture.get(resolved)
@@ -99,6 +106,9 @@ class CameraReplayManager:
                 "trigger_frame": trigger_frame,
                 "playback_fps": PLAYBACK_FPS,
                 "duration_seconds": frame_count / PLAYBACK_FPS,
+                # The operator-facing replay is mirrored by default. Captures
+                # already mirrored during persistence must not be flipped twice.
+                "display_mirror_horizontal": not saved_mirror_horizontal,
             }
             self._entries[replay_id] = _ReplayEntry(
                 replay_id=replay_id,
@@ -121,47 +131,58 @@ class CameraReplayManager:
             if cached:
                 return PreparedCameraReplay(video_path=video_path, payload=dict(entry.payload))
 
-            frames = self._load_frames(entry.capture_path / "frames.npz")
-            frame_count, height, width = frames.shape
-            if frame_count != entry.payload["frame_count"]:
-                raise ReplayPreparationError("Camera replay frame metadata does not match capture")
+            # Loading the archive is included in the manager-wide slot so two
+            # manual requests cannot spike Pi memory before FFmpeg starts.
+            with self._encode_semaphore:
+                return self._encode_replay(entry, video_path)
 
-            ffmpeg = self._resolved_ffmpeg_path()
-            temporary_path = entry.capture_path / f".replay-{uuid4().hex}.mp4"
-            command = self._ffmpeg_command(
-                ffmpeg,
-                temporary_path,
-                width=width,
-                height=height,
+    def _encode_replay(
+        self,
+        entry: _ReplayEntry,
+        video_path: Path,
+    ) -> PreparedCameraReplay:
+        """Encode one uncached replay while the manager-wide slot is held."""
+        frames = self._load_frames(entry.capture_path / "frames.npz")
+        frame_count, height, width = frames.shape
+        if frame_count != entry.payload["frame_count"]:
+            raise ReplayPreparationError("Camera replay frame metadata does not match capture")
+
+        ffmpeg = self._resolved_ffmpeg_path()
+        temporary_path = entry.capture_path / f".replay-{uuid4().hex}.mp4"
+        command = self._ffmpeg_command(
+            ffmpeg,
+            temporary_path,
+            width=width,
+            height=height,
+        )
+        try:
+            self._runner(
+                command,
+                input=np.ascontiguousarray(frames).tobytes(),
+                check=True,
+                capture_output=True,
+                timeout=ENCODE_TIMEOUT_S,
             )
+            if not temporary_path.is_file() or temporary_path.stat().st_size <= 0:
+                raise ReplayPreparationError("Camera replay encoder produced no video")
+            temporary_path.replace(video_path)
+        except subprocess.CalledProcessError as error:
+            detail = (error.stderr or b"").decode("utf-8", errors="replace").strip()
+            logger.warning("[CAMERA] Replay encoding failed: %s", detail or error)
+            raise ReplayPreparationError("Camera replay encoding failed") from error
+        except subprocess.TimeoutExpired as error:
+            logger.warning("[CAMERA] Replay encoding timed out")
+            raise ReplayPreparationError("Camera replay encoding timed out") from error
+        except OSError as error:
+            logger.warning("[CAMERA] Replay video could not be written: %s", error)
+            raise ReplayPreparationError("Camera replay video could not be written") from error
+        finally:
             try:
-                self._runner(
-                    command,
-                    input=np.ascontiguousarray(frames).tobytes(),
-                    check=True,
-                    capture_output=True,
-                    timeout=ENCODE_TIMEOUT_S,
-                )
-                if not temporary_path.is_file() or temporary_path.stat().st_size <= 0:
-                    raise ReplayPreparationError("Camera replay encoder produced no video")
-                temporary_path.replace(video_path)
-            except subprocess.CalledProcessError as error:
-                detail = (error.stderr or b"").decode("utf-8", errors="replace").strip()
-                logger.warning("[CAMERA] Replay encoding failed: %s", detail or error)
-                raise ReplayPreparationError("Camera replay encoding failed") from error
-            except subprocess.TimeoutExpired as error:
-                logger.warning("[CAMERA] Replay encoding timed out")
-                raise ReplayPreparationError("Camera replay encoding timed out") from error
-            except OSError as error:
-                logger.warning("[CAMERA] Replay video could not be written: %s", error)
-                raise ReplayPreparationError("Camera replay video could not be written") from error
-            finally:
-                try:
-                    temporary_path.unlink(missing_ok=True)
-                except OSError:
-                    logger.warning("[CAMERA] Could not remove partial replay %s", temporary_path)
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("[CAMERA] Could not remove partial replay %s", temporary_path)
 
-            return PreparedCameraReplay(video_path=video_path, payload=dict(entry.payload))
+        return PreparedCameraReplay(video_path=video_path, payload=dict(entry.payload))
 
     def video_path(self, replay_id: str) -> Path:
         """Return a prepared MP4 without triggering conversion."""

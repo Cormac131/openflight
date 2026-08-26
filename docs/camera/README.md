@@ -332,9 +332,10 @@ A shot with a matched high-speed camera capture exposes **Replay** in the Live
 header and a play control in its Shots row. Replay opens a full-screen,
 touch-friendly 60 FPS slow-motion player with play/pause, restart, scrubbing,
 looping, selectable `1x`, `0.5x`, `0.25x`, and `0.1x` playback speeds, and an
-impact marker derived from the recorded trigger frame. The player corrects the
-operator-facing left/right mirror without modifying the saved capture frames
-used by camera geometry.
+impact marker derived from the recorded trigger frame. Each replay carries its
+saved-frame orientation, so the player applies the operator-facing left/right
+correction only when needed and never flips a capture twice. Saved frames used
+by camera geometry remain unchanged.
 
 The browser-ready H.264 MP4 is intentionally lazy. Shot processing registers
 only the existing `frames.npz`; OpenFlight does not run FFmpeg until the user
@@ -342,7 +343,9 @@ selects Replay. The first request creates `replay.mp4` atomically beside the raw
 capture, and later requests reuse that file. Closing the player while it is
 preparing does not affect the shot or raw frames. Preparation and playback
 failures are shown as retryable player states, while server-side failures are
-logged without interrupting launch-monitor operation.
+logged without interrupting launch-monitor operation. FFmpeg preparation is
+serialized across replays to avoid simultaneous CPU and memory spikes on the
+Raspberry Pi.
 
 ## Saved Artifacts
 

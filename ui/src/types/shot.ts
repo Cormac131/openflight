@@ -6,6 +6,7 @@ export interface CameraReplay {
   trigger_frame: number;
   playback_fps: number;
   duration_seconds: number;
+  display_mirror_horizontal: boolean;
 }
 
 export interface Shot {

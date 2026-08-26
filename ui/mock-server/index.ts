@@ -32,6 +32,7 @@ app.post('/api/camera/replays/:replayId/prepare', (req, res) => {
     trigger_frame: 73,
     playback_fps: 60,
     duration_seconds: 1.65,
+    display_mirror_horizontal: true,
     video_url: `/api/camera/replays/${encodeURIComponent(replayId)}/video`,
   });
 });

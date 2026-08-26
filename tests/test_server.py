@@ -233,6 +233,7 @@ class TestCameraReplayAPI:
                         "trigger_frame": 73,
                         "playback_fps": 60,
                         "duration_seconds": 1.65,
+                        "display_mirror_horizontal": True,
                     },
                 )
 
@@ -244,6 +245,7 @@ class TestCameraReplayAPI:
         assert calls == ["replay-123"]
         assert response.get_json()["video_url"] == ("/api/camera/replays/replay-123/video")
         assert response.get_json()["trigger_frame"] == 73
+        assert response.get_json()["display_mirror_horizontal"] is True
 
     def test_prepare_replay_is_not_available_via_get(self):
         response = server_module.app.test_client().get("/api/camera/replays/replay-123/prepare")
@@ -321,6 +323,7 @@ class TestCameraReplayAPI:
             "trigger_frame": 73,
             "playback_fps": 60,
             "duration_seconds": 1.65,
+            "display_mirror_horizontal": True,
         }
 
         class FakeManager:

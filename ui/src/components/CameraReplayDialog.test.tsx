@@ -10,6 +10,7 @@ const replay = {
   trigger_frame: 73,
   playback_fps: 60,
   duration_seconds: 1.65,
+  display_mirror_horizontal: true,
 };
 
 describe('CameraReplayDialog', () => {
@@ -35,6 +36,7 @@ describe('CameraReplayDialog', () => {
     expect(html).toContain('role="dialog"');
     expect(html).toContain('class="camera-replay__viewport"');
     expect(html).toContain('<video');
+    expect(html).toContain('camera-replay__video--mirrored');
     expect(html).toContain('http://localhost/replay.mp4');
     expect(html).toContain('--replay-impact-position:74.48979591836735%');
     expect(html).toContain('aria-label="Impact"');
@@ -102,9 +104,18 @@ describe('CameraReplayDialog', () => {
     expect(css).toMatch(/\.camera-replay__controls \{[^}]*grid-area: controls;[^}]*border-left:/s);
   });
 
-  it('corrects the replay camera mirror without changing captured frames', () => {
+  it('mirrors only captures that request an operator-facing correction', () => {
+    const unmirroredHtml = renderToString(
+      <CameraReplayDialog
+        replay={{ ...replay, display_mirror_horizontal: false }}
+        state={{ kind: 'ready', videoUrl: 'http://localhost/replay.mp4' }}
+        onClose={() => {}}
+        onRetry={() => {}}
+      />
+    );
     const css = readFileSync(fileURLToPath(new URL('./CameraReplayDialog.css', import.meta.url)), 'utf8');
 
-    expect(css).toMatch(/\.camera-replay__video \{[^}]*transform: scaleX\(-1\);/s);
+    expect(unmirroredHtml).not.toContain('camera-replay__video--mirrored');
+    expect(css).toMatch(/\.camera-replay__video--mirrored \{[^}]*transform: scaleX\(-1\);/s);
   });
 });

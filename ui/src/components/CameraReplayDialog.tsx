@@ -114,7 +114,7 @@ export function CameraReplayDialog({ replay, state, onClose, onRetry, onPlayback
                   <video
                     ref={videoRef}
                     src={state.videoUrl}
-                    className="camera-replay__video"
+                    className={`camera-replay__video ${replay.display_mirror_horizontal ? 'camera-replay__video--mirrored' : ''}`}
                     aria-label={t('replay.video')}
                     autoPlay
                     loop={loopEnabled}

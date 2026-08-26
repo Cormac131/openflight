@@ -21,6 +21,7 @@ function isReplayPayload(value: unknown): value is CameraReplay & { video_url: s
     typeof replay.trigger_frame === 'number' &&
     typeof replay.playback_fps === 'number' &&
     typeof replay.duration_seconds === 'number' &&
+    typeof replay.display_mirror_horizontal === 'boolean' &&
     typeof replay.video_url === 'string'
   );
 }
@@ -57,6 +58,7 @@ export async function prepareCameraReplay(replayId: string, signal?: AbortSignal
     trigger_frame: payload.trigger_frame,
     playback_fps: payload.playback_fps,
     duration_seconds: payload.duration_seconds,
+    display_mirror_horizontal: payload.display_mirror_horizontal,
     videoUrl: new URL(payload.video_url, `${origin}/`).toString(),
   };
 }

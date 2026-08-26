@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useSocket } from './hooks/useSocket';
 import { useSystemStore } from './stores/useSystemStore';
@@ -7,6 +7,7 @@ import { useCameraStore } from './stores/useCameraStore';
 import { useDebugStore } from './stores/useDebugStore';
 import { usePlayerStore } from './stores/usePlayerStore';
 import { useHeroMetricStore } from './stores/useHeroMetricStore';
+import { useCameraReplayController } from './hooks/useCameraReplayController';
 import { socketService } from './services/socketService';
 import { shouldEchoSelectionToServer } from './services/playerSocketSync';
 import { DebugPanel } from './components/DebugPanel';
@@ -14,7 +15,7 @@ import { DisplayMode } from './components/DisplayMode';
 import { SimShotBadges } from './components/SimShotBadges';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
-import { CameraReplayDialog, type CameraReplayDialogState } from './components/CameraReplayDialog';
+import { CameraReplayDialog } from './components/CameraReplayDialog';
 import {
   CameraPanel,
   LivePanel,
@@ -34,8 +35,7 @@ import {
   type PanelView,
 } from './components/panel';
 import { shouldEnableLiveBallWarning } from './components/panel/liveMetrics';
-import { filterShotsByPlayer, type CameraReplay } from './types/shot';
-import { prepareCameraReplay, ReplayPreparationRequestError } from './services/cameraReplay';
+import { filterShotsByPlayer } from './types/shot';
 import { getClubName } from './data/clubs';
 import { getTrainingImplementLabel } from './data/trainingImplements';
 import { unlockAudioCue } from './utils/audioCue';
@@ -43,11 +43,6 @@ import { useLaunchDaddy, LaunchDaddyOverlay, LaunchDaddyBrand } from './componen
 
 import { useI18n } from './i18n/useI18n';
 import './components/panel/panel.css';
-
-interface ActiveCameraReplay {
-  replay: CameraReplay;
-  state: CameraReplayDialogState;
-}
 
 function AppContent() {
   const { t } = useI18n();
@@ -123,8 +118,7 @@ function AppContent() {
   const [addPlayerOpen, setAddPlayerOpen] = useState(false);
   const [newPlayerName, setNewPlayerName] = useState('');
   const [clearSessionOpen, setClearSessionOpen] = useState(false);
-  const [activeReplay, setActiveReplay] = useState<ActiveCameraReplay | null>(null);
-  const replayRequestRef = useRef<AbortController | null>(null);
+  const { activeReplay, openReplay, closeReplay, reportPlaybackError } = useCameraReplayController();
 
   // Reflect a server-pushed club change (e.g. the club changed in the connected
   // simulator) locally without echoing back. Done during render (React's "adjust
@@ -165,8 +159,6 @@ function AppContent() {
       setCurrentView('live');
     });
   }, []);
-
-  useEffect(() => () => replayRequestRef.current?.abort(), []);
 
   // Trigger explosion when a new shot is detected in Launch Daddy mode
   useEffect(() => {
@@ -229,36 +221,6 @@ function AppContent() {
   const closeShutdown = () => {
     setShowShutdown(false);
     setShutdownState('confirm');
-  };
-
-  const openReplay = (replay: CameraReplay) => {
-    replayRequestRef.current?.abort();
-    const controller = new AbortController();
-    replayRequestRef.current = controller;
-    setActiveReplay({ replay, state: { kind: 'preparing' } });
-
-    void prepareCameraReplay(replay.id, controller.signal)
-      .then((prepared) => {
-        if (replayRequestRef.current !== controller || controller.signal.aborted) return;
-        setActiveReplay({ replay, state: { kind: 'ready', videoUrl: prepared.videoUrl } });
-      })
-      .catch((error: unknown) => {
-        if (replayRequestRef.current !== controller || controller.signal.aborted) return;
-        setActiveReplay({
-          replay,
-          state: {
-            kind: 'error',
-            stage: 'preparation',
-            message: error instanceof ReplayPreparationRequestError ? error.message : undefined,
-          },
-        });
-      });
-  };
-
-  const closeReplay = () => {
-    replayRequestRef.current?.abort();
-    replayRequestRef.current = null;
-    setActiveReplay(null);
   };
 
   const playerShots = filterShotsByPlayer(shots, selectedPlayer);
@@ -329,11 +291,7 @@ function AppContent() {
           state={activeReplay.state}
           onClose={closeReplay}
           onRetry={() => openReplay(activeReplay.replay)}
-          onPlaybackError={() => {
-            setActiveReplay((current) =>
-              current ? { replay: current.replay, state: { kind: 'error', stage: 'playback' } } : current
-            );
-          }}
+          onPlaybackError={reportPlaybackError}
         />
       ) : null}
 

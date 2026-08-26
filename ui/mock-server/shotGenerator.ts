@@ -164,6 +164,7 @@ export function generateShot(options: GenerateShotOptions): Shot {
       trigger_frame: 73,
       playback_fps: 60,
       duration_seconds: 1.65,
+      display_mirror_horizontal: true,
     },
   };
 }
