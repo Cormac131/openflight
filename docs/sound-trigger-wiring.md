@@ -545,6 +545,35 @@ The server could not claim the GPIO lines.
 3. If this Pi exposes the header on a different gpiochip, set
    `OPENFLIGHT_GPIO_CHIP`.
 
+### Digital pot: the wiper moves further than commanded
+
+Symptom: commanding tap 10 lands somewhere much higher — say 33 kΩ instead of
+10 kΩ — and any mid-range tap saturates at ~100 kΩ. The ratio is consistent
+rather than random, so the chip is counting several edges for every `INC` pulse
+sent.
+
+Measure it: `--position 10 --hold` should read ~10 kΩ. Whatever it reads,
+`tap = (ohms - 40) x 99 / 100000`, and `tap / 10` is the number of steps the
+chip takes per pulse.
+
+Note that **tap 0 always looks correct** even when this is happening. It is an
+end stop, so `calibrate()` lands there whether the chip counts 99 pulses or 300.
+Never conclude the wiring is good from tap 0 alone — check a mid-range tap.
+
+Two causes, in the order worth testing:
+
+1. **Logic level too close to the threshold.** Try powering the pot from the
+   Pi's **3.3 V** (header pin 1 or 17) instead of 5 V. Parts specifying
+   `VIH = 0.7 x VCC` need 3.5 V to read high at a 5 V supply, which the Pi's
+   3.3 V output never reaches — the input hovers at its switching point and each
+   transition crosses it several times. At a 3.3 V supply the threshold drops to
+   2.31 V and the Pi drives it cleanly.
+2. **Ringing on the `INC` edge.** Try `--step-delay-us 500`. If a slower pulse
+   fixes it, shorten the `INC` jumper or fit 100–330 Ω in series at the Pi end.
+
+Slower pulses do not help a threshold problem, and a supply change does not help
+ringing, so whichever one fixes it identifies the cause.
+
 ### Digital pot: reads full scale (~100 kΩ) at every tap
 
 The wiper is pinned at the `RH` end. The usual cause is a dead `U/D` line
