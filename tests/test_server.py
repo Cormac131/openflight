@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -2730,6 +2731,70 @@ class TestKLD7PostShotCaptureDelay:
 
 class TestOnShotDetected:
     """Tests for live shot processing in the server."""
+
+    def test_emits_ops_metrics_before_iwr6843_dump_finishes(self, monkeypatch):
+        """The seven-second TI UART dump must not hold the first UI update."""
+        dump_started = threading.Event()
+        release_dump = threading.Event()
+        emitted = []
+        background_threads = []
+
+        class BlockingRuntime:
+            @staticmethod
+            def process_shot(**_kwargs):
+                dump_started.set()
+                assert release_dump.wait(1.0)
+                return SimpleNamespace(capture=None, measurement=None, club_path=None)
+
+        def start_background_task(target, *args, **kwargs):
+            thread = threading.Thread(target=target, args=args, kwargs=kwargs, daemon=True)
+            background_threads.append(thread)
+            thread.start()
+            return thread
+
+        monkeypatch.setattr(server_module, "iwr6843_runtime", BlockingRuntime())
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "camera_tracker", None)
+        monkeypatch.setattr(server_module, "camera_enabled", False)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", None)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module.socketio, "start_background_task", start_background_task)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+
+        shot = Shot(
+            ball_speed_mph=150.0,
+            club_speed_mph=100.0,
+            timestamp=datetime.now(),
+            impact_timestamp=100.0,
+            club=ClubType.DRIVER,
+        )
+        callback = threading.Thread(target=on_shot_detected, args=(shot,), daemon=True)
+        callback.start()
+        assert dump_started.wait(0.5)
+        try:
+            callback.join(timeout=0.1)
+            assert not callback.is_alive()
+            assert emitted[0][0] == "shot"
+            assert emitted[0][1]["shot"]["ball_speed_mph"] == 150.0
+            assert emitted[0][1]["pending"] == {"iwr6843": True}
+            assert all(event != "shot_update" for event, _payload in emitted)
+        finally:
+            release_dump.set()
+            callback.join(timeout=1.0)
+            for thread in background_threads:
+                thread.join(timeout=1.0)
+
+        assert [event for event, _payload in emitted].count("shot") == 1
+        updates = [payload for event, payload in emitted if event == "shot_update"]
+        assert len(updates) == 1
+        assert updates[0]["shot"]["timestamp"] == shot.timestamp.isoformat()
 
     def test_kld7_uses_shot_impact_timestamp(self, monkeypatch):
         """K-LD7 selection should be anchored to the OPS243 impact timestamp."""

@@ -14,7 +14,7 @@ import {
 import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
 import type { PowerStatus } from '../types/power';
 import { getServerOrigin } from '../utils/serverOrigin';
-import { handleShotMessage } from './handleShotMessage';
+import { handleShotMessage, handleShotUpdate, type ShotMessage } from './handleShotMessage';
 import { ingestSocketPlayerName } from './playerSocketSync';
 import { ingestSessionClub } from './sessionClubSync';
 import { remainingShotsAfterClear } from './sessionClear';
@@ -69,8 +69,12 @@ class SocketService {
       }
     });
 
-    this.socket.on('shot', (data: { shot: Shot; stats: SessionStats }) => {
+    this.socket.on('shot', (data: ShotMessage) => {
       handleShotMessage(data);
+    });
+
+    this.socket.on('shot_update', (data: { shot: Shot; stats: SessionStats }) => {
+      handleShotUpdate(data);
     });
 
     // Swing-speed mode also emits a normal `shot` event, handled above, so the

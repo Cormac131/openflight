@@ -94,4 +94,65 @@ describe('handleShotMessage', () => {
     expect(useShotStore.getState().latestShot).toEqual(ballShot);
     expect(context.oscillators.some((oscillator) => oscillator.started)).toBe(true);
   });
+
+  it('updates late hardware metrics without replaying the shot cue', async () => {
+    const context = new FakeAudioContext();
+    vi.stubGlobal('window', {
+      AudioContext: function AudioContext() {
+        return context;
+      },
+    } as unknown as Window & typeof globalThis);
+
+    const { handleShotUpdate } = await import('./handleShotMessage');
+    const { useShotStore } = await import('../stores/useShotStore');
+    useShotStore.setState({ latestShot: ballShot, shots: [ballShot], shotVersion: 1 });
+    const enriched = { ...ballShot, launch_angle_vertical: 17.4 } as Shot;
+
+    handleShotUpdate({
+      shot: enriched,
+      stats: {
+        shot_count: 1,
+        avg_ball_speed: 145,
+        max_ball_speed: 145,
+        min_ball_speed: 145,
+        avg_club_speed: null,
+        avg_smash_factor: null,
+        avg_carry_est: 0,
+      },
+    });
+
+    expect(useShotStore.getState().latestShot).toEqual(enriched);
+    expect(context.oscillators.some((oscillator) => oscillator.started)).toBe(false);
+  });
+
+  it('keeps IWR dump feedback active after provisional OPS metrics arrive', async () => {
+    vi.stubGlobal('window', {} as Window & typeof globalThis);
+
+    const { handleShotMessage } = await import('./handleShotMessage');
+    const { useShotStore } = await import('../stores/useShotStore');
+    useShotStore.setState({
+      latestShot: null,
+      shots: [],
+      shotProcessingPhase: 'calculating',
+      shotProcessingShotTimestamp: null,
+    });
+
+    handleShotMessage({
+      shot: ballShot,
+      stats: {
+        shot_count: 1,
+        avg_ball_speed: 145,
+        max_ball_speed: 145,
+        min_ball_speed: 145,
+        avg_club_speed: null,
+        avg_smash_factor: null,
+        avg_carry_est: 0,
+      },
+      pending: { iwr6843: true },
+    });
+
+    expect(useShotStore.getState().latestShot).toEqual(ballShot);
+    expect(useShotStore.getState().shotProcessingPhase).toBe('iwr_dump');
+    expect(useShotStore.getState().shotProcessingShotTimestamp).toBe(ballShot.timestamp);
+  });
 });

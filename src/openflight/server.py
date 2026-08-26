@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import os
+import queue
 import random
 import statistics
 import sys
@@ -182,6 +183,9 @@ latest_frame: Optional[bytes] = None
 frame_lock = threading.Lock()
 shutdown_lock = threading.Lock()
 shutdown_cleanup_started = False
+shot_enrichment_queue: queue.Queue[tuple[Shot, str, float | None]] = queue.Queue()
+shot_enrichment_task = None
+shot_enrichment_task_lock = threading.Lock()
 
 
 def _run_shutdown_step(name: str, callback) -> None:
@@ -3118,12 +3122,14 @@ def _attach_camera_replay(shot: Shot, camera_capture) -> None:
         )
 
 
-def on_shot_detected(shot: Shot):
-    """Callback when a shot is detected - emit to all clients."""
+def _finish_shot_detected(
+    shot: Shot,
+    *,
+    emit_event: str,
+    initial_ui_ms: float | None = None,
+) -> None:
+    """Enrich, persist, and publish a shot after the fast OPS notification."""
     global ball_detected, ball_detection_confidence  # pylint: disable=global-statement
-
-    shot.player_name = current_player_name
-    logger.info("[SERVER] Shot callback: %.1f mph", shot.ball_speed_mph)
 
     # Snapshot orientation before IWR capture can block, and select only data
     # timestamped before impact so impact vibration cannot bias the geometry.
@@ -3636,6 +3642,9 @@ def on_shot_detected(shot: Shot):
                 player_name=shot.player_name,
                 inclinometer=shot.inclinometer,
                 pipeline_ms={
+                    "initial_ui": (
+                        round(initial_ui_ms, 1) if initial_ui_ms is not None else None
+                    ),
                     "iwr6843": (round(iwr6843_ms, 1) if iwr6843_ms is not None else None),
                     "kld7": round(kld7_ms, 1) if kld7_ms is not None else None,
                     "camera_capture": (
@@ -3656,7 +3665,7 @@ def on_shot_detected(shot: Shot):
     try:
         shot_data = shot_to_dict(shot)
         stats = monitor.get_session_stats() if monitor else {}
-        socketio.emit("shot", {"shot": shot_data, "stats": stats})
+        socketio.emit(emit_event, {"shot": shot_data, "stats": stats})
 
         # Log shot info
         angle_str = ""
@@ -3673,7 +3682,7 @@ def on_shot_detected(shot: Shot):
         log_session_error(
             "WebSocket shot emit failed",
             component="server",
-            context={"stage": "emit_shot", "ball_speed_mph": shot.ball_speed_mph},
+            context={"stage": f"emit_{emit_event}", "ball_speed_mph": shot.ball_speed_mph},
             exc=e,
         )
         return
@@ -3704,6 +3713,136 @@ def on_shot_detected(shot: Shot):
             socketio.emit("debug_shot", debug_log_entry)
         except Exception as e:
             print(f"[WARN] Debug logging error: {e}")
+
+
+def _emit_initial_ops_shot(shot: Shot) -> bool:
+    """Publish immediately available OPS metrics before slow enrichments."""
+    try:
+        shot_data = shot_to_dict(shot)
+        stats = monitor.get_session_stats() if monitor else {}
+        socketio.emit(
+            "shot",
+            {
+                "shot": shot_data,
+                "stats": stats,
+                "pending": {"iwr6843": iwr6843_runtime is not None},
+            },
+        )
+        return True
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.error("[SERVER] Failed to emit initial OPS shot: %s", error, exc_info=True)
+        log_session_error(
+            "Initial WebSocket shot emit failed",
+            component="server",
+            context={"stage": "emit_initial_shot", "ball_speed_mph": shot.ball_speed_mph},
+            exc=error,
+        )
+        return False
+
+
+def _has_slow_shot_enrichment(shot: Shot) -> bool:
+    """Whether optional hardware can add seconds to this shot callback."""
+    return shot.mode != "mock" and (
+        iwr6843_runtime is not None or camera_capture_runtime is not None
+    )
+
+
+def _drain_shot_enrichment_queue() -> None:
+    """Finish deferred shots in detection order, one hardware consumer at a time."""
+    global shot_enrichment_task  # pylint: disable=global-statement
+
+    while True:
+        try:
+            shot, emit_event, initial_ui_ms = shot_enrichment_queue.get_nowait()
+        except queue.Empty:
+            with shot_enrichment_task_lock:
+                if shot_enrichment_queue.empty():
+                    shot_enrichment_task = None
+                    return
+            continue
+
+        try:
+            _finish_shot_detected(
+                shot,
+                emit_event=emit_event,
+                initial_ui_ms=initial_ui_ms,
+            )
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.error("[SERVER] Deferred shot enrichment failed: %s", error, exc_info=True)
+            log_session_error(
+                "Deferred shot enrichment failed",
+                component="server",
+                context={"stage": "deferred_enrichment", "ball_speed_mph": shot.ball_speed_mph},
+                exc=error,
+            )
+        finally:
+            shot_enrichment_queue.task_done()
+
+
+def _defer_shot_enrichment(
+    shot: Shot,
+    *,
+    emit_event: str,
+    initial_ui_ms: float | None,
+) -> None:
+    """Queue slow enrichments on a FIFO background worker."""
+    global shot_enrichment_task  # pylint: disable=global-statement
+
+    with shot_enrichment_task_lock:
+        shot_enrichment_queue.put((shot, emit_event, initial_ui_ms))
+        if shot_enrichment_task is not None:
+            return
+        try:
+            # Reserve the slot while the task starts. The worker needs the same
+            # lock before clearing it, which closes the fast-finish race.
+            shot_enrichment_task = True
+            task = socketio.start_background_task(_drain_shot_enrichment_queue)
+            shot_enrichment_task = task
+        except Exception:
+            shot_enrichment_task = None
+            queued_shot, _event, _latency = shot_enrichment_queue.get_nowait()
+            shot_enrichment_queue.task_done()
+            if queued_shot is not shot:
+                raise RuntimeError("shot enrichment queue lost FIFO ordering") from None
+            raise
+
+
+def on_shot_detected(shot: Shot) -> None:
+    """Publish OPS metrics promptly, then enrich optional hardware data."""
+    shot.player_name = current_player_name
+    logger.info("[SERVER] Shot callback: %.1f mph", shot.ball_speed_mph)
+
+    if not _has_slow_shot_enrichment(shot):
+        _finish_shot_detected(shot, emit_event="shot")
+        return
+
+    emitted = _emit_initial_ops_shot(shot)
+    initial_ui_ms = None
+    if emitted and shot.impact_timestamp is not None:
+        initial_ui_ms = max(0.0, (time.time() - shot.impact_timestamp) * 1000.0)
+        logger.info(
+            "[SERVER] Initial OPS metrics emitted %.0fms after impact; "
+            "hardware enrichment continues in background",
+            initial_ui_ms,
+        )
+    final_event = "shot_update" if emitted else "shot"
+    try:
+        _defer_shot_enrichment(
+            shot,
+            emit_event=final_event,
+            initial_ui_ms=initial_ui_ms,
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning(
+            "[SERVER] Could not defer shot enrichment: %s",
+            error,
+            exc_info=True,
+        )
+        _finish_shot_detected(
+            shot,
+            emit_event=final_event,
+            initial_ui_ms=initial_ui_ms,
+        )
 
 
 def swing_speed_to_dict(event: SwingSpeedEvent) -> dict:

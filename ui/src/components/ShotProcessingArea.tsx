@@ -9,6 +9,17 @@ interface ShotProcessingAreaProps {
 }
 
 export function ShotProcessingArea({ phase, children }: ShotProcessingAreaProps) {
+  if (phase === 'iwr_dump') {
+    return (
+      <>
+        <div className="shot-processing-status">
+          <ProgressIndicator variant="inline" title="OPS metrics ready" detail="Receiving IWR radar dump…" />
+        </div>
+        {children}
+      </>
+    );
+  }
+
   return (
     <>
       {phase ? (
