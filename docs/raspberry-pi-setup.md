@@ -132,30 +132,27 @@ above.
 
 </details>
 
-### Sound Trigger Sensitivity (Optional X9C104 Digital Pot)
+### Sound Trigger Sensitivity (Optional DS3502 Digital Pot)
 
-If you fitted an **X9C104** digital potentiometer to the SEN-14262's `R17` pads
-instead of a soldered resistor, the setup script does not configure it — there
-is nothing to configure on the hardware side. Start the server with
+If you fitted an **Adafruit DS3502** I2C digital pot to the SEN-14262's `R17`
+pads instead of a soldered resistor, start the server with
 `--sound-sensitivity` and tune it from **Debug → Sound** at runtime:
 
 ```bash
 ./scripts/start-kiosk.sh --sound-sensitivity
 ```
 
-The pot claims **BCM22** (CS), **BCM23** (INC) and **BCM24** (U/D) — physical
-pins 15, 16 and 18 — plus 5V on physical pin 2 and ground on physical pin 20.
-Pin 20 rather than 14 because the OPS243 UART migration already puts the radar's
-ground return on 14; see the
-[header allocation table](sound-trigger-wiring.md#where-it-sits-on-the-pi-header)
-for every pin OpenFlight can drive. The server refuses to start if the digipot
-pins collide with something the same run actually drives.
+The pot sits on the existing I2C bus at 0x28 and claims **no GPIOs**. It needs a
+fixed series resistor in the R17 path (33 kΩ by default) — pass
+`--sound-sensitivity-series-ohms` if you fitted a different value, or every
+resistance the UI reports will be wrong.
 
-The setting is saved to `~/.config/openflight/sound_sensitivity.json` and
-re-applied on every start; the chip's own non-volatile memory is never written.
+The setting is stored on the chip's own EEPROM, so it survives a power cycle
+with no file on the Pi. Confirm the Pi can see the pot with `i2cdetect -y 1`.
 
-Wiring and bench-testing are in the
-**[Sound Trigger Wiring Guide](sound-trigger-wiring.md#optional-software-controlled-sensitivity-x9c104-digital-pot)**.
+Wiring — including the two options for power and I2C, and the `V+` jumper that
+must be cut — is in the
+**[Sound Trigger Wiring Guide](sound-trigger-wiring.md#optional-software-controlled-sensitivity-ds3502-digital-pot)**.
 
 ### IWR6843 Angle Radar
 
@@ -265,7 +262,7 @@ sudo systemctl restart openflight
 ```bash
 ./scripts/start-kiosk.sh                      # Default: rolling buffer + sound trigger
 ./scripts/start-kiosk.sh --mock               # Mock mode (no hardware needed)
-./scripts/start-kiosk.sh --sound-sensitivity  # With the optional X9C104 sensitivity control
+./scripts/start-kiosk.sh --sound-sensitivity  # With the optional DS3502 sensitivity control
 ```
 
 Use the [IWR6843 Operator Guide](iwr6843/README.md#start-openflight) or
@@ -311,18 +308,19 @@ uv run python scripts/hardware-test/diagnose.py --ops-port /dev/ttyAMA0
 ### Sound Trigger Not Working
 
 See the [Sound Trigger Wiring Guide — Troubleshooting](sound-trigger-wiring.md#troubleshooting).
-That section also covers the optional X9C104 digital pot: GPIO claim failures, a
-slider that moves nothing, and an inverted sensitivity direction.
+That section also covers the optional DS3502 digital pot: a pot missing from
+`i2cdetect`, a slider that moves nothing, and a range that feels wrong at both
+ends.
 
 To sweep the pot with a meter (stop the server first — it holds the same GPIO
 lines):
 
 ```bash
 # Sweep the wiper against a multimeter on the R17 pads
-uv run python scripts/hardware-test/test_x9c104.py --sweep
+uv run python scripts/hardware-test/test_ds3502.py --sweep
 
 # Sweep while counting GATE edges, to find where room noise starts triggering
-uv run python scripts/hardware-test/test_x9c104.py --noise-floor
+uv run python scripts/hardware-test/test_ds3502.py --noise-floor
 ```
 
 ### K-LD7 Not Connecting

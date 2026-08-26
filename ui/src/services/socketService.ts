@@ -281,9 +281,6 @@ class SocketService {
     this.socket?.emit('set_sound_sensitivity', { position });
   }
 
-  recalibrateSoundSensitivity() {
-    this.socket?.emit('recalibrate_sound_sensitivity');
-  }
 
   toggleCamera() {
     this.socket?.emit('toggle_camera');

@@ -58,9 +58,9 @@ IWR6843_HORIZONTAL_PHASE_REFERENCE_RAD=""
 INCLINOMETER=false
 INCLINOMETER_ZERO_OFFSET=""
 SOUND_SENSITIVITY=false
-SOUND_SENSITIVITY_CS_PIN=""
-SOUND_SENSITIVITY_INC_PIN=""
-SOUND_SENSITIVITY_UD_PIN=""
+SOUND_SENSITIVITY_I2C_BUS=""
+SOUND_SENSITIVITY_ADDRESS=""
+SOUND_SENSITIVITY_SERIES_OHMS=""
 SOUND_SENSITIVITY_POSITION=""
 KLD7=false
 KLD7_PORT=""
@@ -308,16 +308,16 @@ while [[ $# -gt 0 ]]; do
             SOUND_SENSITIVITY=true
             shift
             ;;
-        --sound-sensitivity-cs-pin)
-            SOUND_SENSITIVITY_CS_PIN="$2"
+        --sound-sensitivity-i2c-bus)
+            SOUND_SENSITIVITY_I2C_BUS="$2"
             shift 2
             ;;
-        --sound-sensitivity-inc-pin)
-            SOUND_SENSITIVITY_INC_PIN="$2"
+        --sound-sensitivity-address)
+            SOUND_SENSITIVITY_ADDRESS="$2"
             shift 2
             ;;
-        --sound-sensitivity-ud-pin)
-            SOUND_SENSITIVITY_UD_PIN="$2"
+        --sound-sensitivity-series-ohms)
+            SOUND_SENSITIVITY_SERIES_OHMS="$2"
             shift 2
             ;;
         --sound-sensitivity-position)
@@ -762,9 +762,9 @@ fi
 
 if [ "$SOUND_SENSITIVITY" = true ]; then
     SERVER_CMD="$SERVER_CMD --sound-sensitivity"
-    [ -n "$SOUND_SENSITIVITY_CS_PIN" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-cs-pin $SOUND_SENSITIVITY_CS_PIN"
-    [ -n "$SOUND_SENSITIVITY_INC_PIN" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-inc-pin $SOUND_SENSITIVITY_INC_PIN"
-    [ -n "$SOUND_SENSITIVITY_UD_PIN" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-ud-pin $SOUND_SENSITIVITY_UD_PIN"
+    [ -n "$SOUND_SENSITIVITY_I2C_BUS" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-i2c-bus $SOUND_SENSITIVITY_I2C_BUS"
+    [ -n "$SOUND_SENSITIVITY_ADDRESS" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-address $SOUND_SENSITIVITY_ADDRESS"
+    [ -n "$SOUND_SENSITIVITY_SERIES_OHMS" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-series-ohms $SOUND_SENSITIVITY_SERIES_OHMS"
     [ -n "$SOUND_SENSITIVITY_POSITION" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-position $SOUND_SENSITIVITY_POSITION"
 fi
 

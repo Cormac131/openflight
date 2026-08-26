@@ -5,12 +5,13 @@ import type { SoundSensitivity } from '../types/socket';
 
 const applied: SoundSensitivity = {
   enabled: true,
-  position: 60,
-  max_position: 99,
-  default_position: 46,
-  sensitivity_percent: 60.6,
-  resistance_ohms: 60646,
-  preamp_feedback_ohms: 37752,
+  position: 100,
+  max_position: 127,
+  default_position: 127,
+  sensitivity_percent: 78.7,
+  resistance_ohms: 40874,
+  preamp_feedback_ohms: 29013,
+  series_ohms: 33000,
   simulated: false,
   error: null,
 };
@@ -28,11 +29,11 @@ describe('useDebugStore sound sensitivity', () => {
   it('stores an applied state from the server', () => {
     useDebugStore.getState().setSoundSensitivity(applied);
 
-    expect(useDebugStore.getState().soundSensitivity.position).toBe(60);
+    expect(useDebugStore.getState().soundSensitivity.position).toBe(100);
   });
 
   it('clears a stale error once a fresh state arrives', () => {
-    useDebugStore.getState().setSoundSensitivityError('wiper line stuck');
+    useDebugStore.getState().setSoundSensitivityError('i2c write failed');
 
     useDebugStore.getState().setSoundSensitivity(applied);
 

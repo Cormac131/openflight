@@ -136,18 +136,18 @@ uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 ```bash
 scripts/start-kiosk.sh              # Default: rolling buffer + sound trigger
 scripts/start-kiosk.sh --mock       # Development mode without hardware
-scripts/start-kiosk.sh --sound-sensitivity             # With the optional X9C104 digipot on SEN-14262 R17
+scripts/start-kiosk.sh --sound-sensitivity             # With the optional DS3502 digipot on SEN-14262 R17
 scripts/start-kiosk.sh --kld7                          # With K-LD7 angle radars (deprecated; auto-detects horizontal)
 ```
 
 ### Sound Trigger Testing
 
 ```bash
-# Sweep the optional X9C104 sensitivity pot (stop the server first)
-uv run python scripts/hardware-test/test_x9c104.py --sweep
+# Sweep the optional DS3502 sensitivity pot
+uv run python scripts/hardware-test/test_ds3502.py --sweep
 
-# Find the tap where room noise starts firing the trigger
-uv run python scripts/hardware-test/test_x9c104.py --noise-floor
+# Find the step where room noise starts firing the trigger (stop the server first)
+uv run python scripts/hardware-test/test_ds3502.py --noise-floor
 
 # Test persistent rolling buffer + hardware trigger (recommended)
 uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
@@ -162,7 +162,7 @@ uv run python scripts/hardware-test/test_sound_trigger_hardware.py
 React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ──► OPS243Radar
                               │                │
                               │                └── SoundTrigger (SEN-14262 → HOST_INT)
-                              │                     └── SoundSensitivityService (X9C104 digipot on R17, optional)
+                              │                     └── SoundSensitivityService (DS3502 digipot on R17, optional)
                               │
                               ├── IWR6843Runtime (optional, 60 GHz → launch angle & club path)
                               ├── KLD7Tracker (vertical/horizontal, deprecated)
@@ -192,7 +192,7 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
 - `club_data.py` - Canonical club physics parameters, lofts, typical speeds, and optimal spin
 - `iwr6843/` - TI IWR6843 mmWave radar driver, L3 raw dump parser, LCMF-v1 launch angle & club path
 - `inclinometer.py` - LIS3DH accelerometer tilt compensation service
-- `sensitivity/` - X9C104 digital pot on the SEN-14262 R17 pad; UI-controlled sound-trigger sensitivity
+- `sensitivity/` - DS3502 I2C digital pot on the SEN-14262 R17 pad; UI-controlled sound-trigger sensitivity
 - `sim/` - Simulator connectors (OpenGolfSim, GSPro, E6 Connect, Garmin) and network transports
 - `cloud/` - Telemetry, cloud configuration, session upload, and push error handling
 - `rolling_buffer/` - Trigger strategies, I/Q processor, spin detection
@@ -239,7 +239,7 @@ SEN-14262 GND  → Pi GND (shared with OPS243-A)
 
 A through-hole resistor must be soldered into **R17** on the SEN-14262 to reduce preamp gain at 3.3V (47kΩ recommended, lower for noisy environments).
 
-**Optional X9C104 digital pot:** fitting one to the R17 pads instead of a fixed resistor makes sensitivity adjustable from the Debug page (Sound tab). Wiper position 0 is least sensitive, 99 most; the default tap 46 matches the 47kΩ resistor. Enabled with `--sound-sensitivity`; claims BCM22 (CS), BCM23 (INC), BCM24 (U/D) — physical 15/16/18, with 5V on physical pin 2 and GND on physical pin 20 (not 14, which the OPS243 UART migration uses). `reserved_gpio_pins()` in `server.py` refuses pins the same run already drives. The setting persists to `~/.config/openflight/sound_sensitivity.json` — the chip's own NVM is never written.
+**Optional DS3502 digital pot:** fitting one to the R17 pads instead of a fixed resistor makes sensitivity adjustable from the Debug page (Sound tab). Step 0 is least sensitive, 127 most. Enabled with `--sound-sensitivity`; it is I2C at 0x28 on the existing bus and claims **no GPIOs**. The DS3502 is only 10kΩ end-to-end, so a fixed series resistor (33kΩ default, `--sound-sensitivity-series-ohms`) shifts its span onto R17's 33–47kΩ operating range. The chip reads its wiper back and stores it in its own EEPROM, so there is no calibration and no config file.
 
 See [docs/sound-trigger-wiring.md](docs/sound-trigger-wiring.md) for full instructions.
 

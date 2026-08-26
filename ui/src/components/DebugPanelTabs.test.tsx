@@ -8,12 +8,13 @@ const noop = () => {};
 
 const soundSensitivity: SoundSensitivity = {
   enabled: true,
-  position: 46,
-  max_position: 99,
-  default_position: 46,
-  sensitivity_percent: 46.5,
-  resistance_ohms: 46504,
-  preamp_feedback_ohms: 31742,
+  position: 64,
+  max_position: 127,
+  default_position: 127,
+  sensitivity_percent: 50.4,
+  resistance_ohms: 38039,
+  preamp_feedback_ohms: 27557,
+  series_ohms: 33000,
   simulated: false,
   error: null,
 };
@@ -50,7 +51,6 @@ function render(status: TriggerStatus = triggerStatus) {
       soundSensitivity={soundSensitivity}
       soundSensitivityError={null}
       onUpdateSoundSensitivity={noop}
-      onRecalibrateSoundSensitivity={noop}
     />
   );
 }

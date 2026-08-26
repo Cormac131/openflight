@@ -623,31 +623,3 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.sensitivity-recalibrate {
-  margin-top: var(--space-md);
-  width: 100%;
-  /* Finger-sized: the kiosk has no mouse. */
-  min-height: 2.75rem;
-  padding: var(--space-sm) var(--space-md);
-  background: var(--color-surface-raised, var(--color-surface));
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  color: var(--color-text);
-  font-family: var(--font-body);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
-  touch-action: manipulation;
-}
-
-.sensitivity-recalibrate:active {
-  background: var(--color-accent-block);
-  color: var(--color-bg);
-}
-
-@media (max-height: 500px) {
-  .sensitivity-recalibrate {
-    min-height: 2.25rem;
-  }
-}

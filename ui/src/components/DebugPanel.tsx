@@ -18,7 +18,6 @@ interface DebugPanelProps {
   soundSensitivity: SoundSensitivity;
   soundSensitivityError: string | null;
   onUpdateSoundSensitivity: (position: number) => void;
-  onRecalibrateSoundSensitivity: () => void;
 }
 
 const REASON_DISPLAY: Record<string, string> = {
@@ -313,21 +312,19 @@ interface SoundSensitivityControlProps {
   sensitivity: SoundSensitivity;
   error: string | null;
   onUpdate: (position: number) => void;
-  onRecalibrate: () => void;
 }
 
 /**
- * Wiper control for the X9C104 fitted to the sound detector's R17 pad.
+ * Wiper control for the DS3502 fitted to the sound detector's R17 pad.
  *
- * Every number shown here comes from the server. The chip has no readback, so
- * the server's tracked position is the only source of truth, and re-deriving
- * resistance in the browser would mean maintaining the same formula twice.
+ * Every number shown here comes from the server, which reads the wiper back
+ * from the chip. Re-deriving resistance in the browser would mean maintaining
+ * the same formula twice, and it would not know the series resistor fitted.
  */
 export function SoundSensitivityControl({
   sensitivity,
   error,
   onUpdate,
-  onRecalibrate,
 }: SoundSensitivityControlProps) {
   const { enabled, position, max_position: maxPosition } = sensitivity;
 
@@ -337,7 +334,7 @@ export function SoundSensitivityControl({
 
       {!enabled && (
         <p className="debug-panel__hint">
-          No X9C104 digital pot detected. Start the server with{' '}
+          No DS3502 digital pot detected. Start the server with{' '}
           <code>--sound-sensitivity</code> once one is fitted to the detector&apos;s R17 pad, or keep
           using a soldered resistor.
         </p>
@@ -384,14 +381,10 @@ export function SoundSensitivityControl({
             </div>
           </div>
 
-          <button type="button" className="sensitivity-recalibrate" onClick={onRecalibrate}>
-            Recalibrate wiper
-          </button>
-
           <p className="debug-panel__hint">
             Higher = more gain, so the detector fires on quieter impacts. Turn it down if the trigger
-            fires on ambient noise, up if it misses strikes. Recalibrate re-homes the wiper if the
-            reading and the real chip have drifted apart.
+            fires on ambient noise, up if it misses strikes. The setting is stored on the pot itself,
+            so it survives a power cycle.
           </p>
         </>
       )}
@@ -410,7 +403,6 @@ export function DebugPanel({
   soundSensitivity,
   soundSensitivityError,
   onUpdateSoundSensitivity,
-  onRecalibrateSoundSensitivity,
 }: DebugPanelProps) {
   const [activeTab, setActiveTab] = useState<DebugTab>('status');
   const isRollingBuffer = triggerStatus.mode === 'rolling-buffer';
@@ -557,7 +549,6 @@ export function DebugPanel({
             sensitivity={soundSensitivity}
             error={soundSensitivityError}
             onUpdate={onUpdateSoundSensitivity}
-            onRecalibrate={onRecalibrateSoundSensitivity}
           />
         )}
       </div>

@@ -45,13 +45,12 @@ export interface RadarConfig {
 }
 
 /**
- * State of the X9C104 digital potentiometer fitted to the SEN-14262 R17 pad.
+ * State of the DS3502 digital potentiometer fitted to the SEN-14262 R17 pad.
  *
- * `position` is the wiper tap (0 = least sensitive) and is null whenever the
- * wiper has never been driven to a known value -- the chip has no readback, so
- * the server genuinely has nothing to report. Every derived figure
- * (`sensitivity_percent`, the two resistances) is computed server-side from
- * that tap so the maths lives in exactly one place.
+ * `position` is the wiper step (0 = least sensitive), read back from the chip
+ * itself; it is null only when the device cannot be reached. Every derived
+ * figure (`sensitivity_percent`, the resistances) is computed server-side from
+ * that step so the maths lives in exactly one place.
  */
 export interface SoundSensitivity {
   enabled: boolean;
@@ -59,10 +58,12 @@ export interface SoundSensitivity {
   max_position: number;
   default_position: number;
   sensitivity_percent: number | null;
-  /** What R17 measures: the wiper-to-RL resistance of the digipot. */
+  /** What R17 presents: the series resistor plus the DS3502 wiper. */
   resistance_ohms: number | null;
   /** R17 in parallel with the board's 100k R3, i.e. the actual preamp gain leg. */
   preamp_feedback_ohms: number | null;
+  /** The fixed resistor in series with the wiper, which sets where the span sits. */
+  series_ohms: number;
   simulated: boolean;
   error: string | null;
 }

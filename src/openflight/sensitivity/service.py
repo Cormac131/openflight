@@ -1,67 +1,64 @@
-"""Runtime control of the SEN-14262 preamp gain via an X9C104 digital pot.
+"""Runtime control of the SEN-14262 preamp gain via a DS3502 digital pot.
 
-The service owns three things the driver deliberately does not: the lock that
-keeps concurrent WebSocket handlers from corrupting the tracked wiper position,
-the JSON file that remembers the setting across restarts, and the translation
-between a tap index and the numbers a user reasons about (percent, ohms).
+The service owns the lock that keeps concurrent WebSocket handlers from issuing
+overlapping I2C transactions, and the translation between a wiper step and the
+numbers a user reasons about (percent, ohms).
+
+It deliberately does *not* own a persistence file. The DS3502 reads its own
+wiper back and can commit it to EEPROM, so the chip is the single source of
+truth for the current setting — a mirror on the Pi could only disagree with it.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-from pathlib import Path
 from typing import Optional, Protocol
 
-from .config import CONFIG_PATH, load_position, save_position
-from .models import SensitivityState
-from .x9c104 import (
+from .ds3502 import (
+    DEFAULT_SERIES_OHMS,
     MAX_POSITION,
     position_for_resistance,
     preamp_feedback_ohms,
     resistance_ohms,
     sensitivity_percent,
 )
+from .models import SensitivityState
 
 logger = logging.getLogger(__name__)
 
-# The wiring guide's long-standing advice for a hand-soldered R17. Starting the
-# digipot at the same resistance means an existing build behaves the same on
-# the first boot after fitting the pot.
+# The wiring guide's long-standing advice for a hand-soldered R17.
 DEFAULT_R17_OHMS = 47_000.0
-DEFAULT_POSITION = position_for_resistance(DEFAULT_R17_OHMS)
 
 
 class DigitalPotentiometer(Protocol):  # pylint: disable=unnecessary-ellipsis
-    """The wiper contract the service needs; see :class:`~.x9c104.X9C104`."""
+    """The wiper contract the service needs; see :class:`~.ds3502.DS3502`."""
+
+    series_ohms: float
 
     @property
     def position(self) -> Optional[int]:
-        """Last commanded tap, or None when uncalibrated."""
+        """Live wiper position, or None when the device is closed."""
         ...  # pylint: disable=unnecessary-ellipsis
 
     def open(self) -> None:
-        """Claim the control lines."""
-        ...  # pylint: disable=unnecessary-ellipsis
-
-    def calibrate(self) -> int:
-        """Drive the wiper to a known position and return it."""
+        """Make the device ready for use."""
         ...  # pylint: disable=unnecessary-ellipsis
 
     def set_position(self, position: int, *, store: bool = False) -> int:
-        """Step the wiper to ``position`` and return it."""
+        """Move the wiper to ``position`` and return it."""
         ...  # pylint: disable=unnecessary-ellipsis
 
     def close(self) -> None:
-        """Release the control lines."""
+        """Release the device."""
         ...  # pylint: disable=unnecessary-ellipsis
 
 
 def clamp_position(value) -> int:
-    """Coerce a UI-supplied wiper position into 0..99.
+    """Coerce a UI-supplied wiper position into 0..127.
 
     Clamping rather than rejecting is deliberate: a slider that runs past the
-    end should saturate, and the state echoed back to the UI carries the tap
+    end should saturate, and the state echoed back to the UI carries the step
     that was actually applied.
 
     Raises:
@@ -75,38 +72,35 @@ def clamp_position(value) -> int:
 
 
 class SoundSensitivityService:
-    """Apply, persist, and report the sound detector's preamp sensitivity."""
+    """Apply and report the sound detector's preamp sensitivity."""
 
     def __init__(
         self,
         pot: DigitalPotentiometer,
         *,
-        config_path: Optional[Path] = None,
-        default_position: int = DEFAULT_POSITION,
         simulated: bool = False,
     ):
         self.pot = pot
-        # Resolved here rather than as a default argument so the module-level
-        # CONFIG_PATH stays overridable (tests, and an XDG-relocated home).
-        self.config_path = Path(config_path if config_path is not None else CONFIG_PATH)
-        self.default_position = clamp_position(default_position)
         self.simulated = simulated
         self._lock = threading.Lock()
         self._last_error: Optional[str] = None
 
-    def start(self, force_position=None) -> SensitivityState:
-        """Claim the pot, calibrate it, and apply a tap.
+    @property
+    def series_ohms(self) -> float:
+        """The fixed resistor in series with the wiper, in the R17 path."""
+        return getattr(self.pot, "series_ohms", DEFAULT_SERIES_OHMS)
 
-        Calibration is not optional: the X9C104 restores an unknown wiper
-        position from its own NVM at power-on, so stepping without first
-        driving to a known end would leave the resistance anywhere.
+    def start(self, force_position=None) -> SensitivityState:
+        """Open the device and report where its wiper already is.
+
+        Nothing is written unless ``force_position`` asks for it: the DS3502
+        restores its own wiper from EEPROM at power-on, so whatever the user
+        last set is already in effect and re-applying it would be busywork.
 
         Args:
-            force_position: Apply this tap instead of consulting the saved
-                setting. Used by ``--sound-sensitivity-position``, which
-                overrides the file for one run without rewriting it — a startup
-                flag that silently changed what the UI saved would be a
-                surprise the next time the server came up without it.
+            force_position: Apply this step instead of accepting the chip's
+                own. Used by ``--sound-sensitivity-position``, which steers one
+                run without committing to EEPROM.
 
         Raises:
             Exception: whatever the driver raises. Startup failure is the
@@ -115,32 +109,28 @@ class SoundSensitivityService:
         """
         with self._lock:
             self.pot.open()
-            self.pot.calibrate()
             if force_position is not None:
-                target = clamp_position(force_position)
-                source = "forced"
-            else:
-                target = load_position(self.config_path)
-                source = "saved"
-                if target is None:
-                    target = self.default_position
-                    source = "default"
-            self.pot.set_position(target)
+                self.pot.set_position(clamp_position(force_position))
             self._last_error = None
+            position = self.pot.position
             logger.info(
-                "[SENSITIVITY] Sound detector at position %d (~%.0f ohm R17, %s)",
-                target,
-                resistance_ohms(target),
-                source,
+                "[SENSITIVITY] Sound detector at step %s (~%.0f ohm R17, %s)",
+                position,
+                resistance_ohms(position, self.series_ohms) if position is not None else 0.0,
+                "forced" if force_position is not None else "as found",
             )
             return self._state_locked()
 
-    def set_position(self, value) -> SensitivityState:
-        """Move the wiper to ``value`` (clamped) and remember it.
+    def set_position(self, value, *, store: bool = True) -> SensitivityState:
+        """Move the wiper to ``value`` (clamped) and return the new state.
 
-        A failed save is reported in the returned state but does not undo the
-        move: the detector really is at the new sensitivity, and pretending
-        otherwise would be the more confusing lie.
+        Args:
+            value: Requested step; clamped into range.
+            store: Commit to the chip's EEPROM so the setting survives a power
+                cycle. On by default because a UI change is a deliberate,
+                human-paced act — one EEPROM cycle per adjustment is nowhere
+                near the part's endurance, and it is what makes the setting
+                stick with no file on the Pi.
 
         Raises:
             TypeError, ValueError: if ``value`` is not a usable position.
@@ -149,53 +139,28 @@ class SoundSensitivityService:
         position = clamp_position(value)
         with self._lock:
             try:
-                self.pot.set_position(position)
+                self.pot.set_position(position, store=store)
             except Exception as error:  # pylint: disable=broad-exception-caught
                 self._last_error = str(error)
-                logger.warning(
-                    "[SENSITIVITY] Failed to move wiper to position %d: %s", position, error
-                )
+                logger.warning("[SENSITIVITY] Failed to move wiper to step %d: %s", position, error)
                 raise
             self._last_error = None
-            try:
-                save_position(position, self.config_path)
-            except OSError as error:
-                self._last_error = f"Sensitivity applied but not saved: {error}"
-                logger.warning("[SENSITIVITY] Could not save %s: %s", self.config_path, error)
             logger.info(
-                "[SENSITIVITY] Sound detector at position %d (~%.0f ohm R17, preamp ~%.0f ohm)",
+                "[SENSITIVITY] Sound detector at step %d (~%.0f ohm R17, preamp ~%.0f ohm)%s",
                 position,
-                resistance_ohms(position),
-                preamp_feedback_ohms(position),
+                resistance_ohms(position, self.series_ohms),
+                preamp_feedback_ohms(position, self.series_ohms),
+                ", stored" if store else "",
             )
             return self._state_locked()
 
-    def recalibrate(self) -> SensitivityState:
-        """Re-home the wiper at 0 and re-apply the current position.
-
-        The tracked position is a Python-side model of a chip that cannot be
-        read back, so it can drift if the pot browns out or a line glitches.
-        This is the manual resync.
-        """
-        with self._lock:
-            target = self.pot.position
-            if target is None:
-                target = load_position(self.config_path)
-            if target is None:
-                target = self.default_position
-            self.pot.calibrate()
-            self.pot.set_position(target)
-            self._last_error = None
-            logger.info("[SENSITIVITY] Recalibrated, wiper restored to position %d", target)
-            return self._state_locked()
-
     def state(self) -> SensitivityState:
-        """Return the current state without touching the hardware."""
+        """Return the current state, reading the wiper back from the chip."""
         with self._lock:
             return self._state_locked()
 
     def stop(self) -> None:
-        """Release the GPIO lines. Safe to call more than once."""
+        """Release the I2C bus. Safe to call more than once."""
         with self._lock:
             try:
                 self.pot.close()
@@ -203,15 +168,26 @@ class SoundSensitivityService:
                 logger.debug("[SENSITIVITY] Failed to close the digital pot", exc_info=True)
 
     def _state_locked(self) -> SensitivityState:
-        position = self.pot.position
+        try:
+            position = self.pot.position
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            # A bus error while reading must not take the Debug page down with
+            # it; report the control as present but unreadable.
+            self._last_error = str(error)
+            logger.warning("[SENSITIVITY] Could not read the wiper back: %s", error)
+            position = None
+        series = self.series_ohms
         return SensitivityState(
             enabled=True,
             position=position,
             max_position=MAX_POSITION,
-            default_position=self.default_position,
+            default_position=position_for_resistance(DEFAULT_R17_OHMS, series),
             sensitivity_percent=None if position is None else sensitivity_percent(position),
-            resistance_ohms=None if position is None else resistance_ohms(position),
-            preamp_feedback_ohms=None if position is None else preamp_feedback_ohms(position),
+            resistance_ohms=None if position is None else resistance_ohms(position, series),
+            preamp_feedback_ohms=(
+                None if position is None else preamp_feedback_ohms(position, series)
+            ),
+            series_ohms=series,
             simulated=self.simulated,
             error=self._last_error,
         )
@@ -227,10 +203,11 @@ def disabled_state(error: Optional[str] = None) -> SensitivityState:
         enabled=False,
         position=None,
         max_position=MAX_POSITION,
-        default_position=DEFAULT_POSITION,
+        default_position=position_for_resistance(DEFAULT_R17_OHMS),
         sensitivity_percent=None,
         resistance_ohms=None,
         preamp_feedback_ohms=None,
+        series_ohms=DEFAULT_SERIES_OHMS,
         simulated=False,
         error=error,
     )

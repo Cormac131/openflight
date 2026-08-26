@@ -1373,63 +1373,28 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
         return False
 
 
-def reserved_gpio_pins(args) -> dict:
-    """Map BCM pins this run already drives to a phrase explaining why.
-
-    Only pins the configured build actually claims are listed. A Pi without the
-    UPS, without the inclinometer, and with the OPS243 on USB really does have
-    the I2C, UART, and AC-detect lines free, and refusing them anyway would
-    block a legitimate wiring choice.
-
-    The point is to fail at the CLI rather than at init: an unavailable digipot
-    is deliberately non-fatal, so a silent collision would degrade to "the
-    slider does nothing" instead of an error anyone can act on.
-    """
-    reserved = {args.iwr6843_trigger_pin: "carries the shared sound-trigger edge"}
-
-    uses_i2c = args.inclinometer or args.battery == "geekworm"
-    if uses_i2c:
-        reserved[2] = "is I2C SDA (inclinometer / UPS fuel gauge)"
-        reserved[3] = "is I2C SCL (inclinometer / UPS fuel gauge)"
-
-    if args.battery == "geekworm":
-        from .power.providers.geekworm import (  # pylint: disable=import-outside-toplevel
-            GeekwormPowerReader,
-        )
-
-        reserved[GeekwormPowerReader.AC_DETECT_PIN] = (
-            "is the Geekworm AC-detect input (--battery geekworm)"
-        )
-        # Geekworm drives charge control on BCM16. OpenFlight never reads it,
-        # but the UPS still owns the line.
-        reserved[16] = "is Geekworm charge control (--battery geekworm)"
-
-    if str(args.port or "").startswith("/dev/ttyAMA"):
-        reserved[14] = "is UART TXD0, wired to the OPS243 on the GPIO header"
-        reserved[15] = "is UART RXD0, wired to the OPS243 on the GPIO header"
-
-    return reserved
-
-
 def init_sound_sensitivity(
     *,
-    cs_pin: int,
-    inc_pin: int,
-    ud_pin: int,
+    bus_number: int = 1,
+    address: int = 0x28,
+    series_ohms: float = 33_000.0,
     position: Optional[int] = None,
     simulated: bool = False,
 ) -> bool:
-    """Bring up the X9C104 that sets SEN-14262 preamp gain.
+    """Bring up the DS3502 that sets SEN-14262 preamp gain.
 
     Sensitivity control is a convenience, never a prerequisite for detecting a
     shot: a build with a hand-soldered R17 works exactly as before. So a
     failure here is logged and reported to the UI rather than fatal.
 
     Args:
-        cs_pin, inc_pin, ud_pin: BCM GPIOs wired to the pot's control lines.
-        position: Wiper tap to force for this run, without rewriting the saved
-            setting. Defaults to the saved setting, falling back to the tap
-            matching the guide's 47k resistor.
+        bus_number: I2C bus the pot is on. It shares the bus with the
+            inclinometer and any UPS fuel gauge, and claims no GPIOs.
+        address: DS3502 address, 0x28-0x2b per its A0/A1 jumpers.
+        series_ohms: Fixed resistor in series with the wiper in the R17 path.
+            Must match what is fitted, or every reported resistance is wrong.
+        position: Wiper step to force for this run. Omitted, the position the
+            chip restored from its own EEPROM is left alone.
         simulated: Use the in-memory pot so ``--mock`` can drive the UI control
             with no hardware attached.
     """
@@ -1437,29 +1402,30 @@ def init_sound_sensitivity(
     global sound_sensitivity_runtime_config  # pylint: disable=global-statement
 
     from .sensitivity import (  # pylint: disable=import-outside-toplevel
-        X9C104,
-        MockX9C104,
+        DS3502,
+        MockDS3502,
         SoundSensitivityService,
     )
 
     requested = {
         "requested": True,
-        "device": "x9c104",
+        "device": "ds3502",
         "simulated": simulated,
-        "cs_pin_bcm": cs_pin,
-        "inc_pin_bcm": inc_pin,
-        "ud_pin_bcm": ud_pin,
+        "i2c_bus": bus_number,
+        "i2c_address": f"0x{address:02x}",
+        "series_ohms": series_ohms,
     }
     service = None
     try:
-        pot = MockX9C104() if simulated else X9C104(cs_pin=cs_pin, inc_pin=inc_pin, ud_pin=ud_pin)
+        pot_cls = MockDS3502 if simulated else DS3502
+        pot = pot_cls(bus_number=bus_number, address=address, series_ohms=series_ohms)
         service = SoundSensitivityService(pot, simulated=simulated)
         state = service.start(force_position=position)
         sound_sensitivity_service = service
         sound_sensitivity_runtime_config = {**requested, "enabled": True, "state": state.to_dict()}
         print(
             "Sound sensitivity control enabled "
-            f"(X9C104 position {state.position}, ~{state.resistance_ohms:.0f} ohm R17)"
+            f"(DS3502 step {state.position}, ~{state.resistance_ohms:.0f} ohm R17)"
         )
         return True
     except Exception as error:  # pylint: disable=broad-exception-caught
@@ -1469,7 +1435,7 @@ def init_sound_sensitivity(
         log_session_error(
             "Sound sensitivity initialization failed",
             component="sound_sensitivity",
-            context={"cs_pin": cs_pin, "inc_pin": inc_pin, "ud_pin": ud_pin},
+            context={"i2c_bus": bus_number, "i2c_address": f"0x{address:02x}"},
             exc=error,
         )
         sound_sensitivity_service = None
@@ -2411,37 +2377,6 @@ def handle_set_sound_sensitivity(data):
     _emit_sound_sensitivity(state.to_dict())
 
 
-@socketio.on("recalibrate_sound_sensitivity")
-def handle_recalibrate_sound_sensitivity():
-    """Re-home the wiper at 0 and restore the current position.
-
-    The X9C104 has no readback, so the tracked position is only a model of the
-    chip. This is the escape hatch when the two have drifted apart.
-    """
-    if sound_sensitivity_service is None:
-        socketio.emit(
-            "sound_sensitivity_error",
-            {"error": "Sound sensitivity control is not enabled on this build"},
-        )
-        return
-
-    try:
-        state = sound_sensitivity_service.recalibrate()
-    except Exception as error:  # pylint: disable=broad-except
-        logger.warning("[SERVER] Error recalibrating sound sensitivity: %s", error, exc_info=True)
-        log_session_error(
-            "Sound sensitivity recalibration failed",
-            component="sound_sensitivity",
-            context={"stage": "recalibrate_sound_sensitivity"},
-            exc=error,
-        )
-        socketio.emit("sound_sensitivity_error", {"error": str(error)})
-        _emit_sound_sensitivity()
-        return
-
-    _emit_sound_sensitivity(state.to_dict())
-
-
 @socketio.on("shutdown")
 def handle_shutdown():
     """Cleanly shut down the server and all hardware."""
@@ -3088,9 +3023,7 @@ def _fuse_camera_ball_flight(
                                     camera_capture_config.get("roll_correction_deg", 0.0)
                                 ),
                                 horizontal_pixel_sign=(
-                                    -1.0
-                                    if camera_capture_config.get("mirror_horizontal")
-                                    else 1.0
+                                    -1.0 if camera_capture_config.get("mirror_horizontal") else 1.0
                                 ),
                                 image_width_px=int(camera_capture_config["width"]),
                                 image_height_px=int(camera_capture_config["height"]),
@@ -4701,35 +4634,38 @@ def main():
         "--sound-sensitivity",
         action="store_true",
         help=(
-            "Enable X9C104 digital-pot control of SEN-14262 preamp gain "
+            "Enable DS3502 I2C digital-pot control of SEN-14262 preamp gain "
             "(fitted to the detector's R17 pad); tune it on the Debug page"
         ),
     )
     parser.add_argument(
-        "--sound-sensitivity-cs-pin",
+        "--sound-sensitivity-i2c-bus",
         type=int,
-        default=22,
-        help="BCM GPIO wired to X9C104 CS (default: 22)",
+        default=1,
+        help="I2C bus carrying the DS3502 (default: 1)",
     )
     parser.add_argument(
-        "--sound-sensitivity-inc-pin",
-        type=int,
-        default=23,
-        help="BCM GPIO wired to X9C104 INC (default: 23)",
+        "--sound-sensitivity-address",
+        type=lambda value: int(value, 0),
+        default=0x28,
+        help="DS3502 I2C address, 0x28-0x2b per its A0/A1 jumpers (default: 0x28)",
     )
     parser.add_argument(
-        "--sound-sensitivity-ud-pin",
-        type=int,
-        default=24,
-        help="BCM GPIO wired to X9C104 U/D (default: 24)",
+        "--sound-sensitivity-series-ohms",
+        type=float,
+        default=33_000.0,
+        help=(
+            "Fixed resistor in series with the DS3502 wiper in the R17 path "
+            "(default: 33000). Must match what is fitted"
+        ),
     )
     parser.add_argument(
         "--sound-sensitivity-position",
         type=int,
         default=None,
         help=(
-            "Force the X9C104 wiper to this tap (0-99) at startup, overriding "
-            "the saved setting. 0 is least sensitive, 99 most"
+            "Force the DS3502 wiper to this step (0-127) for this run, leaving "
+            "the chip's stored value alone. 0 is least sensitive, 127 most"
         ),
     )
     parser.add_argument(
@@ -5020,23 +4956,21 @@ def main():
     if args.iwr6843 and (args.iwr6843_tee_m <= 0 or args.iwr6843_net_m <= 0):
         parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
     if args.sound_sensitivity:
-        digipot_pins = [
-            args.sound_sensitivity_cs_pin,
-            args.sound_sensitivity_inc_pin,
-            args.sound_sensitivity_ud_pin,
-        ]
-        # Three lines sharing a GPIO would step the wiper on every CS change.
-        if len(set(digipot_pins)) != len(digipot_pins):
-            parser.error("--sound-sensitivity CS, INC and U/D must be three distinct BCM GPIOs")
-        reserved = reserved_gpio_pins(args)
-        for pin in digipot_pins:
-            if pin in reserved:
-                parser.error(f"--sound-sensitivity cannot use BCM{pin}; that GPIO {reserved[pin]}")
-        if args.sound_sensitivity_position is not None:
-            from .sensitivity import MAX_POSITION  # pylint: disable=import-outside-toplevel
+        from .sensitivity import (  # pylint: disable=import-outside-toplevel
+            MAX_POSITION,
+            validate_address,
+        )
 
-            if not 0 <= args.sound_sensitivity_position <= MAX_POSITION:
-                parser.error(f"--sound-sensitivity-position must be within 0..{MAX_POSITION}")
+        try:
+            validate_address(args.sound_sensitivity_address)
+        except ValueError as error:
+            parser.error(str(error))
+        if args.sound_sensitivity_series_ohms < 0:
+            parser.error("--sound-sensitivity-series-ohms cannot be negative")
+        if args.sound_sensitivity_position is not None and not (
+            0 <= args.sound_sensitivity_position <= MAX_POSITION
+        ):
+            parser.error(f"--sound-sensitivity-position must be within 0..{MAX_POSITION}")
     if args.camera_capture and (
         args.camera_capture_width <= 0
         or args.camera_capture_height <= 0
@@ -5254,9 +5188,9 @@ def main():
 
     if args.sound_sensitivity:
         if not init_sound_sensitivity(
-            cs_pin=args.sound_sensitivity_cs_pin,
-            inc_pin=args.sound_sensitivity_inc_pin,
-            ud_pin=args.sound_sensitivity_ud_pin,
+            bus_number=args.sound_sensitivity_i2c_bus,
+            address=args.sound_sensitivity_address,
+            series_ohms=args.sound_sensitivity_series_ohms,
             position=args.sound_sensitivity_position,
             simulated=args.mock,
         ):

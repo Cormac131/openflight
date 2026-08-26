@@ -421,30 +421,32 @@ def test_sound_sensitivity_flag_is_forwarded():
     assert "--sound-sensitivity" in command_arguments
 
 
-def test_sound_sensitivity_pins_and_position_are_forwarded():
+def test_sound_sensitivity_i2c_options_are_forwarded():
     command_arguments = (
         _dry_run(
             "--sound-sensitivity",
-            "--sound-sensitivity-cs-pin",
-            "5",
-            "--sound-sensitivity-inc-pin",
-            "12",
-            "--sound-sensitivity-ud-pin",
-            "13",
+            "--sound-sensitivity-i2c-bus",
+            "3",
+            "--sound-sensitivity-address",
+            "0x2b",
+            "--sound-sensitivity-series-ohms",
+            "39000",
             "--sound-sensitivity-position",
-            "33",
+            "64",
         )
         .stdout.strip()
         .split()
     )
 
-    assert command_arguments[command_arguments.index("--sound-sensitivity-cs-pin") + 1] == "5"
-    assert command_arguments[command_arguments.index("--sound-sensitivity-inc-pin") + 1] == "12"
-    assert command_arguments[command_arguments.index("--sound-sensitivity-ud-pin") + 1] == "13"
-    assert command_arguments[command_arguments.index("--sound-sensitivity-position") + 1] == "33"
+    assert command_arguments[command_arguments.index("--sound-sensitivity-i2c-bus") + 1] == "3"
+    assert command_arguments[command_arguments.index("--sound-sensitivity-address") + 1] == "0x2b"
+    assert (
+        command_arguments[command_arguments.index("--sound-sensitivity-series-ohms") + 1] == "39000"
+    )
+    assert command_arguments[command_arguments.index("--sound-sensitivity-position") + 1] == "64"
 
 
-def test_sound_sensitivity_pins_are_not_forwarded_without_the_flag():
-    command_arguments = _dry_run("--sound-sensitivity-cs-pin", "5").stdout.strip().split()
+def test_sound_sensitivity_options_are_not_forwarded_without_the_flag():
+    command_arguments = _dry_run("--sound-sensitivity-i2c-bus", "3").stdout.strip().split()
 
-    assert "--sound-sensitivity-cs-pin" not in command_arguments
+    assert "--sound-sensitivity-i2c-bus" not in command_arguments

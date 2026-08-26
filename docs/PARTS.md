@@ -30,10 +30,10 @@ The sound trigger detects club impact to precisely time radar captures. Essentia
 
 > **R17 resistor:** The SEN-14262 is rated for 5V but runs at 3.3V in this setup, which can cause the GATE output to stick high. Soldering a resistor into the R17 through-hole position (in parallel with the onboard 100kΩ R3) reduces preamp gain and fixes this. Start with 47kΩ; use a lower value (e.g. 33kΩ) if the sensor is still too sensitive for your environment.
 
-### Optional: Software-Adjustable Sensitivity (X9C104 Digital Pot)
+### Optional: Software-Adjustable Sensitivity (DS3502 Digital Pot)
 
-A fixed R17 resistor locks the detector at one gain. Fitting an **X9C104**
-100 kΩ digital potentiometer to the R17 pads instead makes that resistance
+A fixed R17 resistor locks the detector at one gain. Replacing it with an
+**Adafruit DS3502** I2C digital potentiometer makes that resistance
 software-controlled, so you tune sensitivity with a slider on the **Debug →
 Sound** page rather than with a soldering iron. Useful if you hit in more than
 one place — a garage, a range bay, and a quiet basement all want different gain.
@@ -42,44 +42,24 @@ This is entirely optional. A build with a soldered R17 works exactly as before.
 
 | Part | Description | Link | ~Price |
 |------|-------------|------|--------|
-| **X9C104** | 100 kΩ, 100-tap digital potentiometer. Either the bare 8-pin DIP (`X9C104P`) or a breakout module — see the [pin mapping](sound-trigger-wiring.md#bare-chip-or-breakout-module) | [Mouser](https://www.mouser.com/c/?q=X9C104P) | $2 |
-| **Jumper Wires** | 5 wires: CS/INC/U-D → Pi GPIO, VCC → Pi 5V, GND → Pi GND | Any | $2 |
-| **10 kΩ resistor** | Pull-up from `CS` to Pi 3.3V, so the wiper holds when the Pi is not driving it | Any electronics supplier | $1 |
-| **100 nF ceramic capacitor** | **Required** for a bare DIP — decoupling across the pot's `VCC`/`VSS`, at the chip. Breakout modules usually have one fitted already | Any electronics supplier | $1 |
-| **3× 100–330 Ω resistors** | Series damping on `CS`/`INC`/`U-D`. Without them long leads ring and the chip counts one pulse as several | Any electronics supplier | $1 |
-| **Wire pigtails** | 2 short leads from the pot's RW/RL to the R17 pads | Any | $1 |
+| **Adafruit DS3502** | I2C 10 kΩ digital potentiometer with STEMMA QT / Qwiic | [Adafruit product 4286](https://www.adafruit.com/product/4286) | $5 |
+| **Series resistor** | **Required** — 33 kΩ unless your room says otherwise; shifts the pot's 10 kΩ span onto R17's operating range | Any electronics supplier | $1 |
+| **Wiring** | Either 5 Dupont jumpers, or one JST-SH STEMMA QT cable chained off the LIS3DH plus a single jumper for `V+` | Any | $1–5 |
 
-> **Get the -104, not a sibling.** The X9C family shares a pinout across
-> resistance values: X9C102 is 1 kΩ, X9C103 is 10 kΩ, X9C503 is 50 kΩ. Only the
-> **X9C104** covers the 0–100 kΩ span R17 needs; a smaller part cannot reach the
-> 47 kΩ starting point the wiring guide recommends.
+> **The 10 kΩ pot cannot do this alone.** R17's recommended value is 47 kΩ, and
+> 10 kΩ in parallel with the board's 100 kΩ R3 gives a 9.1 kΩ preamp leg against
+> 32 kΩ at that baseline — the detector would be far less sensitive at *every*
+> setting. A fixed series resistor shifts the span onto the useful range; 33 kΩ
+> gives 33–43 kΩ, matching the guide's documented window. Tell the server which
+> value you fitted with `--sound-sensitivity-series-ohms`.
 
-> **3.3V or 5V both work.** The X9C104's supply range is 2.7–5.5V, so the Pi's
-> 3.3V rail is in spec, and it keeps the whole subsystem single-rail. Its logic
-> inputs need only 2.0V to read high, so the Pi's 3.3V GPIOs drive CS, INC and
-> U/D directly either way — no level shifter.
+> **It claims no GPIOs.** The DS3502 shares the I2C bus the inclinometer and any
+> UPS fuel gauge already use, sitting at 0x28. If the LIS3DH is fitted, one
+> STEMMA QT cable covers power and I2C — but `V+` still needs its own wire, as
+> the JST cable does not carry it.
 
 Wiring and setup are in
-[sound-trigger-wiring.md](sound-trigger-wiring.md#optional-software-controlled-sensitivity-x9c104-digital-pot);
-the pot takes BCM22/23/24 (physical 15/16/18) plus 5V and ground, and the
-[header allocation table](sound-trigger-wiring.md#where-it-sits-on-the-pi-header)
-shows how that fits alongside the rest of a full build.
-
-### Sound Trigger Wiring
-
-```
-SEN-14262               Raspberry Pi           OPS243
-┌───────────┐          ┌──────────┐          ┌──────────┐
-│ VCC ──────┼──────────┤ 3.3V     │          │          │
-│           │          │          │          │          │
-│ GATE ─────┼──────────┼──────────┼──────────┤ HOST_INT │
-│           │          │          │          │ (J3 P3)  │
-│ GND ──────┼──────────┤ GND      ├──────────┤ GND      │
-│           │          │          │          │ (J3 P1)  │
-└───────────┘          └──────────┘          └──────────┘
-```
-
-See [sound-trigger-wiring.md](sound-trigger-wiring.md) for detailed instructions and troubleshooting.
+[sound-trigger-wiring.md](sound-trigger-wiring.md#optional-software-controlled-sensitivity-ds3502-digital-pot).
 
 ## Angle Radar (TI IWR6843) — CURRENT
 
@@ -189,7 +169,7 @@ camera; the standard setup does not install its optional software dependencies.
 |----------|--------|
 | Core (OPS243, Pi 5, Display) | $355 |
 | Sound Trigger (SEN-14262 + resistor + wires) | $18 |
-| Software sensitivity control (X9C104 + wires) — **optional** | $5 |
+| Software sensitivity control (DS3502 + resistor + wiring) — **optional** | $7 |
 | Power & Accessories | $27 |
 | **Subtotal, no angle radar** | **~$400** |
 | Angle Radar (IWR6843LEVM + cable + wire) — **current** | $156 |

@@ -8,33 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Software-adjustable sound trigger sensitivity.** An optional X9C104 digital
-  potentiometer fitted to the SEN-14262's `R17` pads puts the detector's preamp
-  gain under software control, replacing the soldered resistor. Tune it with the
-  **Sound Trigger Sensitivity** slider on **Debug → Sound**; the readout shows
-  the applied percentage, the resistance `R17` now presents, and the resulting
-  preamp leg. Enable with `--sound-sensitivity` (default GPIOs: BCM22 `CS`,
-  BCM23 `INC`, BCM24 `U/D`; 5V on physical pin 2, ground on physical pin 20).
-  Startup refuses digipot pins that collide with anything the same run drives —
-  the trigger edge, I2C, the OPS243 UART, or a Geekworm UPS. The setting persists to
-  `~/.config/openflight/sound_sensitivity.json` and is re-applied on every start;
-  the chip's own non-volatile memory is never written. A build with a soldered
-  `R17` is unaffected. See
-  [Sound Trigger Wiring](sound-trigger-wiring.md#optional-software-controlled-sensitivity-x9c104-digital-pot).
-- **X9C104 decoupling capacitor.** The wiring guide now requires a 100 nF
-  ceramic across the pot's `VCC`/`VSS` at the chip. Without local decoupling the
-  supply rings on every internal switching event and the wiper's counter
-  miscounts, advancing several taps per commanded pulse.
-- **X9C104 series damping resistors.** The wiring guide now calls for 100–330 Ω
-  in series on `INC` (and ideally `CS`/`U-D`). Long jumper leads ring on the
-  Pi's fast edges, and the X9C104 has no input filtering, so it counts each
-  threshold crossing as a step — one commanded pulse becomes three or four and
-  the wiper overshoots. A *consistent* overshoot multiplier is the signature.
-- **X9C104 `CS` pull-up.** The wiring guide now calls for a 10 kΩ pull-up from
-  `CS` to the Pi's **3.3 V** (not the pot's 5 V rail — Pi GPIOs are not 5 V
-  tolerant). Without it the wiper only holds while a process drives the lines:
-  releasing them lets `CS` fall to the Pi's default pull-down, selecting the
-  chip, and the accompanying edge on `INC` steps the wiper off its setting.
+- **Software-adjustable sound trigger sensitivity.** An optional **Adafruit
+  DS3502** I2C digital potentiometer fitted to the SEN-14262's `R17` pads puts
+  the detector's preamp gain under software control, replacing the soldered
+  resistor. Tune it with the **Sound Trigger Sensitivity** slider on **Debug →
+  Sound**; the readout shows the applied percentage, the resistance `R17` now
+  presents, and the resulting preamp leg. Enable with `--sound-sensitivity`.
+
+  The pot is I2C at 0x28 on the bus the inclinometer and any UPS fuel gauge
+  already share, so it **claims no GPIOs**. It reads its own wiper back and
+  stores it in its own EEPROM, so there is no calibration step and no config
+  file on the Pi — the setting survives a power cycle by itself.
+
+  The DS3502 is 10 kΩ end-to-end, which cannot reach `R17`'s 33–47 kΩ operating
+  range on its own, so a **fixed series resistor is required** — 33 kΩ by
+  default, set with `--sound-sensitivity-series-ohms`. Power and I2C can come
+  from Dupont wires or from a STEMMA QT cable chained off the LIS3DH; either
+  way `V+` needs its own wire and its jumper to `RH` cut. A build with a
+  soldered `R17` is unaffected. See
+  [Sound Trigger Wiring](sound-trigger-wiring.md#optional-software-controlled-sensitivity-ds3502-digital-pot).
 - **Debug page tuning split.** The Debug panel's single **Tuning** tab is now
   **Radar** and **Sound**, so radar filters and sound-trigger sensitivity no
   longer share one scrolling column.

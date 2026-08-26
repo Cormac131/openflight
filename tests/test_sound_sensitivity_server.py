@@ -1,17 +1,11 @@
 """Server wiring for X9C104 sound-detector sensitivity control."""
 
 import sys
-from types import SimpleNamespace
 
 import pytest
 
 from openflight import server as server_module
-from openflight.sensitivity import (
-    DEFAULT_POSITION,
-    MAX_POSITION,
-    MockX9C104,
-    SoundSensitivityService,
-)
+from openflight.sensitivity import MAX_POSITION, MockDS3502, SoundSensitivityService
 
 
 @pytest.fixture(name="emitted")
@@ -27,13 +21,13 @@ def fixture_emitted(monkeypatch):
 
 
 @pytest.fixture(name="service")
-def fixture_service(monkeypatch, tmp_path):
+def fixture_service(monkeypatch):
     """Install a mock-backed, started sensitivity service on the server."""
-    service = SoundSensitivityService(MockX9C104(), config_path=tmp_path / "sound_sensitivity.json")
+    service = SoundSensitivityService(MockDS3502())
     service.start()
     monkeypatch.setattr(server_module, "sound_sensitivity_service", service)
     monkeypatch.setattr(
-        server_module, "sound_sensitivity_runtime_config", {"enabled": True, "device": "x9c104"}
+        server_module, "sound_sensitivity_runtime_config", {"enabled": True, "device": "ds3502"}
     )
     return service
 
@@ -68,12 +62,12 @@ class TestReadState:
         monkeypatch.setattr(
             server_module,
             "sound_sensitivity_runtime_config",
-            {"enabled": False, "requested": True, "error": "Could not claim X9C104 GPIO lines"},
+            {"enabled": False, "requested": True, "error": "No DS3502 responding at 0x28"},
         )
 
         server_module.handle_get_sound_sensitivity()
 
-        assert only(emitted, "sound_sensitivity")[-1]["error"].startswith("Could not claim")
+        assert only(emitted, "sound_sensitivity")[-1]["error"].startswith("No DS3502")
 
 
 class TestSetPosition:
@@ -92,7 +86,7 @@ class TestSetPosition:
     def test_a_missing_position_is_rejected_without_moving_the_wiper(self, service, emitted):
         server_module.handle_set_sound_sensitivity({})
 
-        assert service.state().position == DEFAULT_POSITION
+        assert service.state().position == MAX_POSITION // 2
         assert only(emitted, "sound_sensitivity_error")[-1]["error"] == "No position provided"
 
     def test_a_none_payload_is_rejected(self, service, emitted):
@@ -105,18 +99,18 @@ class TestSetPosition:
 
         assert only(emitted, "sound_sensitivity_error")
         # The UI's optimistic slider has to be pulled back to the real tap.
-        assert only(emitted, "sound_sensitivity")[-1]["position"] == DEFAULT_POSITION
+        assert only(emitted, "sound_sensitivity")[-1]["position"] == MAX_POSITION // 2
 
     def test_a_hardware_failure_reports_an_error(self, service, emitted, monkeypatch):
         def boom(_position, *, store=False):
-            raise OSError("wiper line stuck")
+            raise OSError("i2c write failed")
 
         monkeypatch.setattr(service.pot, "set_position", boom)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
 
         server_module.handle_set_sound_sensitivity({"position": 12})
 
-        assert only(emitted, "sound_sensitivity_error")[-1]["error"] == "wiper line stuck"
+        assert only(emitted, "sound_sensitivity_error")[-1]["error"] == "i2c write failed"
 
     def test_setting_without_hardware_explains_why(self, monkeypatch, emitted):
         monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
@@ -131,71 +125,42 @@ class TestSetPosition:
         assert server_module.sound_sensitivity_runtime_config["state"]["position"] == 21
 
 
-class TestRecalibrate:
-    def test_recalibrate_rehomes_and_broadcasts(self, service, emitted):
-        server_module.handle_set_sound_sensitivity({"position": 55})
-        emitted.clear()
-
-        server_module.handle_recalibrate_sound_sensitivity()
-
-        assert only(emitted, "sound_sensitivity")[-1]["position"] == 55
-
-    def test_recalibrate_without_hardware_explains_why(self, monkeypatch, emitted):
-        monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
-
-        server_module.handle_recalibrate_sound_sensitivity()
-
-        assert "not enabled" in only(emitted, "sound_sensitivity_error")[-1]["error"]
-
-    def test_a_failing_recalibration_reports_an_error(self, service, emitted, monkeypatch):
-        def boom():
-            raise OSError("CS line stuck low")
-
-        monkeypatch.setattr(service.pot, "calibrate", boom)
-        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
-
-        server_module.handle_recalibrate_sound_sensitivity()
-
-        assert only(emitted, "sound_sensitivity_error")[-1]["error"] == "CS line stuck low"
-
-
 class TestInit:
-    def test_mock_init_enables_a_simulated_control(self, monkeypatch, tmp_path):
+    def test_mock_init_enables_a_simulated_control(self, monkeypatch):
         monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
         monkeypatch.setattr(server_module, "sound_sensitivity_runtime_config", {"enabled": False})
-        monkeypatch.setattr("openflight.sensitivity.service.CONFIG_PATH", tmp_path / "s.json")
 
-        assert (
-            server_module.init_sound_sensitivity(cs_pin=22, inc_pin=23, ud_pin=24, simulated=True)
-            is True
-        )
+        assert server_module.init_sound_sensitivity(simulated=True) is True
 
         config = server_module.sound_sensitivity_runtime_config
         assert config["enabled"] is True
+        assert config["device"] == "ds3502"
         assert config["simulated"] is True
-        assert config["state"]["position"] == DEFAULT_POSITION
 
-    def test_an_explicit_position_overrides_the_saved_setting(self, monkeypatch, tmp_path):
-        from openflight.sensitivity import load_position, save_position
-
-        config_path = tmp_path / "s.json"
-        save_position(80, config_path)
-        monkeypatch.setattr("openflight.sensitivity.service.CONFIG_PATH", config_path)
+    def test_the_runtime_config_records_the_bus_address_and_series_resistor(self, monkeypatch):
         monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
 
         server_module.init_sound_sensitivity(
-            cs_pin=22, inc_pin=23, ud_pin=24, position=15, simulated=True
+            bus_number=3, address=0x2A, series_ohms=39_000.0, simulated=True
         )
 
+        config = server_module.sound_sensitivity_runtime_config
+        assert config["i2c_bus"] == 3
+        assert config["i2c_address"] == "0x2a"
+        assert config["series_ohms"] == 39_000.0
+
+    def test_an_explicit_position_is_applied(self, monkeypatch):
+        monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
+
+        server_module.init_sound_sensitivity(position=15, simulated=True)
+
         assert server_module.sound_sensitivity_service.state().position == 15
-        # The flag steers this run; it must not silently rewrite what the UI saved.
-        assert load_position(config_path) == 80
 
     def test_a_failed_init_leaves_the_server_running_without_control(self, monkeypatch):
         monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
-        # No gpiozero on a dev box, so the real driver path fails to claim lines.
-        assert server_module.init_sound_sensitivity(cs_pin=22, inc_pin=23, ud_pin=24) is False
+        # No I2C bus on a dev box, so the real driver path fails to open.
+        assert server_module.init_sound_sensitivity() is False
 
         assert server_module.sound_sensitivity_service is None
         assert server_module.sound_sensitivity_runtime_config["enabled"] is False
@@ -205,75 +170,17 @@ class TestInit:
         monkeypatch.setattr(
             server_module,
             "sound_sensitivity_runtime_config",
-            {"enabled": True, "device": "x9c104"},
+            {"enabled": True, "device": "ds3502"},
         )
 
-        assert server_module._session_start_config()["sound_sensitivity"]["device"] == "x9c104"
-
-
-class TestReservedPins:
-    """Only pins the configured build really drives are refused. A Pi with the
-    OPS243 on USB, no UPS, and no inclinometer genuinely has I2C, UART, and
-    BCM6 free, and blocking them would rule out a valid wiring choice."""
-
-    def _args(self, **overrides):
-        defaults = {
-            "iwr6843_trigger_pin": 17,
-            "inclinometer": False,
-            "battery": None,
-            "port": None,
-        }
-        return SimpleNamespace(**{**defaults, **overrides})
-
-    def test_the_trigger_pin_is_always_reserved(self):
-        assert 17 in server_module.reserved_gpio_pins(self._args())
-
-    def test_a_remapped_trigger_pin_moves_the_reservation(self):
-        reserved = server_module.reserved_gpio_pins(self._args(iwr6843_trigger_pin=27))
-
-        assert 27 in reserved
-        assert 17 not in reserved
-
-    def test_a_bare_build_leaves_i2c_uart_and_the_ups_pins_free(self):
-        reserved = server_module.reserved_gpio_pins(self._args())
-
-        assert set(reserved) == {17}
-
-    def test_the_inclinometer_reserves_i2c(self):
-        reserved = server_module.reserved_gpio_pins(self._args(inclinometer=True))
-
-        assert {2, 3} <= set(reserved)
-
-    def test_the_geekworm_ups_reserves_i2c_ac_detect_and_charge_control(self):
-        reserved = server_module.reserved_gpio_pins(self._args(battery="geekworm"))
-
-        assert {2, 3, 6, 16} <= set(reserved)
-
-    def test_the_gpio_uart_reserves_the_serial_pair(self):
-        reserved = server_module.reserved_gpio_pins(self._args(port="/dev/ttyAMA0"))
-
-        assert {14, 15} <= set(reserved)
-
-    def test_a_usb_radar_leaves_the_serial_pair_free(self):
-        reserved = server_module.reserved_gpio_pins(self._args(port="/dev/ttyUSB0"))
-
-        assert 14 not in reserved
-        assert 15 not in reserved
-
-    def test_every_reservation_explains_itself(self):
-        reserved = server_module.reserved_gpio_pins(
-            self._args(battery="geekworm", inclinometer=True, port="/dev/ttyAMA0")
-        )
-
-        assert all(isinstance(reason, str) and reason for reason in reserved.values())
+        assert server_module._session_start_config()["sound_sensitivity"]["device"] == "ds3502"
 
 
 class TestArgumentValidation:
-    """The digipot claims three GPIOs; a collision or a bad tap must fail loudly
-    at the CLI rather than silently stealing the trigger line or leaving the
-    wiper somewhere the UI never asked for. ``code == 2`` pins each assertion to
-    ``parser.error()`` rather than a later ``SystemExit(1)`` from hardware init
-    failing in a test environment."""
+    """A mistyped address or series resistor must fail at the CLI: the first
+    would talk to whatever else is on the bus, the second would silently make
+    every resistance the UI reports wrong. ``code == 2`` pins each assertion to
+    ``parser.error()`` rather than a later ``SystemExit(1)``."""
 
     def _run(self, monkeypatch, arguments):
         monkeypatch.setattr(sys, "argv", ["openflight-server", *arguments])
@@ -281,37 +188,24 @@ class TestArgumentValidation:
             server_module.main()
         return exc_info.value
 
-    def test_reusing_the_trigger_pin_is_refused(self, monkeypatch, capsys):
-        error = self._run(monkeypatch, ["--sound-sensitivity", "--sound-sensitivity-cs-pin", "17"])
-
-        assert error.code == 2
-        assert "carries the shared sound-trigger edge" in capsys.readouterr().err
-
-    def test_a_ups_pin_is_refused_only_when_the_ups_is_enabled(self, monkeypatch, capsys):
+    @pytest.mark.parametrize("address", ["0x27", "0x2c", "0x18"])
+    def test_an_address_outside_the_jumper_range_is_refused(self, monkeypatch, capsys, address):
         error = self._run(
-            monkeypatch,
-            ["--sound-sensitivity", "--sound-sensitivity-cs-pin", "6", "--battery", "geekworm"],
+            monkeypatch, ["--sound-sensitivity", "--sound-sensitivity-address", address]
         )
 
         assert error.code == 2
-        assert "Geekworm AC-detect" in capsys.readouterr().err
+        assert "DS3502 address must be within" in capsys.readouterr().err
 
-    def test_duplicate_digipot_pins_are_refused(self, monkeypatch, capsys):
+    def test_a_negative_series_resistor_is_refused(self, monkeypatch, capsys):
         error = self._run(
-            monkeypatch,
-            [
-                "--sound-sensitivity",
-                "--sound-sensitivity-cs-pin",
-                "23",
-                "--sound-sensitivity-inc-pin",
-                "23",
-            ],
+            monkeypatch, ["--sound-sensitivity", "--sound-sensitivity-series-ohms", "-1"]
         )
 
         assert error.code == 2
-        assert "three distinct BCM GPIOs" in capsys.readouterr().err
+        assert "series-ohms cannot be negative" in capsys.readouterr().err
 
-    @pytest.mark.parametrize("bad", ["-1", "100", "500"])
+    @pytest.mark.parametrize("bad", ["-1", "128", "500"])
     def test_an_out_of_range_startup_position_is_refused(self, monkeypatch, capsys, bad):
         error = self._run(monkeypatch, ["--sound-sensitivity", "--sound-sensitivity-position", bad])
 

@@ -22,6 +22,7 @@ class SensitivityState:
     sensitivity_percent: Optional[float]
     resistance_ohms: Optional[float]
     preamp_feedback_ohms: Optional[float]
+    series_ohms: float
     simulated: bool = False
     error: Optional[str] = None
 
@@ -41,6 +42,7 @@ class SensitivityState:
             "preamp_feedback_ohms": (
                 round(self.preamp_feedback_ohms) if self.preamp_feedback_ohms is not None else None
             ),
+            "series_ohms": round(self.series_ohms),
             "simulated": self.simulated,
             "error": self.error,
         }
