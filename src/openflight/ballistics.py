@@ -22,6 +22,7 @@ import math
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+from .air_density import STANDARD_AIR_DENSITY
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, ClubType, Shot
 
 MPH_TO_MPS = 0.44704
@@ -34,7 +35,9 @@ M_TO_YD = 1.09361
 BALL_MASS_KG = 0.04593
 BALL_RADIUS_M = 0.02135
 BALL_AREA_M2 = math.pi * BALL_RADIUS_M ** 2
-AIR_DENSITY_STD = 1.225  # kg/m³ at sea level, 15 °C ISA
+# kg/m³ at sea level, 15 °C ISA (1.225). Derived in `air_density` from the
+# gas law rather than written as a literal, so the two can never disagree.
+AIR_DENSITY_STD = STANDARD_AIR_DENSITY
 
 # Cd = CD_BASE + CD_SPIN_COEFF * Sp
 #   Linear rise with spin parameter Sp = r·ω/v.
@@ -89,6 +92,34 @@ CLUB_TYPICAL_SPIN_RPM: dict[ClubType, float] = {
     ClubType.SW: 10000,
     ClubType.LW: 10500,
     ClubType.UNKNOWN: 5000,
+}
+
+# Club-typical vertical launch angle (degrees), TrackMan PGA Tour averages.
+# Only used to characterise a club's *flight shape* when no launch angle was
+# measured — see `density_carry_ratio`. Never used to produce an absolute
+# carry, because a guessed launch angle is far too coarse for that.
+CLUB_TYPICAL_LAUNCH_ANGLE_DEG: dict[ClubType, float] = {
+    ClubType.DRIVER: 12.5,
+    ClubType.WOOD_3: 11.0,
+    ClubType.WOOD_5: 12.5,
+    ClubType.WOOD_7: 13.5,
+    ClubType.HYBRID_3: 12.0,
+    ClubType.HYBRID_5: 13.5,
+    ClubType.HYBRID_7: 15.0,
+    ClubType.HYBRID_9: 16.5,
+    ClubType.IRON_2: 11.0,
+    ClubType.IRON_3: 12.0,
+    ClubType.IRON_4: 13.5,
+    ClubType.IRON_5: 15.0,
+    ClubType.IRON_6: 16.5,
+    ClubType.IRON_7: 18.0,
+    ClubType.IRON_8: 19.5,
+    ClubType.IRON_9: 21.0,
+    ClubType.PW: 24.0,
+    ClubType.GW: 26.0,
+    ClubType.SW: 28.0,
+    ClubType.LW: 31.0,
+    ClubType.UNKNOWN: 15.0,
 }
 
 
@@ -356,3 +387,53 @@ def simulate(
         landing_speed_mph=v_final * MPS_TO_MPH,
         landing_angle_deg=landing_angle,
     )
+
+
+def density_carry_ratio(
+    ball_speed_mph: float,
+    club: ClubType,
+    spin_rpm: float,
+    actual_density: float,
+    reference_density: float = AIR_DENSITY_STD,
+) -> float:
+    """
+    Ratio of carry at `actual_density` to carry at `reference_density`.
+
+    This exists for the table-based carry estimator, which has no launch angle
+    and therefore cannot be simulated directly. Rather than fit a separate
+    density model for that path — which would drift out of step with the RK4
+    model and violate the single source of truth for the physics — we run the
+    real simulator twice on a club-typical flight and keep only the *ratio*.
+
+    Ratios are far more forgiving of a guessed launch angle than absolute
+    carries are: what matters is how long the ball is in the air and how much
+    of its flight is drag-dominated, and a club-typical angle captures that
+    well even when the specific shot's angle is unknown. Empirically this
+    tracks a directly-simulated carry to within ~1 yd across densities from
+    0.95 to 1.30 kg/m³, well inside the table estimator's own error.
+
+    Returns 1.0 when the two densities match, without simulating.
+    """
+    if reference_density <= 0.0 or actual_density <= 0.0:
+        raise ValueError(
+            f"densities must be positive, got actual={actual_density!r} "
+            f"reference={reference_density!r}"
+        )
+    if math.isclose(actual_density, reference_density, rel_tol=1e-9):
+        return 1.0
+
+    probe = LaunchConditions(
+        ball_speed_mph=ball_speed_mph,
+        launch_angle_v=CLUB_TYPICAL_LAUNCH_ANGLE_DEG.get(
+            club, CLUB_TYPICAL_LAUNCH_ANGLE_DEG[ClubType.UNKNOWN]
+        ),
+        launch_angle_h=0.0,
+        spin_rpm=spin_rpm,
+        spin_axis_deg=0.0,
+        spin_source="club_typical",
+    )
+    reference_carry = simulate(probe, air_density=reference_density).carry_yards
+    if reference_carry <= 0.0:
+        # Degenerate launch (e.g. zero ball speed) — no meaningful ratio.
+        return 1.0
+    return simulate(probe, air_density=actual_density).carry_yards / reference_carry

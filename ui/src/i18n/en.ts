@@ -38,6 +38,7 @@ export const en = {
   'metric.clubPath': 'Club path',
   'metric.clubAoa': 'Club AoA',
   'metric.spinAdjusted': 'Spin-adjusted',
+  'metric.carryHere': '{value} here',
   'metric.lastSwing': 'Last swing',
   'metric.best': 'Best',
   'metric.average': 'Average',

@@ -40,6 +40,7 @@ export const fr: Messages = {
   'metric.clubPath': 'Trajectoire club',
   'metric.clubAoa': 'AoA club',
   'metric.spinAdjusted': 'Ajusté au spin',
+  'metric.carryHere': '{value} ici',
   'metric.lastSwing': 'Dernier swing',
   'metric.best': 'Meilleur',
   'metric.average': 'Moyenne',

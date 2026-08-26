@@ -48,6 +48,10 @@ export interface Shot {
   spin_method?: string | null;
   spin_multipath_fade_hz?: number | null;
   carry_spin_adjusted: number | null;
+  /** Carry in the site's actual air. Null when conditions are standard. */
+  carry_actual_yards?: number | null;
+  air_density_kg_m3?: number | null;
+  air_conditions_source?: 'standard' | 'config' | 'sensor' | null;
   swing_speed_duration_ms?: number;
   swing_speed_reading_count?: number;
   swing_speed_trigger_mph?: number;

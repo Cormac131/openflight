@@ -240,6 +240,9 @@ class Shot:
         spin_phase_confirmed: Whether phase recovered a low-SNR spin
         spin_rejection_reason: Why spin was withheld, if it was rejected
         carry_spin_adjusted: Carry distance adjusted for spin (yards)
+        carry_actual_yards: Carry under actual site air density (yards)
+        air_density_kg_m3: Air density used for carry_actual_yards
+        air_conditions_source: 'standard', 'config', or 'sensor'
         mode: Shot source — "streaming", "rolling-buffer", or "mock"
         readings_data: Serialized readings for session logging
     """
@@ -285,6 +288,14 @@ class Shot:
     spin_phase_confirmed: bool = False
     spin_rejection_reason: Optional[str] = None
     carry_spin_adjusted: Optional[float] = None
+    # Carry re-run in the site's measured/configured air, when those differ
+    # from the normalization conditions. `carry_spin_adjusted` stays the
+    # normalized headline so numbers remain comparable across sessions and
+    # against published launch-monitor data; this is the "what it did here,
+    # today" companion. None when conditions are standard or unknown.
+    carry_actual_yards: Optional[float] = None
+    air_density_kg_m3: Optional[float] = None
+    air_conditions_source: Optional[str] = None
     mode: str = "rolling-buffer"
     player_name: str = "Player 1"
     readings_data: Optional[list] = None

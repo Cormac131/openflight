@@ -21,7 +21,8 @@ from flask import Flask, Response, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
-from .ballistics import resolve_launch, simulate
+from .air_density import AirConditions, AirConditionsError
+from .ballistics import AIR_DENSITY_STD, density_carry_ratio, resolve_launch, simulate
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, ClubType, Shot
 from .ops243 import (
     UART_BAUD_COMMANDS,
@@ -141,6 +142,38 @@ inclinometer_runtime_config: dict = {"enabled": False}
 # a vertical launch angle is available. Operators can explicitly disable it;
 # missing launch inputs always fall back to the legacy table estimator.
 ballistics_enabled: bool = True
+
+# Atmospheric state used for carry. Two densities are in play:
+#
+#   carry_normalization_density — what `carry_spin_adjusted` is computed at.
+#     Fixed by default (ISA sea level) so the headline carry stays comparable
+#     across sessions and against published launch-monitor figures, exactly as
+#     it was before air density was modelled at all.
+#   air_conditions.density_kg_m3 — the site's real air, from operator config
+#     or a barometer. Drives `carry_actual_yards`.
+#
+# Defaults reproduce the previous behaviour bit for bit: standard conditions
+# means the two densities are equal and no actual-conditions carry is emitted.
+air_conditions: AirConditions = AirConditions.standard()
+carry_normalization_density: float = AIR_DENSITY_STD
+
+
+def _actual_air_differs() -> bool:
+    """
+    True when the site's air is far enough from the normalization air to matter.
+
+    The 0.1% threshold is deliberately well below anything visible: at typical
+    carries it is under a tenth of a yard, so crossing it means the difference
+    is real rather than float noise. Below it we emit no actual-conditions
+    carry at all, which keeps the default (unconfigured) install emitting
+    exactly the payload it did before.
+    """
+    return (
+        abs(air_conditions.density_kg_m3 - carry_normalization_density)
+        / carry_normalization_density
+        > 0.001
+    )
+
 
 # Simulator connectors (optional). Populated in main() from config/sim.json +
 # CLI flags; shots fan out to every connected connector. Player/club state is
@@ -985,6 +1018,13 @@ def shot_to_dict(shot: Shot) -> dict:
         "carry_spin_adjusted": round(shot.carry_spin_adjusted)
         if shot.carry_spin_adjusted
         else None,
+        "carry_actual_yards": round(shot.carry_actual_yards)
+        if shot.carry_actual_yards
+        else None,
+        "air_density_kg_m3": (
+            round(shot.air_density_kg_m3, 4) if shot.air_density_kg_m3 is not None else None
+        ),
+        "air_conditions_source": shot.air_conditions_source,
     }
 
 
@@ -3349,7 +3389,7 @@ def on_shot_detected(shot: Shot):
     if shot.carry_spin_adjusted is None and shot.mode != "mock":
         conditions = resolve_launch(shot) if ballistics_enabled else None
         if conditions is not None:
-            trajectory = simulate(conditions)
+            trajectory = simulate(conditions, air_density=carry_normalization_density)
             shot.carry_spin_adjusted = trajectory.carry_yards
             logger.info(
                 "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s)",
@@ -3357,6 +3397,10 @@ def on_shot_detected(shot: Shot):
                 conditions.spin_rpm,
                 conditions.spin_source,
             )
+            if _actual_air_differs():
+                shot.carry_actual_yards = simulate(
+                    conditions, air_density=air_conditions.density_kg_m3
+                ).carry_yards
         else:
             has_reliable_spin = (
                 shot.spin_rpm
@@ -3375,6 +3419,17 @@ def on_shot_detected(shot: Shot):
                 shot.club,
                 club_speed_mph=shot.club_speed_mph,
             )
+            if _actual_air_differs():
+                # The table estimator has no launch angle to simulate, so scale
+                # it by the ratio the RK4 model predicts for a club-typical
+                # flight. Keeps both carry paths consistent under the same air.
+                shot.carry_actual_yards = shot.carry_spin_adjusted * density_carry_ratio(
+                    shot.ball_speed_mph,
+                    shot.club,
+                    spin_for_carry,
+                    actual_density=air_conditions.density_kg_m3,
+                    reference_density=carry_normalization_density,
+                )
             reason = "ballistics disabled" if not ballistics_enabled else "no launch angle"
             logger.info(
                 "[SERVER] Table carry (%s): %.0f yds (spin: %.0f rpm%s)",
@@ -3382,6 +3437,18 @@ def on_shot_detected(shot: Shot):
                 shot.carry_spin_adjusted,
                 spin_for_carry,
                 "" if shot.spin_rpm and shot.spin_rpm > 0 else " avg",
+            )
+
+        if shot.carry_actual_yards is not None:
+            shot.air_density_kg_m3 = air_conditions.density_kg_m3
+            shot.air_conditions_source = air_conditions.source
+            logger.info(
+                "[SERVER] Actual-conditions carry: %.0f yds (rho %.4f kg/m3 from %s, "
+                "normalized at %.4f)",
+                shot.carry_actual_yards,
+                air_conditions.density_kg_m3,
+                air_conditions.source,
+                carry_normalization_density,
             )
     if shot.spin_rejection_reason:
         logger.info(
@@ -3423,6 +3490,9 @@ def on_shot_detected(shot: Shot):
                 spin_phase_confirmed=shot.spin_phase_confirmed,
                 spin_rejection_reason=shot.spin_rejection_reason,
                 carry_spin_adjusted=shot.carry_spin_adjusted,
+                carry_actual_yards=shot.carry_actual_yards,
+                air_density_kg_m3=shot.air_density_kg_m3,
+                air_conditions_source=shot.air_conditions_source,
                 mode=shot.mode,
                 launch_angle_vertical=shot.launch_angle_vertical,
                 launch_angle_horizontal=shot.launch_angle_horizontal,
@@ -4225,6 +4295,102 @@ def _add_ballistics_arguments(parser):
     parser.set_defaults(ballistics=True)
 
 
+def _add_air_arguments(parser):
+    """Add site atmospheric configuration for altitude-aware carry."""
+    group = parser.add_argument_group(
+        "air conditions",
+        "Site air density affects carry substantially: about 14 yd of driver "
+        "carry at 5280 ft versus sea level, and about 9 yd across a seasonal "
+        "temperature swing. Configure these and shots gain an actual-conditions "
+        "carry alongside the normalized one. Unset, behaviour is unchanged.",
+    )
+    group.add_argument(
+        "--elevation-ft",
+        type=float,
+        default=None,
+        help="Site elevation above sea level in feet. The single largest term.",
+    )
+    group.add_argument(
+        "--air-temp-c",
+        type=float,
+        default=None,
+        help=(
+            "Ambient air temperature in °C. Defaults to the standard-atmosphere "
+            "temperature for the elevation, which is a weak assumption — a real "
+            "reading is worth up to 5 yd on a driver."
+        ),
+    )
+    group.add_argument(
+        "--sea-level-pressure-hpa",
+        type=float,
+        default=None,
+        help=(
+            "Current sea-level (QNH) pressure in hPa from a local forecast. "
+            "Defaults to the ISA 1013.25, which carries roughly ±1 yd of "
+            "driver-carry uncertainty on a typical day."
+        ),
+    )
+    group.add_argument(
+        "--relative-humidity-pct",
+        type=float,
+        default=None,
+        help=(
+            "Relative humidity, 0-100. Worth 0.7 yd of driver carry at 20 °C "
+            "saturated and 1.4 yd at 35 °C; safe to omit in temperate air."
+        ),
+    )
+    group.add_argument(
+        "--carry-normalization-density",
+        type=float,
+        default=None,
+        help=(
+            "Air density (kg/m³) the headline carry is normalized to. Defaults "
+            f"to ISA sea level ({AIR_DENSITY_STD:.3f}). Use 1.184 to compare "
+            "against TrackMan 'Flat' figures."
+        ),
+    )
+
+
+def _resolve_air_conditions(args) -> tuple:
+    """
+    Turn parsed air arguments into (AirConditions, normalization density).
+
+    Raises SystemExit with a readable message on implausible input — a typo in
+    elevation silently shifting every carry by 14 yd is exactly the failure
+    this guards against.
+    """
+    normalization = (
+        AIR_DENSITY_STD
+        if args.carry_normalization_density is None
+        else args.carry_normalization_density
+    )
+    if not 0.5 <= normalization <= 1.5:
+        raise SystemExit(
+            f"--carry-normalization-density {normalization} is outside the "
+            "plausible range 0.5 to 1.5 kg/m³"
+        )
+
+    supplied = (
+        args.elevation_ft,
+        args.air_temp_c,
+        args.sea_level_pressure_hpa,
+        args.relative_humidity_pct,
+    )
+    if all(value is None for value in supplied):
+        return AirConditions.standard(), normalization
+
+    try:
+        conditions = AirConditions.from_elevation(
+            elevation_ft=args.elevation_ft if args.elevation_ft is not None else 0.0,
+            temperature_c=args.air_temp_c,
+            sea_level_pressure_hpa=args.sea_level_pressure_hpa,
+            relative_humidity_pct=args.relative_humidity_pct,
+        )
+    except AirConditionsError as error:
+        raise SystemExit(f"Invalid air conditions: {error}") from error
+    return conditions, normalization
+
+
 def _add_battery_arguments(parser):
     """Add explicit battery-provider selection."""
     parser.add_argument(
@@ -4400,6 +4566,7 @@ def main():
         "Off by default.",
     )
     _add_ballistics_arguments(parser)
+    _add_air_arguments(parser)
     parser.add_argument(
         "--trigger",
         choices=["polling", "threshold", "speed", "sound"],
@@ -4827,6 +4994,19 @@ def main():
     global calculated_spin_enabled
     calculated_spin_enabled = args.calculated_spin
     ballistics_enabled = args.ballistics
+    global air_conditions
+    global carry_normalization_density
+    air_conditions, carry_normalization_density = _resolve_air_conditions(args)
+    if air_conditions.source != "standard":
+        logger.info(
+            "[SERVER] Air conditions: rho=%.4f kg/m3 (%.0f ft, %.1f C, %.1f hPa), "
+            "carry normalized at rho=%.4f",
+            air_conditions.density_kg_m3,
+            air_conditions.elevation_ft or 0.0,
+            air_conditions.temperature_c,
+            air_conditions.pressure_pa / 100.0,
+            carry_normalization_density,
+        )
     battery_provider = args.battery
     kld7_radc_tuning_kwargs = _kld7_radc_tuning_kwargs(args)
     active_kld7_radc_tuning = dict(kld7_radc_tuning_kwargs)

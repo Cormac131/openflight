@@ -82,6 +82,11 @@ BALLISTICS=true
 SIM=false
 CALCULATED_SPIN=false
 BATTERY_PROVIDER=""
+ELEVATION_FT=""
+AIR_TEMP_C=""
+SEA_LEVEL_PRESSURE_HPA=""
+RELATIVE_HUMIDITY_PCT=""
+CARRY_NORMALIZATION_DENSITY=""
 SWING_SPEED=false
 SWING_SPEED_THRESHOLD=""
 SWING_SPEED_MIN_READINGS=""
@@ -125,6 +130,26 @@ while [[ $# -gt 0 ]]; do
             ;;
         --battery)
             BATTERY_PROVIDER="$2"
+            shift 2
+            ;;
+        --elevation-ft)
+            ELEVATION_FT="$2"
+            shift 2
+            ;;
+        --air-temp-c)
+            AIR_TEMP_C="$2"
+            shift 2
+            ;;
+        --sea-level-pressure-hpa)
+            SEA_LEVEL_PRESSURE_HPA="$2"
+            shift 2
+            ;;
+        --relative-humidity-pct)
+            RELATIVE_HUMIDITY_PCT="$2"
+            shift 2
+            ;;
+        --carry-normalization-density)
+            CARRY_NORMALIZATION_DENSITY="$2"
             shift 2
             ;;
         --debug|-d)
@@ -627,6 +652,13 @@ fi
 if [ -n "$BATTERY_PROVIDER" ]; then
     SERVER_CMD="$SERVER_CMD --battery $BATTERY_PROVIDER"
 fi
+
+# Site air conditions for altitude-aware carry (see docs/air-density.md).
+[ -n "$ELEVATION_FT" ] && SERVER_CMD="$SERVER_CMD --elevation-ft $ELEVATION_FT"
+[ -n "$AIR_TEMP_C" ] && SERVER_CMD="$SERVER_CMD --air-temp-c $AIR_TEMP_C"
+[ -n "$SEA_LEVEL_PRESSURE_HPA" ] && SERVER_CMD="$SERVER_CMD --sea-level-pressure-hpa $SEA_LEVEL_PRESSURE_HPA"
+[ -n "$RELATIVE_HUMIDITY_PCT" ] && SERVER_CMD="$SERVER_CMD --relative-humidity-pct $RELATIVE_HUMIDITY_PCT"
+[ -n "$CARRY_NORMALIZATION_DENSITY" ] && SERVER_CMD="$SERVER_CMD --carry-normalization-density $CARRY_NORMALIZATION_DENSITY"
 
 if [ "$BALLISTICS" = false ]; then
     SERVER_CMD="$SERVER_CMD --no-ballistics"

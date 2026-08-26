@@ -349,6 +349,9 @@ class SessionLogger:
         spin_phase_confirmed: Optional[bool] = None,
         spin_rejection_reason: Optional[str] = None,
         carry_spin_adjusted: Optional[float] = None,
+        carry_actual_yards: Optional[float] = None,
+        air_density_kg_m3: Optional[float] = None,
+        air_conditions_source: Optional[str] = None,
         mode: str = "rolling-buffer",
         launch_angle_vertical: Optional[float] = None,
         launch_angle_horizontal: Optional[float] = None,
@@ -414,6 +417,9 @@ class SessionLogger:
             spin_phase_confirmed: True when phase recovered a low-SNR spin
             spin_rejection_reason: Human-readable reason if spin was rejected
             carry_spin_adjusted: Carry distance adjusted for spin (rolling buffer mode only)
+            carry_actual_yards: Carry under the site's actual air density
+            air_density_kg_m3: Air density used for carry_actual_yards
+            air_conditions_source: 'standard', 'config', or 'sensor'
             mode: Radar mode ("rolling-buffer" or "mock")
             impact_timestamp: Host epoch timestamp aligned to impact/OPS trigger time
             inclinometer: Enclosure orientation and effective IWR tilt used for the shot
@@ -456,6 +462,9 @@ class SessionLogger:
             "spin_phase_confirmed": spin_phase_confirmed,
             "spin_rejection_reason": spin_rejection_reason,
             "carry_spin_adjusted": carry_spin_adjusted,
+            "carry_actual_yards": carry_actual_yards,
+            "air_density_kg_m3": air_density_kg_m3,
+            "air_conditions_source": air_conditions_source,
             "mode": mode,
             "launch_angle_vertical": launch_angle_vertical,
             "launch_angle_horizontal": launch_angle_horizontal,

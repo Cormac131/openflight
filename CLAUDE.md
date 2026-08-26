@@ -181,6 +181,7 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
 - `ops243.py` - OPS243 radar driver, rolling buffer capture, I/Q processing
 - `launch_monitor.py` - Shot dataclass, ClubType enum, carry estimation
 - `ballistics.py` - Numerical ballistic trajectory simulation (drag + Magnus RK4)
+- `air_density.py` - Atmosphere model (gas law, ISA barometric formula) for altitude-aware carry
 - `club_data.py` - Canonical club physics parameters, lofts, typical speeds, and optimal spin
 - `iwr6843/` - TI IWR6843 mmWave radar driver, L3 raw dump parser, LCMF-v1 launch angle & club path
 - `inclinometer.py` - LIS3DH accelerometer tilt compensation service

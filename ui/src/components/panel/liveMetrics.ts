@@ -71,6 +71,24 @@ function experimentalStatus(status: string | null | undefined): string {
   return status.replace(/^rejected_/, 'rejected: ').replaceAll('_', ' ');
 }
 
+/**
+ * Second line under the carry number.
+ *
+ * The headline carry is normalized to standard air so sessions stay
+ * comparable. When the site's air differs enough for the server to compute an
+ * actual-conditions carry, that number is the more useful thing to show here —
+ * it is what the ball did today — so it takes precedence over the
+ * spin-adjusted label.
+ */
+function carrySubtext(shot: Shot, unitSystem: UnitSystem): string | undefined {
+  if (shot.carry_actual_yards != null) {
+    return t('metric.carryHere', {
+      value: `${formatDistance(shot.carry_actual_yards, unitSystem, 0)} ${getDistanceUnit(unitSystem)}`,
+    });
+  }
+  return shot.carry_spin_adjusted === null ? undefined : t('metric.spinAdjusted');
+}
+
 function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[] {
   const speedUnit = getSpeedUnit(unitSystem);
   const carry = shot.carry_spin_adjusted ?? shot.estimated_carry_yards;
@@ -112,7 +130,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       label: t('metric.carry'),
       value: formatDistance(carry, unitSystem, 0),
       unit: getDistanceUnit(unitSystem),
-      subtext: shot.carry_spin_adjusted === null ? undefined : t('metric.spinAdjusted'),
+      subtext: carrySubtext(shot, unitSystem),
       estimated: markEstimated(shot.carry_spin_adjusted === null),
     },
     {

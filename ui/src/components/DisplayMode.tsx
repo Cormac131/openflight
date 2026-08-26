@@ -79,7 +79,14 @@ function buildMetrics(shot: Shot | null, unitSystem: 'imperial' | 'metric', t: T
       label: t('metric.carry'),
       value: formatDistance(carryYards, unitSystem, 0),
       unit: getDistanceUnit(unitSystem),
-      detail: shot.carry_spin_adjusted ? t('metric.spinAdjusted') : undefined,
+      detail:
+        shot.carry_actual_yards != null
+          ? t('metric.carryHere', {
+              value: `${formatDistance(shot.carry_actual_yards, unitSystem, 0)} ${getDistanceUnit(unitSystem)}`,
+            })
+          : shot.carry_spin_adjusted
+            ? t('metric.spinAdjusted')
+            : undefined,
     },
     {
       label: t('display.clubSpeed'),

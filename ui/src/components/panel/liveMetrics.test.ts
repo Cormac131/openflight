@@ -304,3 +304,46 @@ describe('shouldEnableLiveBallWarning', () => {
     expect(shouldEnableLiveBallWarning('live', { available: true, enabled: false })).toBe(false);
   });
 });
+
+describe('carry subtext under non-standard air', () => {
+  it('shows the spin-adjusted label when conditions are standard', () => {
+    const metrics = buildLiveMetrics(makeShot(), 'imperial', emptySwingStats);
+    expect(byId(metrics, 'carry').subtext).toBe('Spin-adjusted');
+  });
+
+  it('shows the actual-conditions carry when the server supplies one', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({ carry_spin_adjusted: 214, carry_actual_yards: 228 }),
+      'imperial',
+      emptySwingStats,
+    );
+    expect(byId(metrics, 'carry').subtext).toBe('228 yds here');
+  });
+
+  it('keeps the headline carry normalized, not the actual-conditions value', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({ carry_spin_adjusted: 214, carry_actual_yards: 228 }),
+      'imperial',
+      emptySwingStats,
+    );
+    expect(byId(metrics, 'carry').value).toBe('214');
+  });
+
+  it('converts the actual-conditions carry for metric units', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({ carry_spin_adjusted: 214, carry_actual_yards: 228 }),
+      'metric',
+      emptySwingStats,
+    );
+    expect(byId(metrics, 'carry').subtext).toContain('m here');
+  });
+
+  it('falls back to the spin-adjusted label when actual carry is null', () => {
+    const metrics = buildLiveMetrics(
+      makeShot({ carry_actual_yards: null }),
+      'imperial',
+      emptySwingStats,
+    );
+    expect(byId(metrics, 'carry').subtext).toBe('Spin-adjusted');
+  });
+});

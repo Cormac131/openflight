@@ -40,6 +40,7 @@ export const pt: Messages = {
   'metric.clubPath': 'Path do taco',
   'metric.clubAoa': 'AoA do taco',
   'metric.spinAdjusted': 'Ajustado por spin',
+  'metric.carryHere': '{value} aqui',
   'metric.lastSwing': 'Último swing',
   'metric.best': 'Melhor',
   'metric.average': 'Média',
