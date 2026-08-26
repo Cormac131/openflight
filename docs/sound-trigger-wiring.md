@@ -250,6 +250,32 @@ in one block. Ground is **pin 20**, not pin 14: on a build with the OPS243 on
 the GPIO UART, [that migration's diagram](ops243-uart-migration.md) already has
 pin 14 carrying the radar's ground return.
 
+### Strongly Recommended: Series Resistors on the Control Lines
+
+Put **100–330 Ω in series on `INC`**, in the wire at the Pi end, and ideally on
+`CS` and `U/D` too.
+
+Without it, long jumper leads ring. The Pi's edge is a few nanoseconds into an
+inductive wire, and the resulting damped oscillation crosses the X9C104's input
+threshold several times. The chip has no input filtering, so it counts every
+crossing as a step: one commanded pulse becomes three or four, and the wiper
+lands far past where it was told to go.
+
+The tell is a **consistent** multiplier. Commanding tap 10 and landing near 32
+every time, reproducibly, is ringing — the wiring's L/C fixes how many crossings
+each edge produces, so it repeats. Measure it with `--position 10 --hold`: the
+reading should be ~10 kΩ, and `(ohms / 1037) / 10` is how many taps each pulse
+is actually moving.
+
+`INC` matters most, since only its edges count as steps, but a glitch on `CS`
+mid-train misframes the whole instruction. Also keep `INC` from running bundled
+against `CS` and `U/D`, and keep all three leads short. If a series resistor
+alone is not enough, add 100 pF from `INC` to GND at the chip end.
+
+Note that **no software setting fixes this**. `--step-delay-us` changes the gap
+between pulses, not the edge rate, and the ringing is over long before the next
+pulse begins.
+
 ### Strongly Recommended: A Pull-Up on CS
 
 Add a **10 kΩ resistor from `CS` (pin 7) to the Pi's 3.3 V** (header pin 1 or
@@ -504,6 +530,8 @@ including `scripts/start-kiosk.sh` — sets it correctly.
 - [ ] X9C104 pin 1 (INC) → Pi BCM23 (physical pin 16)
 - [ ] X9C104 pin 2 (U/D) → Pi BCM24 (physical pin 18)
 - [ ] 10 kΩ from X9C104 pin 7 (CS) to Pi **3.3 V** — not to 5 V
+- [ ] 100–330 Ω in series on `INC` (and ideally `CS` and `U/D`), at the Pi end
+- [ ] `INC` lead short, and not bundled against `CS`/`U/D`
 - [ ] X9C104 pin 3 (RH) linked to pin 5 (RW)
 - [ ] RH+RW pair → one R17 pad; pin 6 (RL) → the other R17 pad
 - [ ] No fixed resistor left soldered in R17 (it would parallel the pot)
@@ -568,11 +596,12 @@ Two causes, in the order worth testing:
    3.3 V output never reaches — the input hovers at its switching point and each
    transition crosses it several times. At a 3.3 V supply the threshold drops to
    2.31 V and the Pi drives it cleanly.
-2. **Ringing on the `INC` edge.** Try `--step-delay-us 500`. If a slower pulse
-   fixes it, shorten the `INC` jumper or fit 100–330 Ω in series at the Pi end.
+2. **Ringing on the `INC` edge** — by far the more common cause, and the one to
+   assume when the multiplier is *consistent* across repeated runs. Fit
+   [series resistors](#strongly-recommended-series-resistors-on-the-control-lines).
 
-Slower pulses do not help a threshold problem, and a supply change does not help
-ringing, so whichever one fixes it identifies the cause.
+`--step-delay-us` does **not** test for this. It changes the gap between pulses,
+not the edge rate, and the ringing is over long before the next pulse starts.
 
 ### Digital pot: reads full scale (~100 kΩ) at every tap
 
