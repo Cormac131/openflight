@@ -9,7 +9,7 @@ Wiring (BCM numbering; see docs/sound-trigger-wiring.md):
     X9C104 pin 1 INC -> Pi BCM23 (physical 16)
     X9C104 pin 2 U/D -> Pi BCM24 (physical 18)
     X9C104 pin 8 VCC -> Pi 5V    (physical 2)
-    X9C104 pin 4 VSS -> Pi GND   (physical 14)
+    X9C104 pin 4 VSS -> Pi GND   (physical 20)
     X9C104 pin 5 RW + pin 3 RH -> one R17 pad
     X9C104 pin 6 RL            -> the other R17 pad
 

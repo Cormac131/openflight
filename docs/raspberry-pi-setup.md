@@ -143,7 +143,14 @@ is nothing to configure on the hardware side. Start the server with
 ./scripts/start-kiosk.sh --sound-sensitivity
 ```
 
-The pot claims **BCM22** (CS), **BCM23** (INC) and **BCM24** (U/D) by default.
+The pot claims **BCM22** (CS), **BCM23** (INC) and **BCM24** (U/D) — physical
+pins 15, 16 and 18 — plus 5V on physical pin 2 and ground on physical pin 20.
+Pin 20 rather than 14 because the OPS243 UART migration already puts the radar's
+ground return on 14; see the
+[header allocation table](sound-trigger-wiring.md#where-it-sits-on-the-pi-header)
+for every pin OpenFlight can drive. The server refuses to start if the digipot
+pins collide with something the same run actually drives.
+
 The setting is saved to `~/.config/openflight/sound_sensitivity.json` and
 re-applied on every start; the chip's own non-volatile memory is never written.
 

@@ -57,8 +57,11 @@ This is entirely optional. A build with a soldered R17 works exactly as before.
 > shifter. The resistor network itself only ever sees the detector's 3.3V rail,
 > which is safely inside the pot's 0–5V analog range.
 
-Wiring, GPIO assignments, and setup are in
-[sound-trigger-wiring.md](sound-trigger-wiring.md#optional-software-controlled-sensitivity-x9c104-digital-pot).
+Wiring and setup are in
+[sound-trigger-wiring.md](sound-trigger-wiring.md#optional-software-controlled-sensitivity-x9c104-digital-pot);
+the pot takes BCM22/23/24 (physical 15/16/18) plus 5V and ground, and the
+[header allocation table](sound-trigger-wiring.md#where-it-sits-on-the-pi-header)
+shows how that fits alongside the rest of a full build.
 
 ### Sound Trigger Wiring
 

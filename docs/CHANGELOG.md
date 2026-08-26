@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Sound Trigger Sensitivity** slider on **Debug → Tuning**; the readout shows
   the applied percentage, the resistance `R17` now presents, and the resulting
   preamp leg. Enable with `--sound-sensitivity` (default GPIOs: BCM22 `CS`,
-  BCM23 `INC`, BCM24 `U/D`). The setting persists to
+  BCM23 `INC`, BCM24 `U/D`; 5V on physical pin 2, ground on physical pin 20).
+  Startup refuses digipot pins that collide with anything the same run drives —
+  the trigger edge, I2C, the OPS243 UART, or a Geekworm UPS. The setting persists to
   `~/.config/openflight/sound_sensitivity.json` and is re-applied on every start;
   the chip's own non-volatile memory is never written. A build with a soldered
   `R17` is unaffected. See

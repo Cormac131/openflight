@@ -182,6 +182,42 @@ how an existing build behaves on the first boot.
   1 kΩ / 10 kΩ / 50 kΩ and cannot reach 47 kΩ.
 - Five jumper wires to the Pi header, plus two short leads to the R17 pads.
 
+### Where It Sits on the Pi Header
+
+Everything OpenFlight can drive on the 40-pin header, so you can see what is
+free before picking pins:
+
+| BCM | Physical | Claimed by | When |
+|-----|----------|------------|------|
+| 2 / 3 | 3 / 5 | I2C — LIS3DH inclinometer, Geekworm fuel gauge | `--inclinometer`, `--battery geekworm` |
+| 6 | 31 | Geekworm AC detect | `--battery geekworm` |
+| 14 / 15 | 8 / 10 | UART `TXD0` / `RXD0` → OPS243 `J3` | [OPS243 on the GPIO UART](ops243-uart-migration.md) |
+| 16 | 36 | Geekworm charge control (OpenFlight never reads it) | `--battery geekworm` |
+| 17 | 11 | Shared sound-trigger edge → IWR6843 and camera capture | Always |
+| **22 / 23 / 24** | **15 / 16 / 18** | **X9C104 `CS` / `INC` / `U/D`** | **`--sound-sensitivity`** |
+
+Power and ground pins already spoken for on a full build:
+
+| Pi pin | Used by |
+|--------|---------|
+| 1 (3.3V) | SEN-14262 `VCC` |
+| 4 (5V) | OPS243 `J3` pin 9, on the GPIO UART |
+| 6 (GND) | SEN-14262 `GND` |
+| 14 (GND) | OPS243 `J3` pin 10, on the GPIO UART |
+
+That leaves **pin 2** for the digipot's 5V and **pin 20** for its ground. The Pi
+has eight ground pins (6, 9, 14, 20, 25, 30, 34, 39) and two 5V pins (2, 4), so
+there is room either way — the point is not to double-book one hole.
+
+The server refuses to start if the digipot pins collide with something the same
+run actually drives, and the error names the conflict. The three lines are
+remappable with `--sound-sensitivity-cs-pin`, `--sound-sensitivity-inc-pin` and
+`--sound-sensitivity-ud-pin`.
+
+Neither display touches the header: the HMTECH 7" is HDMI plus USB, and the
+Raspberry Pi Touch Display 2 is MIPI DSI. A Geekworm X1202/X1206 reaches the
+header through pogo pins from underneath, so the top of the header stays free.
+
 ### X9C104 Pinout
 
 ```
@@ -204,20 +240,23 @@ how an existing build behaves on the first boot.
 | X9C104 | Signal | Pi header | BCM |
 |--------|--------|-----------|-----|
 | Pin 8 | VCC | Physical **2** (5V) | — |
-| Pin 4 | VSS | Physical **14** (GND) | — |
+| Pin 4 | VSS | Physical **20** (GND) | — |
 | Pin 7 | CS | Physical **15** | **BCM22** |
 | Pin 1 | INC | Physical **16** | **BCM23** |
 | Pin 2 | U/D | Physical **18** | **BCM24** |
+
+Physical 15/16/18/20 are four pins in a row, so the whole digipot bundle lands
+in one block. Ground is **pin 20**, not pin 14: on a build with the OPS243 on
+the GPIO UART, [that migration's diagram](ops243-uart-migration.md) already has
+pin 14 carrying the radar's ground return.
 
 **Power it from 5V, not 3.3V.** The X9C104's DC characteristics are specified at
 5V. Its logic inputs read high from 2.0V, so the Pi's 3.3V GPIOs drive `CS`,
 `INC` and `U/D` directly with no level shifter. The resistor element only ever
 sees the detector's 3.3V rail, which is well inside the pot's 0–5V analog range.
 
-The three GPIOs are configurable — pass `--sound-sensitivity-cs-pin`,
-`--sound-sensitivity-inc-pin` and `--sound-sensitivity-ud-pin` if these clash
-with something else on your build. They must not be BCM17: that GPIO carries the
-shared sound-trigger edge, and the server refuses to start if you try.
+See [Where It Sits on the Pi Header](#where-it-sits-on-the-pi-header) above if
+you need to move these.
 
 ### Step 2: Connect the Pot to the R17 Pads
 
@@ -233,7 +272,7 @@ R17 pad and **pin 6 (RL)** to the other:
 │           │                    │  (parallel  │
 │  RL (6) ──┼─────────────────── ┤   with R3)  │
 │           │                    │             │
-│ VSS (4) ──┼──── Pi GND ────────┤ GND         │
+│ VSS (4) ──┼─ Pi GND (pin 20) ──┤ GND         │
 └───────────┘                    └─────────────┘
 ```
 
@@ -328,7 +367,7 @@ including `scripts/start-kiosk.sh` — sets it correctly.
 ### Digipot Wiring Checklist
 
 - [ ] X9C104 pin 8 (VCC) → Pi 5V (physical pin 2)
-- [ ] X9C104 pin 4 (VSS) → Pi GND (physical pin 14, same rail as the detector)
+- [ ] X9C104 pin 4 (VSS) → Pi GND (physical pin 20, same rail as the detector)
 - [ ] X9C104 pin 7 (CS) → Pi BCM22 (physical pin 15)
 - [ ] X9C104 pin 1 (INC) → Pi BCM23 (physical pin 16)
 - [ ] X9C104 pin 2 (U/D) → Pi BCM24 (physical pin 18)

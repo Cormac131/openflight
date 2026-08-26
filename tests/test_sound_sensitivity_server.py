@@ -1,6 +1,7 @@
 """Server wiring for X9C104 sound-detector sensitivity control."""
 
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -210,6 +211,63 @@ class TestInit:
         assert server_module._session_start_config()["sound_sensitivity"]["device"] == "x9c104"
 
 
+class TestReservedPins:
+    """Only pins the configured build really drives are refused. A Pi with the
+    OPS243 on USB, no UPS, and no inclinometer genuinely has I2C, UART, and
+    BCM6 free, and blocking them would rule out a valid wiring choice."""
+
+    def _args(self, **overrides):
+        defaults = {
+            "iwr6843_trigger_pin": 17,
+            "inclinometer": False,
+            "battery": None,
+            "port": None,
+        }
+        return SimpleNamespace(**{**defaults, **overrides})
+
+    def test_the_trigger_pin_is_always_reserved(self):
+        assert 17 in server_module.reserved_gpio_pins(self._args())
+
+    def test_a_remapped_trigger_pin_moves_the_reservation(self):
+        reserved = server_module.reserved_gpio_pins(self._args(iwr6843_trigger_pin=27))
+
+        assert 27 in reserved
+        assert 17 not in reserved
+
+    def test_a_bare_build_leaves_i2c_uart_and_the_ups_pins_free(self):
+        reserved = server_module.reserved_gpio_pins(self._args())
+
+        assert set(reserved) == {17}
+
+    def test_the_inclinometer_reserves_i2c(self):
+        reserved = server_module.reserved_gpio_pins(self._args(inclinometer=True))
+
+        assert {2, 3} <= set(reserved)
+
+    def test_the_geekworm_ups_reserves_i2c_ac_detect_and_charge_control(self):
+        reserved = server_module.reserved_gpio_pins(self._args(battery="geekworm"))
+
+        assert {2, 3, 6, 16} <= set(reserved)
+
+    def test_the_gpio_uart_reserves_the_serial_pair(self):
+        reserved = server_module.reserved_gpio_pins(self._args(port="/dev/ttyAMA0"))
+
+        assert {14, 15} <= set(reserved)
+
+    def test_a_usb_radar_leaves_the_serial_pair_free(self):
+        reserved = server_module.reserved_gpio_pins(self._args(port="/dev/ttyUSB0"))
+
+        assert 14 not in reserved
+        assert 15 not in reserved
+
+    def test_every_reservation_explains_itself(self):
+        reserved = server_module.reserved_gpio_pins(
+            self._args(battery="geekworm", inclinometer=True, port="/dev/ttyAMA0")
+        )
+
+        assert all(isinstance(reason, str) and reason for reason in reserved.values())
+
+
 class TestArgumentValidation:
     """The digipot claims three GPIOs; a collision or a bad tap must fail loudly
     at the CLI rather than silently stealing the trigger line or leaving the
@@ -227,7 +285,16 @@ class TestArgumentValidation:
         error = self._run(monkeypatch, ["--sound-sensitivity", "--sound-sensitivity-cs-pin", "17"])
 
         assert error.code == 2
-        assert "carries the sound-trigger edge" in capsys.readouterr().err
+        assert "carries the shared sound-trigger edge" in capsys.readouterr().err
+
+    def test_a_ups_pin_is_refused_only_when_the_ups_is_enabled(self, monkeypatch, capsys):
+        error = self._run(
+            monkeypatch,
+            ["--sound-sensitivity", "--sound-sensitivity-cs-pin", "6", "--battery", "geekworm"],
+        )
+
+        assert error.code == 2
+        assert "Geekworm AC-detect" in capsys.readouterr().err
 
     def test_duplicate_digipot_pins_are_refused(self, monkeypatch, capsys):
         error = self._run(

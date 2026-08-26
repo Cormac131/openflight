@@ -236,7 +236,7 @@ SEN-14262 GND  → Pi GND (shared with OPS243-A)
 
 A through-hole resistor must be soldered into **R17** on the SEN-14262 to reduce preamp gain at 3.3V (47kΩ recommended, lower for noisy environments).
 
-**Optional X9C104 digital pot:** fitting one to the R17 pads instead of a fixed resistor makes sensitivity adjustable from the Debug page. Wiper position 0 is least sensitive, 99 most; the default tap 46 matches the 47kΩ resistor. Enabled with `--sound-sensitivity`; claims BCM22 (CS), BCM23 (INC), BCM24 (U/D). The setting persists to `~/.config/openflight/sound_sensitivity.json` — the chip's own NVM is never written.
+**Optional X9C104 digital pot:** fitting one to the R17 pads instead of a fixed resistor makes sensitivity adjustable from the Debug page. Wiper position 0 is least sensitive, 99 most; the default tap 46 matches the 47kΩ resistor. Enabled with `--sound-sensitivity`; claims BCM22 (CS), BCM23 (INC), BCM24 (U/D) — physical 15/16/18, with 5V on physical pin 2 and GND on physical pin 20 (not 14, which the OPS243 UART migration uses). `reserved_gpio_pins()` in `server.py` refuses pins the same run already drives. The setting persists to `~/.config/openflight/sound_sensitivity.json` — the chip's own NVM is never written.
 
 See [docs/sound-trigger-wiring.md](docs/sound-trigger-wiring.md) for full instructions.
 

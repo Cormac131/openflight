@@ -1373,6 +1373,44 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
         return False
 
 
+def reserved_gpio_pins(args) -> dict:
+    """Map BCM pins this run already drives to a phrase explaining why.
+
+    Only pins the configured build actually claims are listed. A Pi without the
+    UPS, without the inclinometer, and with the OPS243 on USB really does have
+    the I2C, UART, and AC-detect lines free, and refusing them anyway would
+    block a legitimate wiring choice.
+
+    The point is to fail at the CLI rather than at init: an unavailable digipot
+    is deliberately non-fatal, so a silent collision would degrade to "the
+    slider does nothing" instead of an error anyone can act on.
+    """
+    reserved = {args.iwr6843_trigger_pin: "carries the shared sound-trigger edge"}
+
+    uses_i2c = args.inclinometer or args.battery == "geekworm"
+    if uses_i2c:
+        reserved[2] = "is I2C SDA (inclinometer / UPS fuel gauge)"
+        reserved[3] = "is I2C SCL (inclinometer / UPS fuel gauge)"
+
+    if args.battery == "geekworm":
+        from .power.providers.geekworm import (  # pylint: disable=import-outside-toplevel
+            GeekwormPowerReader,
+        )
+
+        reserved[GeekwormPowerReader.AC_DETECT_PIN] = (
+            "is the Geekworm AC-detect input (--battery geekworm)"
+        )
+        # Geekworm drives charge control on BCM16. OpenFlight never reads it,
+        # but the UPS still owns the line.
+        reserved[16] = "is Geekworm charge control (--battery geekworm)"
+
+    if str(args.port or "").startswith("/dev/ttyAMA"):
+        reserved[14] = "is UART TXD0, wired to the OPS243 on the GPIO header"
+        reserved[15] = "is UART RXD0, wired to the OPS243 on the GPIO header"
+
+    return reserved
+
+
 def init_sound_sensitivity(
     *,
     cs_pin: int,
@@ -4987,15 +5025,13 @@ def main():
             args.sound_sensitivity_inc_pin,
             args.sound_sensitivity_ud_pin,
         ]
-        # Three lines sharing a GPIO would step the wiper on every CS change,
-        # and stealing the trigger pin would silently kill shot detection.
+        # Three lines sharing a GPIO would step the wiper on every CS change.
         if len(set(digipot_pins)) != len(digipot_pins):
             parser.error("--sound-sensitivity CS, INC and U/D must be three distinct BCM GPIOs")
-        if args.iwr6843_trigger_pin in digipot_pins:
-            parser.error(
-                f"--sound-sensitivity cannot use BCM{args.iwr6843_trigger_pin}; "
-                "that GPIO carries the sound-trigger edge"
-            )
+        reserved = reserved_gpio_pins(args)
+        for pin in digipot_pins:
+            if pin in reserved:
+                parser.error(f"--sound-sensitivity cannot use BCM{pin}; that GPIO {reserved[pin]}")
         if args.sound_sensitivity_position is not None:
             from .sensitivity import MAX_POSITION  # pylint: disable=import-outside-toplevel
 
