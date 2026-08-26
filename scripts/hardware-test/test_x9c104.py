@@ -30,6 +30,9 @@ Usage:
     # Step through the full range, pausing so you can read a meter
     uv run python scripts/hardware-test/test_x9c104.py --sweep
 
+    # Finer and slower: every tap, five seconds each (~8 minutes)
+    uv run python scripts/hardware-test/test_x9c104.py --sweep --sweep-step 1 --sweep-dwell 5
+
     # Find where ambient noise starts triggering, in a quiet room
     uv run python scripts/hardware-test/test_x9c104.py --noise-floor
 
@@ -238,6 +241,24 @@ def run_noise_floor(pot, args) -> None:
         gate.close()
 
 
+def validate_args(parser, args) -> None:
+    """Reject argument combinations that would fail partway through a run."""
+    if args.position is not None and not 0 <= args.position <= MAX_POSITION:
+        parser.error(f"--position must be within 0..{MAX_POSITION}")
+    if not 1 <= args.sweep_step <= MAX_POSITION:
+        parser.error(f"--sweep-step must be within 1..{MAX_POSITION}")
+    if args.margin < 0:
+        parser.error("--margin cannot be negative")
+    # time.sleep raises on a negative delay, which would abort a sweep partway
+    # through with a traceback instead of a usable message.
+    if args.sweep_dwell < 0:
+        parser.error("--sweep-dwell cannot be negative")
+    if args.settle < 0:
+        parser.error("--settle cannot be negative")
+    if args.noise_floor and args.trigger_pin in (args.cs_pin, args.inc_pin, args.ud_pin):
+        parser.error("--trigger-pin cannot be one of the digipot's own control lines")
+
+
 def main() -> None:
     """Parse arguments and run the requested bring-up mode."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -263,10 +284,16 @@ def main() -> None:
         help="BCM GPIO carrying the SEN-14262 GATE edge (default: 17)",
     )
     parser.add_argument(
-        "--sweep-step", type=int, default=10, help="Taps between sweep stops (default: 10)"
+        "--sweep-step",
+        type=int,
+        default=10,
+        help=f"Taps between sweep stops, 1..{MAX_POSITION}; 1 visits every tap (default: 10)",
     )
     parser.add_argument(
-        "--sweep-dwell", type=float, default=2.0, help="Seconds to hold each sweep stop"
+        "--sweep-dwell",
+        type=float,
+        default=2.0,
+        help="Seconds to hold each sweep stop (default: 2). Raise it to read a meter",
     )
     parser.add_argument(
         "--settle",
@@ -281,15 +308,7 @@ def main() -> None:
         help=f"Taps to back off from the noise floor (default: {DEFAULT_MARGIN_TAPS})",
     )
     args = parser.parse_args()
-
-    if args.position is not None and not 0 <= args.position <= MAX_POSITION:
-        parser.error(f"--position must be within 0..{MAX_POSITION}")
-    if args.sweep_step < 1:
-        parser.error("--sweep-step must be at least 1")
-    if args.margin < 0:
-        parser.error("--margin cannot be negative")
-    if args.noise_floor and args.trigger_pin in (args.cs_pin, args.inc_pin, args.ud_pin):
-        parser.error("--trigger-pin cannot be one of the digipot's own control lines")
+    validate_args(parser, args)
 
     pot = X9C104(cs_pin=args.cs_pin, inc_pin=args.inc_pin, ud_pin=args.ud_pin)
     suggested = None

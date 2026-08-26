@@ -338,7 +338,22 @@ That is correct and expected; it is not a half-broken pot. Measure the pot on
 its own before soldering if you want to see the full 100 kΩ span.
 
 What matters either way is that the reading **moves monotonically** with the
-printed tap. To park it at one value:
+printed tap.
+
+The sweep defaults to every 10th tap with a 2-second dwell, which is a quick
+first look. To go finer and slower — one tap at a time, five seconds each, so
+an auto-ranging meter has time to settle:
+
+```bash
+uv run python scripts/hardware-test/test_x9c104.py --sweep --sweep-step 1 --sweep-dwell 5
+```
+
+`--sweep-step 1` visits all 100 taps, so budget the time: total runtime is
+roughly `stops × dwell`, about 8 minutes for that example. A middle ground of
+`--sweep-step 5 --sweep-dwell 4` covers 21 stops in under 90 seconds and is
+usually enough to prove the wiper moves smoothly.
+
+To park it at one value instead of sweeping:
 
 ```bash
 uv run python scripts/hardware-test/test_x9c104.py --position 46

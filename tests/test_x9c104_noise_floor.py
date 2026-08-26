@@ -1,8 +1,10 @@
 """Noise-floor sweep logic for the X9C104 bring-up script."""
 
+import argparse
 import itertools
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -177,3 +179,72 @@ class TestObserveTap:
         script.observe_tap(gate, position=0, dwell_s=0.01, sample_hz=10000.0)
 
         assert gate.when_activated is None
+
+
+class TestValidateArgs:
+    """Bad values must fail at the CLI, not partway through a sweep with the
+    wiper parked somewhere the user did not choose."""
+
+    def _parser_and_args(self, **overrides):
+        defaults = {
+            "position": None,
+            "sweep_step": 10,
+            "sweep_dwell": 2.0,
+            "settle": 0.3,
+            "margin": 5,
+            "noise_floor": False,
+            "trigger_pin": 17,
+            "cs_pin": 22,
+            "inc_pin": 23,
+            "ud_pin": 24,
+        }
+        parser = argparse.ArgumentParser()
+        return parser, SimpleNamespace(**{**defaults, **overrides})
+
+    def _expect_error(self, **overrides):
+        parser, args = self._parser_and_args(**overrides)
+        with pytest.raises(SystemExit):
+            script.validate_args(parser, args)
+
+    def test_defaults_are_accepted(self):
+        parser, args = self._parser_and_args()
+
+        script.validate_args(parser, args)
+
+    def test_a_single_tap_step_is_accepted(self):
+        parser, args = self._parser_and_args(sweep_step=1)
+
+        script.validate_args(parser, args)
+
+    def test_a_long_dwell_is_accepted(self):
+        parser, args = self._parser_and_args(sweep_dwell=30.0)
+
+        script.validate_args(parser, args)
+
+    @pytest.mark.parametrize("step", [0, -1, MAX_POSITION + 1])
+    def test_an_unusable_step_is_refused(self, step):
+        self._expect_error(sweep_step=step)
+
+    def test_a_negative_dwell_is_refused(self):
+        # time.sleep() raises on a negative delay, so this would otherwise
+        # abort mid-sweep with a traceback.
+        self._expect_error(sweep_dwell=-1.0)
+
+    def test_a_negative_settle_is_refused(self):
+        self._expect_error(settle=-0.5)
+
+    def test_a_negative_margin_is_refused(self):
+        self._expect_error(margin=-1)
+
+    @pytest.mark.parametrize("position", [-1, MAX_POSITION + 1])
+    def test_an_out_of_range_position_is_refused(self, position):
+        self._expect_error(position=position)
+
+    def test_the_trigger_pin_cannot_be_a_digipot_line(self):
+        self._expect_error(noise_floor=True, trigger_pin=23)
+
+    def test_that_clash_only_matters_for_the_noise_floor_sweep(self):
+        # Without --noise-floor the trigger line is never claimed.
+        parser, args = self._parser_and_args(noise_floor=False, trigger_pin=23)
+
+        script.validate_args(parser, args)
