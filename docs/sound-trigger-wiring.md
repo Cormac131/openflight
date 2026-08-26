@@ -545,6 +545,33 @@ The server could not claim the GPIO lines.
 3. If this Pi exposes the header on a different gpiochip, set
    `OPENFLIGHT_GPIO_CHIP`.
 
+### Digital pot: reads full scale (~100 kΩ) at every tap
+
+The wiper is pinned at the `RH` end. The usual cause is a dead `U/D` line
+(pin 2): with it stuck high, `calibrate()`'s decrements run *upward* instead,
+driving the wiper to the top, and every later move can only push it further
+into that end stop.
+
+Confirm with two readings while the lines are held:
+
+```bash
+uv run python scripts/hardware-test/test_x9c104.py --position 0 --hold
+```
+
+- `RW` (pin 5) to `RL` (pin 6) should be **~40 Ω**. Full scale here means the
+  wiper never came down.
+- `U/D` (pin 2) to GND should be **~0 V** — calibrate leaves the direction low.
+  3.3 V means BCM24 is not reaching pin 2.
+
+Repeat with `--position 99 --hold`: `RW`–`RL` should be ~100 kΩ and `U/D` ~3.3 V.
+If neither reading changes between the two runs, the line is not being driven.
+
+> **The `RH`–`RW` tie hides one variant of this.** Tying them gives current a
+> second path — `RH` through the whole element to `RL` — so an open wiper reads
+> as a steady ~100 kΩ instead of an obvious open circuit. When bench-testing,
+> lift the tie and measure pin 5 to pin 6 directly, then restore it for the
+> build.
+
 ### Digital pot: a parked position does not hold
 
 Symptom: `--position N` sets the wiper, but the resistance reverts as soon as
