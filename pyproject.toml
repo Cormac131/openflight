@@ -53,6 +53,12 @@ ui = [
 camera = [
     "opencv-python-headless>=4.8.0",
 ]
+# Branding asset generation for the prebuilt SD card image
+# (scripts/image/make_branding.py). Build-machine only — never installed on
+# the Pi, which just consumes the generated PNGs.
+image = [
+    "pillow>=10.0.0",
+]
 # Analysis tools for I/Q capture data
 analysis = [
     "numpy>=1.20.0",
@@ -63,6 +69,7 @@ analysis = [
 [project.scripts]
 openflight-server = "openflight.server:main"
 openflight-cloud = "openflight.cloud.cli:main"
+openflight-detect-hardware = "openflight.provisioning.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/jewbetcha/openflight"

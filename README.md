@@ -76,7 +76,16 @@ instead; see the operator guide's Option B.
 
 ### 3. Set up the Pi
 
-Flash Raspberry Pi OS (64-bit), plug in the radars, then run the interactive setup:
+**The easy way — a prebuilt SD card image.** Download the latest
+`openflight-*.img.xz` from the
+[Releases page](https://github.com/jewbetcha/openflight/releases), write it
+with Raspberry Pi Imager, and switch on. It works out which radars and sensors
+you have connected and starts with the right settings, so there is nothing to
+install and no flags to remember. See the
+**[SD Card Image Guide](docs/sd-card-image.md)**.
+
+**The manual way.** Flash Raspberry Pi OS (64-bit), plug in the radars, then
+run the interactive setup:
 
 ```bash
 git clone https://github.com/jewbetcha/openflight.git
@@ -307,6 +316,7 @@ uv run pytest tests/ -v
 
 ## Documentation
 
+- **[SD Card Image](docs/sd-card-image.md)** — Prebuilt image with automatic hardware detection
 - **[Parts List](docs/PARTS.md)** — What to buy
 - **[Sound Trigger Wiring](docs/sound-trigger-wiring.md)** — How to wire the sound trigger
 - **[Raspberry Pi Setup](docs/raspberry-pi-setup.md)** — Full setup guide

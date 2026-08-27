@@ -3,6 +3,11 @@
 # OpenFlight Kiosk Startup Script
 # Starts the radar server and launches Chromium in kiosk mode
 #
+# --auto-hardware detects the attached radars and sensors and adds the
+# matching flags automatically; it is what the prebuilt SD card image uses.
+# Values it cannot detect (bay geometry) come from openflight.conf on the
+# boot partition. See docs/sd-card-image.md.
+#
 
 set -e
 
@@ -34,7 +39,7 @@ CAMERA_CAPTURE_SCALER_CROP=""
 CAMERA_CAPTURE_ROTATE_180=false
 CAMERA_CAPTURE_MIRROR_HORIZONTAL=false
 TRACKMAN_TEST=false
-SESSION_LOCATION=""
+SESSION_LOCATION="${SESSION_LOCATION:-}"
 DRY_RUN=false
 # Rolling buffer mode is the only mode (streaming mode removed)
 TRIGGER="sound"  # Default: hardware sound trigger (SEN-14262 → HOST_INT)
@@ -59,13 +64,16 @@ INCLINOMETER=false
 INCLINOMETER_ZERO_OFFSET=""
 KLD7=false
 KLD7_PORT=""
-KLD7_ANGLE_OFFSET=""
+KLD7_ANGLE_OFFSET="${KLD7_ANGLE_OFFSET:-}"
 KLD7_HORIZONTAL=false
 KLD7_HORIZONTAL_PORT=""
 KLD7_HORIZONTAL_OFFSET=""
-KLD7_MOUNT_TILT=""
-KLD7_BALL_DISTANCE=""
-NET_DISTANCE=""
+# Site geometry has no detectable value and no safe default, so it is seeded
+# from the environment (which the boot config below populates) rather than
+# blanked. A command-line flag still overrides whatever arrives that way.
+KLD7_MOUNT_TILT="${KLD7_MOUNT_TILT:-}"
+KLD7_BALL_DISTANCE="${KLD7_BALL_DISTANCE:-}"
+NET_DISTANCE="${NET_DISTANCE:-}"
 KLD7_VERTICAL_RAW=false
 EXPERIMENTAL_KLD7_RAW_RADC_LOGGING=false
 EXPERIMENTAL_KLD7_RADC_TUNING=false
@@ -106,6 +114,106 @@ resolve_buffer_split() {
         *)          echo "$1" ;;  # raw number passthrough
     esac
 }
+
+# ──────────────────────────────────────────────────────────────────────
+# Boot config — the one file a non-technical owner edits
+# ──────────────────────────────────────────────────────────────────────
+#
+# Prebuilt SD card images put openflight.conf on the FAT boot partition,
+# which mounts on any computer, so an owner can set their bay geometry
+# before the Pi has ever been powered on. Manual installs can use
+# /etc/openflight/openflight.conf instead.
+#
+# The file is parsed, not sourced: only NAME=VALUE lines are honoured, so a
+# stray character cannot turn a config typo into a command that runs as the
+# kiosk user. Values already in the environment win, which keeps
+# `KLD7_MOUNT_TILT=9 ./scripts/start-kiosk.sh` working for one-off tests.
+BOOT_CONFIG_PATHS=(
+    /boot/firmware/openflight.conf   # Raspberry Pi OS Bookworm and later
+    /boot/openflight.conf            # Bullseye and earlier
+    /etc/openflight/openflight.conf  # manual installs
+)
+
+load_boot_config() {
+    local file="$1" line key value
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%%#*}"                       # strip comments
+        line="${line#"${line%%[![:space:]]*}"}"  # strip leading space
+        line="${line%"${line##*[![:space:]]}"}"  # strip trailing space
+        [ -z "$line" ] && continue
+        if [[ ! "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+            echo "[OpenFlight] Ignoring unparseable line in $file: $line" >&2
+            continue
+        fi
+        key="${line%%=*}"
+        value="${line#*=}"
+        # Tolerate quoted values, which is what most people write.
+        value="${value%\"}"; value="${value#\"}"
+        value="${value%\'}"; value="${value#\'}"
+        # Already exported (or set on the command line)? Leave it alone.
+        if [ -z "${!key:-}" ]; then
+            export "$key=$value"
+        fi
+    done < "$file"
+}
+
+for config_file in "${BOOT_CONFIG_PATHS[@]}"; do
+    if [ -r "$config_file" ]; then
+        load_boot_config "$config_file"
+        OPENFLIGHT_BOOT_CONFIG="$config_file"
+        break
+    fi
+done
+
+# ──────────────────────────────────────────────────────────────────────
+# --auto-hardware — detect what is plugged in and start accordingly
+# ──────────────────────────────────────────────────────────────────────
+#
+# The SD card image cannot know which optional radars and sensors a given
+# owner built in, so it starts with --auto-hardware and lets detection
+# decide. Detected flags are *prepended* to the owner's own arguments, so
+# anything typed by hand still wins: the parse loop below takes the last
+# value it sees.
+AUTO_HARDWARE=false
+PARSED_ARGS=()
+SAW_MOCK=false
+for arg in "$@"; do
+    case "$arg" in
+        --auto-hardware) AUTO_HARDWARE=true ;;
+        --mock|-m)       SAW_MOCK=true; PARSED_ARGS+=("$arg") ;;
+        *)               PARSED_ARGS+=("$arg") ;;
+    esac
+done
+set -- ${PARSED_ARGS[@]+"${PARSED_ARGS[@]}"}
+
+if [ "$AUTO_HARDWARE" = true ] && [ "$SAW_MOCK" = true ]; then
+    echo "[OpenFlight] --mock given; skipping hardware detection"
+elif [ "$AUTO_HARDWARE" = true ]; then
+    echo "[OpenFlight] Detecting attached hardware..."
+    DETECTED_FLAGS=()
+    # Warnings go to stderr and reach the console; only flags land on stdout.
+    # Detection failing is not fatal — the server still starts with defaults
+    # and surfaces the missing radar in the UI, which is more useful to a
+    # non-technical owner than a script that exits before anything appears.
+    # OPENFLIGHT_DETECT_CMD exists so the ordering rule above can be tested
+    # without hardware, and so a field debug can substitute a canned profile.
+    DETECT_CMD="${OPENFLIGHT_DETECT_CMD:-uv run --quiet python -m openflight.provisioning --no-camera}"
+    # Captured into a variable rather than piped into mapfile: `mapfile < <(cmd)`
+    # reports mapfile's exit status, so a detector that died would look like a
+    # detector that found nothing.
+    if DETECTED_OUTPUT="$(cd "$PROJECT_DIR" && eval "$DETECT_CMD")"; then
+        [ -n "$DETECTED_OUTPUT" ] && mapfile -t DETECTED_FLAGS <<< "$DETECTED_OUTPUT"
+    else
+        echo "[OpenFlight] Hardware detection failed; continuing with defaults" >&2
+        DETECTED_FLAGS=()
+    fi
+    if [ ${#DETECTED_FLAGS[@]} -gt 0 ]; then
+        echo "[OpenFlight] Detected: ${DETECTED_FLAGS[*]}"
+        set -- "${DETECTED_FLAGS[@]}" "$@"
+    else
+        echo "[OpenFlight] No optional hardware detected; using defaults"
+    fi
+fi
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do

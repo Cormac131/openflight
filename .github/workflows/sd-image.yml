@@ -1,0 +1,98 @@
+name: SD Card Image
+
+# Building an image takes ~20 minutes and produces a ~1.5 GB artifact, so it
+# never runs on ordinary pushes. Tag a release to publish one, or run it by
+# hand from the Actions tab to test a change to the build.
+on:
+  workflow_dispatch:
+    inputs:
+      compress:
+        description: "Compress the image with xz (uncheck for a faster test build)"
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # attaching the image to a release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # The base image download, the 3 GB working copy, and the xz pass are all
+    # slow; the default 6 h ceiling is generous but the real cost is the base
+    # image mirror, which can crawl.
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # build-image.sh stages the image from `git archive HEAD`, so the
+          # commit has to actually be present rather than a shallow stub.
+          fetch-depth: 1
+
+      - name: Free up disk space
+        # A hosted runner has ~14 GB free by default; the base image, the
+        # grown working copy, and the compressed output together need more.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo rm -rf /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          df -h /
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-user-static binfmt-support xz-utils parted \
+            e2fsprogs kpartx curl
+
+      - name: Register the arm64 binfmt handler
+        # Lets the runner execute the image's aarch64 binaries during chroot.
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Build the image
+        run: |
+          sudo --preserve-env=PATH ./scripts/image/build-image.sh \
+            --work-dir "$RUNNER_TEMP/image" \
+            --out "$RUNNER_TEMP/openflight-${GITHUB_REF_NAME//\//-}.img" \
+            ${{ (github.event_name == 'workflow_dispatch' && !inputs.compress) && '--no-compress' || '' }}
+
+      - name: Summarise the build
+        run: |
+          {
+            echo "### OpenFlight SD card image"
+            echo
+            echo '```'
+            ls -lh "$RUNNER_TEMP"/openflight-*.img* | sed 's|.*/||'
+            echo
+            cat "$RUNNER_TEMP"/openflight-*.sha256 | sed 's|.*/||'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the image as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openflight-sd-image
+          path: |
+            ${{ runner.temp }}/openflight-*.img.xz
+            ${{ runner.temp }}/openflight-*.img
+            ${{ runner.temp }}/openflight-*.sha256
+          # Artifacts are ~1.5 GB each; a fortnight is long enough to test a
+          # build and short enough not to fill the org's storage quota.
+          retention-days: 14
+          compression-level: 0 # already xz-compressed
+
+      - name: Attach the image to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ runner.temp }}/openflight-*.img.xz
+            ${{ runner.temp }}/openflight-*.sha256
+          fail_on_unmatched_files: true

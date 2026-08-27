@@ -1,0 +1,24 @@
+[Unit]
+Description=OpenFlight first-boot hardware provisioning
+Documentation=file:///opt/openflight/docs/sd-card-image.md
+# Runs before the kiosk so provisioning never races the server for the radar's
+# serial port. systemd-udev-settle is deprecated in general, but it is the
+# right tool here: detection is a one-shot snapshot of the USB bus, and taking
+# it before enumeration finishes would miss a radar that is simply slow.
+After=multi-user.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+Before=openflight.service
+ConditionPathExists=/opt/openflight/scripts/image/firstboot.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/openflight/scripts/image/firstboot.sh
+# Radar flash writes and the self-test both wait on hardware; a stuck probe
+# must not strand the unit before the kiosk ever starts.
+TimeoutStartSec=300
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

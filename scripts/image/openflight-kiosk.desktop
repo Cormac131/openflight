@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=OpenFlight
+Comment=Golf launch monitor
+# Started from /etc/xdg/autostart rather than a systemd service so it runs as
+# whichever user the owner created with the Raspberry Pi Imager, inside their
+# graphical session. A system service would have to hardcode a username the
+# image cannot know, and would come up without a display to draw on.
+Exec=/opt/openflight/scripts/start-kiosk.sh --auto-hardware
+Icon=openflight
+Terminal=false
+X-GNOME-Autostart-enabled=true
+NoDisplay=false
+Categories=Game;Sports;

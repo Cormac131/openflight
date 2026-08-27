@@ -27,10 +27,12 @@ from typing import Literal, Optional
 # Allow running as a script from repo root
 sys.path.insert(0, "src")
 
-import serial.tools.list_ports
-
 from openflight.kld7.tracker import KLD7Tracker
 from openflight.ops243 import OPS243Radar, is_uart_port
+from openflight.provisioning.detect import (
+    detect_kld7_ports,
+    detect_ops243_port as _detect_ops243_port,
+)
 from openflight.rolling_buffer.processor import RollingBufferProcessor
 
 # ANSI escape codes. When stdout is a TTY these render as color;
@@ -76,23 +78,16 @@ def print_check_result(index: int, total: int, result: CheckResult) -> None:
 
 
 def detect_ops243_port() -> Optional[str]:
-    """Find the OPS243-A serial port.
+    """Find the OPS243-A serial port over USB.
 
-    Over USB the OPS243-A enumerates as a CDC ACM device on Linux
-    (/dev/ttyACM*) or a usbmodem on macOS. K-LD7 boards enumerate
-    differently (FTDI/CP210x USB-serial bridges at /dev/ttyUSB* or
-    /dev/cu.usbserial-*), so we identify OPS243 by device name.
-
-    Returns None when the radar is on the GPIO UART: a raw UART has no
-    USB descriptors, and guessing between /dev/ttyAMA0 (the 40-pin
-    header) and /dev/ttyAMA10 (the Pi 5 debug UART) would be wrong as
-    often as right. Pass --ops-port in that case.
+    Delegates to the shared probe in ``openflight.provisioning.detect`` with
+    UART candidates excluded. The diagnostic deliberately wants the narrower
+    USB-only answer: on the UART wiring the port is supplied by --ops-port,
+    and check 0 uses this function to detect the *fault* of a USB radar being
+    enumerated at the same time. Guessing /dev/ttyAMA0 here would make that
+    check report a problem that does not exist.
     """
-    for port in serial.tools.list_ports.comports():
-        device = port.device or ""
-        if "ACM" in device or "usbmodem" in device:
-            return device
-    return None
+    return _detect_ops243_port(include_uart=False)
 
 
 def check_uart_preflight(state: DiagnosticState) -> CheckResult:
@@ -178,25 +173,6 @@ def _serial_console_units(port: str) -> list[str]:
             if unit not in units:
                 units.append(unit)
     return units
-
-
-def detect_kld7_ports() -> list[str]:
-    """Find all K-LD7 EVAL board serial ports.
-
-    K-LD7 EVAL boards use FTDI or CP210x USB-serial chips, which
-    advertise "FTDI", "CP210", or "usb-serial" in the port description
-    or manufacturer string. Returns the list of matching devices in
-    the order they were enumerated.
-    """
-    ports = []
-    for port in serial.tools.list_ports.comports():
-        desc = (port.description or "").lower()
-        mfg = (port.manufacturer or "").lower()
-        if any(kw in desc for kw in ["ftdi", "cp210", "usb-serial", "uart"]):
-            ports.append(port.device)
-        elif any(kw in mfg for kw in ["ftdi", "silicon labs"]):
-            ports.append(port.device)
-    return ports
 
 
 @dataclass

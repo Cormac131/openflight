@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=OpenFlight
+Description=OpenFlight golf launch monitor boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/openflight
+ScriptFile=/usr/share/plymouth/themes/openflight/openflight.script

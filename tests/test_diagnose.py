@@ -84,28 +84,28 @@ class TestOverallStatus:
 
 
 class TestDetectOps243Port:
-    @patch("diagnose.serial.tools.list_ports.comports")
+    @patch("serial.tools.list_ports.comports")
     def test_finds_acm_device(self, mock_comports):
         mock_port = MagicMock()
         mock_port.device = "/dev/ttyACM0"
         mock_comports.return_value = [mock_port]
         assert diagnose.detect_ops243_port() == "/dev/ttyACM0"
 
-    @patch("diagnose.serial.tools.list_ports.comports")
+    @patch("serial.tools.list_ports.comports")
     def test_finds_usbmodem_device(self, mock_comports):
         mock_port = MagicMock()
         mock_port.device = "/dev/cu.usbmodem14301"
         mock_comports.return_value = [mock_port]
         assert diagnose.detect_ops243_port() == "/dev/cu.usbmodem14301"
 
-    @patch("diagnose.serial.tools.list_ports.comports")
+    @patch("serial.tools.list_ports.comports")
     def test_returns_none_when_nothing_matches(self, mock_comports):
         mock_port = MagicMock()
         mock_port.device = "/dev/ttyS0"
         mock_comports.return_value = [mock_port]
         assert diagnose.detect_ops243_port() is None
 
-    @patch("diagnose.serial.tools.list_ports.comports")
+    @patch("serial.tools.list_ports.comports")
     def test_empty_port_list(self, mock_comports):
         mock_comports.return_value = []
         assert diagnose.detect_ops243_port() is None
@@ -119,21 +119,21 @@ class TestDetectKld7Ports:
         p.manufacturer = mfg
         return p
 
-    @patch("diagnose.serial.tools.list_ports.comports")
+    @patch("serial.tools.list_ports.comports")
     def test_finds_ftdi_port(self, mock_comports):
         mock_comports.return_value = [
             self._make_port("/dev/ttyUSB0", desc="FTDI USB-Serial"),
         ]
         assert diagnose.detect_kld7_ports() == ["/dev/ttyUSB0"]
 
-    @patch("diagnose.serial.tools.list_ports.comports")
+    @patch("serial.tools.list_ports.comports")
     def test_finds_cp210x_port(self, mock_comports):
         mock_comports.return_value = [
             self._make_port("/dev/ttyUSB1", desc="CP210x UART Bridge"),
         ]
         assert diagnose.detect_kld7_ports() == ["/dev/ttyUSB1"]
 
-    @patch("diagnose.serial.tools.list_ports.comports")
+    @patch("serial.tools.list_ports.comports")
     def test_finds_two_ports(self, mock_comports):
         mock_comports.return_value = [
             self._make_port("/dev/ttyUSB0", desc="FTDI USB-Serial"),
@@ -141,7 +141,7 @@ class TestDetectKld7Ports:
         ]
         assert diagnose.detect_kld7_ports() == ["/dev/ttyUSB0", "/dev/ttyUSB1"]
 
-    @patch("diagnose.serial.tools.list_ports.comports")
+    @patch("serial.tools.list_ports.comports")
     def test_ignores_acm_devices(self, mock_comports):
         """ACM devices are OPS243, not K-LD7."""
         mock_comports.return_value = [
@@ -149,7 +149,7 @@ class TestDetectKld7Ports:
         ]
         assert diagnose.detect_kld7_ports() == []
 
-    @patch("diagnose.serial.tools.list_ports.comports")
+    @patch("serial.tools.list_ports.comports")
     def test_empty_list(self, mock_comports):
         mock_comports.return_value = []
         assert diagnose.detect_kld7_ports() == []

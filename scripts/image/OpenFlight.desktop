@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=OpenFlight
+Comment=Start the golf launch monitor
+Exec=/opt/openflight/scripts/start-kiosk.sh --auto-hardware
+Icon=openflight
+Terminal=false
+Categories=Game;Sports;

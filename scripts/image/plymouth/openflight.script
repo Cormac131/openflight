@@ -1,0 +1,70 @@
+# OpenFlight boot splash.
+#
+# Deliberately plain: the logo on the app's own background, with a row of
+# accent dots to show the unit is working. Matching the app's background
+# (#0e0f10) means the handover from splash to desktop to kiosk is a single
+# continuous screen rather than three flashes of different colours.
+#
+# Plymouth's script language takes colours as 0..1 floats.
+
+# #0e0f10
+Window.SetBackgroundTopColor(0.055, 0.059, 0.063);
+Window.SetBackgroundBottomColor(0.055, 0.059, 0.063);
+
+logo.image = Image("splash.png");
+logo.sprite = Sprite(logo.image);
+logo.x = Window.GetWidth() / 2 - logo.image.GetWidth() / 2;
+logo.y = Window.GetHeight() / 2 - logo.image.GetHeight() / 2;
+logo.sprite.SetPosition(logo.x, logo.y, 0);
+
+# Progress dots, drawn as 1x1 accent images scaled to size. Scaling a solid
+# image avoids needing a second asset just for a dot.
+dot.count = 5;
+dot.size = 10;
+dot.gap = 26;
+dot.image = Image("dot.png");
+
+for (i = 0; i < dot.count; i++) {
+    dots[i].sprite = Sprite(dot.image);
+    dots[i].sprite.SetPosition(
+        Window.GetWidth() / 2 - ((dot.count - 1) * dot.gap) / 2 + i * dot.gap - dot.size / 2,
+        logo.y + logo.image.GetHeight() + 60,
+        1);
+    dots[i].sprite.SetOpacity(0.2);
+}
+
+# One dot brightens at a time, cycling about three times a second. Slow
+# enough to read as deliberate rather than as a stutter.
+progress = 0;
+fun refresh_callback() {
+    progress++;
+    active = Math.Int(progress / 16) % dot.count;
+    for (i = 0; i < dot.count; i++) {
+        if (i == active) {
+            dots[i].sprite.SetOpacity(1.0);
+        } else {
+            dots[i].sprite.SetOpacity(0.2);
+        }
+    }
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+# Password and message callbacks are required for the boot to proceed when
+# plymouth needs to prompt (an encrypted disk, an fsck message). Without them
+# the splash simply swallows the prompt and the unit appears to hang.
+message.sprite = Sprite();
+message.sprite.SetPosition(0, Window.GetHeight() - 60, 10);
+
+fun display_message_callback(text) {
+    message.image = Image.Text(text, 1.0, 0.831, 0.0);
+    message.sprite.SetImage(message.image);
+    message.sprite.SetX(Window.GetWidth() / 2 - message.image.GetWidth() / 2);
+}
+
+fun hide_message_callback(text) {
+    message.sprite.SetImage(Image.Text("", 0, 0, 0));
+}
+
+Plymouth.SetDisplayMessageFunction(display_message_callback);
+Plymouth.SetHideMessageFunction(hide_message_callback);
+Plymouth.SetMessageFunction(display_message_callback);
