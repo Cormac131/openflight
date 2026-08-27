@@ -38,11 +38,13 @@ export function ProfilesPanel({
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? null;
   const shotCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const profile of profiles) {
-      counts[profile.id] = filterShotsByProfile(shots, profile.id).length;
+    for (const shot of shots) {
+      const id = shot.profile_id;
+      if (!id) continue;
+      counts[id] = (counts[id] ?? 0) + 1;
     }
     return counts;
-  }, [profiles, shots]);
+  }, [shots]);
 
   return (
     <div className="panel">
