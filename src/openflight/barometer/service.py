@@ -7,6 +7,7 @@ import statistics
 import threading
 import time
 from collections import deque
+from dataclasses import replace
 from typing import Optional, Protocol
 
 from ..air_density import AirConditions, AirConditionsError, air_density
@@ -163,11 +164,29 @@ class BarometerService:
         return ReadingSelection(snapshot=snapshot, status="ok", age_s=age_s)
 
     def current_conditions(self, now: Optional[float] = None) -> Optional[AirConditions]:
-        """Return sensor-derived conditions, or None when no usable reading exists."""
+        """Return conditions from a fresh reading, or None if none is fresh."""
         selection = self.reading_for_shot(now)
         if selection.snapshot is None:
             return None
         return selection.snapshot.to_air_conditions(elevation_m=self.elevation_m)
+
+    def last_known_conditions(self) -> Optional[AirConditions]:
+        """
+        Return the most recent reading regardless of age, or None if never read.
+
+        This is the fallback when the sensor stops responding. Air density at a
+        fixed site moves within a few percent over days, so even a very old
+        measurement is far closer to the truth than a textbook assumption —
+        and crucially it still carries the site's elevation implicitly, which
+        is worth up to 14 yd of driver carry to get wrong. Labelled
+        `sensor_stale` so the distinction survives into the logs.
+        """
+        with self._lock:
+            snapshot = self._latest
+        if snapshot is None:
+            return None
+        measured = snapshot.to_air_conditions(elevation_m=self.elevation_m)
+        return replace(measured, source="sensor_stale")
 
     def wait_for_reading(self, timeout_s: float = 15.0) -> ReadingSelection:
         """

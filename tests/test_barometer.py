@@ -411,3 +411,34 @@ class TestSnapshotSerialisation:
         data = BarometerService(StubSensor()).reading_for_shot(now=1.0).to_dict()
         assert data["applied"] is False
         assert data["age_s"] is None
+
+
+class TestLastKnownConditions:
+    def test_none_before_any_reading(self):
+        assert BarometerService(StubSensor()).last_known_conditions() is None
+
+    def test_returns_a_reading_that_is_far_too_old_to_be_fresh(self):
+        service = BarometerService(StubSensor(), window_samples=2, max_reading_age_s=1.0)
+        for sample in _samples(2, pressure_pa=83400.0, temperature_c=20.0):
+            service.add_sample(sample)
+
+        # Fresh selection refuses it; last-known still hands it over.
+        assert service.current_conditions(now=1e9) is None
+        remembered = service.last_known_conditions()
+        assert remembered is not None
+        assert remembered.pressure_pa == pytest.approx(83400.0)
+
+    def test_is_labelled_sensor_stale_not_sensor(self):
+        service = BarometerService(StubSensor(), window_samples=1)
+        service.add_sample(_samples(1)[0])
+        assert service.last_known_conditions().source == "sensor_stale"
+
+    def test_matches_the_fresh_reading_apart_from_provenance(self):
+        service = BarometerService(StubSensor(), window_samples=1)
+        service.add_sample(_samples(1, pressure_pa=83400.0)[0])
+
+        fresh = service.current_conditions(now=1000.0)
+        remembered = service.last_known_conditions()
+        assert remembered.density_kg_m3 == pytest.approx(fresh.density_kg_m3)
+        assert fresh.source == "sensor"
+        assert remembered.source == "sensor_stale"

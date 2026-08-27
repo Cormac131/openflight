@@ -164,19 +164,29 @@ carry_normalization_density: float = AIR_DENSITY_STD
 
 def current_air_conditions() -> AirConditions:
     """
-    The atmospheric state to score this shot in.
+    The atmospheric state to score this shot in, best source first.
 
-    A live barometer reading wins when one is available, because it captures
-    the weather on top of the elevation and temperature the operator
-    configured. When the sensor is absent, failing, or its last reading has
-    gone stale, this falls back to the configured conditions rather than
-    dropping the correction entirely — a slightly out-of-date density beats
-    silently reverting a Denver rig to sea level.
+    1. A fresh barometer reading. It captures elevation and weather together,
+       because station pressure already contains both — which is why fitting a
+       sensor needs no elevation configured at all.
+    2. The last reading that sensor took, however old. Density at a fixed site
+       moves a few percent over days, so a remembered measurement stays far
+       closer to the truth than a textbook assumption, and it still carries the
+       site's elevation implicitly. Without this tier, a sensor that stopped
+       responding would drop an altitude rig back to sea level and cost it 14 yd
+       of driver carry — the exact error the sensor was fitted to remove.
+    3. Whatever was configured, or standard sea level if nothing was.
+
+    So a barometer alone is a complete configuration, and the flags exist to
+    override it or to work without one.
     """
     if barometer_service is not None:
         measured = barometer_service.current_conditions()
         if measured is not None:
             return measured
+        remembered = barometer_service.last_known_conditions()
+        if remembered is not None:
+            return remembered
     return air_conditions
 
 
@@ -1408,12 +1418,17 @@ def init_barometer(
             f"({snapshot.pressure_pa / 100.0:.2f} hPa, {snapshot.temperature_c:+.1f}C, "
             f"rho {snapshot.density_kg_m3:.4f} kg/m3)"
         )
-        # Config-derived density is what the sensor replaces; showing both makes
-        # a miscalibrated temperature offset obvious on the first run.
-        print(
-            f"Air density: configured {air_conditions.density_kg_m3:.4f}, "
-            f"measured {snapshot.density_kg_m3:.4f} kg/m3"
-        )
+        if air_conditions.source == "standard":
+            # Nothing was configured, and nothing needs to be: station pressure
+            # already contains the site elevation.
+            print("Air conditions come from the sensor; no elevation needed.")
+        else:
+            # Both numbers shown, because a large gap on a rig at the right
+            # elevation usually means a miscalibrated temperature offset.
+            print(
+                f"Air density: configured {air_conditions.density_kg_m3:.4f}, "
+                f"measured {snapshot.density_kg_m3:.4f} kg/m3"
+            )
         return True
     except Exception as error:  # pylint: disable=broad-exception-caught
         if service is not None:

@@ -8,8 +8,10 @@ This is an optional feature. It is disabled unless `--barometer` is passed.
 Without it, OpenFlight uses the elevation and temperature you configure on the
 command line; without those either, it assumes standard sea-level air.
 
-If the sensor is missing, unreadable, or its last reading has gone stale,
-OpenFlight keeps the shot and falls back to the configured air conditions.
+**With the sensor fitted, nothing needs configuring.** Station pressure already
+contains your site elevation, so `--barometer` on its own is a complete setup.
+If the sensor later stops responding, OpenFlight reuses its last reading rather
+than reverting to sea level, so the rig stays correct through a failure.
 
 ## Is This Worth Fitting?
 
@@ -37,9 +39,11 @@ Split by which input drives the error:
 | **Barometric weather** | **±1 to 2.5 yd** | **A barometer. This is the only term the sensor uniquely buys.** |
 | Humidity | 0.7–1.4 yd | A humidity sensor. The BMP580 has none. |
 
-So: configure `--elevation-ft` and `--air-temp-c` first — that is most of the
-benefit, free. Fit the barometer when you want the weather term too, or want to
-stop typing the temperature in.
+Two ways to collect this. `--elevation-ft` and `--air-temp-c` cost nothing and
+capture the top two rows, but the temperature is a number you have to keep
+updating as the seasons turn. `--barometer` captures all three measurable rows
+and never needs updating — which, as much as the ±1–2.5 yd weather term, is the
+practical reason to fit one.
 
 ## What To Buy
 
@@ -93,9 +97,16 @@ The density column is exact at every row, while the altitude column is off by
 over 1500 ft across the range. OpenFlight uses the measured pressure directly
 and never routes it through an altitude.
 
-`--elevation-ft` is still useful, and is not the same thing: with no sensor it
-is how OpenFlight estimates your pressure. With a sensor fitted it becomes
-metadata only.
+This is also why a barometer needs no elevation configured. The sensor cannot
+tell you how high you are — but it does not need to, because the pressure it
+measures is *already* lower at altitude, and that is the only thing carry
+depends on. What pressure alone cannot do is *separate* elevation from weather,
+and that separation is a question the carry model never asks.
+
+`--elevation-ft` therefore does different jobs in the two setups: with no sensor
+it is how OpenFlight estimates your pressure, and with one fitted it is
+log metadata only. It never enters the density calculation alongside a real
+pressure reading.
 
 ## Power Down Before Wiring
 
@@ -273,14 +284,23 @@ longer and run it again.
 Example production startup:
 
 ```bash
-scripts/start-kiosk.sh \
-  --elevation-ft 5280 \
-  --barometer \
-  --barometer-temp-offset-c -4.7
+scripts/start-kiosk.sh --barometer
 ```
 
-Keep `--elevation-ft` even with the sensor fitted. It costs nothing, is recorded
-as metadata, and is what OpenFlight falls back to if the sensor fails.
+That is the whole configuration. **No elevation, temperature, or pressure
+number is needed with a sensor fitted** — station pressure already contains the
+site elevation, so the measurement supplies every input the carry model wants.
+
+Add the temperature offset once you have calibrated it:
+
+```bash
+scripts/start-kiosk.sh --barometer --barometer-temp-offset-c -4.7
+```
+
+`--elevation-ft` and `--air-temp-c` remain available, but with a barometer
+fitted they are overrides, not requirements. If the sensor stops responding,
+OpenFlight keeps using its last reading rather than reverting to sea level, so
+an unconfigured altitude rig stays correct through a sensor failure.
 
 At startup, OpenFlight prints the measured pressure, temperature, and density,
 alongside the configured density the sensor is replacing. A large gap between
@@ -294,7 +314,21 @@ For each shot, OpenFlight:
 3. Simulates carry twice: once at the normalization density, once in that air.
 4. Reports the normalized carry as the headline and the actual-conditions carry
    alongside it.
-5. Falls back to the configured air conditions if no usable reading exists.
+
+Air conditions are resolved best-source-first, so nothing has to be configured:
+
+| Source | When | Logged as |
+|---|---|---|
+| Fresh sensor reading | Normal operation | `sensor` |
+| That sensor's last reading, however old | Sensor stopped responding | `sensor_stale` |
+| Configured elevation and temperature | No sensor, or it never read | `config` |
+| Standard sea level | Nothing configured and no sensor | `standard` |
+
+The second tier is what makes the sensor self-sufficient. Air density at a fixed
+site moves a few percent over days, so a remembered reading stays far closer to
+the truth than a textbook assumption — and it still carries the site elevation
+implicitly. Without it, a failed sensor on an unconfigured rig would silently
+revert to sea level and lose the full 14 yd at altitude.
 
 ## Two Carries
 
@@ -325,7 +359,7 @@ Each `shot_detected` entry records:
 
 - `carry_actual_yards` alongside `carry_spin_adjusted`.
 - `air_density_kg_m3` used for that shot.
-- `air_conditions_source`: `standard`, `config`, or `sensor`.
+- `air_conditions_source`: `sensor`, `sensor_stale`, `config`, or `standard`.
 
 That last field matters when reading logs later: the difference between an
 assumed density and a measured one is up to 14 yd, far too large to leave
@@ -386,11 +420,12 @@ That is enclosure self-heating, and it is the normal failure mode. See
 [Mounting](#mounting) and calibrate the offset. Do not ignore it: it is worth
 about a yard of driver carry, which is the entire benefit of the sensor.
 
-### Shots Report `stale`
+### Shots Report `sensor_stale`
 
-No usable reading within `max_reading_age_s` (default 300 s). Check the I2C
-connection and the logs for sample errors. Shots are still processed using the
-configured air conditions.
+No fresh reading within `max_reading_age_s` (default 300 s), so OpenFlight is
+reusing the sensor's last measurement. Carry stays close to correct, but the
+sensor has stopped responding — check the I2C connection and the logs for
+sample errors.
 
 ### Pressure Looks Wildly Wrong
 

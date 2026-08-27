@@ -48,8 +48,8 @@ Shots now carry two numbers:
   unconfigured install produces exactly the payload it always did.
 
 Both are written to the session log, along with `air_density_kg_m3` and
-`air_conditions_source` (`standard`, `config`, or `sensor`) so a later reader
-can always tell a measured density from an assumed one.
+`air_conditions_source` (`sensor`, `sensor_stale`, `config`, or `standard`) so a
+later reader can always tell a measured density from an assumed one.
 
 ## Configuration
 
@@ -72,9 +72,10 @@ Implausible values are rejected at startup rather than silently shifting every
 carry — a mistyped elevation is worth 14 yd, which is far too large to let
 through quietly.
 
-Add `--barometer` to measure pressure and temperature instead of configuring
-them; the flags above then act as the fallback when the sensor is missing or
-its reading goes stale. See [docs/barometer/README.md](barometer/README.md).
+Or set none of them and pass `--barometer` instead: a fitted sensor supplies
+every input on its own, because station pressure already contains the site
+elevation. The flags above then act purely as overrides and as the fallback for
+a rig with no sensor. See [docs/barometer/README.md](barometer/README.md).
 
 ### Matching TrackMan "Flat"
 

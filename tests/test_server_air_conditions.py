@@ -301,14 +301,15 @@ class TestSensorPreferredOverConfig:
 
         assert server_module.current_air_conditions() is DENVER
 
-    def test_falls_back_to_config_when_the_reading_is_stale(self, monkeypatch):
+    def test_stale_reading_is_remembered_rather_than_discarded(self, monkeypatch):
         stale = _loaded_barometer(98000.0, 15.0, max_reading_age_s=0.001)
         time.sleep(0.01)
         monkeypatch.setattr(server_module, "air_conditions", DENVER)
         monkeypatch.setattr(server_module, "barometer_service", stale)
 
-        # A slightly out-of-date elevation beats silently reverting to sea level.
-        assert server_module.current_air_conditions() is DENVER
+        conditions = server_module.current_air_conditions()
+        assert conditions.source == "sensor_stale"
+        assert conditions.pressure_pa == pytest.approx(98000.0)
 
     def test_falls_back_to_config_when_the_sensor_never_read(self, monkeypatch):
         empty = BarometerService(_StubBarometerSensor(98000.0, 15.0), window_samples=3)
@@ -352,3 +353,58 @@ class TestSensorPreferredOverConfig:
         on_shot_detected(corrected)
 
         assert corrected.carry_actual_yards < uncorrected.carry_actual_yards
+
+
+class TestBarometerAloneNeedsNoConfiguration:
+    """
+    A fitted sensor is a complete configuration on its own.
+
+    These pin the behaviour the flags exist to make optional: plug the sensor
+    in, set nothing, and an altitude rig still scores correctly — including
+    after the sensor stops responding.
+    """
+
+    def test_unconfigured_rig_scores_correctly_from_the_sensor_alone(self, quiet_pipeline):
+        # Nothing configured: air_conditions is bare standard sea level.
+        quiet_pipeline.setattr(server_module, "air_conditions", AirConditions.standard())
+        quiet_pipeline.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+        quiet_pipeline.setattr(server_module, "ballistics_enabled", True)
+        quiet_pipeline.setattr(
+            server_module, "barometer_service", _loaded_barometer(83400.0, 20.0)
+        )
+
+        shot = _shot()
+        on_shot_detected(shot)
+
+        assert shot.air_conditions_source == "sensor"
+        assert shot.carry_actual_yards == pytest.approx(
+            shot.carry_spin_adjusted + 14.0, abs=1.5
+        )
+
+    def test_a_dead_sensor_does_not_drop_an_unconfigured_rig_to_sea_level(
+        self, quiet_pipeline
+    ):
+        """The 14 yd cliff this tier exists to prevent."""
+        dead = _loaded_barometer(83400.0, 20.0, max_reading_age_s=0.001)
+        time.sleep(0.01)
+        quiet_pipeline.setattr(server_module, "air_conditions", AirConditions.standard())
+        quiet_pipeline.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+        quiet_pipeline.setattr(server_module, "ballistics_enabled", True)
+        quiet_pipeline.setattr(server_module, "barometer_service", dead)
+
+        shot = _shot()
+        on_shot_detected(shot)
+
+        assert shot.air_conditions_source == "sensor_stale"
+        assert shot.carry_actual_yards == pytest.approx(
+            shot.carry_spin_adjusted + 14.0, abs=1.5
+        )
+
+    def test_sensor_that_never_read_falls_through_to_configuration(self, monkeypatch):
+        # Only genuine no-data falls through; a wired-but-silent sensor on an
+        # unconfigured rig has nothing better to offer than standard air.
+        never_read = BarometerService(_StubBarometerSensor(83400.0, 20.0), window_samples=3)
+        monkeypatch.setattr(server_module, "air_conditions", DENVER)
+        monkeypatch.setattr(server_module, "barometer_service", never_read)
+
+        assert server_module.current_air_conditions() is DENVER

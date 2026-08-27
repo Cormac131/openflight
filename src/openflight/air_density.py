@@ -80,7 +80,11 @@ MAX_PRESSURE_PA = 115000.0  # Beyond the strongest recorded sea-level highs.
 MIN_TEMPERATURE_C = -60.0
 MAX_TEMPERATURE_C = 60.0
 
-ConditionsSource = Literal["standard", "config", "sensor"]
+# "sensor_stale" is a real measurement that has aged past the freshness limit.
+# It is kept distinct from "sensor" so a log reader can tell a current reading
+# from a remembered one, and ranked above "config" because yesterday's measured
+# pressure at this site beats a textbook assumption about it.
+ConditionsSource = Literal["standard", "config", "sensor", "sensor_stale"]
 
 
 class AirConditionsError(ValueError):
