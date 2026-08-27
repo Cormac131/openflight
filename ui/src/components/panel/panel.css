@@ -1368,6 +1368,79 @@
   padding: 0 16px;
 }
 
+/* ------------------------------------------------------- club tag toast --- */
+
+/*
+ * Sits above the picker (z 30) because a tag tap closes the picker underneath
+ * it, but below the shutdown dialog (z 1000), which must never be obscured.
+ */
+.club-toast {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Never intercept a tap: this is a confirmation, not a dialog. */
+  pointer-events: none;
+  /* Dim the panel behind so the club reads at a glance from the mat. */
+  background: color-mix(in srgb, var(--color-bg) 62%, transparent);
+  animation: club-toast-in 160ms ease-out;
+}
+
+.club-toast__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 2.25rem 4rem;
+  border-radius: var(--radius);
+  /*
+   * The accent block/fg pair, as used by the header's primary action. Accent as
+   * *text* fails on the light theme, where --color-surface also equals
+   * --color-bg and leaves the card with nothing to separate it from the panel.
+   * Filling the card instead reads at a glance in both themes.
+   */
+  background: var(--color-accent-block);
+  color: var(--color-accent-fg);
+  text-align: center;
+  max-width: 90%;
+}
+
+.club-toast__label {
+  font-weight: 700;
+  font-size: clamp(0.8125rem, 2.4vh, 1.25rem);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--color-accent-fg);
+  opacity: 0.72;
+}
+
+.club-toast__club {
+  font-weight: 800;
+  /* Matches the Live hero metric scale so it reads from behind the mat. */
+  font-size: clamp(2.5rem, 12vh, 5.5rem);
+  line-height: 1;
+  color: var(--color-accent-fg);
+}
+
+@keyframes club-toast-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .club-toast {
+    animation: none;
+  }
+}
+
 /* ------------------------------------------------------- add player modal -- */
 
 .add-player-modal {

@@ -153,6 +153,7 @@ export const es: Messages = {
   'app.simulateSwing': 'Simular swing',
   'app.simulateShot': 'Simular golpe',
   'menu.clubTags': 'Etiquetas de palos',
+  'nfc.clubSelected': 'Palo seleccionado',
   'nfc.newTagTitle': 'Nueva etiqueta de palo',
   'nfc.newTagSubtitle': 'Etiqueta {uid}: elige su palo',
   'nfc.noTags': 'Aún no hay etiquetas guardadas',

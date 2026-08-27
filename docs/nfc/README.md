@@ -359,7 +359,10 @@ For each tap, OpenFlight:
 3. Looks the UID up in the learned mapping.
 4. Selects the mapped club and broadcasts it to every connected client, or asks
    the kiosk to learn the tag.
-5. Records the tap in the session log.
+5. Shows a large **Club selected — 7 Iron** confirmation on the kiosk for about
+   two seconds, and closes the club picker if it was open. The confirmation is
+   not tappable and cannot swallow a tap while it fades.
+6. Records the tap in the session log.
 
 In mock mode (`--mock --nfc`) a mock reader replaces the hardware, so the whole
 learn-and-select flow can be exercised on a laptop with no PN532 attached.

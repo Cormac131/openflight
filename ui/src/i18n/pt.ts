@@ -153,6 +153,7 @@ export const pt: Messages = {
   'app.simulateSwing': 'Simular swing',
   'app.simulateShot': 'Simular tacada',
   'menu.clubTags': 'Etiquetas de tacos',
+  'nfc.clubSelected': 'Taco selecionado',
   'nfc.newTagTitle': 'Nova etiqueta de taco',
   'nfc.newTagSubtitle': 'Etiqueta {uid}: escolha o taco',
   'nfc.noTags': 'Nenhuma etiqueta guardada',

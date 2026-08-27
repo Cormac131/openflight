@@ -151,6 +151,7 @@ export const en = {
   'app.simulateSwing': 'Simulate swing',
   'app.simulateShot': 'Simulate shot',
   'menu.clubTags': 'Club tags',
+  'nfc.clubSelected': 'Club selected',
   'nfc.newTagTitle': 'New club tag',
   'nfc.newTagSubtitle': 'Tag {uid} — pick its club',
   'nfc.noTags': 'No tags learned yet',

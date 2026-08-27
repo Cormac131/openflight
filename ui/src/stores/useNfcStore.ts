@@ -10,10 +10,13 @@ interface NfcState {
   pendingTag: NfcScan | null;
   /**
    * Bumped every time a *known* tag selects a club. App watches this to close
-   * the club picker, which a plain club change must not do -- the picker opens
-   * deliberately on startup and would otherwise vanish on the connect snapshot.
+   * the club picker and to raise the confirmation toast. A plain club change
+   * must do neither -- the picker opens deliberately on startup and would
+   * otherwise vanish on the connect snapshot.
    */
   clubScanVersion: number;
+  /** Club the last tag tap selected, shown by the confirmation toast. */
+  announcedClub: string | null;
   setClubTags: (tags: ClubTag[], enabled: boolean) => void;
   recordScan: (scan: NfcScan) => void;
   setPendingTag: (scan: NfcScan) => void;
@@ -26,12 +29,14 @@ export const useNfcStore = create<NfcState>((set) => ({
   lastScan: null,
   pendingTag: null,
   clubScanVersion: 0,
+  announcedClub: null,
   setClubTags: (tags, enabled) => set({ tags, enabled }),
   recordScan: (scan) =>
     set((state) => ({
       lastScan: scan,
       enabled: true,
       clubScanVersion: scan.known ? state.clubScanVersion + 1 : state.clubScanVersion,
+      announcedClub: scan.known ? scan.club : state.announcedClub,
       // A recognized tap resolves whatever learn prompt was open: the user
       // walked away from the unknown tag and grabbed a club that is already set up.
       pendingTag: scan.known ? null : state.pendingTag,

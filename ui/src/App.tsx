@@ -20,6 +20,7 @@ import {
   LivePanel,
   AddPlayerDialog,
   ClearSessionDialog,
+  ClubChangeToast,
   ClubTagPrompt,
   SimulateBubble,
   MenuSheet,
@@ -43,6 +44,9 @@ import { useLaunchDaddy, LaunchDaddyOverlay, LaunchDaddyBrand } from './componen
 
 import { useI18n } from './i18n/useI18n';
 import './components/panel/panel.css';
+
+/** How long the club-tag confirmation stays on screen, in milliseconds. */
+const CLUB_TOAST_MS = 2200;
 
 function AppContent() {
   const { t } = useI18n();
@@ -82,10 +86,11 @@ function AppContent() {
     }))
   );
   const serverPlayerName = useSystemStore((state) => state.serverPlayerName);
-  const { pendingTag, clubScanVersion, clearPendingTag } = useNfcStore(
+  const { pendingTag, clubScanVersion, announcedClub, clearPendingTag } = useNfcStore(
     useShallow((state) => ({
       pendingTag: state.pendingTag,
       clubScanVersion: state.clubScanVersion,
+      announcedClub: state.announcedClub,
       clearPendingTag: state.clearPendingTag,
     }))
   );
@@ -149,10 +154,21 @@ function AppContent() {
   // connect-time session_state snapshot also sets a club, and closing on that
   // would hide the startup picker before the user ever saw it.
   const [appliedClubScan, setAppliedClubScan] = useState(clubScanVersion);
+  const [clubToastVisible, setClubToastVisible] = useState(false);
   if (clubScanVersion !== appliedClubScan) {
     setAppliedClubScan(clubScanVersion);
     setPickerOpen(false);
+    setClubToastVisible(true);
   }
+
+  // Hold the confirmation on screen long enough to read at arm's length, then
+  // clear it. Keyed on the scan counter too, so tapping a second club restarts
+  // the timer rather than letting the first tap's timer dismiss the second.
+  useEffect(() => {
+    if (!clubToastVisible) return undefined;
+    const timer = window.setTimeout(() => setClubToastVisible(false), CLUB_TOAST_MS);
+    return () => window.clearTimeout(timer);
+  }, [clubToastVisible, clubScanVersion]);
 
   const { isLaunchDaddyMode, isExploding, triggerExplosion } = useLaunchDaddy();
   const isDisplayRoute = typeof window !== 'undefined' && window.location.pathname.replace(/\/$/, '') === '/display';
@@ -422,6 +438,8 @@ function AppContent() {
           onCancel={() => setClearSessionOpen(false)}
         />
       ) : null}
+
+      {clubToastVisible && announcedClub ? <ClubChangeToast clubId={announcedClub} /> : null}
 
       {pendingTag ? <ClubTagPrompt scan={pendingTag} onAssign={handleLearnTag} onDismiss={clearPendingTag} /> : null}
 

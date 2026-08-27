@@ -29,6 +29,7 @@ describe('useNfcStore', () => {
       lastScan: null,
       pendingTag: null,
       clubScanVersion: 0,
+      announcedClub: null,
     });
   });
 
@@ -83,5 +84,28 @@ describe('useNfcStore', () => {
     useNfcStore.getState().clearPendingTag();
 
     expect(useNfcStore.getState().pendingTag).toBeNull();
+  });
+
+  it('records the club a known tag selected, for the confirmation toast', () => {
+    useNfcStore.getState().recordScan(scan({ club: '7-iron', known: true }));
+
+    expect(useNfcStore.getState().announcedClub).toBe('7-iron');
+  });
+
+  it('leaves the announced club alone for an unknown tag', () => {
+    useNfcStore.getState().recordScan(scan({ club: 'driver', known: true }));
+
+    useNfcStore.getState().recordScan(scan({ uid: '04A2B1C4' }));
+
+    // The prompt takes over the screen; the stale toast must not contradict it.
+    expect(useNfcStore.getState().announcedClub).toBe('driver');
+    expect(useNfcStore.getState().clubScanVersion).toBe(1);
+  });
+
+  it('advances the counter on a repeat tap so the toast timer restarts', () => {
+    useNfcStore.getState().recordScan(scan({ club: 'pw', known: true }));
+    useNfcStore.getState().recordScan(scan({ club: 'pw', known: true }));
+
+    expect(useNfcStore.getState().clubScanVersion).toBe(2);
   });
 });
