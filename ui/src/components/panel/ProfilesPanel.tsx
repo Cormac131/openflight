@@ -78,24 +78,26 @@ export function ProfilesPanel({
                   <span className="profiles-panel__name">{profile.name}</span>
                   <span className="profiles-panel__count">{shotLabel}</span>
                 </button>
-                <button
-                  type="button"
-                  className="profiles-panel__rename"
-                  aria-label={t('menu.renameProfileNamed', { name: profile.name })}
-                  onClick={() => onRenameProfile(profile)}
-                >
-                  ✎
-                </button>
-                {canRemove && !selected ? (
+                <div className="profiles-panel__actions">
                   <button
                     type="button"
-                    className="profiles-panel__remove"
-                    aria-label={t('menu.removeProfile', { name: profile.name })}
-                    onClick={() => onRemoveProfile(profile.id)}
+                    className="profiles-panel__rename"
+                    aria-label={t('menu.renameProfileNamed', { name: profile.name })}
+                    onClick={() => onRenameProfile(profile)}
                   >
-                    ✕
+                    ✎
                   </button>
-                ) : null}
+                  {canRemove && !selected ? (
+                    <button
+                      type="button"
+                      className="profiles-panel__remove"
+                      aria-label={t('menu.removeProfile', { name: profile.name })}
+                      onClick={() => onRemoveProfile(profile.id)}
+                    >
+                      ✕
+                    </button>
+                  ) : null}
+                </div>
               </div>
             );
           })

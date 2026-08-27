@@ -746,7 +746,7 @@
 .profiles-panel__card {
   width: 100%;
   min-height: 132px;
-  padding: 22px 20px 18px;
+  padding: 22px 96px 18px 20px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -785,32 +785,17 @@
   color: var(--color-text);
 }
 
-.profiles-panel__remove {
+.profiles-panel__actions {
   position: absolute;
   top: 8px;
   right: 8px;
-  width: 44px;
-  height: 44px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  color: var(--color-text-faint);
-  font-size: 0.875rem;
-  cursor: pointer;
-  touch-action: none;
+  justify-content: flex-end;
 }
 
-.profiles-panel__remove:hover,
-.profiles-panel__remove:active {
-  color: var(--color-danger);
-}
-
-.profiles-panel__rename {
-  position: absolute;
-  top: 8px;
-  right: 60px;
+.profiles-panel__rename,
+.profiles-panel__remove {
   width: 44px;
   height: 44px;
   display: flex;
@@ -827,6 +812,11 @@
 .profiles-panel__rename:hover,
 .profiles-panel__rename:active {
   color: var(--color-text);
+}
+
+.profiles-panel__remove:hover,
+.profiles-panel__remove:active {
+  color: var(--color-danger);
 }
 
 .profiles-panel__skeleton {
@@ -1595,7 +1585,7 @@
 
   .profiles-panel__card {
     min-height: 112px;
-    padding: 16px 16px 14px;
+    padding: 16px 96px 14px 16px;
   }
 
   .shots-panel__row-main {

@@ -73,6 +73,17 @@ describe('ProfilesPanel', () => {
     expect(html).toContain('aria-label="Rename Range"');
   });
 
+  it('groups rename and remove in a right-aligned actions cluster', () => {
+    const html = render();
+    const clusters = [...html.matchAll(/<div class="profiles-panel__actions">[\s\S]*?<\/div>/g)].map(
+      (match) => match[0]
+    );
+
+    expect(clusters).toHaveLength(2);
+    expect(clusters.some((cluster) => cluster.includes('Rename Range') && cluster.includes('Remove Range'))).toBe(true);
+    expect(clusters.some((cluster) => cluster.includes('Rename Home') && !cluster.includes('Remove Home'))).toBe(true);
+  });
+
   it('shows a skeleton until the roster arrives, with no profile names in the output', () => {
     const html = render({ loaded: false, profiles: [], activeProfileId: '' });
 
