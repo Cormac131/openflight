@@ -881,13 +881,16 @@ fi
 
 configure_kld7_latency
 
-# Check if UI is built
+# The UI is expected to already be built — either by scripts/setup/setup.sh
+# (first-time setup) or shipped prebuilt in the active release (auto-update
+# refuses to prepare a release without one). Building it here on-device used
+# to be a silent fallback, but `npm run build` is slow/memory-heavy on a Pi;
+# fail clearly instead of doing it automatically.
 if [ ! -d "ui/dist" ]; then
-    warn "UI not built. Building now..."
-    cd ui
-    npm install
-    npm run build
-    cd ..
+    error "UI not built (ui/dist is missing)."
+    error "  Run ./scripts/setup/setup.sh, or build it manually with:"
+    error "      cd ui && npm install && npm run build"
+    exit 1
 fi
 
 # Start Grafana Alloy for log shipping (if installed and credentials configured)
