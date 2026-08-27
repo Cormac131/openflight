@@ -137,6 +137,58 @@ The I2C bus is shared. The PN532 (`0x24`) and the LIS3DH inclinometer (`0x18`)
 use different addresses and coexist on bus 1 without a second set of power pins,
 as long as each connection is secure.
 
+### Daisy-Chaining From An Existing STEMMA QT Board
+
+A spare STEMMA QT port on a board already in the enclosure is a tidy way to tap
+the I2C bus, and it removes the 5 V hazard above entirely: STEMMA QT and Qwiic
+are 3.3 V by definition. Use it for `SDA`, `SCL`, and `GND`.
+
+> [!WARNING]
+> **Do not take the PN532's power from a downstream STEMMA QT port.** Run its
+> `VCC` on its own wire to a Pi 3.3 V header pin (physical **1** or **17**).
+
+The PN532 is not a sensor-sized load. It draws roughly 100 mA while its RF field
+is energised and can peak near 150 mA with a large antenna, against the few
+milliamps a STEMMA QT chain is laid out for. Pulled through an upstream
+breakout, that current crosses the breakout's own 3.3 V regulator, its traces,
+and two JST-SH connectors before reaching the reader.
+
+On the LIS3DH specifically it is worse than it looks. Its STEMMA QT port is fed
+from the breakout's onboard 3.3 V regulator, and this build supplies that
+regulator's input with 3.3 V from Pi pin 17 (see the
+[inclinometer guide](../inclinometer/README.md#wiring)) — so the regulator is
+already in dropout and its output sits below 3.3 V before the PN532 asks for
+anything. Every RF burst then pulls it lower.
+
+The failure this produces is not a clean one. Expect tags that read only when
+almost touching, taps that are missed at random, or a reader that ACKs commands
+while `InListPassiveTarget` never finds a target. It can also brown out the
+sensor upstream of it: an NFC reader hung off the LIS3DH's power can show up as
+`sensor_error` or `stale` inclinometer readings on shots, quietly degrading the
+launch-angle correction.
+
+The Pi's own 3.3 V rail supplies 100 mA without complaint. Wire it directly:
+
+```text
+Qwiic/STEMMA QT cable from an existing board   PN532 module
+
+Blue    SDA         ------------------------>  SDA
+Yellow  SCL         ------------------------>  SCL
+Black   GND         ------------------------>  GND
+Red     3.3V        --- leave disconnected ---
+
+Raspberry Pi GPIO header
+
+physical pin 17 (3.3V)  ------------------->  VCC
+```
+
+Ground may come through the Qwiic cable — what matters is that the reader and
+the Pi share one. A separate `GND` wire to physical pin 20 alongside `VCC` is
+better for the return path of a 150 mA burst, and costs one jumper.
+
+Tape or trim the unused red lead. It is a live 3.3 V socket on a loose flying
+end, and inside a metal enclosure that is a short waiting to happen.
+
 ## Mounting And Read Range
 
 Mount the reader where a club can be presented without a swing hitting it — the
@@ -374,6 +426,11 @@ sudo reboot
 
 ### Tags Read Intermittently Or Only At One Angle
 
+- Check the power path first. If `VCC` comes from a downstream STEMMA QT port
+  rather than a Pi 3.3 V header pin, fix that before chasing anything else —
+  see [Daisy-Chaining From An Existing STEMMA QT
+  Board](#daisy-chaining-from-an-existing-stemma-qt-board). A reader that
+  browns out mid-burst reads exactly like a range problem.
 - Move the reader further from metal, especially the radar shielding.
 - Switch to on-metal (ferrite-backed) tags if the tag sits on a metal cap.
 - Tap flat against the antenna coil, not edge-on.
