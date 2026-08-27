@@ -10,6 +10,7 @@ export const en = {
 
   'header.serverConnected': 'Server connected',
   'header.serverDisconnected': 'Server disconnected',
+  'header.radarDisconnected': 'Radar disconnected',
   'header.statusMenu': 'System status',
   'header.closeStatus': 'Close status',
   'header.server': 'Server',
@@ -26,6 +27,10 @@ export const en = {
   'live.tiRadarDetail': 'This shot used an estimated launch angle. {reason}',
   'live.dismiss': 'Dismiss',
   'live.dismissAlert': 'Dismiss TI radar alert',
+
+  // Hardware that failed to start (see types/hardware.ts).
+  'hardware.serverOffline': 'The launch monitor is not responding. Switch the unit off and on again.',
+  'hardware.dismissFault': 'Dismiss {device}',
 
   'metric.ballSpeed': 'Ball speed',
   'metric.carry': 'Carry',

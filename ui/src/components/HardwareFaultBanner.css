@@ -1,0 +1,53 @@
+/*
+ * Degraded-hardware strip. Mirrors .iwr-alert in App.css so the two kinds of
+ * in-app warning read as one thing, but uses the warning colour rather than
+ * danger: shots still work, and reserving red for "nothing works" keeps that
+ * signal meaningful.
+ */
+
+.hardware-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  padding: 0.75rem var(--space-lg);
+  border-bottom: 1px solid var(--color-warning);
+  background: var(--color-warning);
+  color: var(--color-accent-fg);
+  flex-shrink: 0;
+}
+
+.hardware-banner__text {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.hardware-banner__text strong {
+  white-space: nowrap;
+}
+
+/* Wraps rather than ellipsising, unlike .iwr-alert: this line is the
+   instruction, and truncating it on an 800px panel loses the half that says
+   what still works. The strip grows by a line instead. */
+.hardware-banner__text span {
+  color: var(--color-accent-fg);
+  line-height: 1.35;
+}
+
+.hardware-banner button {
+  border: 1px solid var(--color-accent-fg);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.7rem;
+  background: transparent;
+  color: var(--color-accent-fg);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  /* Finger-sized: the kiosk has no mouse (ui/AGENTS.md). */
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  flex-shrink: 0;
+}

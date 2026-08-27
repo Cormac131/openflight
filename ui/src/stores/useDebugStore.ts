@@ -35,7 +35,9 @@ export const useDebugStore = create<DebugState>((set) => ({
   triggerStatus: {
     mode: 'rolling-buffer',
     trigger_type: null,
-    radar_connected: false,
+    // Optimistic until the server says otherwise, so a normal start-up does
+    // not flash a radar warning before the first trigger_status arrives.
+    radar_connected: true,
     radar_port: null,
     triggers_total: 0,
     triggers_accepted: 0,

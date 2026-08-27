@@ -123,6 +123,25 @@ The result of the last detection run is also saved to
 `/etc/openflight/hardware.env`, which is the first file to read when
 answering a support question.
 
+### When hardware fails to start
+
+Detection says what is *attached*; it cannot say whether a device will
+actually come up. When one does not, the server records the fault and starts
+anyway rather than exiting — because on a kiosk the server is the only thing
+that can tell the owner what happened, and a server that exits leaves a blank
+screen and no explanation.
+
+| Failure                    | What the owner sees                          |
+| -------------------------- | -------------------------------------------- |
+| OPS243-A will not open     | Full-screen "Radar not found" and what to try |
+| IWR6843 / K-LD7 / sensors  | Amber strip, dismissible; shots still work    |
+
+Both come from `src/openflight/hardware_status.py` and reach the UI over the
+`hardware_status` WebSocket event, also served at `/api/hardware-status`. The
+radar indicator in the status menu now reflects the real serial link rather
+than "a monitor object exists", so a radar unplugged mid-session shows as
+disconnected instead of staying green.
+
 ### Settings the machine cannot detect
 
 Bay geometry is physical, not electrical: nothing on the bus knows how far
@@ -231,9 +250,19 @@ also attaches the image to the release.
 **It switched off during the first boot.** That is the expected one-time
 radar power cycle. Switch it back on.
 
-**No ball speed / "No OPS243-A radar found".** Check the radar's USB cable
-and reboot. `/var/lib/openflight/hardware-report.txt` lists everything that
-was and was not found.
+**"Radar not found" fills the screen.** The launch monitor could not open the
+OPS243-A. Check its USB cable at both ends and switch the unit off and on
+again. The small grey line at the bottom of that screen is the underlying
+error — quote it if you ask for help.
+
+**An amber strip across the top.** Optional hardware (the 60 GHz radar, an
+angle radar, the battery gauge) did not start. Shots still work; the strip
+says what is missing and what it costs you. Tap **Dismiss** to hide it for
+this session.
+
+`/var/lib/openflight/hardware-report.txt` lists everything that was and was
+not found at first boot, and `curl localhost:8080/api/hardware-status` gives
+the live picture as JSON.
 
 **Launch angle is missing on a K-LD7 build.** Those radars stay off until
 `KLD7_MOUNT_TILT` is set in `openflight.conf`. Measure the tilt of the

@@ -14,6 +14,9 @@ import { DisplayMode } from './components/DisplayMode';
 import { SimShotBadges } from './components/SimShotBadges';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
+import { HardwareFaultScreen } from './components/HardwareFaultScreen';
+import { HardwareFaultBanner } from './components/HardwareFaultBanner';
+import { visibleDegradedFaults } from './services/hardwareFaults';
 import {
   CameraPanel,
   LivePanel,
@@ -45,13 +48,25 @@ import './components/panel/panel.css';
 function AppContent() {
   const { t } = useI18n();
   const { shutdown } = useSocket();
-  const { connected, mockMode, debugMode, latestSimShots, serverClub } = useSystemStore(
+  const {
+    connected,
+    mockMode,
+    debugMode,
+    latestSimShots,
+    serverClub,
+    hardwareStatus,
+    dismissedFaults,
+    dismissFault,
+  } = useSystemStore(
     useShallow((state) => ({
       connected: state.connected,
       mockMode: state.mockMode,
       debugMode: state.debugMode,
       latestSimShots: state.latestSimShots,
       serverClub: state.serverClub,
+      hardwareStatus: state.hardwareStatus,
+      dismissedFaults: state.dismissedFaults,
+      dismissFault: state.dismissFault,
     }))
   );
   const { latestShot, shots, isNewShot, shotProcessingPhase, shotVersion } = useShotStore(
@@ -226,6 +241,12 @@ function AppContent() {
     isNewShot && latestShot && playerLatestShot && latestShot.timestamp === playerLatestShot.timestamp
   );
 
+  // Checked before any route: a blocking fault means there is no session to
+  // show on the panel or the display head, so the explanation is all there is.
+  if (hardwareStatus.blocking) {
+    return <HardwareFaultScreen fault={hardwareStatus.blocking} serverConnected={connected} />;
+  }
+
   if (isDisplayRoute) {
     return <DisplayMode connected={connected} cameraStatus={cameraStatus} latestShot={latestShot} shots={shots} />;
   }
@@ -253,6 +274,11 @@ function AppContent() {
   return (
     <div className={`panel-app ${isLaunchDaddyMode ? 'app--launch-daddy' : ''} ${isExploding ? 'app--exploding' : ''}`}>
       <LaunchDaddyOverlay />
+
+      <HardwareFaultBanner
+        faults={visibleDegradedFaults(hardwareStatus, dismissedFaults)}
+        onDismiss={dismissFault}
+      />
 
       {iwr6843Alert && (
         <div className="iwr-alert" role="alert">

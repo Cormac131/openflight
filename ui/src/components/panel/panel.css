@@ -118,6 +118,12 @@
   background: var(--color-error);
 }
 
+/* Server reachable, radar not. The session is up but cannot measure a shot,
+   so amber rather than green — red stays reserved for "nothing is talking". */
+.panel-header__dot--degraded {
+  background: var(--color-warning);
+}
+
 .panel-header__status-menu {
   position: absolute;
   top: calc(var(--panel-control-height, 32px) + 26px);

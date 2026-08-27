@@ -444,6 +444,17 @@ class OPS243Radar:
                 return str(data["Version"])
         return None
 
+    @property
+    def is_connected(self) -> bool:
+        """True while the serial handle is open.
+
+        The status the UI shows used to be inferred from "a monitor object
+        exists", which stayed true after the radar was unplugged. This is the
+        real thing: pulling the cable closes the handle (or invalidates it),
+        so a stale "Connected" cannot be reported.
+        """
+        return self.serial is not None and bool(getattr(self.serial, "is_open", False))
+
     def disconnect(self):
         """Disconnect from the radar sensor."""
         if self.serial and self.serial.is_open:

@@ -12,6 +12,7 @@ import {
   type TriggerStatus,
 } from '../types/shot';
 import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
+import type { HardwareStatus } from '../types/hardware';
 import type { PowerStatus } from '../types/power';
 import { getServerOrigin } from '../utils/serverOrigin';
 import { handleShotMessage } from './handleShotMessage';
@@ -206,6 +207,10 @@ class SocketService {
 
     this.socket.on('trigger_status', (data: TriggerStatus) => {
       useDebugStore.getState().setTriggerStatus(data);
+    });
+
+    this.socket.on('hardware_status', (data: HardwareStatus) => {
+      useSystemStore.getState().setHardwareStatus(data);
     });
 
     this.socket.on(

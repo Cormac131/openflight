@@ -10,7 +10,6 @@ import math
 import os
 import random
 import statistics
-import sys
 import threading
 import time
 from datetime import datetime
@@ -22,6 +21,7 @@ from flask_cors import CORS
 from flask_socketio import SocketIO
 
 from .ballistics import resolve_launch, simulate
+from .hardware_status import HardwareStatus, Severity
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, ClubType, Shot
 from .ops243 import (
     UART_BAUD_COMMANDS,
@@ -31,6 +31,7 @@ from .ops243 import (
     set_show_raw_readings,
 )
 from .power import SUPPORTED_BATTERY_PROVIDERS, PowerMonitor, PowerStatus
+from .provisioning.detect import DeviceKind
 from .rolling_buffer.monitor import estimate_carry_with_spin, get_optimal_spin_for_ball_speed
 from .session_logger import get_session_logger, init_session_logger, log_session_error
 from .sim import (
@@ -80,6 +81,9 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # Global state
 monitor = None
+# Hardware that was asked for and failed to start. Populated during start-up
+# instead of exiting, so the UI can say what is wrong; see hardware_status.py.
+hardware_status = HardwareStatus()
 power_monitor: Optional[PowerMonitor] = None
 battery_provider: str | None = None
 mock_mode: bool = False
@@ -1809,6 +1813,50 @@ def on_live_reading(reading: SpeedReading):
         return
 
 
+def radar_is_connected() -> bool:
+    """Whether the OPS243 serial link is actually open right now.
+
+    This used to be ``monitor is not None and not mock_mode``, which is a
+    statement about our own objects, not about the radar: it stayed True after
+    the cable was pulled, and could never be False on a real unit because the
+    server exited when the radar was missing. Mock mode reports True because
+    the simulated radar is, for the UI's purposes, working.
+    """
+    if monitor is None:
+        return False
+    if mock_mode:
+        return True
+    radar = getattr(monitor, "radar", None)
+    if radar is None:
+        return False
+    connected = getattr(radar, "is_connected", None)
+    if connected is None:
+        # A monitor whose radar predates the is_connected property. Fall back
+        # to "we have a radar object", which is what the old flag meant.
+        return True
+    return bool(connected)
+
+
+def _get_hardware_status() -> dict:
+    """Build the hardware_status payload the UI renders faults from."""
+    return hardware_status.to_dict(radar_connected=radar_is_connected())
+
+
+def emit_hardware_status() -> None:
+    """Push the current hardware status to every connected client."""
+    socketio.emit("hardware_status", _get_hardware_status())
+
+
+@app.route("/api/hardware-status")
+def api_hardware_status():
+    """Hardware faults as JSON.
+
+    Available over plain HTTP as well as the socket so a support request can
+    be answered with one curl, without a browser or a WebSocket client.
+    """
+    return jsonify(_get_hardware_status())
+
+
 def _get_trigger_status() -> dict:
     """Build trigger status payload for the UI."""
     from .rolling_buffer import RollingBufferMonitor  # pylint: disable=import-outside-toplevel
@@ -1837,7 +1885,7 @@ def _get_trigger_status() -> dict:
     return {
         "mode": mode,
         "trigger_type": trigger_type,
-        "radar_connected": monitor is not None and not mock_mode,
+        "radar_connected": radar_is_connected(),
         "radar_port": radar_port,
         "triggers_total": stats.get("triggers_total", 0),
         "triggers_accepted": stats.get("triggers_accepted", 0),
@@ -1967,6 +2015,9 @@ def handle_connect():
     """Handle client connection."""
     print("Client connected")
     _emit_sim_snapshot()
+    # Unconditional and first: a client that has just loaded needs to know
+    # about a missing radar even when there is no monitor to describe.
+    socketio.emit("hardware_status", _get_hardware_status())
     if power_monitor and power_monitor.status:
         socketio.emit("power_status", power_monitor.status.to_dict())
     if monitor:
@@ -1978,6 +2029,12 @@ def handle_connect():
 def handle_disconnect():
     """Handle client disconnection."""
     print("Client disconnected")
+
+
+@socketio.on("get_hardware_status")
+def handle_get_hardware_status():
+    """Re-send the hardware status on request."""
+    socketio.emit("hardware_status", _get_hardware_status())
 
 
 @socketio.on("get_trigger_status")
@@ -3678,7 +3735,26 @@ def start_monitor(
             f"(trigger: {trigger_type}, sample_rate: {sample_rate_ksps}ksps)"
         )
 
-    monitor.connect()
+    # A radar that will not connect is reported, not fatal. Exiting here would
+    # take the web server down with it, and the web server is the only thing
+    # that can tell a kiosk owner what went wrong — see hardware_status.py.
+    try:
+        monitor.connect()
+        hardware_status.clear(DeviceKind.OPS243)
+    except Exception as error:  # noqa: BLE001 - any failure must reach the UI
+        hardware_status.record(
+            DeviceKind.OPS243,
+            Severity.BLOCKING,
+            detail=str(error),
+        )
+        logger.error("[SERVER] OPS243 did not connect: %s", error)
+        print(f"ERROR: OPS243 did not connect: {error}")
+        print("The server is still starting so the UI can report this.")
+        # Everything below needs a live radar: session logging reads the
+        # firmware version, and monitor.start() opens the trigger loop. Stop
+        # here and leave `monitor` in place so the UI still learns the mode
+        # and trigger type it would have run with.
+        return
 
     if swing_speed_mode:
         swing_config = swing_speed_kwargs or {}
@@ -3862,8 +3938,17 @@ def stop_monitor():
         _fire_cloud_push(session_logger)
 
     if monitor:
-        monitor.stop()
-        monitor.disconnect()
+        # A monitor whose radar never connected has no reader thread and no
+        # open handle. Stopping it is still the right call, but neither step
+        # may abort shutdown.
+        try:
+            monitor.stop()
+        except Exception:  # pylint: disable=broad-except
+            logger.warning("[SERVER] monitor.stop() failed during shutdown", exc_info=True)
+        try:
+            monitor.disconnect()
+        except Exception:  # pylint: disable=broad-except
+            logger.warning("[SERVER] monitor.disconnect() failed during shutdown", exc_info=True)
         monitor = None
     mock_swing_speed_mode = False
 
@@ -4989,11 +5074,23 @@ def main():
             if args.debug:
                 print(f"IWR6843 raw dumps enabled: {iwr_output_dir}")
         else:
-            print("ERROR: IWR6843 requested but failed to initialize. Exiting.")
-            sys.exit(1)
+            # Degraded, not fatal: ball speed still works without the 60 GHz
+            # radar. Exiting would leave a kiosk owner with a blank screen
+            # instead of a session that is missing launch angle.
+            hardware_status.record(
+                DeviceKind.IWR6843,
+                Severity.DEGRADED,
+                detail="The IWR6843 was enabled but did not initialize.",
+            )
+            print("WARNING: IWR6843 requested but failed to initialize; continuing without it.")
 
     if args.inclinometer:
         if not init_inclinometer(zero_offset_deg=args.inclinometer_zero_offset):
+            hardware_status.record(
+                DeviceKind.INCLINOMETER,
+                Severity.DEGRADED,
+                detail="The inclinometer was enabled but did not respond on I2C.",
+            )
             print("WARNING: Inclinometer unavailable; continuing with configured IWR6843 tilt")
 
     # Initialize K-LD7 angle radars (if enabled)
@@ -5017,8 +5114,12 @@ def main():
             )
             print(f"K-LD7 vertical radar enabled (launch angle{offset_str})")
         else:
-            print("ERROR: K-LD7 vertical requested but failed to connect. Exiting.")
-            sys.exit(1)
+            hardware_status.record(
+                DeviceKind.KLD7_VERTICAL,
+                Severity.DEGRADED,
+                detail="The vertical K-LD7 was enabled but did not connect.",
+            )
+            print("WARNING: K-LD7 vertical requested but failed to connect; continuing without it.")
 
     if args.kld7_horizontal:
         if init_kld7(
@@ -5035,8 +5136,15 @@ def main():
             )
             print(f"K-LD7 horizontal radar enabled (club path{offset_str})")
         else:
-            print("ERROR: K-LD7 horizontal requested but failed to connect. Exiting.")
-            sys.exit(1)
+            hardware_status.record(
+                DeviceKind.KLD7_HORIZONTAL,
+                Severity.DEGRADED,
+                detail="The horizontal K-LD7 was enabled but did not connect.",
+            )
+            print(
+                "WARNING: K-LD7 horizontal requested but failed to connect; "
+                "continuing without it."
+            )
 
     start_monitor(
         port=args.port,
@@ -5074,6 +5182,10 @@ def main():
         print("Running in SWING SPEED mode - no ball impact trigger required")
 
     print(f"Server starting at http://{args.host}:{args.web_port}")
+    if hardware_status.faults:
+        print()
+        print(hardware_status.console_summary())
+        print("The UI will show this too; nothing here stops the server.")
     print()
 
     try:

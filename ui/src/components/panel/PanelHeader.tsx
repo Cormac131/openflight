@@ -72,8 +72,15 @@ export function PanelHeader({
   const radarConnected = radarConnectedProp ?? storeRadarConnected;
   const cameraStatus = cameraStatusProp ?? storeCameraStatus;
   const menuOpen = statusMenuOpenProp ?? internalOpen;
-  const status = connected ? 'connected' : 'disconnected';
-  const statusLabel = connected ? t('header.serverConnected') : t('header.serverDisconnected');
+  // The dot used to track only the websocket, so a unit whose radar had been
+  // unplugged still showed green. Radar trouble now degrades it to a warning
+  // state, which is visible without opening the status menu.
+  const status = !connected ? 'disconnected' : radarConnected ? 'connected' : 'degraded';
+  const statusLabel = !connected
+    ? t('header.serverDisconnected')
+    : radarConnected
+      ? t('header.serverConnected')
+      : t('header.radarDisconnected');
 
   const toggleMenu = () => {
     handleSecretTap();

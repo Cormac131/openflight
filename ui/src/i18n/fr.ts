@@ -12,6 +12,7 @@ export const fr: Messages = {
 
   'header.serverConnected': 'Serveur connecté',
   'header.serverDisconnected': 'Serveur déconnecté',
+  'header.radarDisconnected': 'Radar déconnecté',
   'header.statusMenu': 'État du système',
   'header.closeStatus': 'Fermer l’état',
   'header.server': 'Serveur',
@@ -28,6 +29,10 @@ export const fr: Messages = {
   'live.tiRadarDetail': 'Ce coup a utilisé un angle de lancement estimé. {reason}',
   'live.dismiss': 'Fermer',
   'live.dismissAlert': 'Fermer l’alerte radar TI',
+
+  // Hardware that failed to start (see types/hardware.ts).
+  'hardware.serverOffline': "Le moniteur de lancement ne répond pas. Éteignez puis rallumez l'appareil.",
+  'hardware.dismissFault': 'Fermer {device}',
 
   'metric.ballSpeed': 'Vit. balle',
   'metric.carry': 'Carry',

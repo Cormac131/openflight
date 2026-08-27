@@ -162,9 +162,11 @@ main() {
             install_ftdi_latency_rule
 
             if ! ops243_present; then
-                # Nothing to persist and nothing to power cycle for. Let the
-                # owner reach the UI, which will show the missing radar far
-                # more clearly than a console message they will never see.
+                # Nothing to persist and nothing to power cycle for. Carry
+                # on to the kiosk: the server starts even without a radar and
+                # covers the screen with "Radar not found" and what to do
+                # about it, which is the only message an owner with no
+                # keyboard will ever see. See src/openflight/hardware_status.py.
                 announce "No OPS243-A radar found. Check its USB cable, then reboot."
                 write_stage "done"
                 return 0

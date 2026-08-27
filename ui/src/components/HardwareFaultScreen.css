@@ -1,0 +1,60 @@
+/*
+ * Full-screen blocking fault notice.
+ *
+ * Sized in rem so it tracks the fluid html font-size across the 800x400,
+ * 800x480, and 1024x600 kiosk panels (see ui/AGENTS.md). Nothing here is
+ * tappable, so there are no touch-target or drag-scroll concerns; the text
+ * just has to be readable from arm's length at a golf mat.
+ */
+
+.hardware-fault {
+  position: fixed;
+  inset: 0;
+  /* Opaque, not a scrim: there is no usable app behind this to show through. */
+  background: var(--color-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg);
+  /* Above the shutdown dialog (1000): a unit with no radar cannot be shut
+     down into a working state, and this is the more important message. */
+  z-index: 1100;
+}
+
+.hardware-fault__card {
+  max-width: 34rem;
+  text-align: center;
+}
+
+.hardware-fault__title {
+  margin: 0 0 var(--space-md);
+  color: var(--color-danger);
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+
+.hardware-fault__remedy {
+  margin: 0 0 var(--space-md);
+  color: var(--color-text);
+  font-size: 1.125rem;
+  line-height: 1.5;
+}
+
+.hardware-fault__offline {
+  margin: 0 0 var(--space-sm);
+  color: var(--color-text-muted);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.hardware-fault__detail {
+  margin: var(--space-lg) 0 0;
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--color-border-soft);
+  color: var(--color-text-faint);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  /* The underlying error can be long and contains device paths; keep it
+     wrapping rather than clipped so it can be read off the screen. */
+  overflow-wrap: anywhere;
+}
