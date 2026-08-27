@@ -288,9 +288,7 @@ def circular_median(values: list[float]) -> float:
     # horizontal estimators call this hundreds of times per shot (usually for
     # four RX phases); constructing a separate NumPy pipeline per candidate
     # made this otherwise tiny robust statistic a measurable hot path.
-    wrapped_distances = np.abs(
-        np.angle(np.exp(1j * (array[:, np.newaxis] - array[np.newaxis, :])))
-    )
+    wrapped_distances = np.abs(np.angle(np.exp(1j * (array[:, np.newaxis] - array[np.newaxis, :]))))
     scores = np.median(wrapped_distances, axis=0)
     return float(array[int(np.argmin(scores))])
 

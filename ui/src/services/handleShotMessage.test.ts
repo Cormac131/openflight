@@ -155,4 +155,28 @@ describe('handleShotMessage', () => {
     expect(useShotStore.getState().shotProcessingPhase).toBe('iwr_dump');
     expect(useShotStore.getState().shotProcessingShotTimestamp).toBe(ballShot.timestamp);
   });
+
+  it('keeps camera processing feedback active after provisional OPS metrics arrive', async () => {
+    vi.stubGlobal('window', {} as Window & typeof globalThis);
+
+    const { handleShotMessage } = await import('./handleShotMessage');
+    const { useShotStore } = await import('../stores/useShotStore');
+
+    handleShotMessage({
+      shot: ballShot,
+      stats: {
+        shot_count: 1,
+        avg_ball_speed: 145,
+        max_ball_speed: 145,
+        min_ball_speed: 145,
+        avg_club_speed: null,
+        avg_smash_factor: null,
+        avg_carry_est: 0,
+      },
+      pending: { camera: true },
+    });
+
+    expect(useShotStore.getState().shotProcessingPhase).toBe('camera_processing');
+    expect(useShotStore.getState().shotProcessingShotTimestamp).toBe(ballShot.timestamp);
+  });
 });

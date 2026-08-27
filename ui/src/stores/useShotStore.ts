@@ -4,7 +4,8 @@ import type { Shot } from '../types/shot';
 /** Duration to keep isNewShot true — covers the longest animation (shot-glow: 2s) */
 const NEW_SHOT_DURATION_MS = 2500;
 const SHOT_PROCESSING_TIMEOUT_MS = 30_000;
-export type ShotProcessingPhase = 'capturing' | 'calculating' | 'iwr_dump';
+export type ShotProcessingPhase =
+  'capturing' | 'calculating' | 'iwr_dump' | 'camera_processing' | 'hardware_enrichment';
 
 interface ShotState {
   latestShot: Shot | null;
@@ -82,7 +83,6 @@ export const useShotStore = create<ShotState>((set) => {
           latestShot: state.latestShot?.timestamp === shot.timestamp ? shot : state.latestShot,
           shotProcessingPhase: completesPendingShot ? null : state.shotProcessingPhase,
           shotProcessingShotTimestamp: completesPendingShot ? null : state.shotProcessingShotTimestamp,
-          shotVersion: state.shotVersion + 1,
         };
       }),
     setShots: (newShots) => {

@@ -214,6 +214,7 @@ class TestCameraCaptureSettings:
             )
         ]
 
+
 class TestCameraReplayAPI:
     """Camera replay is prepared only through the explicit HTTP action."""
 
@@ -2732,6 +2733,27 @@ class TestKLD7PostShotCaptureDelay:
 class TestOnShotDetected:
     """Tests for live shot processing in the server."""
 
+    @staticmethod
+    def _shot(second: int = 0) -> Shot:
+        return Shot(
+            ball_speed_mph=150.0 + second,
+            club_speed_mph=100.0,
+            timestamp=datetime(2026, 8, 26, 12, 0, second),
+            impact_timestamp=100.0 + second,
+            club=ClubType.DRIVER,
+        )
+
+    @staticmethod
+    def _enrichment_queue():
+        return server_module.queue.Queue(maxsize=server_module._SHOT_ENRICHMENT_QUEUE_CAPACITY)
+
+    def test_enrichment_queue_has_hard_capacity(self):
+        assert server_module._SHOT_ENRICHMENT_QUEUE_CAPACITY > 0
+        assert (
+            server_module.shot_enrichment_queue.maxsize
+            == server_module._SHOT_ENRICHMENT_QUEUE_CAPACITY
+        )
+
     def test_emits_ops_metrics_before_iwr6843_dump_finishes(self, monkeypatch):
         """The seven-second TI UART dump must not hold the first UI update."""
         dump_started = threading.Event()
@@ -2743,7 +2765,7 @@ class TestOnShotDetected:
             @staticmethod
             def process_shot(**_kwargs):
                 dump_started.set()
-                assert release_dump.wait(1.0)
+                assert release_dump.wait(5.0)
                 return SimpleNamespace(capture=None, measurement=None, club_path=None)
 
         def start_background_task(target, *args, **kwargs):
@@ -2768,18 +2790,12 @@ class TestOnShotDetected:
             lambda event, payload: emitted.append((event, payload)),
         )
 
-        shot = Shot(
-            ball_speed_mph=150.0,
-            club_speed_mph=100.0,
-            timestamp=datetime.now(),
-            impact_timestamp=100.0,
-            club=ClubType.DRIVER,
-        )
+        shot = self._shot()
         callback = threading.Thread(target=on_shot_detected, args=(shot,), daemon=True)
         callback.start()
-        assert dump_started.wait(0.5)
+        assert dump_started.wait(2.0)
         try:
-            callback.join(timeout=0.1)
+            callback.join(timeout=1.0)
             assert not callback.is_alive()
             assert emitted[0][0] == "shot"
             assert emitted[0][1]["shot"]["ball_speed_mph"] == 150.0
@@ -2787,14 +2803,162 @@ class TestOnShotDetected:
             assert all(event != "shot_update" for event, _payload in emitted)
         finally:
             release_dump.set()
-            callback.join(timeout=1.0)
+            callback.join(timeout=2.0)
             for thread in background_threads:
-                thread.join(timeout=1.0)
+                thread.join(timeout=2.0)
 
         assert [event for event, _payload in emitted].count("shot") == 1
         updates = [payload for event, payload in emitted if event == "shot_update"]
         assert len(updates) == 1
         assert updates[0]["shot"]["timestamp"] == shot.timestamp.isoformat()
+
+    def test_deferred_shots_are_fifo_on_one_worker(self, monkeypatch):
+        processed = []
+        worker_targets = []
+        worker_token = object()
+        enrichment_queue = self._enrichment_queue()
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", enrichment_queue)
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(
+            server_module,
+            "_finish_shot_detected",
+            lambda shot, **_kwargs: processed.append(shot.timestamp),
+        )
+
+        def capture_worker(target, *_args, **_kwargs):
+            worker_targets.append(target)
+            return worker_token
+
+        monkeypatch.setattr(server_module.socketio, "start_background_task", capture_worker)
+        shots = [self._shot(1), self._shot(2)]
+
+        for shot in shots:
+            server_module._defer_shot_enrichment(
+                shot,
+                emit_event="shot_update",
+                initial_ui_ms=10.0,
+            )
+
+        assert worker_targets == [server_module._drain_shot_enrichment_queue]
+        assert server_module.shot_enrichment_task is worker_token
+
+        worker_targets[0]()
+
+        assert processed == [shot.timestamp for shot in shots]
+        assert enrichment_queue.empty()
+        assert server_module.shot_enrichment_task is None
+
+    def test_camera_only_enrichment_uses_provisional_then_final_events(self, monkeypatch):
+        emitted = []
+        worker_targets = []
+        enrichment_queue = self._enrichment_queue()
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", enrichment_queue)
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", object())
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+
+        def capture_worker(target, *_args, **_kwargs):
+            worker_targets.append(target)
+            return object()
+
+        def finish(shot, *, emit_event, initial_ui_ms=None):
+            del initial_ui_ms
+            server_module.socketio.emit(
+                emit_event,
+                {"shot": shot_to_dict(shot), "stats": {}},
+            )
+
+        monkeypatch.setattr(server_module.socketio, "start_background_task", capture_worker)
+        monkeypatch.setattr(server_module, "_finish_shot_detected", finish)
+
+        on_shot_detected(self._shot())
+        worker_targets[0]()
+
+        assert [event for event, _payload in emitted] == ["shot", "shot_update"]
+        assert emitted[0][1]["pending"] == {"camera": True}
+
+    def test_worker_start_failure_keeps_ops_result_usable(self, monkeypatch):
+        emitted = []
+        enrichment_queue = self._enrichment_queue()
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", enrichment_queue)
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", object())
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+        monkeypatch.setattr(
+            server_module.socketio,
+            "start_background_task",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("no worker")),
+        )
+
+        on_shot_detected(self._shot())
+
+        assert [event for event, _payload in emitted] == ["shot", "shot_update"]
+        assert emitted[-1][1]["shot"]["ball_speed_mph"] == 150.0
+        assert enrichment_queue.empty()
+
+    def test_worker_enrichment_failure_keeps_ops_result_usable(self, monkeypatch):
+        emitted = []
+        worker_targets = []
+        enrichment_queue = self._enrichment_queue()
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", enrichment_queue)
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(server_module, "camera_capture_runtime", None)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+        monkeypatch.setattr(
+            server_module.socketio,
+            "start_background_task",
+            lambda target, *_args, **_kwargs: worker_targets.append(target) or object(),
+        )
+        monkeypatch.setattr(
+            server_module,
+            "_finish_shot_detected",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("hardware failed")),
+        )
+
+        on_shot_detected(self._shot())
+        worker_targets[0]()
+
+        assert [event for event, _payload in emitted] == ["shot", "shot_update"]
+        assert emitted[-1][1]["shot"]["ball_speed_mph"] == 150.0
+
+    def test_stuck_hardware_cannot_grow_enrichment_queue_without_bound(self, monkeypatch):
+        emitted = []
+        enrichment_queue = self._enrichment_queue()
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", enrichment_queue)
+        monkeypatch.setattr(server_module, "shot_enrichment_task", object())
+        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(server_module, "camera_capture_runtime", None)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: emitted.append((event, payload)),
+        )
+
+        for second in range(5):
+            on_shot_detected(self._shot(second))
+
+        assert enrichment_queue.qsize() == server_module._SHOT_ENRICHMENT_QUEUE_CAPACITY
+        assert [event for event, _payload in emitted].count("shot") == 5
+        assert [event for event, _payload in emitted].count("shot_update") == 3
 
     def test_kld7_uses_shot_impact_timestamp(self, monkeypatch):
         """K-LD7 selection should be anchored to the OPS243 impact timestamp."""

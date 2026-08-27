@@ -52,7 +52,7 @@ describe('useShotStore processing lifecycle', () => {
     expect(useShotStore.getState().shotProcessingPhase).toBeNull();
   });
 
-  it('replaces a provisional shot when hardware enrichment finishes', () => {
+  it('replaces a provisional shot without replaying new-shot effects', () => {
     const enriched = {
       ...shot,
       launch_angle_vertical: 17.4,
@@ -63,6 +63,7 @@ describe('useShotStore processing lifecycle', () => {
       shots: [shot],
       shotProcessingPhase: 'iwr_dump',
       shotProcessingShotTimestamp: shot.timestamp,
+      isNewShot: true,
       shotVersion: 1,
     });
 
@@ -72,7 +73,8 @@ describe('useShotStore processing lifecycle', () => {
     expect(useShotStore.getState().latestShot).toBe(enriched);
     expect(useShotStore.getState().shotProcessingPhase).toBeNull();
     expect(useShotStore.getState().shotProcessingShotTimestamp).toBeNull();
-    expect(useShotStore.getState().shotVersion).toBe(2);
+    expect(useShotStore.getState().isNewShot).toBe(true);
+    expect(useShotStore.getState().shotVersion).toBe(1);
   });
 
   it('does not clear a newer IWR dump indicator when an older shot update arrives', () => {

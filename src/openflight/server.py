@@ -183,7 +183,12 @@ latest_frame: Optional[bytes] = None
 frame_lock = threading.Lock()
 shutdown_lock = threading.Lock()
 shutdown_cleanup_started = False
-shot_enrichment_queue: queue.Queue[tuple[Shot, str, float | None]] = queue.Queue()
+# One active hardware job plus two waiting shots is enough for normal golf
+# cadence without allowing a stuck peripheral to consume memory indefinitely.
+_SHOT_ENRICHMENT_QUEUE_CAPACITY = 2
+shot_enrichment_queue: queue.Queue[tuple[Shot, str, float | None]] = queue.Queue(
+    maxsize=_SHOT_ENRICHMENT_QUEUE_CAPACITY
+)
 shot_enrichment_task = None
 shot_enrichment_task_lock = threading.Lock()
 
@@ -3642,9 +3647,7 @@ def _finish_shot_detected(
                 player_name=shot.player_name,
                 inclinometer=shot.inclinometer,
                 pipeline_ms={
-                    "initial_ui": (
-                        round(initial_ui_ms, 1) if initial_ui_ms is not None else None
-                    ),
+                    "initial_ui": (round(initial_ui_ms, 1) if initial_ui_ms is not None else None),
                     "iwr6843": (round(iwr6843_ms, 1) if iwr6843_ms is not None else None),
                     "kld7": round(kld7_ms, 1) if kld7_ms is not None else None,
                     "camera_capture": (
@@ -3720,12 +3723,17 @@ def _emit_initial_ops_shot(shot: Shot) -> bool:
     try:
         shot_data = shot_to_dict(shot)
         stats = monitor.get_session_stats() if monitor else {}
+        pending = {}
+        if iwr6843_runtime is not None:
+            pending["iwr6843"] = True
+        if camera_capture_runtime is not None:
+            pending["camera"] = True
         socketio.emit(
             "shot",
             {
                 "shot": shot_data,
                 "stats": stats,
-                "pending": {"iwr6843": iwr6843_runtime is not None},
+                "pending": pending,
             },
         )
         return True
@@ -3738,6 +3746,30 @@ def _emit_initial_ops_shot(shot: Shot) -> bool:
             exc=error,
         )
         return False
+
+
+def _emit_ops_enrichment_fallback(shot: Shot, *, emit_event: str, reason: str) -> None:
+    """Finish the provisional UI contract when optional enrichment is unavailable."""
+    logger.warning(
+        "[SERVER] Publishing OPS-only %s after enrichment was skipped: %s",
+        emit_event,
+        reason,
+    )
+    try:
+        shot_data = shot_to_dict(shot)
+        stats = monitor.get_session_stats() if monitor else {}
+        socketio.emit(emit_event, {"shot": shot_data, "stats": stats})
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.error("[SERVER] Failed to emit OPS-only shot: %s", error, exc_info=True)
+        log_session_error(
+            "OPS-only WebSocket shot emit failed",
+            component="server",
+            context={"stage": f"emit_{emit_event}", "ball_speed_mph": shot.ball_speed_mph},
+            exc=error,
+        )
+        return
+
+    _forward_shot_to_simulators(shot)
 
 
 def _has_slow_shot_enrichment(shot: Shot) -> bool:
@@ -3775,6 +3807,11 @@ def _drain_shot_enrichment_queue() -> None:
                 context={"stage": "deferred_enrichment", "ball_speed_mph": shot.ball_speed_mph},
                 exc=error,
             )
+            _emit_ops_enrichment_fallback(
+                shot,
+                emit_event=emit_event,
+                reason="deferred worker failed",
+            )
         finally:
             shot_enrichment_queue.task_done()
 
@@ -3789,7 +3826,7 @@ def _defer_shot_enrichment(
     global shot_enrichment_task  # pylint: disable=global-statement
 
     with shot_enrichment_task_lock:
-        shot_enrichment_queue.put((shot, emit_event, initial_ui_ms))
+        shot_enrichment_queue.put_nowait((shot, emit_event, initial_ui_ms))
         if shot_enrichment_task is not None:
             return
         try:
@@ -3832,16 +3869,26 @@ def on_shot_detected(shot: Shot) -> None:
             emit_event=final_event,
             initial_ui_ms=initial_ui_ms,
         )
+    except queue.Full:
+        logger.warning(
+            "[SERVER] Shot enrichment queue is full (%d waiting); skipping optional hardware",
+            _SHOT_ENRICHMENT_QUEUE_CAPACITY,
+        )
+        _emit_ops_enrichment_fallback(
+            shot,
+            emit_event=final_event,
+            reason="enrichment queue full",
+        )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning(
             "[SERVER] Could not defer shot enrichment: %s",
             error,
             exc_info=True,
         )
-        _finish_shot_detected(
+        _emit_ops_enrichment_fallback(
             shot,
             emit_event=final_event,
-            initial_ui_ms=initial_ui_ms,
+            reason="background worker could not start",
         )
 
 

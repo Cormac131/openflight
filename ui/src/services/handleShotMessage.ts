@@ -7,14 +7,19 @@ export interface ShotMessage {
   stats: SessionStats;
   pending?: {
     iwr6843?: boolean;
+    camera?: boolean;
   };
 }
 
 export function handleShotMessage(data: ShotMessage) {
   const shotStore = useShotStore.getState();
   shotStore.addShot(data.shot);
-  if (data.pending?.iwr6843) {
+  if (data.pending?.iwr6843 && data.pending?.camera) {
+    shotStore.startShotProcessing('hardware_enrichment', data.shot.timestamp);
+  } else if (data.pending?.iwr6843) {
     shotStore.startShotProcessing('iwr_dump', data.shot.timestamp);
+  } else if (data.pending?.camera) {
+    shotStore.startShotProcessing('camera_processing', data.shot.timestamp);
   }
   playSwingCapturedCue();
 }

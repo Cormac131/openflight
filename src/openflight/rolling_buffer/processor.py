@@ -33,7 +33,7 @@ class RollingBufferProcessor:
     Processes raw I/Q data from rolling buffer mode into speed and spin data.
 
     The processor implements:
-    1. Standard FFT processing (128-sample blocks, ~56 Hz equivalent)
+    1. Standard FFT processing (128-sample blocks, ~234 Hz equivalent)
     2. Overlapping FFT processing (32-sample steps, ~937 Hz)
     3. Secondary FFT for spin detection from speed oscillations
 
@@ -430,15 +430,18 @@ class RollingBufferProcessor:
 
             peaks = self._process_block(i_block, q_block)
             timestamp_ms = (start / self.SAMPLE_RATE) * 1000
-            yield start, [
-                SpeedReading(
-                    speed_mph=speed_mph,
-                    magnitude=magnitude,
-                    timestamp_ms=timestamp_ms,
-                    direction=direction,
-                )
-                for speed_mph, magnitude, direction in peaks
-            ]
+            yield (
+                start,
+                [
+                    SpeedReading(
+                        speed_mph=speed_mph,
+                        magnitude=magnitude,
+                        timestamp_ms=timestamp_ms,
+                        direction=direction,
+                    )
+                    for speed_mph, magnitude, direction in peaks
+                ],
+            )
             start += step_size
 
     def _process_capture(self, capture: IQCapture, step_size: int) -> SpeedTimeline:
@@ -483,7 +486,7 @@ class RollingBufferProcessor:
 
     def process_standard(self, capture: IQCapture) -> SpeedTimeline:
         """
-        Process capture with standard non-overlapping blocks (~56 Hz).
+        Process capture with standard non-overlapping blocks (~234 Hz).
 
         Args:
             capture: Raw I/Q capture from radar
