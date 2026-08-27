@@ -331,6 +331,9 @@ def _shot_finalization_watchdog_loop() -> None:
             should_drain = False
             with _shot_finalization_condition:
                 if not _shot_finalization_order:
+                    if _shot_finalization_watchdog is current_thread:
+                        _shot_finalization_watchdog = None
+                    _shot_finalization_condition.notify_all()
                     return
                 head = _shot_finalization_registered[_shot_finalization_order[0]]
                 if head.deadline_monotonic is None:
