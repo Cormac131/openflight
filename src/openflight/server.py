@@ -14,6 +14,7 @@ import statistics
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -191,6 +192,16 @@ shot_enrichment_queue: queue.Queue[tuple[Shot, str, float | None]] = queue.Queue
 )
 shot_enrichment_task = None
 shot_enrichment_task_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class _ShotEnrichmentResult:
+    """Optional hardware outputs needed by required shot finalization."""
+
+    iwr6843_ms: float | None = None
+    kld7_ms: float | None = None
+    camera_capture_ms: float | None = None
+    camera_data: dict | None = None
 
 
 def _run_shutdown_step(name: str, callback) -> None:
@@ -3127,13 +3138,8 @@ def _attach_camera_replay(shot: Shot, camera_capture) -> None:
         )
 
 
-def _finish_shot_detected(
-    shot: Shot,
-    *,
-    emit_event: str,
-    initial_ui_ms: float | None = None,
-) -> None:
-    """Enrich, persist, and publish a shot after the fast OPS notification."""
+def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
+    """Mutate a shot with available radar/camera measurements and timings."""
     global ball_detected, ball_detection_confidence  # pylint: disable=global-statement
 
     # Snapshot orientation before IWR capture can block, and select only data
@@ -3498,6 +3504,28 @@ def _finish_shot_detected(
     if shot.mode != "mock":
         _fuse_camera_measurements(shot, camera_capture)
 
+    return _ShotEnrichmentResult(
+        iwr6843_ms=iwr6843_ms,
+        kld7_ms=kld7_ms,
+        camera_capture_ms=camera_capture_ms,
+        camera_data=camera_data,
+    )
+
+
+def _finalize_shot_detected(
+    shot: Shot,
+    *,
+    emit_event: str,
+    initial_ui_ms: float | None = None,
+    enrichment: _ShotEnrichmentResult | None = None,
+) -> None:
+    """Apply required fallbacks, persist once, and publish the final shot."""
+    enrichment = enrichment or _ShotEnrichmentResult()
+    iwr6843_ms = enrichment.iwr6843_ms
+    kld7_ms = enrichment.kld7_ms
+    camera_capture_ms = enrichment.camera_capture_ms
+    camera_data = enrichment.camera_data
+
     # Always emit user-facing launch angles. Radar/camera measurements win;
     # rejected or missing axes fall back to conservative estimates.
     _ensure_user_facing_launch_angles(shot)
@@ -3718,6 +3746,33 @@ def _finish_shot_detected(
             print(f"[WARN] Debug logging error: {e}")
 
 
+def _finish_shot_detected(
+    shot: Shot,
+    *,
+    emit_event: str,
+    initial_ui_ms: float | None = None,
+) -> None:
+    """Attempt optional enrichment, then always perform required finalization."""
+    enrichment = _ShotEnrichmentResult()
+    try:
+        enrichment = _enrich_shot_from_optional_hardware(shot)
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.error("[SERVER] Deferred shot enrichment failed: %s", error, exc_info=True)
+        log_session_error(
+            "Deferred shot enrichment failed",
+            component="server",
+            context={"stage": "deferred_enrichment", "ball_speed_mph": shot.ball_speed_mph},
+            exc=error,
+        )
+
+    _finalize_shot_detected(
+        shot,
+        emit_event=emit_event,
+        initial_ui_ms=initial_ui_ms,
+        enrichment=enrichment,
+    )
+
+
 def _emit_initial_ops_shot(shot: Shot) -> bool:
     """Publish immediately available OPS metrics before slow enrichments."""
     try:
@@ -3748,30 +3803,6 @@ def _emit_initial_ops_shot(shot: Shot) -> bool:
         return False
 
 
-def _emit_ops_enrichment_fallback(shot: Shot, *, emit_event: str, reason: str) -> None:
-    """Finish the provisional UI contract when optional enrichment is unavailable."""
-    logger.warning(
-        "[SERVER] Publishing OPS-only %s after enrichment was skipped: %s",
-        emit_event,
-        reason,
-    )
-    try:
-        shot_data = shot_to_dict(shot)
-        stats = monitor.get_session_stats() if monitor else {}
-        socketio.emit(emit_event, {"shot": shot_data, "stats": stats})
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        logger.error("[SERVER] Failed to emit OPS-only shot: %s", error, exc_info=True)
-        log_session_error(
-            "OPS-only WebSocket shot emit failed",
-            component="server",
-            context={"stage": f"emit_{emit_event}", "ball_speed_mph": shot.ball_speed_mph},
-            exc=error,
-        )
-        return
-
-    _forward_shot_to_simulators(shot)
-
-
 def _has_slow_shot_enrichment(shot: Shot) -> bool:
     """Whether optional hardware can add seconds to this shot callback."""
     return shot.mode != "mock" and (
@@ -3800,17 +3831,12 @@ def _drain_shot_enrichment_queue() -> None:
                 initial_ui_ms=initial_ui_ms,
             )
         except Exception as error:  # pylint: disable=broad-exception-caught
-            logger.error("[SERVER] Deferred shot enrichment failed: %s", error, exc_info=True)
+            logger.error("[SERVER] Deferred shot finalization failed: %s", error, exc_info=True)
             log_session_error(
-                "Deferred shot enrichment failed",
+                "Deferred shot finalization failed",
                 component="server",
-                context={"stage": "deferred_enrichment", "ball_speed_mph": shot.ball_speed_mph},
+                context={"stage": "deferred_finalization", "ball_speed_mph": shot.ball_speed_mph},
                 exc=error,
-            )
-            _emit_ops_enrichment_fallback(
-                shot,
-                emit_event=emit_event,
-                reason="deferred worker failed",
             )
         finally:
             shot_enrichment_queue.task_done()
@@ -3874,10 +3900,10 @@ def on_shot_detected(shot: Shot) -> None:
             "[SERVER] Shot enrichment queue is full (%d waiting); skipping optional hardware",
             _SHOT_ENRICHMENT_QUEUE_CAPACITY,
         )
-        _emit_ops_enrichment_fallback(
+        _finalize_shot_detected(
             shot,
             emit_event=final_event,
-            reason="enrichment queue full",
+            initial_ui_ms=initial_ui_ms,
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning(
@@ -3885,10 +3911,10 @@ def on_shot_detected(shot: Shot) -> None:
             error,
             exc_info=True,
         )
-        _emit_ops_enrichment_fallback(
+        _finalize_shot_detected(
             shot,
             emit_event=final_event,
-            reason="background worker could not start",
+            initial_ui_ms=initial_ui_ms,
         )
 
 
