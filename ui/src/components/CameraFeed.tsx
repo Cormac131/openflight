@@ -41,6 +41,7 @@ interface ExposureQuality {
 }
 
 const AUTO_EXPOSURE_LABELS: Record<CameraAutoExposureStatus['status'], string> = {
+  calibrating: 'Checking',
   ready: 'Ready',
   adjusting: 'Adjusting',
   lighting_required: 'Lighting needed',
@@ -104,7 +105,7 @@ function CaptureSettingsPanel({ settings, exposureQuality, error, onUpdate }: Ca
         <section className="camera-settings__section">
           <div className="camera-settings__section-title">
             <span>Automatic exposure</span>
-            <small>calibrates once at startup</small>
+            <small>checks every 5 seconds</small>
           </div>
           <div
             className={`camera-settings__auto-status camera-settings__auto-status--${autoExposure?.status ?? 'unavailable'}`}
