@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from flask import Flask, Response, jsonify, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
@@ -47,6 +47,12 @@ from .sim import (
 from .speed_correction import correct_ball_speed
 from .spin_estimate import calculated_spin_rpm
 from .swing_speed import SwingSpeedEvent
+from .update.commands import cmd_skip as update_cmd_skip
+from .update.config import (
+    CONFIG_PATH as UPDATE_CONFIG_PATH,
+    RESTART_MARKER_PATH,
+    load_config as load_update_config,
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -175,6 +181,9 @@ camera_enabled: bool = False
 camera_streaming: bool = False
 camera_thread: Optional[threading.Thread] = None
 camera_stop_event: Optional[threading.Event] = None
+update_poll_thread: Optional[threading.Thread] = None
+UPDATE_POLL_INTERVAL_S = 30
+_last_notified_pending_tag: str = ""
 ball_detected: bool = False
 ball_detection_confidence: float = 0.0
 latest_frame: Optional[bytes] = None
@@ -238,6 +247,46 @@ def _shutdown_process_after_delay(delay_s: float = 0.5) -> None:
         return
     logger.info("[SERVER] Goodbye")
     os._exit(0)
+
+
+def _update_status_payload(config) -> dict:
+    """Shape shared by the update_status push and the get_update_status reply."""
+    if not config:
+        return {"pending_tag": "", "pending_notes": "", "active_tag": ""}
+    return {
+        "pending_tag": config.pending_tag,
+        "pending_notes": config.pending_notes,
+        "active_tag": config.active_tag,
+    }
+
+
+def _update_poll_loop() -> None:
+    """Background loop: notice when openflight-update.timer prepares a new
+    release and push it to connected clients. Auto-update runs as a separate
+    systemd oneshot process, so this is how the running server learns about
+    it — polling ~/.config/openflight/update.json rather than any direct
+    coupling between the two processes."""
+    global _last_notified_pending_tag  # pylint: disable=global-statement
+    while True:
+        try:
+            config = load_update_config()
+            pending = config.pending_tag if config else ""
+            if pending and pending != _last_notified_pending_tag:
+                _last_notified_pending_tag = pending
+                socketio.emit("update_available", {"tag": pending, "notes": config.pending_notes})
+            elif not pending:
+                _last_notified_pending_tag = ""
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.exception("[UPDATE] Failed to poll update status")
+        time.sleep(UPDATE_POLL_INTERVAL_S)
+
+
+def _start_update_poll_thread() -> None:
+    global update_poll_thread  # pylint: disable=global-statement
+    if update_poll_thread is not None:
+        return
+    update_poll_thread = threading.Thread(target=_update_poll_loop, daemon=True)
+    update_poll_thread.start()
 
 
 # Baseline launch angles by club (TrackMan data)
@@ -1012,6 +1061,41 @@ def api_shutdown():
     logger.info("[SERVER] Shutdown requested via REST API")
     threading.Thread(target=_shutdown_process_after_delay, daemon=True).start()
     return {"status": "shutting_down"}, 200
+
+
+@app.route("/api/update/apply-now", methods=["POST"])
+def api_update_apply_now():
+    """Restart now to apply an already-prepared release.
+
+    Deliberately does not perform the symlink swap itself — it just marks
+    that a restart was requested and shuts down. `apply_pending_update` at
+    the top of start-kiosk.sh does the actual swap on the way back up,
+    reusing the same tested path the background timer already relies on.
+    """
+    config = load_update_config()
+    if not config or not config.pending_tag:
+        return {"error": "no update pending"}, 400
+
+    RESTART_MARKER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RESTART_MARKER_PATH.touch()
+    logger.info("[UPDATE] Apply-now requested via REST API (tag=%s)", config.pending_tag)
+    threading.Thread(target=_shutdown_process_after_delay, daemon=True).start()
+    return {"status": "restarting", "tag": config.pending_tag}, 200
+
+
+@app.route("/api/update/skip", methods=["POST"])
+def api_update_skip():
+    """Permanently dismiss the currently pending release ("Never")."""
+    data = request.get_json(silent=True) or {}
+    tag = data.get("tag")
+    config = load_update_config()
+    if (
+        not tag
+        or not config
+        or not update_cmd_skip(config, UPDATE_CONFIG_PATH, tag, out=lambda _msg: None)
+    ):
+        return {"error": "tag does not match the pending release"}, 400
+    return _update_status_payload(config), 200
 
 
 # Camera functions
@@ -1972,12 +2056,21 @@ def handle_connect():
     if monitor:
         socketio.emit("session_state", _session_state_payload(include_runtime_meta=True))
         socketio.emit("trigger_status", _get_trigger_status())
+    update_config = load_update_config()
+    if update_config and update_config.pending_tag:
+        socketio.emit("update_status", _update_status_payload(update_config))
 
 
 @socketio.on("disconnect")
 def handle_disconnect():
     """Handle client disconnection."""
     print("Client disconnected")
+
+
+@socketio.on("get_update_status")
+def handle_get_update_status():
+    """Report current auto-update state for the update-available dialog."""
+    socketio.emit("update_status", _update_status_payload(load_update_config()))
 
 
 @socketio.on("get_trigger_status")
@@ -2885,9 +2978,7 @@ def _fuse_camera_ball_flight(
                                     camera_capture_config.get("roll_correction_deg", 0.0)
                                 ),
                                 horizontal_pixel_sign=(
-                                    -1.0
-                                    if camera_capture_config.get("mirror_horizontal")
-                                    else 1.0
+                                    -1.0 if camera_capture_config.get("mirror_horizontal") else 1.0
                                 ),
                                 image_width_px=int(camera_capture_config["width"]),
                                 image_height_px=int(camera_capture_config["height"]),
@@ -5072,6 +5163,8 @@ def main():
         print("Simulate shots via WebSocket or API")
     if args.swing_speed:
         print("Running in SWING SPEED mode - no ball impact trigger required")
+
+    _start_update_poll_thread()
 
     print(f"Server starting at http://{args.host}:{args.web_port}")
     print()

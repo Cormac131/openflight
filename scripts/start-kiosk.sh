@@ -597,6 +597,13 @@ wait_for_server() {
     curl -s "http://$HOST:$PORT" > /dev/null 2>&1
 }
 
+# Touched by the server's POST /api/update/apply-now right before it exits
+# (see src/openflight/update/config.py's RESTART_MARKER_PATH — same path,
+# kept in sync by hand since one side is bash and the other Python). Checked
+# after the server process exits, below, to tell an update-triggered restart
+# apart from a real shutdown.
+RESTART_MARKER="$HOME/.config/openflight/restart-requested"
+
 # Swap in any release openflight-update.timer already downloaded/built in the
 # background (see scripts/setup/openflight-update.timer). A safe no-op when
 # auto-update isn't installed/enabled, or nothing is pending. Prints
@@ -998,6 +1005,23 @@ fi
 
 log "OpenFlight is running! Press Ctrl+C to stop."
 
-# Wait for server process — exits when server stops (Ctrl+C or UI shutdown)
+# Wait for server process — exits when server stops (Ctrl+C, UI shutdown, or
+# an "Apply now" update restart)
 wait $SERVER_PID
+
+if [ -f "$RESTART_MARKER" ]; then
+    rm -f "$RESTART_MARKER"
+    log "Update requested from the UI — restarting to apply it..."
+    if [ -n "$BROWSER_PID" ]; then
+        kill "$BROWSER_PID" 2>/dev/null || true
+    fi
+    pkill -f "chromium.*--kiosk" 2>/dev/null || true
+    pkill -f "chrome.*--kiosk" 2>/dev/null || true
+    # Re-run this script from the top: re-does apply_pending_update (the
+    # actual symlink swap), uv sync, the UI-built check, and starts a fresh
+    # server + browser — identical whether we're under systemd or a manual
+    # run, no Restart=on-failure exit-code tricks needed.
+    exec "$0" "$@"
+fi
+
 cleanup

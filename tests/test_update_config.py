@@ -23,7 +23,9 @@ class TestLoadConfig:
                     "etag": '"e"',
                     "active_tag": "v1.0.0",
                     "pending_tag": "v1.1.0",
+                    "pending_notes": "release notes here",
                     "previous_tag": "v0.9.0",
+                    "skipped_tag": "v1.2.0",
                     "last_check_at": "2026-01-01T00:00:00Z",
                     "last_error": "boom",
                 }
@@ -39,7 +41,9 @@ class TestLoadConfig:
             etag='"e"',
             active_tag="v1.0.0",
             pending_tag="v1.1.0",
+            pending_notes="release notes here",
             previous_tag="v0.9.0",
+            skipped_tag="v1.2.0",
             last_check_at="2026-01-01T00:00:00Z",
             last_error="boom",
         )
@@ -52,6 +56,8 @@ class TestLoadConfig:
         assert loaded.repo == cfg.DEFAULT_REPO
         assert loaded.keep_releases == cfg.DEFAULT_KEEP_RELEASES
         assert loaded.active_tag == "v1.0.0"
+        assert loaded.pending_notes == ""
+        assert loaded.skipped_tag == ""
 
 
 class TestSaveConfig:
@@ -71,6 +77,12 @@ class TestSaveConfig:
         )
         cfg.save_config(config, path)
         assert cfg.load_config(path) == config
+
+
+class TestRestartMarkerPath:
+    def test_lives_alongside_config_path(self):
+        assert cfg.RESTART_MARKER_PATH.parent == cfg.CONFIG_PATH.parent
+        assert cfg.RESTART_MARKER_PATH.name == "restart-requested"
 
 
 class TestPaths:

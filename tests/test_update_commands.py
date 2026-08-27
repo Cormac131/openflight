@@ -120,9 +120,22 @@ class TestCmdCheck:
 
         assert result["prepared"] == "v0.2.0"
         assert config.pending_tag == "v0.2.0"
+        assert config.pending_notes == "notes"
         assert config.etag == '"e1"'
         assert (config.releases_path() / "v0.2.0" / "pyproject.toml").exists()
         assert (config.releases_path() / "v0.2.0" / "ui" / "dist" / "index.html").exists()
+
+    def test_skipped_tag_is_not_re_prepared(self, tmp_path):
+        release = _release("v0.2.0")
+        client = FakeClient(check_result=CheckResult(release=release, etag='"e1"'))
+        config = _config(tmp_path, active_tag="v0.1.0", skipped_tag="v0.2.0")
+
+        result = commands.cmd_check(config, tmp_path / "update.json", client, out=lambda _m: None)
+
+        assert result["prepared"] is None
+        assert result["up_to_date"] is False
+        assert config.pending_tag == ""
+        assert client.download_calls == []
 
     def test_up_to_date_when_tag_matches_active(self, tmp_path):
         client = FakeClient(check_result=CheckResult(release=_release("v0.1.0"), etag='"e"'))
@@ -210,6 +223,24 @@ class TestCmdCheck:
         assert (active_dir / "marker.txt").exists()
         assert not (config.releases_path() / "v0.2.0").exists()
 
+    def test_missing_ui_asset_fails_prepare_instead_of_falling_back(self, tmp_path):
+        # A release with no ui-dist.tar.gz asset must never be prepared/applied:
+        # start-kiosk.sh's on-device `npm run build` fallback is exactly what
+        # auto-update must never trigger on a Pi.
+        release = _release("v0.2.0", ui=False)
+        client = FakeClient(
+            check_result=CheckResult(release=release, etag='"e1"'),
+            assets={release.tarball_url: _tarball_for(release.tag)},
+        )
+        config = _config(tmp_path, active_tag="v0.1.0")
+
+        result = commands.cmd_check(config, tmp_path / "update.json", client, out=lambda _m: None)
+
+        assert result["error"] is not None
+        assert "ui-dist.tar.gz" in result["error"]
+        assert config.pending_tag == ""
+        assert not (config.releases_path() / "v0.2.0").exists()
+
     def test_dry_run_does_not_write_state_or_download(self, tmp_path):
         release = _release("v0.2.0")
         client = FakeClient(check_result=CheckResult(release=release, etag='"e1"'))
@@ -284,6 +315,50 @@ class TestCmdRollback:
         config = _config(tmp_path, active_tag="v0.2.0", previous_tag="v0.1.0")
         ok = commands.cmd_rollback(config, tmp_path / "update.json", out=lambda _m: None)
         assert ok is False
+
+
+class TestCmdSkip:
+    def test_dismisses_pending_tag(self, tmp_path):
+        config = _config(tmp_path, active_tag="v0.1.0", pending_tag="v0.2.0", pending_notes="notes")
+        (config.releases_path() / "v0.1.0").mkdir(parents=True)
+        (config.releases_path() / "v0.2.0").mkdir(parents=True)
+
+        ok = commands.cmd_skip(config, tmp_path / "update.json", "v0.2.0", out=lambda _m: None)
+
+        assert ok is True
+        assert config.skipped_tag == "v0.2.0"
+        assert config.pending_tag == ""
+        assert config.pending_notes == ""
+        # Freed immediately rather than waiting for the next check cycle.
+        assert not (config.releases_path() / "v0.2.0").exists()
+        assert (config.releases_path() / "v0.1.0").exists()
+
+    def test_mismatched_tag_is_ignored(self, tmp_path):
+        config = _config(tmp_path, pending_tag="v0.2.0")
+
+        ok = commands.cmd_skip(config, tmp_path / "update.json", "v0.3.0", out=lambda _m: None)
+
+        assert ok is False
+        assert config.skipped_tag == ""
+        assert config.pending_tag == "v0.2.0"
+
+    def test_a_later_release_is_not_suppressed(self, tmp_path):
+        # "Never" only dismisses the exact tag; a newer one should still
+        # prepare normally on a later cmd_check.
+        release = _release("v0.3.0")
+        client = FakeClient(
+            check_result=CheckResult(release=release, etag='"e2"'),
+            assets={
+                release.tarball_url: _tarball_for(release.tag),
+                release.ui_dist_url: _ui_tarball(),
+            },
+        )
+        config = _config(tmp_path, active_tag="v0.1.0", skipped_tag="v0.2.0")
+
+        result = commands.cmd_check(config, tmp_path / "update.json", client, out=lambda _m: None)
+
+        assert result["prepared"] == "v0.3.0"
+        assert config.pending_tag == "v0.3.0"
 
 
 class TestCmdStatus:

@@ -7,6 +7,7 @@ import { useCameraStore } from './stores/useCameraStore';
 import { useDebugStore } from './stores/useDebugStore';
 import { usePlayerStore } from './stores/usePlayerStore';
 import { useHeroMetricStore } from './stores/useHeroMetricStore';
+import { useUpdateStore } from './stores/useUpdateStore';
 import { socketService } from './services/socketService';
 import { shouldEchoSelectionToServer } from './services/playerSocketSync';
 import { DebugPanel } from './components/DebugPanel';
@@ -14,6 +15,7 @@ import { DisplayMode } from './components/DisplayMode';
 import { SimShotBadges } from './components/SimShotBadges';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
+import { UpdateAvailableDialog, type UpdateDialogState } from './components/UpdateAvailableDialog';
 import {
   CameraPanel,
   LivePanel,
@@ -44,7 +46,7 @@ import './components/panel/panel.css';
 
 function AppContent() {
   const { t } = useI18n();
-  const { shutdown } = useSocket();
+  const { shutdown, applyUpdateNow, skipUpdate } = useSocket();
   const { connected, mockMode, debugMode, latestSimShots, serverClub } = useSystemStore(
     useShallow((state) => ({
       connected: state.connected,
@@ -102,6 +104,14 @@ function AppContent() {
       dismissIWR6843Alert: state.dismissIWR6843Alert,
     }))
   );
+  const { pendingUpdate, dismissedTag, dismissForSession, setPendingUpdate } = useUpdateStore(
+    useShallow((state) => ({
+      pendingUpdate: state.pendingUpdate,
+      dismissedTag: state.dismissedTag,
+      dismissForSession: state.dismissForSession,
+      setPendingUpdate: state.setPendingUpdate,
+    }))
+  );
 
   const [currentView, setCurrentView] = useState<PanelView>('live');
   const [selectedClub, setSelectedClub] = useState('driver');
@@ -109,6 +119,7 @@ function AppContent() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [showShutdown, setShowShutdown] = useState(false);
   const [shutdownState, setShutdownState] = useState<ShutdownState>('confirm');
+  const [updateDialogState, setUpdateDialogState] = useState<UpdateDialogState>('prompt');
   // Open on every app load so the user confirms their club before the first
   // shot; dismissing keeps the default. The /display route returns early below,
   // so this never appears in the passive TV view.
@@ -220,6 +231,42 @@ function AppContent() {
     setShutdownState('confirm');
   };
 
+  const doApplyUpdateNow = async () => {
+    setUpdateDialogState('pending');
+    try {
+      await applyUpdateNow();
+    } catch {
+      setUpdateDialogState('error');
+    }
+  };
+
+  const handleApplyNowClick = () => {
+    if (shots.length > 0) {
+      setUpdateDialogState('confirmActiveSession');
+    } else {
+      void doApplyUpdateNow();
+    }
+  };
+
+  const handleUpdateNextRestart = () => {
+    if (pendingUpdate) {
+      dismissForSession(pendingUpdate.tag);
+    }
+    setUpdateDialogState('prompt');
+  };
+
+  const handleUpdateNever = async () => {
+    if (!pendingUpdate) return;
+    try {
+      await skipUpdate(pendingUpdate.tag);
+      setPendingUpdate(null);
+    } catch {
+      // Leave the prompt up — the user can retry "Never" or dismiss with
+      // "Next restart" instead.
+    }
+    setUpdateDialogState('prompt');
+  };
+
   const playerShots = filterShotsByPlayer(shots, selectedPlayer);
   const playerLatestShot = playerShots[playerShots.length - 1] ?? null;
   const playerIsNewShot = Boolean(
@@ -268,6 +315,19 @@ function AppContent() {
 
       {showShutdown ? (
         <ShutdownDialog state={shutdownState} onConfirm={handleShutdown} onCancel={closeShutdown} />
+      ) : null}
+
+      {!showShutdown && pendingUpdate && pendingUpdate.tag !== dismissedTag ? (
+        <UpdateAvailableDialog
+          state={updateDialogState}
+          tag={pendingUpdate.tag}
+          notes={pendingUpdate.notes}
+          onApplyNowClick={handleApplyNowClick}
+          onApplyConfirmed={doApplyUpdateNow}
+          onCancelConfirm={() => setUpdateDialogState('prompt')}
+          onNextRestart={handleUpdateNextRestart}
+          onNever={handleUpdateNever}
+        />
       ) : null}
 
       <main className="panel-app__main">

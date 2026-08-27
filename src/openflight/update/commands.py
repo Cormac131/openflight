@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from . import deploy as deploy_module
-from .client import RateLimited, ReleaseSchemaError, UpdateNetworkError, is_newer
+from .client import (
+    UI_DIST_ASSET_NAME,
+    RateLimited,
+    ReleaseSchemaError,
+    UpdateNetworkError,
+    is_newer,
+)
 from .config import UpdateConfig, save_config
 
 OutFn = Callable[[str], None]
@@ -79,6 +85,12 @@ def cmd_check(
 
     candidate_tag = result.release.tag
 
+    if candidate_tag == config.skipped_tag:
+        out(f'{candidate_tag} was dismissed ("Never"); not preparing it again.')
+        if not dry_run:
+            save_config(config, config_path)
+        return summary
+
     if candidate_tag == config.active_tag:
         out(f"Up to date (active release is already {candidate_tag}).")
         summary["up_to_date"] = True
@@ -121,9 +133,15 @@ def cmd_check(
 
         deploy.install_deps(dest)
 
-        if result.release.ui_dist_url:
-            ui_bytes = client.download(result.release.ui_dist_url)
-            deploy.install_ui(ui_bytes, dest)
+        # A missing prebuilt UI asset is a hard failure, not a fallback: we
+        # never want a kiosk running the on-device `npm run build` fallback
+        # in start-kiosk.sh, which is slow/memory-heavy on a Pi.
+        if not result.release.ui_dist_url:
+            raise deploy_module.DeployError(
+                f"release {candidate_tag} has no {UI_DIST_ASSET_NAME} asset"
+            )
+        ui_bytes = client.download(result.release.ui_dist_url)
+        deploy.install_ui(ui_bytes, dest)
 
         deploy.smoke_test(dest)
     except (UpdateNetworkError, deploy_module.DeployError) as exc:
@@ -135,6 +153,7 @@ def cmd_check(
         return summary
 
     config.pending_tag = candidate_tag
+    config.pending_notes = result.release.notes
     config.last_error = ""
     save_config(config, config_path)
     _prune(config, deploy, out)
@@ -167,6 +186,7 @@ def cmd_apply(
         config.last_error = message
         if target_tag == config.pending_tag:
             config.pending_tag = ""
+            config.pending_notes = ""
         if not dry_run:
             save_config(config, config_path)
         summary["error"] = message
@@ -185,6 +205,7 @@ def cmd_apply(
     config.active_tag = target_tag
     if target_tag == config.pending_tag:
         config.pending_tag = ""
+        config.pending_notes = ""
     config.last_error = ""
     save_config(config, config_path)
     _prune(config, deploy, out)
@@ -222,6 +243,32 @@ def cmd_rollback(
     _prune(config, deploy, out)
 
     out(f"Rolled back to {config.active_tag} ({failed_tag} failed to start).")
+    return True
+
+
+def cmd_skip(
+    config: UpdateConfig,
+    config_path: Path,
+    tag: str,
+    deploy=deploy_module,
+    out: OutFn = print,
+) -> bool:
+    """Permanently dismiss ``tag`` (the UI's "Never"). Only that exact tag is
+    skipped — a later, newer release still prompts normally. Frees the
+    now-unwanted prepared release directory immediately rather than waiting
+    for the next check cycle to prune it."""
+    if tag != config.pending_tag:
+        pending = config.pending_tag or "(none)"
+        out(f"{tag} is not the currently pending release ({pending}); ignoring.")
+        return False
+
+    config.skipped_tag = tag
+    config.pending_tag = ""
+    config.pending_notes = ""
+    save_config(config, config_path)
+    _prune(config, deploy, out)
+
+    out(f"{tag} dismissed; won't be prepared again unless a newer release supersedes it.")
     return True
 
 

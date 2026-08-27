@@ -19,6 +19,11 @@ DEFAULT_RELEASES_DIR = Path.home() / "openflight-releases"
 DEFAULT_INSTALL_DIR = Path.home() / "openflight"
 DEFAULT_KEEP_RELEASES = 2
 
+# Touched by server.py's /api/update/apply-now right before it exits;
+# start-kiosk.sh checks for this exact path after the server process exits
+# to decide whether to exec itself fresh (apply) instead of shutting down.
+RESTART_MARKER_PATH = Path.home() / ".config" / "openflight" / "restart-requested"
+
 
 @dataclass
 class UpdateConfig:
@@ -32,7 +37,9 @@ class UpdateConfig:
     etag: str = ""
     active_tag: str = ""
     pending_tag: str = ""
+    pending_notes: str = ""
     previous_tag: str = ""
+    skipped_tag: str = ""
     last_check_at: str = ""
     last_error: str = ""
 
@@ -59,7 +66,9 @@ def load_config(path: Path = CONFIG_PATH) -> Optional[UpdateConfig]:
         etag=data.get("etag", ""),
         active_tag=data.get("active_tag", ""),
         pending_tag=data.get("pending_tag", ""),
+        pending_notes=data.get("pending_notes", ""),
         previous_tag=data.get("previous_tag", ""),
+        skipped_tag=data.get("skipped_tag", ""),
         last_check_at=data.get("last_check_at", ""),
         last_error=data.get("last_error", ""),
     )

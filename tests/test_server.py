@@ -27,6 +27,7 @@ from openflight.server import (
     swing_speed_to_shot_dict,
 )
 from openflight.swing_speed import SwingSpeedEvent
+from openflight.update.config import UpdateConfig
 
 
 class TestCameraCaptureSettings:
@@ -3800,3 +3801,108 @@ class TestOpsBaudValidation:
         a stricter check would reject a legitimate fallback to 115200, which the
         flag's own help text tells operators to use."""
         assert good in UART_BAUD_COMMANDS
+
+
+class TestUpdateEndpoints:
+    """Tests for the update-available REST API (/api/update/*)."""
+
+    class _FakeThread:
+        """Captures the target instead of actually running it in a background
+        thread — the real _shutdown_process_after_delay is already covered
+        by TestShutdownCleanup; here we only need to confirm it gets
+        scheduled, not that os._exit eventually fires in this process."""
+
+        started = []
+
+        def __init__(self, target=None, daemon=None):  # noqa: ARG002 - matches threading.Thread
+            self.target = target
+
+        def start(self):
+            TestUpdateEndpoints._FakeThread.started.append(self.target)
+
+    def setup_method(self):
+        self._FakeThread.started = []
+
+    def test_apply_now_400_when_nothing_pending(self, monkeypatch):
+        monkeypatch.setattr(server_module, "load_update_config", lambda: None)
+        client = server_module.app.test_client()
+
+        response = client.post("/api/update/apply-now")
+
+        assert response.status_code == 400
+
+    def test_apply_now_touches_marker_and_schedules_shutdown(self, monkeypatch, tmp_path):
+        config = UpdateConfig(pending_tag="v0.2.0", pending_notes="notes")
+        monkeypatch.setattr(server_module, "load_update_config", lambda: config)
+        monkeypatch.setattr(server_module, "RESTART_MARKER_PATH", tmp_path / "restart-requested")
+        monkeypatch.setattr(server_module.threading, "Thread", self._FakeThread)
+        client = server_module.app.test_client()
+
+        response = client.post("/api/update/apply-now")
+
+        assert response.status_code == 200
+        assert response.get_json() == {"status": "restarting", "tag": "v0.2.0"}
+        assert (tmp_path / "restart-requested").exists()
+        assert self._FakeThread.started == [server_module._shutdown_process_after_delay]
+
+    def test_skip_dismisses_pending_release(self, monkeypatch, tmp_path):
+        config = UpdateConfig(
+            releases_dir=str(tmp_path / "releases"),
+            install_dir=str(tmp_path / "openflight"),
+            active_tag="v0.1.0",
+            pending_tag="v0.2.0",
+            pending_notes="notes",
+        )
+        (config.releases_path() / "v0.1.0").mkdir(parents=True)
+        (config.releases_path() / "v0.2.0").mkdir(parents=True)
+        monkeypatch.setattr(server_module, "load_update_config", lambda: config)
+        monkeypatch.setattr(server_module, "UPDATE_CONFIG_PATH", tmp_path / "update.json")
+        client = server_module.app.test_client()
+
+        response = client.post("/api/update/skip", json={"tag": "v0.2.0"})
+
+        assert response.status_code == 200
+        assert response.get_json() == {
+            "pending_tag": "",
+            "pending_notes": "",
+            "active_tag": "v0.1.0",
+        }
+        assert not (config.releases_path() / "v0.2.0").exists()
+
+    def test_skip_400_on_tag_mismatch(self, monkeypatch, tmp_path):
+        config = UpdateConfig(pending_tag="v0.2.0")
+        monkeypatch.setattr(server_module, "load_update_config", lambda: config)
+        monkeypatch.setattr(server_module, "UPDATE_CONFIG_PATH", tmp_path / "update.json")
+        client = server_module.app.test_client()
+
+        response = client.post("/api/update/skip", json={"tag": "v0.3.0"})
+
+        assert response.status_code == 400
+        assert config.pending_tag == "v0.2.0"
+
+    def test_skip_400_when_no_tag_given(self, monkeypatch):
+        monkeypatch.setattr(server_module, "load_update_config", UpdateConfig)
+        client = server_module.app.test_client()
+
+        response = client.post("/api/update/skip", json={})
+
+        assert response.status_code == 400
+
+
+class TestUpdateStatusPayload:
+    """Tests for the payload shared by the update_status push and reply."""
+
+    def test_none_config_returns_empty_payload(self):
+        assert server_module._update_status_payload(None) == {
+            "pending_tag": "",
+            "pending_notes": "",
+            "active_tag": "",
+        }
+
+    def test_populated_config(self):
+        config = UpdateConfig(pending_tag="v0.2.0", pending_notes="notes", active_tag="v0.1.0")
+        assert server_module._update_status_payload(config) == {
+            "pending_tag": "v0.2.0",
+            "pending_notes": "notes",
+            "active_tag": "v0.1.0",
+        }

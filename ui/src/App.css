@@ -207,6 +207,74 @@
   background: color-mix(in srgb, var(--color-text) 8%, transparent);
 }
 
+.update-dialog {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 2rem;
+  text-align: center;
+  min-width: 280px;
+  max-width: 360px;
+}
+
+.update-dialog p {
+  font-size: 1.125rem;
+  color: var(--color-text);
+  margin: 0 0 0.75rem;
+}
+
+.update-dialog--pending {
+  min-width: 320px;
+}
+
+.update-dialog__detail {
+  display: block;
+  margin: 0 0 1.25rem;
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+}
+
+.update-dialog__detail--error {
+  color: var(--color-danger);
+}
+
+.update-dialog__buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.update-dialog__confirm {
+  padding: 0.625rem 1.5rem;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.update-dialog__confirm:active {
+  background: color-mix(in srgb, var(--color-accent) 80%, var(--color-text));
+}
+
+.update-dialog__secondary,
+.update-dialog__cancel {
+  padding: 0.625rem 1.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.9375rem;
+  cursor: pointer;
+}
+
+.update-dialog__secondary:active,
+.update-dialog__cancel:active {
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+}
+
 /* Landscape 7" screen (800x480) */
 @media (max-height: 500px) {
   .header {

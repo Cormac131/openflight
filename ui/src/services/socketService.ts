@@ -3,6 +3,7 @@ import { useSystemStore } from '../stores/useSystemStore';
 import { useShotStore } from '../stores/useShotStore';
 import { useCameraStore, type CameraCaptureSettings, type CameraStatus } from '../stores/useCameraStore';
 import { useDebugStore } from '../stores/useDebugStore';
+import { useUpdateStore, type PendingUpdate } from '../stores/useUpdateStore';
 import {
   type Shot,
   type SessionStats,
@@ -48,10 +49,15 @@ class SocketService {
     this.socket.on('connect', () => {
       console.log('Connected to server');
       useSystemStore.getState().setConnected(true);
+      // "Next restart" dismissal is session-local — a fresh connection (page
+      // reload or a dropped/restored socket) should prompt again if a
+      // release is still pending.
+      useUpdateStore.getState().clearDismissed();
       this.socket?.emit('get_session');
       this.socket?.emit('get_trigger_status');
       this.socket?.emit('get_radar_config');
       this.socket?.emit('get_camera_capture_settings');
+      this.socket?.emit('get_update_status');
     });
 
     this.socket.on('disconnect', () => {
@@ -214,6 +220,16 @@ class SocketService {
         useSystemStore.getState().setCloudUploadStatus(data.state, data.message);
       }
     );
+
+    this.socket.on('update_available', (data: PendingUpdate) => {
+      useUpdateStore.getState().setPendingUpdate(data);
+    });
+
+    this.socket.on('update_status', (data: { pending_tag: string; pending_notes: string }) => {
+      useUpdateStore
+        .getState()
+        .setPendingUpdate(data.pending_tag ? { tag: data.pending_tag, notes: data.pending_notes } : null);
+    });
   }
 
   // Emitters

@@ -170,6 +170,21 @@ export const fr: Messages = {
   'shutdown.shutDown': 'Éteindre',
   'shutdown.cancel': 'Annuler',
 
+  'update.available': 'Mise à jour disponible ({tag})',
+  'update.applyNow': 'Appliquer maintenant',
+  'update.nextRestart': 'Prochain redémarrage',
+  'update.never': 'Jamais',
+  'update.cancel': 'Retour',
+  'update.confirmActiveSessionTitle': 'Terminer cette session pour mettre à jour ?',
+  'update.confirmActiveSessionDetail':
+    'Appliquer la mise à jour maintenant redémarrera OpenFlight et mettra fin à la session en cours.',
+  'update.pendingAria': 'Application de la mise à jour',
+  'update.pendingTitle': 'Application de la mise à jour…',
+  'update.pendingDetail': 'OpenFlight redémarre pour charger la nouvelle version',
+  'update.error': 'Impossible de démarrer la mise à jour',
+  'update.errorDetail': 'Vérifiez le serveur et réessayez.',
+  'update.tryAgain': 'Réessayer',
+
   'power.pluggedIn': 'Branché',
   'power.onBattery': 'Sur batterie',
   'power.label': '{source}, {percent} de batterie',

@@ -170,6 +170,21 @@ export const pt: Messages = {
   'shutdown.shutDown': 'Desligar',
   'shutdown.cancel': 'Cancelar',
 
+  'update.available': 'Atualização disponível ({tag})',
+  'update.applyNow': 'Aplicar agora',
+  'update.nextRestart': 'Próxima reinicialização',
+  'update.never': 'Nunca',
+  'update.cancel': 'Voltar',
+  'update.confirmActiveSessionTitle': 'Encerrar esta sessão para atualizar?',
+  'update.confirmActiveSessionDetail':
+    'Aplicar a atualização agora reiniciará o OpenFlight, encerrando a sessão de hoje.',
+  'update.pendingAria': 'Aplicando atualização',
+  'update.pendingTitle': 'Aplicando atualização…',
+  'update.pendingDetail': 'O OpenFlight está reiniciando para carregar a nova versão',
+  'update.error': 'Não foi possível iniciar a atualização',
+  'update.errorDetail': 'Verifique o servidor e tente novamente.',
+  'update.tryAgain': 'Tentar novamente',
+
   'power.pluggedIn': 'Na tomada',
   'power.onBattery': 'Na bateria',
   'power.label': '{source}, {percent} de bateria',
