@@ -52,15 +52,14 @@ class Profile:
     def to_dict(self) -> dict:
         """Wire/disk representation.
 
-        ``settings`` is returned by reference, not copied: a caller that
-        holds onto it and mutates it later bypasses the store's lock and
-        ``save()`` path.
+        ``settings`` is shallow-copied so external callers can't mutate store-owned
+        state (and bypass the store's lock / persistence path).
         """
         return {
             "id": self.id,
             "name": self.name,
             "created_at": self.created_at,
-            "settings": self.settings,
+            "settings": dict(self.settings),
         }
 
     @classmethod
@@ -112,7 +111,8 @@ class ProfileStore:
 
     def snapshot(self) -> dict:
         """The authoritative payload broadcast on the socket."""
-        return self._payload()
+        with self._lock:
+            return self._payload()
 
     # -- mutations -----------------------------------------------------
 
@@ -167,7 +167,8 @@ class ProfileStore:
 
     def save(self) -> None:
         """Write the roster atomically. Never raises into a caller."""
-        payload = self._payload()
+        with self._lock:
+            payload = self._payload()
         temp_path = self._path.with_name(f"{self._path.name}.{uuid.uuid4().hex}.tmp")
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)

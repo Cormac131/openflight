@@ -7,6 +7,7 @@ import pytest
 from openflight.profiles import (
     DEFAULT_PROFILE_NAME,
     MAX_PROFILES,
+    Profile,
     ProfileStore,
 )
 
@@ -274,6 +275,31 @@ class TestSettings:
 
         assert ProfileStore(store_path).list()[-1].settings == {"altitude_m": 120}
 
+    def test_to_dict_returns_a_copy_of_settings(self):
+        profile = Profile(
+            id="abc",
+            name="Range",
+            created_at="2026-01-01T00:00:00Z",
+            settings={"altitude_m": 120},
+        )
+
+        payload = profile.to_dict()
+        payload["settings"]["altitude_m"] = 999
+        payload["settings"]["extra"] = True
+
+        assert profile.settings == {"altitude_m": 120}
+
+    def test_snapshot_settings_cannot_mutate_store_state(self, store_path):
+        store = ProfileStore(store_path)
+        added = store.add("Range")
+        added.settings["altitude_m"] = 120
+        store.save()
+
+        snapshot = store.snapshot()
+        snapshot["profiles"][-1]["settings"]["altitude_m"] = 999
+
+        assert store.list()[-1].settings == {"altitude_m": 120}
+
 
 class TestSnapshot:
     """snapshot() is the socket payload."""
@@ -313,3 +339,29 @@ class TestAtomicWrite:
         store.add("Range")
 
         assert [path.name for path in store_path.parent.iterdir()] == [store_path.name]
+
+    def test_save_builds_payload_while_holding_the_lock(self, store_path):
+        store = ProfileStore(store_path)
+
+        def observing_payload():
+            assert store._lock.locked()
+            return {
+                "profiles": [profile.to_dict() for profile in store.list()],
+                "active_profile_id": store.get_active().id,
+            }
+
+        store._payload = observing_payload
+        store.save()
+
+    def test_snapshot_builds_payload_while_holding_the_lock(self, store_path):
+        store = ProfileStore(store_path)
+
+        def observing_payload():
+            assert store._lock.locked()
+            return {
+                "profiles": [profile.to_dict() for profile in store.list()],
+                "active_profile_id": store.get_active().id,
+            }
+
+        store._payload = observing_payload
+        store.snapshot()

@@ -112,9 +112,10 @@ Client → server:
 - `clear_session` — `{ profile_id }` (defaults to the active profile).
   Deletes that profile's shots; other profiles are untouched.
 
-Shots carry `profile_id` and `profile_name` (denormalized at capture time),
-not a live reference — renaming a profile does not rewrite past shots' display
-name.
+Shots carry `profile_id` and `profile_name` (a snapshot at capture time) for
+logging / external consumers. The kiosk UI renders the current profile name
+from the `profiles` roster (joined by `profile_id`), so renaming updates the
+on-screen name for past shots.
 
 **Kiosk shell.** Footer tabs switch views. The footer logo opens a sheet for
 units (MPH/YDS vs KMH/M), dark/light theme, language, simulator and

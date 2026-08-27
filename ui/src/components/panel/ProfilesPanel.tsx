@@ -1,7 +1,6 @@
 import { useMemo, useRef, type ReactNode } from 'react';
 import type { Profile } from '../../types/profile';
 import type { Shot } from '../../types/shot';
-import { filterShotsByProfile } from '../../types/shot';
 import { useDragScroll } from '../../hooks/useDragScroll';
 import { useI18n } from '../../i18n/useI18n';
 import { PanelHeader } from './PanelHeader';
