@@ -153,7 +153,8 @@ class TestValidateArgs:
             "sweep_dwell": 2.0,
             "settle": 0.3,
             "margin": 6,
-            "series_ohms": 33_000.0,
+            "series_ohms": None,
+            "end_to_end_ohms": None,
         }
         return argparse.ArgumentParser(), SimpleNamespace(**{**defaults, **overrides})
 
@@ -204,6 +205,22 @@ class TestValidateArgs:
 
     def test_a_negative_series_resistor_is_refused(self):
         self._expect_error(series_ohms=-1.0)
+
+    def test_series_and_variant_default_to_none_and_are_accepted(self):
+        # Both resolve per device after validation, so None must not be
+        # compared against a number.
+        parser, args = self._parser_and_args(series_ohms=None, end_to_end_ohms=None)
+
+        script.validate_args(parser, args)
+
+    @pytest.mark.parametrize("value", [0, -1.0])
+    def test_a_non_positive_end_to_end_resistance_is_refused(self, value):
+        self._expect_error(end_to_end_ohms=value)
+
+    def test_a_family_variant_is_accepted(self):
+        parser, args = self._parser_and_args(end_to_end_ohms=10_000.0)
+
+        script.validate_args(parser, args)
 
     def test_a_negative_margin_is_refused(self):
         self._expect_error(margin=-1)

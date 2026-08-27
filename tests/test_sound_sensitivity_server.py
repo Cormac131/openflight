@@ -345,3 +345,62 @@ class TestAutoGain:
 
     def test_a_pot_without_an_adc_says_auto_is_unavailable(self, service):
         assert service.state().auto_available is False
+
+
+class TestResistanceVariants:
+    """The MCP4018 breakout ships in 5k/10k/50k/100k. Getting the value wrong
+    does not change behaviour, but it makes every resistance the UI reports
+    wrong, which is how a working pot comes to look broken."""
+
+    def test_the_default_is_the_100k_part(self, monkeypatch):
+        monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
+
+        server_module.init_sound_sensitivity(simulated=True)
+
+        pot = server_module.sound_sensitivity_service.pot
+        assert pot.end_to_end_ohms == 100_000.0
+
+    def test_a_smaller_variant_can_be_configured(self, monkeypatch):
+        monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
+
+        server_module.init_sound_sensitivity(end_to_end_ohms=10_000.0, simulated=True)
+
+        pot = server_module.sound_sensitivity_service.pot
+        assert pot.end_to_end_ohms == 10_000.0
+        assert server_module.sound_sensitivity_runtime_config["end_to_end_ohms"] == 10_000.0
+
+    def test_the_variant_changes_every_reported_resistance(self, monkeypatch):
+        monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
+        server_module.init_sound_sensitivity(end_to_end_ohms=10_000.0, simulated=True)
+
+        state = server_module.sound_sensitivity_service.state()
+
+        assert state.resistance_ohms < 11_000
+
+    def test_the_ds3502_ignores_it(self, monkeypatch):
+        # Its span is fixed by the part; only the series resistor moves it.
+        monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
+
+        server_module.init_sound_sensitivity(
+            device="ds3502", end_to_end_ohms=10_000.0, simulated=True
+        )
+
+        assert "end_to_end_ohms" not in server_module.sound_sensitivity_runtime_config
+
+    def test_a_non_positive_variant_is_refused_at_the_cli(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "openflight-server",
+                "--sound-sensitivity",
+                "--sound-sensitivity-end-to-end-ohms",
+                "0",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            server_module.main()
+
+        assert exc_info.value.code == 2
+        assert "end-to-end-ohms must be positive" in capsys.readouterr().err

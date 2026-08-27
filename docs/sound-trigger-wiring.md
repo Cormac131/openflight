@@ -42,9 +42,9 @@ R17 sits in parallel with the onboard 100kΩ surface-mount R3, reducing the prea
 
 Start with 47kΩ. If the GATE LED still stays lit without sound, switch to a lower value.
 
-> **Want to change sensitivity without a soldering iron?** Fit a DS3502 digital
+> **Want to change sensitivity without a soldering iron?** Fit an I2C digital
 > potentiometer to the R17 pads instead of a fixed resistor and tune it from the
-> UI. See [Optional: Software-Controlled Sensitivity](#optional-software-controlled-sensitivity-ds3502-digital-pot)
+> UI. See [Optional: Software-Controlled Sensitivity](#optional-software-controlled-sensitivity-digital-pot)
 > below. Wire the rest of the trigger first and get it working with a soldered
 > resistor — the digipot replaces one component, not the whole guide.
 
@@ -148,16 +148,59 @@ Make a sound near the sensor... (Ctrl+C to quit)
 
 ---
 
-## Optional: Software-Controlled Sensitivity (DS3502 Digital Pot)
+## Optional: Software-Controlled Sensitivity (Digital Pot)
 
-A soldered R17 fixes the detector's gain at one value. Replacing it with an
-**Adafruit DS3502** I2C digital potentiometer puts that resistance under
-software control, so sensitivity becomes a slider on the **Debug → Sound** page
-instead of a trip to the bench. Everything else about the trigger is unchanged:
-`GATE` still drives `HOST_INT` directly, and the ~10 µs hardware latency is
-untouched.
+A soldered R17 fixes the detector's gain at one value. Replacing it with an I2C
+digital potentiometer puts that resistance under software control, so
+sensitivity becomes a slider on the **Debug → Sound** page instead of a trip to
+the bench. Everything else about the trigger is unchanged: `GATE` still drives
+`HOST_INT` directly, and the ~10 µs hardware latency is untouched.
 
 This is optional. Skip it if a fixed resistor works for where you hit.
+
+### Which Part
+
+| | **MCP401X 100 kΩ** (preferred) | DS3502 10 kΩ |
+|---|---|---|
+| Series resistor | **not needed** | required, 33 kΩ typical |
+| R17 span | 0.1 – 100 kΩ | 33 – 43 kΩ |
+| Gain range for auto gain | **~500×** | ~1.2× |
+| Resolution | 787 Ω/step | 79 Ω/step |
+| Address | 0x2f, **fixed** | 0x28–0x2b |
+| Remembers its setting | no — the Pi does | yes, in EEPROM |
+| Extra supply pin | no | `V+`, and a jumper to cut |
+
+**Take a 100 kΩ MCP401X.** It spans R17's whole operating range unaided, which
+is what makes [closed-loop auto gain](#optional-closed-loop-auto-gain-ads1115)
+worth running — the DS3502's 10 kΩ behind a series resistor leaves the loop with
+almost no travel. Pass `--sound-sensitivity-device ds3502` if you already have
+the other part; both are fully supported.
+
+#### Which Breakout
+
+The convenient option is **[Soldered's Digipot 100k breakout](https://docs.soldered.com/digipot/overview/)**
+(MCP4018). It has **two Qwiic ports**, so it chains straight off the LIS3DH with
+one cable and no header wiring at all, and it runs from 3.3 V or 5 V. Soldered
+also sell 5 kΩ, 10 kΩ and 50 kΩ versions of the same board — tell the server
+which you have with `--sound-sensitivity-end-to-end-ohms`, or every resistance
+it reports will be wrong.
+
+The alternative is a bare **MCP4017T-104E/LT** (SC70-6) on a scrap of
+protoboard. Identical address, protocol and driver; four wires instead of a
+cable.
+
+> **⚠ Check the wiper-to-ground path before committing to a board.** The family
+> shares an address, a protocol and this codebase, but not its terminals. From
+> the Microchip datasheet: *"The MCP4017 is a true rheostat, with terminal B and
+> the wiper (W) of the variable resistor available on pins. The MCP4018 device
+> offers a voltage divider (potentiometer) with terminal B internally connected
+> to ground."*
+>
+> R17 sits in the preamp's feedback path. If neither end of it is at ground, a
+> `B` tied internally to ground would pull that node down through the ladder.
+> Soldered's board breaks out `A` and `W` only, which is consistent with `B`
+> being internal. **Two minutes with a meter settles it** — see
+> [Step 0](#step-0-check-the-wiper-to-ground-path) before soldering anything.
 
 ### Why It Works (and When a Series Resistor Is Needed)
 
@@ -165,7 +208,7 @@ This is optional. Skip it if a fixed resistor works for where you hit.
 they set the preamp's gain. A **lower** parallel resistance means **less gain**,
 so a lower R17 makes the detector **less** sensitive.
 
-**A 100 kΩ MCP4017 needs nothing in series.** Its span covers 0 to 100 kΩ, so
+**A 100 kΩ MCP401X needs nothing in series.** Its span covers 0 to 100 kΩ, so
 this guide's 33 kΩ and 47 kΩ settings both land comfortably inside it — at steps
 42 and 60 of 127. Leave `--sound-sensitivity-series-ohms` alone.
 
@@ -203,12 +246,23 @@ detect the drift. Both supported parts avoid all of it:
 - **They claim no GPIOs.** They share the I2C bus the inclinometer and any UPS
   fuel gauge already use.
 
-The DS3502 additionally keeps its setting in its own EEPROM. The MCP4017's wiper
+The DS3502 additionally keeps its setting in its own EEPROM. The MCP401X's wiper
 is volatile and returns to mid-scale on every power-up, so OpenFlight saves the
 setting to `~/.config/openflight/sound_sensitivity.json` and re-applies it at
 startup instead — the difference is invisible in use.
 
 ### Parts
+
+For an **MCP401X** (preferred):
+
+- One **[Soldered Digipot 100k](https://docs.soldered.com/digipot/overview/)**
+  breakout, or a bare **MCP4017T-104E/LT** on protoboard — see
+  [Which Breakout](#which-breakout).
+- **No series resistor.**
+- Either one JST-SH Qwiic cable, **or** four Dupont jumpers — see Step 2.
+- Two short leads to the R17 pads.
+
+For a **DS3502**:
 
 - One **Adafruit DS3502** breakout ([product 4286](https://www.adafruit.com/product/4286)).
 - One **series resistor** — 33 kΩ unless the table above says otherwise.
@@ -216,9 +270,39 @@ startup instead — the difference is invisible in use.
   jumper for `V+` — see Step 2.
 - Two short leads to the R17 pads.
 
-### Step 1: Cut the V+ Jumper
+### Step 0: Check the Wiper-to-Ground Path
 
-Do this before anything else. **`V+` is the wiper bias pin**, and Adafruit ship
+Do this before soldering anything to the SEN-14262, on any MCP401X board. It
+answers the question raised above — whether this particular part's terminal B is
+internally grounded — with a meter instead of a datasheet. **Skip it for the
+DS3502**, whose `RL` is a plain pin with no internal connection.
+
+Power the board from 3.3 V and GND alone; no I2C is needed, because the wiper
+comes up at mid-scale (step 64) by itself. Then take two readings:
+
+| Probes | Reading | Means |
+|--------|---------|-------|
+| `A` → `W` | ~50 kΩ | The ladder is alive and sitting mid-scale. Any other value: wrong part, wrong end-to-end resistance, or no power. |
+| `W` → `GND` | open, or ≫ 1 MΩ | **Good.** The ladder floats. Fit it to R17. |
+| `W` → `GND` | ~50 kΩ (and `A` → `GND` ~100 kΩ) | **Stop.** Terminal B is internally grounded — MCP4018 behaviour. Do not fit it to R17. |
+
+The second reading is the whole test. R17 sits in the preamp's feedback path,
+where neither end is at ground; a grounded B would drag that node down through
+the ladder and the detector's gain would never track the slider. If the board
+fails, use a bare MCP4017 or the DS3502 instead — both are supported, and
+nothing else in this guide changes.
+
+A board that passes has a floating two-terminal ladder, whichever way its pins
+are silkscreened, and the driver's maths applies unchanged.
+[Step 5](#step-5-verify-with-a-meter) confirms the direction once it is on the
+bus: resistance must *rise* with the step.
+
+### Step 1: Cut the V+ Jumper — DS3502 Only
+
+The MCP401X has no `V+` pin and no jumper to cut. If that is what you are
+fitting, go straight to Step 2.
+
+**`V+` is the wiper bias pin** on the DS3502, and Adafruit ship
 the board with a solder jumper tying it to `RH`. Their pinout page: *"By default
 this is connected with a jumper to RH but you can cut the solder jumper and wire
 it directly."*
@@ -238,22 +322,32 @@ Two ways, depending on whether you already have the LIS3DH inclinometer fitted.
 
 #### Option A — Dupont wires
 
-Five wires straight to the Pi header:
+Four wires straight to the Pi header, or five for a DS3502:
 
-| DS3502 | Pi header | Note |
-|--------|-----------|------|
+| Pot | Pi header | Note |
+|-----|-----------|------|
 | `VCC` | Physical **1** or **17** (3.3 V) | Logic supply |
 | `GND` | Physical **9** (GND) | Shared rail |
 | `SDA` | Physical **3** (BCM2) | Shared I2C bus |
 | `SCL` | Physical **5** (BCM3) | Shared I2C bus |
-| `V+` | Physical **2** or **4** (5 V) | Wiper bias — see Step 1 |
+| `V+` | Physical **2** or **4** (5 V) | **DS3502 only** — wiper bias, see Step 1 |
 
-#### Option B — STEMMA QT chained from the LIS3DH
+#### Option B — Qwiic / STEMMA QT chained from the LIS3DH
 
 If you have the [LIS3DH inclinometer](inclinometer/README.md), it is an Adafruit
-STEMMA QT board with a spare port. One JST-SH cable from it to the DS3502 covers
-`VCC`, `GND`, `SDA` and `SCL` in a single click — no header pins to find and
-nothing to mis-wire.
+STEMMA QT board with a spare port. Qwiic and STEMMA QT are the same 4-conductor
+JST-SH connector, so one cable from it to the pot covers `VCC`, `GND`, `SDA` and
+`SCL` in a single click — no header pins to find and nothing to mis-wire.
+
+On a **Soldered Digipot** this is the whole job, and its *second* Qwiic port
+carries the chain onward to an ADS1115 if you go on to fit
+[auto gain](#optional-closed-loop-auto-gain-ads1115):
+
+```
+   Pi header ──[existing]── LIS3DH ──[JST-SH]── Digipot ──[JST-SH]── ADS1115
+```
+
+A **DS3502** needs one extra wire, because `V+` is not on the cable:
 
 ```
    Pi header ──[existing wiring]── LIS3DH ──[JST-SH cable]── DS3502
@@ -263,28 +357,48 @@ nothing to mis-wire.
 
 | Connection | Carries |
 |------------|---------|
-| JST-SH cable, LIS3DH spare port → DS3502 QT port | `VCC` (3.3 V), `GND`, `SDA`, `SCL` |
-| One Dupont wire, Pi physical **2** or **4** → DS3502 `V+` | Wiper bias |
+| JST-SH cable, LIS3DH spare port → pot's Qwiic port | `VCC` (3.3 V), `GND`, `SDA`, `SCL` |
+| One Dupont wire, Pi physical **2** or **4** → DS3502 `V+` | Wiper bias (DS3502 only) |
 
-**The QT cable does not carry `V+`** — it is a 4-conductor I2C cable, and `V+`
-is specific to this board. So Option B is one cable plus one wire, not one cable
-alone. That single wire is the whole difference between the two options.
+On a DS3502, **the QT cable does not carry `V+`** — it is a 4-conductor I2C
+cable, and `V+` is specific to that board. So Option B is one cable plus one
+wire there, not one cable alone. The MCP401X has no such pin, which is why the
+Soldered board is genuinely cable-only.
 
 Either way the pot lands on the same bus the inclinometer (0x18) and any
-Geekworm UPS fuel gauge (0x36) already use. The DS3502 sits at **0x28** and does
-not clash; the `A0`/`A1` jumpers give 0x28–0x2b if you need to move it, passed
-with `--sound-sensitivity-address`.
+Geekworm UPS fuel gauge (0x36) already use, and neither part clashes. The
+MCP401X answers at **0x2f**, which is fixed in silicon — there are no address
+jumpers, and only one can be on the bus. The DS3502 sits at **0x28**, with
+`A0`/`A1` jumpers giving 0x28–0x2b if you need to move it, passed with
+`--sound-sensitivity-address`.
 
 Confirm the Pi can see it before going further:
 
 ```bash
-i2cdetect -y 1     # expect 28 in the grid, alongside 18 and 36 if fitted
+i2cdetect -y 1     # expect 2f (or 28 for a DS3502), alongside 18 and 36 if fitted
 ```
 
 ### Step 3: Connect the Pot to the R17 Pads
 
-The wiper and the low terminal go across the R17 footprint, with the series
-resistor in the wiper leg:
+Two leads bridge the R17 footprint. Which pot terminals they come from, and
+whether a series resistor sits in one leg, depends on the part.
+
+**MCP401X** — the two ladder terminals go straight across the pads, nothing in
+series:
+
+```
+   MCP401X                                    SEN-14262
+┌───────────┐                               ┌─────────────┐
+│  A  ──────┼───────────────────────────────┤ R17 pad     │
+│           │                               │  (parallel  │
+│  W  ──────┼───────────────────────────────┤   with R3)  │
+│           │                               │             │
+│ GND ──────┼──────── Pi GND ───────────────┤ GND         │
+└───────────┘                               └─────────────┘
+```
+
+**DS3502** — the wiper and the low terminal, with the series resistor in the
+wiper leg:
 
 ```
    DS3502                                     SEN-14262
@@ -297,8 +411,15 @@ resistor in the wiper leg:
 └───────────┘                               └─────────────┘
 ```
 
-- **`RH` is left unconnected.** Only `RW` and `RL` are used, so the pot acts as
-  a variable resistor rather than a divider.
+- **The MCP401X has only two terminals**, so there is nothing to leave
+  unconnected — Soldered's board silkscreens them `A` and `W`, a bare MCP4017
+  calls them `B` and `W`. Either way, a board that passed Step 0 has a floating
+  pair that behaves as a rheostat, and its resistance *rises* with the step:
+  ~100 Ω at step 0, ~100 kΩ at step 127. That matches the DS3502 and what the
+  driver assumes, so left on the UI slider is least sensitive on both parts.
+  Step 5 checks it with a meter.
+- **The DS3502's `RH` is left unconnected.** Only `RW` and `RL` are used, so the
+  pot acts as a variable resistor rather than a divider.
 - **R17 is not polarised** — it is a plain two-pad footprint, so either lead can
   go to either pad.
 - Keep the two leads short. This is a high-impedance node on an audio preamp;
@@ -318,7 +439,10 @@ Sound sensitivity control enabled (mcp401x step 64, ~50494 ohm R17)
 ```
 
 On a DS3502, add `--sound-sensitivity-device ds3502` and
-`--sound-sensitivity-series-ohms` if you fitted something other than 33 kΩ.
+`--sound-sensitivity-series-ohms` if you fitted something other than 33 kΩ. On
+one of Soldered's 5 kΩ, 10 kΩ or 50 kΩ boards, add
+`--sound-sensitivity-end-to-end-ohms` — the driver has no way to measure it,
+so without the flag every resistance the UI reports is wrong.
 
 If the pot cannot be reached, the server logs a warning and carries on — the
 detector keeps whatever gain the hardware is at, and the Debug page shows the
@@ -329,8 +453,9 @@ prerequisite for detecting a shot.
 |------|---------|
 | `--sound-sensitivity` | Enable the control (off by default) |
 | `--sound-sensitivity-device` | `mcp401x` (default) or `ds3502` |
-| `--sound-sensitivity-series-ohms N` | The series resistor you fitted. Defaults per device: none for the MCP4017, 33000 for the DS3502 |
-| `--sound-sensitivity-address N` | I2C address. Defaults per device; the MCP4017's 0x2f is fixed |
+| `--sound-sensitivity-series-ohms N` | The series resistor you fitted. Defaults per device: none for the MCP401X, 33000 for the DS3502 |
+| `--sound-sensitivity-end-to-end-ohms N` | The pot's own resistance, if not the 100 kΩ default. Soldered also sell 5k/10k/50k |
+| `--sound-sensitivity-address N` | I2C address. Defaults per device; the MCP401X's 0x2f is fixed |
 | `--sound-sensitivity-i2c-bus N` | I2C bus (default 1) |
 | `--sound-sensitivity-position N` | Force step `N` (0–127) for this run, without persisting it |
 
@@ -346,11 +471,23 @@ uv run python scripts/hardware-test/test_digipot.py --sweep
 is in the feedback path around a live op-amp, and a meter on a powered node
 reads the amplifier's response to room noise rather than a resistance.
 
-Expect the reading to climb smoothly from the series resistor's value to that
-plus 10 kΩ — 33 kΩ to 43 kΩ with the default. In circuit (unpowered) you will
-instead read that in parallel with the board's 100 kΩ `R3`, so 24.8 kΩ to
-30.1 kΩ. Either way what matters is that it **moves monotonically** with the
-printed step.
+Expect the reading to **climb monotonically** with the printed step. Out of
+circuit, across the pot's own two terminals:
+
+| Part | Step 0 | Step 127 |
+|------|--------|----------|
+| MCP401X 100 kΩ | ~0.1 kΩ | ~100 kΩ |
+| DS3502 + 33 kΩ series | ~33 kΩ | ~43 kΩ |
+
+In circuit but unpowered you read that in parallel with the board's 100 kΩ
+`R3`, which compresses the top end hard: 0.1–50 kΩ for the MCP401X, 24.8–30.1 kΩ
+for the DS3502. **50 kΩ is the in-circuit ceiling** — a higher reading means the
+meter is seeing something other than R17 ∥ R3, so re-check your leads before
+reading anything into it.
+
+Direction is the other thing this proves. Resistance must *rise* with the step
+on both parts; if it falls, the board's exposed pair is not the one the driver
+assumes and its slider will read backwards.
 
 ### Step 6: Find the Ceiling for Your Room
 
@@ -418,7 +555,7 @@ so this needs a small ADC.
 ```
   SEN-14262 ──GATE──────────────────────────► OPS243-A HOST_INT
       │
-      └──────ENVELOPE──► ADS1115 ──I2C──► Pi ──I2C──► DS3502 ──► R17
+      └──────ENVELOPE──► ADS1115 ──I2C──► Pi ──I2C──► digipot ──► R17
                                                                   │
       ▲───────────────────────────────────────────────────────────┘
 ```
@@ -467,14 +604,17 @@ Two ways to give it authority, and you want one of them:
 - **Fit a smaller series resistor**, which widens the relative range at the cost
   of lower absolute gain.
 
-Either way the series resistor still sets the *window*; auto gain only trims
-within it. If your detector is badly placed, no setting in the loop will save
+Either way the fitted pot still sets the *window* — its own end-to-end value,
+and on a DS3502 the series resistor in front of it — and auto gain only trims
+within that. If your detector is badly placed, no setting in the loop will save
 it, and the controller will say so rather than sitting at an end stop.
 
 #### Parts and Wiring
 
-One **ADS1115** breakout — Adafruit's has STEMMA QT, so it chains off the same
-cable as the DS3502.
+One **ADS1115** breakout. Adafruit's has STEMMA QT and Soldered's has Qwiic —
+the same connector either way — so it chains onward from the pot rather than
+needing its own run to the header. On a Soldered Digipot that is what its
+second port is for.
 
 | ADS1115 | Connect to |
 |---------|------------|
@@ -484,11 +624,11 @@ cable as the DS3502.
 | `A0` | SEN-14262 **`ENVELOPE`** |
 
 The ADC sits at **0x48** by default (`ADDR` selects 0x48–0x4b), clear of the
-DS3502 at 0x28, the inclinometer at 0x18 and any UPS gauge at 0x36. Unlike the
-DS3502 it has no `V+` to worry about.
+pot at 0x2f or 0x28, the inclinometer at 0x18 and any UPS gauge at 0x36. Like
+the MCP401X, and unlike the DS3502, it has no `V+` to worry about.
 
 ```bash
-i2cdetect -y 1                                   # expect 48 as well as 28
+i2cdetect -y 1                                   # expect 48 as well as 2f (or 28)
 scripts/start-kiosk.sh --sound-sensitivity --sound-sensitivity-auto
 ```
 
@@ -515,7 +655,7 @@ without spending a write per shot on a part with finite endurance.
 
 **It depends on the part, and OpenFlight handles both.**
 
-- **MCP4017** — the wiper is RAM only and powers up at mid-scale, so the setting
+- **MCP401X** — the wiper is RAM only and powers up at mid-scale, so the setting
   is saved to `~/.config/openflight/sound_sensitivity.json` and re-applied when
   the server starts.
 - **DS3502** — every change is committed to the chip's own EEPROM, so it
@@ -528,25 +668,29 @@ set.
 
 ### Digipot Wiring Checklist
 
-- [ ] MCP4017 (**not** MCP4018/4019 — their `B` terminal is grounded internally)
+- [ ] Wiper-to-ground path checked ([Step 0](#step-0-check-the-wiper-to-ground-path)) — MCP401X only
 - [ ] `V+`/`RH` solder jumper **cut** — DS3502 only
 - [ ] Power and I2C by **one** of:
       - Dupont: `VCC` → Pi 3.3 V (pin 1/17), `GND` → Pi GND (pin 9),
         `SDA` → pin 3, `SCL` → pin 5
-      - STEMMA QT: JST-SH cable from the LIS3DH's spare port
+      - Qwiic / STEMMA QT: JST-SH cable from the LIS3DH's spare port
 - [ ] DS3502 `V+` → Pi 5 V (physical pin 2 or 4) — a separate wire either way, DS3502 only
-- [ ] `i2cdetect -y 1` shows the pot at 0x28
-- [ ] MCP4017 `W` and `B` → the two R17 pads (nothing in series), **or**
+- [ ] `i2cdetect -y 1` shows the pot at **0x2f** (MCP401X) or **0x28** (DS3502)
+- [ ] MCP401X's two terminals → the two R17 pads (nothing in series), **or**
       DS3502 `RW` → series resistor → one pad and `RL` → the other, `RH` unconnected
+- [ ] Resistance across the pads **rises** with the step ([Step 5](#step-5-verify-with-a-meter))
 - [ ] No fixed resistor left soldered in R17 (it would parallel the pot)
-- [ ] `--sound-sensitivity` passed to the server, with `--sound-sensitivity-device ds3502` and `--sound-sensitivity-series-ohms` if not on the default MCP4017
+- [ ] `--sound-sensitivity` passed to the server, plus `--sound-sensitivity-device ds3502`
+      and `--sound-sensitivity-series-ohms` on a DS3502, or
+      `--sound-sensitivity-end-to-end-ohms` on an MCP401X that is not 100 kΩ
 
 For the optional closed loop:
 
 - [ ] ADS1115 powered and on the bus (`i2cdetect -y 1` shows `48`)
 - [ ] SEN-14262 `ENVELOPE` → ADS1115 `A0`
 - [ ] `--sound-sensitivity-auto` passed
-- [ ] Target band narrower than the gain range your series resistor allows
+- [ ] Target band narrower than the gain range the fitted pot allows (rarely a
+      constraint on a 100 kΩ MCP401X; usually the binding one on a DS3502)
 
 ---
 
@@ -586,21 +730,22 @@ The server could not claim the GPIO lines.
 
 ### Digital pot: not detected at startup
 
-The server could not reach the DS3502.
+The server could not reach the pot.
 
-1. `i2cdetect -y 1` — the pot should appear at `2f` (MCP4017) or `28`
-   (DS3502). Nothing there means wiring, power, or the wrong bus. On a STEMMA QT
+1. `i2cdetect -y 1` — the pot should appear at `2f` (MCP401X) or `28`
+   (DS3502). Nothing there means wiring, power, or the wrong bus. On a Qwiic
    chain, check the cable is in the LIS3DH's *spare* port and clicked in at both
    ends.
-2. **DS3502 only:** check `V+` has 4.5 V or more, and that its jumper to `RH` is
+2. Check `--sound-sensitivity-device` matches the part you fitted; the two use
+   different addresses, so the wrong one finds nothing.
+3. **DS3502 only:** check `V+` has 4.5 V or more, and that its jumper to `RH` is
    cut. Without bias the chip answers on I2C while the wiper does nothing —
    which looks like a dead pot but is a two-minute fix.
-3. Check `--sound-sensitivity-device` matches the part you fitted; the two use
-   different addresses, so the wrong one finds nothing.
-3. Confirm I2C is enabled (`sudo raspi-config`) and the user is in the `i2c`
+4. Confirm I2C is enabled (`sudo raspi-config`) and the user is in the `i2c`
    group.
-4. If the `A0`/`A1` jumpers are set, pass the matching
-   `--sound-sensitivity-address`.
+5. **DS3502 only:** if the `A0`/`A1` jumpers are set, pass the matching
+   `--sound-sensitivity-address`. The MCP401X's 0x2f is fixed — if it is not
+   there, no address will find it.
 
 ### Digital pot: slider moves but the detector does not change
 

@@ -135,7 +135,9 @@ above.
 ### Sound Trigger Sensitivity (Optional Digital Pot)
 
 If you fitted an I2C digital pot to the SEN-14262's `R17` pads instead of a
-soldered resistor — an **MCP4017 100 kΩ** is preferred — start the server with
+soldered resistor — a **100 kΩ MCP401X** is preferred, either
+[Soldered's Digipot 100k](https://docs.soldered.com/digipot/overview/) breakout
+or a bare MCP4017 — start the server with
 `--sound-sensitivity` and tune it from **Debug → Sound** at runtime:
 
 ```bash
@@ -150,7 +152,7 @@ Confirm the Pi can see the pot with `i2cdetect -y 1`.
 
 Wiring — including the two options for power and I2C, and the `V+` jumper that
 must be cut — is in the
-**[Sound Trigger Wiring Guide](sound-trigger-wiring.md#optional-software-controlled-sensitivity-ds3502-digital-pot)**.
+**[Sound Trigger Wiring Guide](sound-trigger-wiring.md#optional-software-controlled-sensitivity-digital-pot)**.
 
 ### IWR6843 Angle Radar
 

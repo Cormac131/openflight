@@ -221,8 +221,11 @@ def validate_args(parser, args, max_position: int = 127) -> None:
         parser.error(f"--sweep-step must be within 1..{max_position}")
     if args.margin < 0:
         parser.error("--margin cannot be negative")
-    if args.series_ohms < 0:
+    # Both default to None (resolved per device), so guard before comparing.
+    if args.series_ohms is not None and args.series_ohms < 0:
         parser.error("--series-ohms cannot be negative")
+    if args.end_to_end_ohms is not None and args.end_to_end_ohms <= 0:
+        parser.error("--end-to-end-ohms must be positive")
     # time.sleep raises on a negative delay, which would abort a sweep partway
     # through with a traceback instead of a usable message.
     if args.sweep_dwell < 0:
@@ -246,6 +249,12 @@ def main() -> None:
         type=lambda value: int(value, 0),
         default=None,
         help="I2C address; defaults to the selected device's own",
+    )
+    parser.add_argument(
+        "--end-to-end-ohms",
+        type=float,
+        default=None,
+        help="The MCP401X's own resistance (5k/10k/50k/100k); defaults to 100k",
     )
     parser.add_argument(
         "--series-ohms",
@@ -300,7 +309,10 @@ def main() -> None:
     validate_args(parser, args)
     address = spec["address"] if args.address is None else args.address
     series_ohms = spec["series_ohms"] if args.series_ohms is None else args.series_ohms
-    pot = spec["driver"](bus_number=args.i2c_bus, address=address, series_ohms=series_ohms)
+    extra = {}
+    if args.end_to_end_ohms is not None and spec.get("configurable_end_to_end"):
+        extra["end_to_end_ohms"] = args.end_to_end_ohms
+    pot = spec["driver"](bus_number=args.i2c_bus, address=address, series_ohms=series_ohms, **extra)
 
     suggested = None
     try:

@@ -49,6 +49,8 @@ DEVICES = {
         "address": MCP401X_ADDRESS,
         "series_ohms": MCP401X_SERIES_OHMS,
         "validate_address": validate_mcp401x_address,
+        # The family ships 5k/10k/50k/100k in the same package and protocol.
+        "configurable_end_to_end": True,
     },
     "ds3502": {
         "driver": DS3502,
@@ -56,6 +58,7 @@ DEVICES = {
         "address": DS3502_ADDRESS,
         "series_ohms": DS3502_SERIES_OHMS,
         "validate_address": validate_ds3502_address,
+        "configurable_end_to_end": False,
     },
 }
 

@@ -162,7 +162,7 @@ uv run python scripts/hardware-test/test_sound_trigger_hardware.py
 React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ──► OPS243Radar
                               │                │
                               │                └── SoundTrigger (SEN-14262 → HOST_INT)
-                              │                     └── SoundSensitivityService (MCP4017/DS3502 digipot on R17, optional)
+                              │                     └── SoundSensitivityService (MCP401X/DS3502 digipot on R17, optional)
                               │                          └── AutoGainController (ADS1115 on ENVELOPE, optional)
                               │
                               ├── IWR6843Runtime (optional, 60 GHz → launch angle & club path)
@@ -193,7 +193,7 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
 - `club_data.py` - Canonical club physics parameters, lofts, typical speeds, and optimal spin
 - `iwr6843/` - TI IWR6843 mmWave radar driver, L3 raw dump parser, LCMF-v1 launch angle & club path
 - `inclinometer.py` - LIS3DH accelerometer tilt compensation service
-- `sensitivity/` - I2C digital pot on the SEN-14262 R17 pad (MCP4017 preferred, DS3502 supported); UI-controlled sound-trigger sensitivity
+- `sensitivity/` - I2C digital pot on the SEN-14262 R17 pad (MCP401X 100k preferred, DS3502 supported); UI-controlled sound-trigger sensitivity
 - `sim/` - Simulator connectors (OpenGolfSim, GSPro, E6 Connect, Garmin) and network transports
 - `cloud/` - Telemetry, cloud configuration, session upload, and push error handling
 - `rolling_buffer/` - Trigger strategies, I/Q processor, spin detection
@@ -242,7 +242,7 @@ A through-hole resistor must be soldered into **R17** on the SEN-14262 to reduce
 
 **Optional digital pot:** fitting one to the R17 pads instead of a fixed resistor makes sensitivity adjustable from the Debug page (Sound tab). Step 0 is least sensitive, 127 most. Enabled with `--sound-sensitivity`; I2C on the existing bus, claims **no GPIOs**. Two parts are supported via `--sound-sensitivity-device`:
 
-- **MCP4017 100kΩ (`mcp401x`, default)** at fixed address 0x2f. Spans R17's range with nothing in series. Its wiper is volatile and powers up mid-scale, so the setting is saved to `~/.config/openflight/sound_sensitivity.json` and re-applied at startup. **Buy the -4017, not the -4018/-4019: their terminal B is grounded internally, which R17's feedback position cannot tolerate.**
+- **MCP401X 100kΩ (`mcp401x`, default)** at fixed address 0x2f. Spans R17's range with nothing in series. Its wiper is volatile and powers up mid-scale, so the setting is saved to `~/.config/openflight/sound_sensitivity.json` and re-applied at startup. Preferred board is [Soldered's Digipot 100k](https://docs.soldered.com/digipot/overview/) (two Qwiic ports, chains off the LIS3DH); a bare MCP4017T-104E/LT works identically. Other end-to-end values need `--sound-sensitivity-end-to-end-ohms`. **Check the wiper-to-ground path first (wiring guide Step 0): the -4018/-4019 ground terminal B internally, which R17's feedback position cannot tolerate.**
 - **DS3502 10kΩ (`ds3502`)** at 0x28–0x2b. Needs a fixed series resistor (33kΩ default, `--sound-sensitivity-series-ohms`) to reach R17's 33–47kΩ range, which leaves auto gain only ~1.2× of travel. Stores its wiper in its own EEPROM.
 
 Both read their wiper back, so there is no calibration step. Shared resistance maths lives in `sensitivity/potentiometer.py`.

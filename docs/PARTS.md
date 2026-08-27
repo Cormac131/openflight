@@ -30,10 +30,10 @@ The sound trigger detects club impact to precisely time radar captures. Essentia
 
 > **R17 resistor:** The SEN-14262 is rated for 5V but runs at 3.3V in this setup, which can cause the GATE output to stick high. Soldering a resistor into the R17 through-hole position (in parallel with the onboard 100kΩ R3) reduces preamp gain and fixes this. Start with 47kΩ; use a lower value (e.g. 33kΩ) if the sensor is still too sensitive for your environment.
 
-### Optional: Software-Adjustable Sensitivity (DS3502 Digital Pot)
+### Optional: Software-Adjustable Sensitivity (Digital Pot)
 
-A fixed R17 resistor locks the detector at one gain. Replacing it with an
-**Adafruit DS3502** I2C digital potentiometer makes that resistance
+A fixed R17 resistor locks the detector at one gain. Replacing it with an I2C
+digital potentiometer makes that resistance
 software-controlled, so you tune sensitivity with a slider on the **Debug →
 Sound** page rather than with a soldering iron. Useful if you hit in more than
 one place — a garage, a range bay, and a quiet basement all want different gain.
@@ -42,7 +42,14 @@ This is entirely optional. A build with a soldered R17 works exactly as before.
 
 | Part | Description | Link | ~Price |
 |------|-------------|------|--------|
-| **Microchip MCP4017T-104E/LT** | **Preferred.** I2C 100 kΩ digital potentiometer, SC70-6. Spans R17's whole range with nothing in series | [Microchip](https://www.microchip.com/en-us/product/mcp4017) | $1 |
+| **Soldered Digipot 100k** | **Preferred.** MCP4018 breakout with **two Qwiic ports**, so it chains off the LIS3DH with one cable and no header wiring. 3.3 V or 5 V | [Soldered](https://docs.soldered.com/digipot/overview/) | $6 |
+| **Wiring** | One JST-SH Qwiic cable, plus 2 short leads from `A` and `W` to the R17 pads | Any | $2 |
+
+Or the bare chip, if you would rather solder than buy a breakout:
+
+| Part | Description | Link | ~Price |
+|------|-------------|------|--------|
+| **Microchip MCP4017T-104E/LT** | I2C 100 kΩ digital potentiometer, SC70-6. Same address, protocol and driver as the breakout | [Microchip](https://www.microchip.com/en-us/product/mcp4017) | $1 |
 | **Wiring** | 4 wires: `VDD`/`GND`/`SDA`/`SCL` to the Pi, plus 2 short leads from `B` and `W` to the R17 pads | Any | $1 |
 
 Or, if you already have one:
@@ -53,10 +60,15 @@ Or, if you already have one:
 | **Series resistor** | **Required with the DS3502** — 33 kΩ typical; shifts its 10 kΩ span onto R17's operating range | Any electronics supplier | $1 |
 | **Wiring** | Either 5 Dupont jumpers, or one JST-SH STEMMA QT cable chained off the LIS3DH plus a single jumper for `V+` | Any | $1–5 |
 
-> **⚠ MCP4017, not MCP4018 or MCP4019.** They share an address, a protocol and
-> this codebase, but not their terminals: the -4018 and -4019 have terminal `B`
-> connected internally to ground, and R17 sits in the preamp's feedback path
-> where neither end is at ground. Only the MCP4017's floating pair works here.
+> **⚠ Check the wiper-to-ground path before soldering.** The MCP401X family
+> shares an address, a protocol and this codebase, but not its terminals: per
+> Microchip, the -4018 and -4019 have terminal `B` connected internally to
+> ground, where the -4017 is a true rheostat with `B` and `W` on pins. R17 sits
+> in the preamp's feedback path, where neither end is at ground, so only a
+> floating pair works here. Soldered's board breaks out `A` and `W` only.
+> **Two minutes with a meter settles it** —
+> [Step 0](sound-trigger-wiring.md#step-0-check-the-wiper-to-ground-path) is the
+> check, and a bare MCP4017 or the DS3502 is the fallback if a board fails it.
 
 > **Why 100 kΩ matters.** The 10 kΩ DS3502 needs a series resistor to reach
 > R17's 33–47 kΩ range at all, and that leaves the optional
@@ -64,10 +76,12 @@ Or, if you already have one:
 > only ~1.2× of travel to work with. A 100 kΩ part needs nothing in series and
 > gives the loop real authority.
 
-> **It claims no GPIOs.** The DS3502 shares the I2C bus the inclinometer and any
-> UPS fuel gauge already use, sitting at 0x28. If the LIS3DH is fitted, one
-> STEMMA QT cable covers power and I2C — but `V+` still needs its own wire, as
-> the JST cable does not carry it.
+> **It claims no GPIOs.** Either part shares the I2C bus the inclinometer and
+> any UPS fuel gauge already use — the MCP401X at 0x2f (fixed in silicon, so
+> only one can be on the bus), the DS3502 at 0x28. Qwiic and STEMMA QT are the
+> same connector, so with the LIS3DH fitted one cable covers power and I2C. On
+> a DS3502 `V+` still needs its own wire, as the JST cable does not carry it;
+> the MCP401X has no such pin.
 
 #### Optional: Closed-Loop Auto Gain
 
@@ -87,7 +101,7 @@ a target band. It chains off the same STEMMA QT cable and sits at 0x48.
 > the wiring guide has the numbers.
 
 Wiring and setup are in
-[sound-trigger-wiring.md](sound-trigger-wiring.md#optional-software-controlled-sensitivity-ds3502-digital-pot).
+[sound-trigger-wiring.md](sound-trigger-wiring.md#optional-software-controlled-sensitivity-digital-pot).
 
 ## Angle Radar (TI IWR6843) — CURRENT
 
@@ -197,7 +211,7 @@ camera; the standard setup does not install its optional software dependencies.
 |----------|--------|
 | Core (OPS243, Pi 5, Display) | $355 |
 | Sound Trigger (SEN-14262 + resistor + wires) | $18 |
-| Software sensitivity control (MCP4017 + wiring) — **optional** | $2 |
+| Software sensitivity control (digital pot + wiring) — **optional** | $2–8 |
 | Closed-loop auto gain (ADS1115 + wire) — **optional** | $16 |
 | Power & Accessories | $27 |
 | **Subtotal, no angle radar** | **~$400** |

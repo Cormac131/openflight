@@ -39,7 +39,7 @@ Doppler radar, with an optional TI IWR6843 angle radar.
 | 7" Touchscreen | Shows shot data | $46 |
 | SparkFun SEN-14262 | Impact sound trigger for shot capture | $18 |
 | Power supply + accessories | | $27 |
-| MCP4017 100kΩ digital pot | Tune trigger sensitivity from the UI (**optional**) | $2 |
+| 100kΩ I2C digital pot | Tune trigger sensitivity from the UI (**optional**) | $2–8 |
 | **Subtotal, no angle radar** | | **~$400** |
 | TI IWR6843LEVM + cable | Launch angle, experimental club path | $156 |
 | **Total with angle radar** | | **~$556** |

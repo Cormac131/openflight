@@ -1379,6 +1379,7 @@ def init_sound_sensitivity(
     bus_number: int = 1,
     address: Optional[int] = None,
     series_ohms: Optional[float] = None,
+    end_to_end_ohms: Optional[float] = None,
     position: Optional[int] = None,
     simulated: bool = False,
     auto: bool = False,
@@ -1404,6 +1405,9 @@ def init_sound_sensitivity(
             Defaults per device -- none for a 100k MCP401X, 33k for the 10k
             DS3502. Must match what is fitted, or every reported resistance is
             wrong.
+        end_to_end_ohms: The pot's own resistance. Only meaningful for the
+            MCP401X, which ships in 5k/10k/50k/100k; 100k is the default and
+            the one this build wants.
         position: Wiper step to force for this run. Omitted, the position the
             chip restored from its own EEPROM is left alone.
         simulated: Use the in-memory pot so ``--mock`` can drive the UI control
@@ -1432,6 +1436,9 @@ def init_sound_sensitivity(
     spec = DEVICES[device]
     address = spec["address"] if address is None else address
     series_ohms = spec["series_ohms"] if series_ohms is None else series_ohms
+    extra = {}
+    if end_to_end_ohms is not None and spec.get("configurable_end_to_end"):
+        extra["end_to_end_ohms"] = end_to_end_ohms
 
     requested = {
         "requested": True,
@@ -1441,6 +1448,7 @@ def init_sound_sensitivity(
         "i2c_address": f"0x{address:02x}",
         "series_ohms": series_ohms,
         "auto_gain": auto,
+        **({"end_to_end_ohms": end_to_end_ohms} if extra else {}),
     }
     if auto:
         requested["envelope_address"] = f"0x{envelope_address:02x}"
@@ -1449,7 +1457,7 @@ def init_sound_sensitivity(
     service = None
     try:
         pot_cls = spec["mock"] if simulated else spec["driver"]
-        pot = pot_cls(bus_number=bus_number, address=address, series_ohms=series_ohms)
+        pot = pot_cls(bus_number=bus_number, address=address, series_ohms=series_ohms, **extra)
         envelope = None
         controller = None
         if auto:
@@ -4806,6 +4814,15 @@ def main():
         ),
     )
     parser.add_argument(
+        "--sound-sensitivity-end-to-end-ohms",
+        type=float,
+        default=None,
+        help=(
+            "The MCP401X's own resistance. The family ships 5k/10k/50k/100k; "
+            "100k is the default and what this build wants. Ignored for the DS3502"
+        ),
+    )
+    parser.add_argument(
         "--sound-sensitivity-position",
         type=int,
         default=None,
@@ -5116,6 +5133,11 @@ def main():
             and args.sound_sensitivity_series_ohms < 0
         ):
             parser.error("--sound-sensitivity-series-ohms cannot be negative")
+        if (
+            args.sound_sensitivity_end_to_end_ohms is not None
+            and args.sound_sensitivity_end_to_end_ohms <= 0
+        ):
+            parser.error("--sound-sensitivity-end-to-end-ohms must be positive")
         if args.sound_sensitivity_position is not None and not (
             0 <= args.sound_sensitivity_position <= MAX_POSITION
         ):
@@ -5360,6 +5382,7 @@ def main():
             bus_number=args.sound_sensitivity_i2c_bus,
             address=args.sound_sensitivity_address,
             series_ohms=args.sound_sensitivity_series_ohms,
+            end_to_end_ohms=args.sound_sensitivity_end_to_end_ohms,
             position=args.sound_sensitivity_position,
             simulated=args.mock,
             auto=args.sound_sensitivity_auto,

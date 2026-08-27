@@ -19,10 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sensitivity/potentiometer.py` so the service, the UI payload and the gain
   controller all work from whichever part is fitted.
 
-  **Buy the MCP4017, not the MCP4018 or MCP4019.** They share an address, a
-  protocol and this driver, but the -4018 and -4019 connect terminal `B`
-  internally to ground — and R17 sits in the preamp's feedback path, where
-  neither end is at ground.
+  The convenient board is [Soldered's Digipot 100k](https://docs.soldered.com/digipot/overview/)
+  (MCP4018), which has **two Qwiic ports** — it chains straight off the LIS3DH
+  with one cable and carries the chain onward to the ADS1115, so the whole
+  option needs no header wiring at all. A bare MCP4017T-104E/LT on protoboard
+  is the same address, protocol and driver. Soldered's 5 kΩ, 10 kΩ and 50 kΩ
+  variants work too — tell the server which with
+  `--sound-sensitivity-end-to-end-ohms`, or every resistance it reports is
+  wrong.
+
+  **Check the wiper-to-ground path before soldering to R17.** The family shares
+  an address, a protocol and this driver, but per Microchip the -4018 and -4019
+  connect terminal `B` internally to ground where the -4017 is a true rheostat
+  — and R17 sits in the preamp's feedback path, where neither end is at ground.
+  The wiring guide's Step 0 settles it with two meter readings; a bare MCP4017
+  or the DS3502 is the fallback.
 
   The bench script is now `scripts/hardware-test/test_digipot.py` and takes
   `--device`.
@@ -44,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from Dupont wires or from a STEMMA QT cable chained off the LIS3DH; either
   way `V+` needs its own wire and its jumper to `RH` cut. A build with a
   soldered `R17` is unaffected. See
-  [Sound Trigger Wiring](sound-trigger-wiring.md#optional-software-controlled-sensitivity-ds3502-digital-pot).
+  [Sound Trigger Wiring](sound-trigger-wiring.md#optional-software-controlled-sensitivity-digital-pot).
 - **Closed-loop sound trigger gain.** With an **ADS1115** on the detector's
   `ENVELOPE` output (`--sound-sensitivity-auto`), OpenFlight reads each shot's
   envelope peak and trims the DS3502 between shots to hold peaks in a target
