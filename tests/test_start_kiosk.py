@@ -302,7 +302,7 @@ def test_startup_applies_kld7_latency_setup_before_server_start():
     assert setup_idx < server_start_idx
 
 
-def test_camera_capture_syncs_optional_camera_dependencies():
+def test_camera_capture_uses_system_python_for_sync_and_server_start():
     """Camera startup must keep system Python through sync and server launch."""
     from pathlib import Path
 
@@ -313,12 +313,12 @@ def test_camera_capture_syncs_optional_camera_dependencies():
     camera_branch_idx = script.index('if [ "$CAMERA_CAPTURE" = true ]; then', sync_setup_idx)
     camera_else_idx = script.index("\nelse\n", camera_branch_idx)
     export_idx = script.index("export UV_PYTHON=/usr/bin/python3", camera_branch_idx)
+    camera_sync_idx = script.index('uv sync "${UV_SYNC_ARGS[@]}"', export_idx, camera_else_idx)
     server_start_idx = script.index("uv run ${OPENFLIGHT_UV_RUN_ARGS:-} $SERVER_CMD &")
 
     assert "uv venv --clear --system-site-packages --python /usr/bin/python3" in script
     assert "UV_SYNC_ARGS+=(--extra camera)" in script
-    assert 'uv sync "${UV_SYNC_ARGS[@]}"' in script
-    assert camera_branch_idx < export_idx < camera_else_idx < server_start_idx
+    assert camera_branch_idx < export_idx < camera_sync_idx < camera_else_idx < server_start_idx
 
 
 def test_shutdown_requests_server_cleanup_before_forcing_process_exit():
