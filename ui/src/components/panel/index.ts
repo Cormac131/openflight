@@ -2,6 +2,8 @@ export { PanelAction } from './PanelAction';
 export { PanelFooter } from './PanelFooter';
 export { PanelHeader } from './PanelHeader';
 export { MenuSheet } from './MenuSheet';
+export { ClubTagList } from './ClubTagList';
+export { ClubTagPrompt } from './ClubTagPrompt';
 export { PickerOverlay } from './PickerOverlay';
 export { clubSections, trainingImplementSections, type PickerOption, type PickerSection } from './pickerSections';
 export { LivePanel } from './LivePanel';

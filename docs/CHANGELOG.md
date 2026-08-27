@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **NFC club tags.** An optional PN532 reader selects the club when a tagged
+  club is tapped against it. Tags carry nothing but their factory UID: the first
+  tap of an unknown tag asks the kiosk which club it is, and the mapping is
+  written to `~/.openflight/club_tags.json` immediately, so it survives restarts
+  and can be backed up or copied between rigs. Learned tags are listed in the
+  menu sheet with a Forget action for re-teaching. Enable with `--nfc`;
+  `--mock --nfc` exercises the whole flow without hardware. See
+  [PN532 NFC Club Tags](nfc/README.md).
 - **Instrument-panel kiosk UI.** The dashboard is a tabbed shell (Live, Stats,
   Shots, Camera, Players, Debug) instead of the previous stacked shot and stats
   views. Tap a Live metric to pin it top-left while keeping all ten metrics

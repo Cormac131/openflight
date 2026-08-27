@@ -57,6 +57,10 @@ IWR6843_AZIMUTH_OFFSET=""
 IWR6843_HORIZONTAL_PHASE_REFERENCE_RAD=""
 INCLINOMETER=false
 INCLINOMETER_ZERO_OFFSET=""
+NFC=false
+NFC_I2C_BUS=""
+NFC_I2C_ADDRESS=""
+NFC_TAGS_FILE=""
 KLD7=false
 KLD7_PORT=""
 KLD7_ANGLE_OFFSET=""
@@ -297,6 +301,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         --inclinometer-zero-offset)
             INCLINOMETER_ZERO_OFFSET="$2"
+            shift 2
+            ;;
+        --nfc)
+            NFC=true
+            shift
+            ;;
+        --nfc-i2c-bus)
+            NFC_I2C_BUS="$2"
+            shift 2
+            ;;
+        --nfc-i2c-address)
+            NFC_I2C_ADDRESS="$2"
+            shift 2
+            ;;
+        --nfc-tags-file)
+            NFC_TAGS_FILE="$2"
             shift 2
             ;;
         --kld7)
@@ -733,6 +753,13 @@ fi
 if [ "$INCLINOMETER" = true ]; then
     SERVER_CMD="$SERVER_CMD --inclinometer"
     [ -n "$INCLINOMETER_ZERO_OFFSET" ] && SERVER_CMD="$SERVER_CMD --inclinometer-zero-offset $INCLINOMETER_ZERO_OFFSET"
+fi
+
+if [ "$NFC" = true ]; then
+    SERVER_CMD="$SERVER_CMD --nfc"
+    [ -n "$NFC_I2C_BUS" ] && SERVER_CMD="$SERVER_CMD --nfc-i2c-bus $NFC_I2C_BUS"
+    [ -n "$NFC_I2C_ADDRESS" ] && SERVER_CMD="$SERVER_CMD --nfc-i2c-address $NFC_I2C_ADDRESS"
+    [ -n "$NFC_TAGS_FILE" ] && SERVER_CMD="$SERVER_CMD --nfc-tags-file $NFC_TAGS_FILE"
 fi
 
 if [ "$EXPERIMENTAL_KLD7_RAW_RADC_LOGGING" = true ]; then

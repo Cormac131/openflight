@@ -6,6 +6,8 @@ import { initialPickerSection, pickerGridRows, type PickerSection } from './pick
 
 interface PickerOverlayProps {
   title: string;
+  /** Optional second line under the title, e.g. the UID of a tag being learned. */
+  subtitle?: string;
   selectedId: string;
   sections: ReadonlyArray<PickerSection>;
   onSelect: (id: string) => void;
@@ -19,7 +21,15 @@ interface PickerOverlayProps {
  * hairline-bordered option buttons grouped by tab. Four columns span the
  * overlay; row height is capped so irons stay on screen.
  */
-export function PickerOverlay({ title, selectedId, sections, onSelect, onClose, wide = false }: PickerOverlayProps) {
+export function PickerOverlay({
+  title,
+  subtitle,
+  selectedId,
+  sections,
+  onSelect,
+  onClose,
+  wide = false,
+}: PickerOverlayProps) {
   const { t } = useI18n();
   const [sectionName, setSectionName] = useState(() => initialPickerSection(sections, selectedId));
   const activeSection = sections.find((section) => section.name === sectionName) ?? sections[0];
@@ -34,7 +44,10 @@ export function PickerOverlay({ title, selectedId, sections, onSelect, onClose, 
       aria-label={title}
     >
       <div className="picker-overlay__header">
-        <span className="picker-overlay__title">{title}</span>
+        <span className="picker-overlay__titles">
+          <span className="picker-overlay__title">{title}</span>
+          {subtitle ? <span className="picker-overlay__subtitle">{subtitle}</span> : null}
+        </span>
         <button
           type="button"
           className="picker-overlay__close"

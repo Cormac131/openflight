@@ -754,6 +754,18 @@ class SessionLogger:
             return
         self._write_entry("power_status", status)
 
+    def log_nfc_scan(self, scan: Dict[str, Any]) -> None:
+        """Log one club-tag tap, learned or not, for post-session review."""
+        if not self.enabled:
+            return
+        self._write_entry("nfc_scan", scan)
+
+    def log_club_tag_change(self, action: str, uid: str, club: Optional[str]) -> None:
+        """Log a learned or forgotten club tag."""
+        if not self.enabled:
+            return
+        self._write_entry("club_tag_change", {"action": action, "uid": uid, "club": club})
+
     def log_iq_reading(
         self,
         speed_mph: float,

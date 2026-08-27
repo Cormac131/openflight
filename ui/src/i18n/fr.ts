@@ -152,6 +152,13 @@ export const fr: Messages = {
   'app.selectClub': 'Choisir un club',
   'app.simulateSwing': 'Simuler un swing',
   'app.simulateShot': 'Simuler un coup',
+  'menu.clubTags': 'Étiquettes de clubs',
+  'nfc.newTagTitle': 'Nouvelle étiquette de club',
+  'nfc.newTagSubtitle': 'Étiquette {uid} : choisissez son club',
+  'nfc.noTags': 'Aucune étiquette enregistrée',
+  'nfc.forget': 'Oublier',
+  'nfc.forgetTag': "Oublier l'étiquette de {club}",
+
   'picker.groups': 'Groupes',
   'picker.close': 'Fermer {title}',
 

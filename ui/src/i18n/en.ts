@@ -150,6 +150,13 @@ export const en = {
   'app.selectClub': 'Select club',
   'app.simulateSwing': 'Simulate swing',
   'app.simulateShot': 'Simulate shot',
+  'menu.clubTags': 'Club tags',
+  'nfc.newTagTitle': 'New club tag',
+  'nfc.newTagSubtitle': 'Tag {uid} — pick its club',
+  'nfc.noTags': 'No tags learned yet',
+  'nfc.forget': 'Forget',
+  'nfc.forgetTag': 'Forget the tag for {club}',
+
   'picker.groups': 'Groups',
   'picker.close': 'Close {title}',
 

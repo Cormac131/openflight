@@ -407,3 +407,35 @@ def test_iwr6843_horizontal_phase_reference_is_forwarded():
 def test_iwr6843_horizontal_phase_reference_is_omitted_by_default():
     command = _dry_run("--iwr6843").stdout.strip()
     assert "--iwr6843-horizontal-phase-reference-rad" not in command
+
+
+def test_nfc_flag_is_forwarded():
+    command_arguments = _dry_run("--nfc").stdout.strip().split()
+
+    assert "--nfc" in command_arguments
+
+
+def test_nfc_options_are_forwarded():
+    command_arguments = (
+        _dry_run(
+            "--nfc",
+            "--nfc-i2c-bus",
+            "3",
+            "--nfc-i2c-address",
+            "0x25",
+            "--nfc-tags-file",
+            "/tmp/tags.json",
+        )
+        .stdout.strip()
+        .split()
+    )
+
+    assert command_arguments[command_arguments.index("--nfc-i2c-bus") + 1] == "3"
+    assert command_arguments[command_arguments.index("--nfc-i2c-address") + 1] == "0x25"
+    assert command_arguments[command_arguments.index("--nfc-tags-file") + 1] == "/tmp/tags.json"
+
+
+def test_nfc_options_are_not_forwarded_without_the_flag():
+    command_arguments = _dry_run("--nfc-i2c-bus", "3").stdout.strip().split()
+
+    assert "--nfc-i2c-bus" not in command_arguments

@@ -7,6 +7,7 @@ import { useCameraStore } from './stores/useCameraStore';
 import { useDebugStore } from './stores/useDebugStore';
 import { usePlayerStore } from './stores/usePlayerStore';
 import { useHeroMetricStore } from './stores/useHeroMetricStore';
+import { useNfcStore } from './stores/useNfcStore';
 import { socketService } from './services/socketService';
 import { shouldEchoSelectionToServer } from './services/playerSocketSync';
 import { DebugPanel } from './components/DebugPanel';
@@ -19,6 +20,7 @@ import {
   LivePanel,
   AddPlayerDialog,
   ClearSessionDialog,
+  ClubTagPrompt,
   SimulateBubble,
   MenuSheet,
   PanelFooter,
@@ -80,6 +82,13 @@ function AppContent() {
     }))
   );
   const serverPlayerName = useSystemStore((state) => state.serverPlayerName);
+  const { pendingTag, clubScanVersion, clearPendingTag } = useNfcStore(
+    useShallow((state) => ({
+      pendingTag: state.pendingTag,
+      clubScanVersion: state.clubScanVersion,
+      clearPendingTag: state.clearPendingTag,
+    }))
+  );
   const { heroMetricId, setHeroMetricId } = useHeroMetricStore(
     useShallow((state) => ({ heroMetricId: state.heroMetricId, setHeroMetricId: state.setHeroMetricId }))
   );
@@ -133,6 +142,16 @@ function AppContent() {
     if (serverPlayerName !== selectedPlayer) {
       selectPlayer(serverPlayerName);
     }
+  }
+
+  // A recognized club tag already answered the question the picker asks, so
+  // close it. Keyed on the scan counter rather than on `serverClub`: the
+  // connect-time session_state snapshot also sets a club, and closing on that
+  // would hide the startup picker before the user ever saw it.
+  const [appliedClubScan, setAppliedClubScan] = useState(clubScanVersion);
+  if (clubScanVersion !== appliedClubScan) {
+    setAppliedClubScan(clubScanVersion);
+    setPickerOpen(false);
   }
 
   const { isLaunchDaddyMode, isExploding, triggerExplosion } = useLaunchDaddy();
@@ -204,6 +223,15 @@ function AppContent() {
       socketService.setClub(id);
     }
     setPickerOpen(false);
+  };
+
+  const handleLearnTag = (clubId: string) => {
+    if (!pendingTag) return;
+    socketService.assignClubTag(pendingTag.uid, clubId);
+    // The server echoes club_changed, but update locally too so the tile
+    // switches even if the assignment is rejected downstream and retried.
+    setSelectedClub(clubId);
+    clearPendingTag();
   };
 
   const handleShutdown = async () => {
@@ -395,7 +423,9 @@ function AppContent() {
         />
       ) : null}
 
-      {pickerOpen ? (
+      {pendingTag ? <ClubTagPrompt scan={pendingTag} onAssign={handleLearnTag} onDismiss={clearPendingTag} /> : null}
+
+      {pickerOpen && !pendingTag ? (
         <PickerOverlay
           title={isSwingSpeedMode ? t('app.selectImplement') : t('app.selectClub')}
           selectedId={isSwingSpeedMode ? selectedTrainingImplement : selectedClub}

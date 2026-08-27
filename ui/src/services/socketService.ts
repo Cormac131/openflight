@@ -3,6 +3,7 @@ import { useSystemStore } from '../stores/useSystemStore';
 import { useShotStore } from '../stores/useShotStore';
 import { useCameraStore, type CameraCaptureSettings, type CameraStatus } from '../stores/useCameraStore';
 import { useDebugStore } from '../stores/useDebugStore';
+import { useNfcStore } from '../stores/useNfcStore';
 import {
   type Shot,
   type SessionStats,
@@ -13,6 +14,7 @@ import {
 } from '../types/shot';
 import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
 import type { PowerStatus } from '../types/power';
+import type { ClubTagsPayload, NfcScan } from '../types/nfc';
 import { getServerOrigin } from '../utils/serverOrigin';
 import { handleShotMessage } from './handleShotMessage';
 import { ingestSocketPlayerName } from './playerSocketSync';
@@ -52,6 +54,7 @@ class SocketService {
       this.socket?.emit('get_trigger_status');
       this.socket?.emit('get_radar_config');
       this.socket?.emit('get_camera_capture_settings');
+      this.socket?.emit('get_club_tags');
     });
 
     this.socket.on('disconnect', () => {
@@ -99,8 +102,27 @@ class SocketService {
       console.warn(`Sim shot dropped: ${data.reason}`);
     });
 
-    this.socket.on('club_changed', (data: { club: string }) => {
+    this.socket.on('club_changed', (data: { club: string; source?: string }) => {
       ingestSessionClub(data.club);
+    });
+
+    this.socket.on('club_tags', (data: ClubTagsPayload) => {
+      useNfcStore.getState().setClubTags(data.tags ?? [], Boolean(data.enabled));
+    });
+
+    // A recognized tag also arrives as `club_changed`, which is what actually
+    // moves the selection; this only records the tap for the tag list and to
+    // dismiss the club picker.
+    this.socket.on('nfc_scan', (data: NfcScan) => {
+      useNfcStore.getState().recordScan(data);
+    });
+
+    this.socket.on('nfc_tag_unknown', (data: NfcScan) => {
+      useNfcStore.getState().setPendingTag(data);
+    });
+
+    this.socket.on('club_tag_error', (data: { error: string; uid?: string }) => {
+      console.warn(`Club tag error: ${data.error}`);
     });
 
     this.socket.on('player_changed', (data: { player_name: string }) => {
@@ -235,6 +257,19 @@ class SocketService {
 
   setClub(club: string) {
     this.socket?.emit('set_club', { club });
+  }
+
+  assignClubTag(uid: string, club: string) {
+    this.socket?.emit('assign_club_tag', { uid, club });
+  }
+
+  forgetClubTag(uid: string) {
+    this.socket?.emit('forget_club_tag', { uid });
+  }
+
+  /** Mock-mode helper: present a tag without a reader attached. */
+  simulateNfcScan(uid: string) {
+    this.socket?.emit('simulate_nfc_scan', { uid });
   }
 
   setTrainingImplement(implement: string) {

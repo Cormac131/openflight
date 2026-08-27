@@ -101,6 +101,22 @@ tilt when the rig is placed on uneven ground.
 See the **[LIS3DH Inclinometer Setup Guide](inclinometer/README.md)** for wiring,
 mounting, calibration, startup flags, and troubleshooting.
 
+### Optional NFC Club Tags
+
+A PN532 reader beside the mat plus a sticker on each grip lets OpenFlight switch
+the selected club when the club is tapped against the reader.
+
+| Part | Description | Link | ~Price |
+|------|-------------|------|--------|
+| **Adafruit PN532 breakout** | NFC/RFID reader; set the DIP switches to I2C | [Adafruit product 364](https://www.adafruit.com/product/364) | $40 |
+| **NTAG213/215 stickers** | 25 mm adhesive tags, one per club; use on-metal tags for metal grip caps | Any NFC tag supplier | ~$10 / 20 |
+
+> The **ST25DV16K is a tag, not a reader** — it cannot read the tags on your
+> clubs. A reader IC such as the PN532 is required.
+
+See the **[PN532 NFC Club Tag Guide](nfc/README.md)** for wiring, mounting,
+learning tags, startup flags, and troubleshooting.
+
 ---
 
 ## Angle Radar (K-LD7) — DEPRECATED

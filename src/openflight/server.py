@@ -137,6 +137,11 @@ camera_ball_flight_reference_tracker = None
 inclinometer_service = None
 inclinometer_runtime_config: dict = {"enabled": False}
 
+# Optional PN532 NFC reader that selects the club from a tag on the grip.
+nfc_service = None
+club_tag_registry = None
+nfc_runtime_config: dict = {"enabled": False}
+
 # Ballistic model toggle. Shot carry comes from the physics simulator whenever
 # a vertical launch angle is available. Operators can explicitly disable it;
 # missing launch inputs always fall back to the legacy table estimator.
@@ -211,6 +216,8 @@ def _cleanup_hardware_for_shutdown() -> bool:
         _run_shutdown_step("K-LD7 horizontal stop", kld7_horizontal.stop)
     if inclinometer_service:
         _run_shutdown_step("inclinometer stop", inclinometer_service.stop)
+    if nfc_service:
+        _run_shutdown_step("NFC reader stop", nfc_service.stop)
     if iwr6843_runtime:
         _run_shutdown_step("IWR6843 stop", iwr6843_runtime.stop)
     if power_monitor:
@@ -877,6 +884,7 @@ def _session_start_config() -> dict:
     config["iwr6843"] = dict(iwr6843_runtime_config)
     config["camera_capture"] = dict(camera_capture_config)
     config["inclinometer"] = dict(inclinometer_runtime_config)
+    config["nfc"] = dict(nfc_runtime_config)
     config["power"] = {
         "enabled": battery_provider is not None,
         "provider": battery_provider,
@@ -1363,6 +1371,132 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
             "error": str(error),
         }
         return False
+
+
+def init_nfc(
+    *,
+    bus_number: int = 1,
+    address: int = 0x24,
+    tags_path: str | None = None,
+    use_mock_reader: bool = False,
+) -> bool:
+    """Start the optional PN532 club-tag reader without risking radar availability.
+
+    The registry loads even when the reader itself fails to come up, so tags
+    already learned stay listed in the UI and the failure is visible there
+    instead of only in the log.
+    """
+    global nfc_service  # pylint: disable=global-statement
+    global club_tag_registry  # pylint: disable=global-statement
+    global nfc_runtime_config  # pylint: disable=global-statement
+
+    from .nfc import (  # pylint: disable=import-outside-toplevel
+        PN532I2C,
+        ClubTagRegistry,
+        MockTagReader,
+        NfcService,
+    )
+
+    service = None
+    try:
+        club_tag_registry = ClubTagRegistry(tags_path)
+        reader = (
+            MockTagReader() if use_mock_reader else PN532I2C(bus_number=bus_number, address=address)
+        )
+        service = NfcService(reader, club_tag_registry, on_scan=_on_nfc_scan)
+        service.start()
+        nfc_service = service
+        nfc_runtime_config = {
+            "enabled": True,
+            "reader": reader.name,
+            "i2c_bus": bus_number,
+            "i2c_address": f"0x{address:02x}",
+            "tags_path": str(club_tag_registry.path),
+            "known_tags": len(club_tag_registry),
+        }
+        print(
+            f"NFC club tags enabled ({reader.name}, {len(club_tag_registry)} tag(s) learned, "
+            f"{club_tag_registry.path})"
+        )
+        return True
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        if service is not None:
+            try:
+                service.stop()
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.debug("Failed to stop NFC service after init error", exc_info=True)
+        logger.warning("[SERVER] NFC reader initialization failed: %s", error, exc_info=True)
+        log_session_error(
+            "NFC reader initialization failed",
+            component="nfc",
+            context={"i2c_bus": bus_number, "i2c_address": f"0x{address:02x}"},
+            exc=error,
+        )
+        nfc_service = None
+        nfc_runtime_config = {
+            "enabled": False,
+            "requested": True,
+            "reader": "mock" if use_mock_reader else "pn532",
+            "i2c_bus": bus_number,
+            "i2c_address": f"0x{address:02x}",
+            "tags_path": str(club_tag_registry.path) if club_tag_registry else None,
+            "known_tags": len(club_tag_registry) if club_tag_registry else 0,
+            "error": str(error),
+        }
+        return False
+
+
+def _apply_club(club_id: str, *, source: str) -> Optional[str]:
+    """Set the active club and tell every client. Returns the applied club id.
+
+    Shared by the UI picker and the NFC reader so a tap and a tap-on-screen take
+    exactly the same path -- including the ``club_changed`` broadcast the UI
+    listens to, which is what makes a tag update the selection automatically.
+    """
+    try:
+        club = ClubType(str(club_id))
+    except ValueError:
+        logger.warning("[SERVER] Ignoring unknown club %r from %s", club_id, source)
+        return None
+    if monitor:
+        monitor.set_club(club)
+    socketio.emit("club_changed", {"club": club.value, "source": source})
+    return club.value
+
+
+def _emit_club_tags() -> None:
+    """Broadcast the learned tag list so every client's tag view stays current."""
+    socketio.emit(
+        "club_tags",
+        {
+            "tags": club_tag_registry.to_payload() if club_tag_registry else [],
+            "enabled": bool(nfc_runtime_config.get("enabled")),
+        },
+    )
+
+
+def _on_nfc_scan(scan) -> None:
+    """Handle one tag tap from the reader thread.
+
+    A known tag switches the club straight away. An unknown one asks the UI to
+    learn it, which is the only way a mapping is ever created -- there is no
+    preloaded tag list to keep in sync with the hardware.
+    """
+    payload = scan.to_dict()
+    session_log = get_session_logger()
+    if session_log:
+        session_log.log_nfc_scan(payload)
+
+    socketio.emit("nfc_scan", payload)
+    if scan.known:
+        applied = _apply_club(scan.club_id, source="nfc")
+        if applied is None:
+            # The stored club is no longer a valid ClubType (renamed or removed
+            # between releases); treat the tag as unlearned so it can be re-taught.
+            socketio.emit("nfc_tag_unknown", payload)
+        return
+    logger.info("[NFC] Unknown tag %s awaiting assignment", scan.uid)
+    socketio.emit("nfc_tag_unknown", payload)
 
 
 def init_kld7(
@@ -1969,6 +2103,8 @@ def handle_connect():
     _emit_sim_snapshot()
     if power_monitor and power_monitor.status:
         socketio.emit("power_status", power_monitor.status.to_dict())
+    if club_tag_registry is not None:
+        _emit_club_tags()
     if monitor:
         socketio.emit("session_state", _session_state_payload(include_runtime_meta=True))
         socketio.emit("trigger_status", _get_trigger_status())
@@ -1989,14 +2125,95 @@ def handle_get_trigger_status():
 @socketio.on("set_club")
 def handle_set_club(data):
     """Handle club selection change."""
-    club_name = data.get("club", "driver")
+    club_name = data.get("club", "driver") if isinstance(data, dict) else "driver"
+    _apply_club(club_name, source="ui")
+
+
+@socketio.on("get_club_tags")
+def handle_get_club_tags():
+    """Send the learned club-tag list to a client that just connected."""
+    _emit_club_tags()
+
+
+@socketio.on("assign_club_tag")
+def handle_assign_club_tag(data):
+    """Learn a tag for a club and persist it immediately.
+
+    This is the only writer of the mapping: the UI calls it after the user picks
+    a club for a tag the reader did not recognize. The club is also selected, so
+    the tap that taught the tag counts as a normal club change.
+    """
+    from .nfc import InvalidTagUidError, UnknownClubError  # pylint: disable=import-outside-toplevel
+
+    if club_tag_registry is None:
+        socketio.emit("club_tag_error", {"error": "NFC club tags are not enabled"})
+        return
+
+    uid = data.get("uid") if isinstance(data, dict) else None
+    club_id = data.get("club") if isinstance(data, dict) else None
     try:
-        club = ClubType(club_name)
-        if monitor:
-            monitor.set_club(club)
-        socketio.emit("club_changed", {"club": club.value})
-    except ValueError:
-        pass
+        tag = club_tag_registry.assign(uid, club_id)
+    except (InvalidTagUidError, UnknownClubError) as error:
+        logger.warning("[NFC] Rejected tag assignment %r -> %r: %s", uid, club_id, error)
+        socketio.emit("club_tag_error", {"error": str(error), "uid": uid})
+        return
+    except OSError as error:
+        logger.error("[NFC] Could not persist tag %r: %s", uid, error)
+        socketio.emit(
+            "club_tag_error",
+            {"error": f"Could not save club tags: {error}", "uid": uid},
+        )
+        return
+
+    session_log = get_session_logger()
+    if session_log:
+        session_log.log_club_tag_change("assigned", tag.uid, tag.club_id)
+    if nfc_service is not None:
+        # The user may confirm by tapping the same tag again straight away.
+        nfc_service.forget_recent(tag.uid)
+    _emit_club_tags()
+    _apply_club(tag.club_id, source="nfc-learn")
+
+
+@socketio.on("forget_club_tag")
+def handle_forget_club_tag(data):
+    """Remove one learned tag mapping."""
+    if club_tag_registry is None:
+        socketio.emit("club_tag_error", {"error": "NFC club tags are not enabled"})
+        return
+
+    uid = data.get("uid") if isinstance(data, dict) else None
+    try:
+        removed = club_tag_registry.forget(uid)
+    except OSError as error:
+        logger.error("[NFC] Could not persist tag removal %r: %s", uid, error)
+        socketio.emit(
+            "club_tag_error",
+            {"error": f"Could not save club tags: {error}", "uid": uid},
+        )
+        return
+
+    if removed:
+        session_log = get_session_logger()
+        if session_log:
+            session_log.log_club_tag_change("forgotten", str(uid), None)
+        if nfc_service is not None:
+            nfc_service.forget_recent(str(uid))
+    _emit_club_tags()
+
+
+@socketio.on("simulate_nfc_scan")
+def handle_simulate_nfc_scan(data):
+    """Present a tag to the mock reader so the flow can be exercised without hardware."""
+    reader = getattr(nfc_service, "reader", None)
+    if nfc_service is None or not hasattr(reader, "present_tag"):
+        socketio.emit("club_tag_error", {"error": "Mock NFC reader is not running"})
+        return
+    uid = data.get("uid") if isinstance(data, dict) else None
+    try:
+        reader.present_tag(uid or "04A1B2C3")
+    except ValueError as error:
+        socketio.emit("club_tag_error", {"error": str(error), "uid": uid})
 
 
 @socketio.on("set_player")
@@ -2885,9 +3102,7 @@ def _fuse_camera_ball_flight(
                                     camera_capture_config.get("roll_correction_deg", 0.0)
                                 ),
                                 horizontal_pixel_sign=(
-                                    -1.0
-                                    if camera_capture_config.get("mirror_horizontal")
-                                    else 1.0
+                                    -1.0 if camera_capture_config.get("mirror_horizontal") else 1.0
                                 ),
                                 image_width_px=int(camera_capture_config["width"]),
                                 image_height_px=int(camera_capture_config["height"]),
@@ -4495,6 +4710,28 @@ def main():
         help="Degrees added to raw LIS3DH pitch (default: 0)",
     )
     parser.add_argument(
+        "--nfc",
+        action="store_true",
+        help="Enable the PN532 NFC reader so club tags select the club",
+    )
+    parser.add_argument(
+        "--nfc-i2c-bus",
+        type=int,
+        default=1,
+        help="I2C bus the PN532 is on (default: 1)",
+    )
+    parser.add_argument(
+        "--nfc-i2c-address",
+        type=lambda value: int(value, 0),
+        default=0x24,
+        help="PN532 I2C address (default: 0x24)",
+    )
+    parser.add_argument(
+        "--nfc-tags-file",
+        default=None,
+        help="Where learned club tags are stored (default: ~/.openflight/club_tags.json)",
+    )
+    parser.add_argument(
         "--iwr6843-port", default=None, help="TI serial port (auto-detect by default)"
     )
     parser.add_argument(
@@ -4995,6 +5232,15 @@ def main():
     if args.inclinometer:
         if not init_inclinometer(zero_offset_deg=args.inclinometer_zero_offset):
             print("WARNING: Inclinometer unavailable; continuing with configured IWR6843 tilt")
+
+    if args.nfc:
+        if not init_nfc(
+            bus_number=args.nfc_i2c_bus,
+            address=args.nfc_i2c_address,
+            tags_path=args.nfc_tags_file,
+            use_mock_reader=args.mock,
+        ):
+            print("WARNING: NFC reader unavailable; club selection stays manual")
 
     # Initialize K-LD7 angle radars (if enabled)
     if args.kld7:

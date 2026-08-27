@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import App from './App';
 import { PANEL_VIEWS } from './components/panel';
 import { useSystemStore } from './stores/useSystemStore';
+import { useNfcStore } from './stores/useNfcStore';
 
 describe('App shell', () => {
   beforeEach(() => {
     useSystemStore.setState({ serverClub: null });
+    useNfcStore.setState({ enabled: false, tags: [], lastScan: null, pendingTag: null, clubScanVersion: 0 });
   });
 
   it('renders the bottom bar instead of the old top header', () => {

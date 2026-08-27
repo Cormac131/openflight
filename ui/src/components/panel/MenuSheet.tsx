@@ -3,12 +3,14 @@ import { useI18n } from '../../i18n/useI18n';
 import { useSystemStore } from '../../stores/useSystemStore';
 import { useCameraStore } from '../../stores/useCameraStore';
 import { useThemeStore } from '../../stores/useThemeStore';
+import { useNfcStore } from '../../stores/useNfcStore';
 import { useLocaleStore } from '../../stores/useLocaleStore';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { socketService } from '../../services/socketService';
 import { ballDetectionStatusLabel } from '../../utils/ballDetectionStatus';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { SimStatus } from '../SimStatus';
+import { ClubTagList } from './ClubTagList';
 
 interface MenuSheetProps {
   onClose: () => void;
@@ -26,6 +28,8 @@ interface MenuSheetProps {
 export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
   const simStatuses = useSystemStore((state) => state.simStatuses);
   const cameraStatus = useCameraStore((state) => state.cameraStatus);
+  const nfcEnabled = useNfcStore((state) => state.enabled);
+  const clubTags = useNfcStore((state) => state.tags);
   const { t } = useI18n();
   const { unitSystem, setUnitSystem } = useUnitPreference();
   const { theme, setTheme } = useThemeStore();
@@ -97,6 +101,13 @@ export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
             </div>
           ) : null}
         </section>
+
+        {nfcEnabled ? (
+          <section className="menu-sheet__section">
+            <span className="menu-sheet__section-title">{t('menu.clubTags')}</span>
+            <ClubTagList tags={clubTags} onForget={(uid) => socketService.forgetClubTag(uid)} />
+          </section>
+        ) : null}
 
         <button type="button" className="menu-sheet__shutdown" onClick={onShutdown}>
           {t('menu.shutdown')}

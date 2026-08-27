@@ -152,6 +152,13 @@ export const pt: Messages = {
   'app.selectClub': 'Selecionar taco',
   'app.simulateSwing': 'Simular swing',
   'app.simulateShot': 'Simular tacada',
+  'menu.clubTags': 'Etiquetas de tacos',
+  'nfc.newTagTitle': 'Nova etiqueta de taco',
+  'nfc.newTagSubtitle': 'Etiqueta {uid}: escolha o taco',
+  'nfc.noTags': 'Nenhuma etiqueta guardada',
+  'nfc.forget': 'Esquecer',
+  'nfc.forgetTag': 'Esquecer a etiqueta de {club}',
+
   'picker.groups': 'Grupos',
   'picker.close': 'Fechar {title}',
 
