@@ -8,7 +8,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import replace
-from typing import Optional, Protocol
+from typing import Callable, Optional, Protocol
 
 from ..air_density import AirConditions, AirConditionsError, air_density
 from .models import AirSnapshot, PressureSample, ReadingSelection
@@ -59,6 +59,7 @@ class BarometerService:
         sample_hz: float = 0.5,
         window_samples: int = 5,
         max_reading_age_s: float = 300.0,
+        on_reading: Optional[Callable[[AirSnapshot], None]] = None,
     ):
         if sample_hz <= 0:
             raise ValueError("sample_hz must be positive")
@@ -72,6 +73,7 @@ class BarometerService:
         self.sample_hz = sample_hz
         self.window_samples = window_samples
         self.max_reading_age_s = max_reading_age_s
+        self.on_reading = on_reading
         self._samples: deque[PressureSample] = deque(maxlen=window_samples)
         self._latest: AirSnapshot | None = None
         self._lock = threading.Lock()
@@ -145,7 +147,24 @@ class BarometerService:
                 sample_count=len(samples),
             )
             self._latest = snapshot
-            return snapshot
+        self._notify(snapshot)
+        return snapshot
+
+    def _notify(self, snapshot: AirSnapshot) -> None:
+        """
+        Publish a reading to any observer, outside the lock.
+
+        A slow or throwing observer must not stall the sampling thread or hold
+        the lock that `reading_for_shot` needs, so this both runs unlocked and
+        swallows observer errors: a broken debug display is never a reason to
+        stop measuring air.
+        """
+        if self.on_reading is None:
+            return
+        try:
+            self.on_reading(snapshot)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.warning("Barometer reading observer failed: %s", error)
 
     def reading_for_shot(self, now: Optional[float] = None) -> ReadingSelection:
         """Select the current atmospheric reading, or explain why there is none."""

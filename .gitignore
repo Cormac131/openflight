@@ -67,8 +67,9 @@ htmlcov/
 .ipynb_checkpoints/
 
 # UI (Node.js)
-# Unanchored so it matches at any depth: package.json sits at the repo
-# root, so npm installs to ./node_modules, not ui/node_modules.
+# Unanchored so it matches at any depth. The UI project lives in ui/, so a
+# normal install lands in ui/node_modules, but tooling run from the repo root
+# can create a stray one there too.
 node_modules/
 ui/dist/autoresearch-results.tsv
 

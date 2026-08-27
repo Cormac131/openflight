@@ -91,6 +91,7 @@ function AppContent() {
     triggerStatus,
     iwr6843Alert,
     dismissIWR6843Alert,
+    airStatus,
   } = useDebugStore(
     useShallow((state) => ({
       debugReadings: state.debugReadings,
@@ -100,6 +101,7 @@ function AppContent() {
       triggerStatus: state.triggerStatus,
       iwr6843Alert: state.iwr6843Alert,
       dismissIWR6843Alert: state.dismissIWR6843Alert,
+      airStatus: state.airStatus,
     }))
   );
 
@@ -348,6 +350,7 @@ function AppContent() {
                 onUpdateConfig={(config) => socketService.setRadarConfig(config)}
                 triggerDiagnostics={triggerDiagnostics}
                 triggerStatus={triggerStatus}
+                airStatus={airStatus}
               />
             </div>
           </div>

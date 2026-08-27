@@ -330,6 +330,29 @@ the truth than a textbook assumption — and it still carries the site elevation
 implicitly. Without it, a failed sensor on an unconfigured rig would silently
 revert to sea level and lose the full 14 yd at altitude.
 
+## The Air Tab
+
+The Diagnostics screen has an **Air** tab showing what the carry numbers are
+actually being computed from. It is present whether or not a sensor is fitted,
+because assumed air affects carry just as much as measured air does.
+
+**Air Conditions** reports the resolved density, pressure, and temperature, a
+colour-coded source badge (Measured / Last known / Configured / Assumed), and
+the difference from the normalization air expressed two ways — as a percentage
+and as yards of driver carry. The yardage is there because it is the only unit
+you can judge by eye.
+
+**Barometer** reports the device, address, reading status and age, station
+pressure with its sample spread, and the temperature as
+`26.20 °C die → 21.50 °C used (-4.70)`. Both the raw die reading and the
+corrected value are shown deliberately: self-heating is this sensor's main
+failure mode, and hiding the raw number behind the offset would hide the very
+thing worth watching. If no offset is set, the tab says so, since an
+uncorrected die is worth about a yard of driver carry.
+
+Readings push to the tab as they are taken, so with the default 0.5 Hz sampling
+the values refresh every couple of seconds.
+
 ## Two Carries
 
 With any air configuration in play, shots carry two numbers:

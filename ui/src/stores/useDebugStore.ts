@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { IWR6843Diagnostic, TriggerDiagnostic, TriggerDiagnosticUpdate, TriggerStatus } from '../types/shot';
-import type { DebugReading, RadarConfig, DebugShotLog } from '../types/socket';
+import type { AirStatus, DebugReading, RadarConfig, DebugShotLog } from '../types/socket';
 
 interface DebugState {
   debugReadings: DebugReading[];
@@ -10,6 +10,7 @@ interface DebugState {
   triggerStatus: TriggerStatus;
   iwr6843Alert: IWR6843Diagnostic | null;
   iwr6843ErrorActive: boolean;
+  airStatus: AirStatus | null;
 
   addDebugReading: (reading: DebugReading) => void;
   addDebugShotLog: (log: DebugShotLog) => void;
@@ -20,6 +21,7 @@ interface DebugState {
   dismissIWR6843Alert: () => void;
   setTriggerStatus: (status: TriggerStatus) => void;
   updateTriggerStatusStats: (accepted: boolean) => void;
+  setAirStatus: (status: AirStatus) => void;
 }
 
 export const useDebugStore = create<DebugState>((set) => ({
@@ -43,6 +45,7 @@ export const useDebugStore = create<DebugState>((set) => ({
   },
   iwr6843Alert: null,
   iwr6843ErrorActive: false,
+  airStatus: null,
 
   addDebugReading: (reading) =>
     set((state) => {
@@ -88,6 +91,8 @@ export const useDebugStore = create<DebugState>((set) => ({
   dismissIWR6843Alert: () => set({ iwr6843Alert: null }),
 
   setTriggerStatus: (status) => set({ triggerStatus: status }),
+
+  setAirStatus: (status) => set({ airStatus: status }),
 
   updateTriggerStatusStats: (accepted) =>
     set((state) => ({

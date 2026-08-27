@@ -1,6 +1,6 @@
 import { memo, useState } from 'react';
 import type { CameraStatus } from '../stores/useCameraStore';
-import type { DebugReading, RadarConfig, DebugShotLog } from '../types/socket';
+import type { AirStatus, DebugReading, RadarConfig, DebugShotLog } from '../types/socket';
 import type { TriggerDiagnostic, TriggerStatus } from '../types/shot';
 import './DebugPanel.css';
 
@@ -15,6 +15,7 @@ interface DebugPanelProps {
   onUpdateConfig: (config: Partial<RadarConfig>) => void;
   triggerDiagnostics: TriggerDiagnostic[];
   triggerStatus: TriggerStatus;
+  airStatus: AirStatus | null;
 }
 
 const REASON_DISPLAY: Record<string, string> = {
@@ -198,6 +199,147 @@ function SystemStatus({ status }: { status: TriggerStatus }) {
   );
 }
 
+const AIR_SOURCE_LABEL: Record<string, string> = {
+  sensor: 'Measured',
+  sensor_stale: 'Last known',
+  config: 'Configured',
+  standard: 'Assumed',
+};
+
+const AIR_SOURCE_DETAIL: Record<string, string> = {
+  sensor: 'Live barometer reading.',
+  sensor_stale: 'Barometer has stopped responding; reusing its last reading.',
+  config: 'From the configured elevation and temperature. No barometer reading available.',
+  standard: 'Standard sea-level air. Nothing configured and no barometer fitted.',
+};
+
+function signed(value: number, digits = 1): string {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}`;
+}
+
+export function AirConditionsCard({ air }: { air: AirStatus }) {
+  const carry = air.driver_carry_delta_yards;
+  return (
+    <div className="debug-panel__section">
+      <h4>Air Conditions</h4>
+      <div className="system-status">
+        <div className="system-status__item">
+          <span className="system-status__label">Source</span>
+          <span className={`system-status__badge air-source air-source--${air.source}`}>
+            {AIR_SOURCE_LABEL[air.source] ?? air.source}
+          </span>
+        </div>
+        <div className="system-status__item">
+          <span className="system-status__label">Density</span>
+          <span className="system-status__value">{air.density_kg_m3.toFixed(4)} kg/m³</span>
+        </div>
+        <div className="system-status__item">
+          <span className="system-status__label">Pressure</span>
+          <span className="system-status__value">{air.pressure_hpa.toFixed(2)} hPa</span>
+        </div>
+        <div className="system-status__item">
+          <span className="system-status__label">Temperature</span>
+          <span className="system-status__value">{air.temperature_c.toFixed(1)} °C</span>
+        </div>
+        {air.elevation_ft !== null && (
+          <div className="system-status__item">
+            <span className="system-status__label">Elevation</span>
+            <span className="system-status__value">{air.elevation_ft.toFixed(0)} ft</span>
+          </div>
+        )}
+        <div className="system-status__item">
+          <span className="system-status__label">vs normalized</span>
+          <span className="system-status__value">
+            {`${signed(air.density_delta_pct, 2)}% density · `}
+            <strong>{`${signed(carry)} yd`}</strong>
+            {' driver carry'}
+          </span>
+        </div>
+      </div>
+      <p className="debug-panel__hint">{AIR_SOURCE_DETAIL[air.source] ?? ''}</p>
+    </div>
+  );
+}
+
+export function AirSensorCard({ air }: { air: AirStatus }) {
+  const { sensor, reading } = air;
+
+  if (!sensor.enabled) {
+    return (
+      <div className="debug-panel__section">
+        <h4>Barometer</h4>
+        <p className="debug-panel__hint">
+          {sensor.error
+            ? `Barometer requested but unavailable: ${sensor.error}`
+            : 'No barometer fitted. Start with --barometer to measure air density instead of assuming it.'}
+        </p>
+      </div>
+    );
+  }
+
+  const offset = sensor.temperature_offset_c ?? 0;
+  // The die self-heats inside a warm enclosure. An uncorrected sensor is the
+  // common misconfiguration and is worth about a yard of driver carry, so the
+  // raw reading is shown next to the corrected one rather than hidden.
+  const uncalibrated = offset === 0;
+
+  return (
+    <div className="debug-panel__section">
+      <h4>Barometer</h4>
+      <div className="system-status">
+        <div className="system-status__item">
+          <span className="system-status__label">Device</span>
+          <span className="system-status__value">
+            {`${sensor.sensor ?? 'bmp580'} @ ${sensor.i2c_address} (i2c-${sensor.i2c_bus})`}
+          </span>
+        </div>
+        <div className="system-status__item">
+          <span className="system-status__label">Reading</span>
+          <span
+            className={`system-status__value ${
+              reading?.status === 'ok' ? 'system-status__value--success' : 'system-status__value--error'
+            }`}
+          >
+            {`${reading?.status ?? 'no reading'}${reading?.age_s != null ? ` · ${reading.age_s.toFixed(0)}s ago` : ''}`}
+          </span>
+        </div>
+        {reading?.pressure_hpa != null && (
+          <div className="system-status__item">
+            <span className="system-status__label">Station pressure</span>
+            <span className="system-status__value">
+              {`${reading.pressure_hpa.toFixed(2)} hPa${
+                reading.pressure_std_pa != null ? ` (±${reading.pressure_std_pa.toFixed(2)} Pa)` : ''
+              }`}
+            </span>
+          </div>
+        )}
+        {reading?.raw_temperature_c != null && (
+          <div className="system-status__item">
+            <span className="system-status__label">Temperature</span>
+            <span className="system-status__value">
+              {`${reading.raw_temperature_c.toFixed(2)} °C die → ${reading.temperature_c?.toFixed(
+                2
+              )} °C used (${signed(offset, 2)})`}
+            </span>
+          </div>
+        )}
+        <div className="system-status__item">
+          <span className="system-status__label">Sample rate</span>
+          <span className="system-status__value">
+            {`${sensor.sample_hz} Hz${reading?.sample_count != null ? ` · median of ${reading.sample_count}` : ''}`}
+          </span>
+        </div>
+      </div>
+      {uncalibrated && (
+        <p className="debug-panel__hint debug-panel__hint--warn">
+          No temperature offset set. The die reads warm inside an enclosure, and 3 °C of error is about 0.8 yd of driver
+          carry. Calibrate with scripts/hardware-test/calibrate_bmp580.py.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function LastTriggerCard({ diag }: { diag: TriggerDiagnostic | null }) {
   if (!diag) {
     return (
@@ -300,7 +442,7 @@ function LastTriggerCard({ diag }: { diag: TriggerDiagnostic | null }) {
   );
 }
 
-type DebugTab = 'status' | 'history' | 'tuning';
+type DebugTab = 'status' | 'history' | 'air' | 'tuning';
 
 export function DebugPanel({
   radarConfig,
@@ -308,6 +450,7 @@ export function DebugPanel({
   onUpdateConfig,
   triggerDiagnostics,
   triggerStatus,
+  airStatus,
 }: DebugPanelProps) {
   const [activeTab, setActiveTab] = useState<DebugTab>('status');
   const isRollingBuffer = triggerStatus.mode === 'rolling-buffer';
@@ -339,6 +482,12 @@ export function DebugPanel({
             History
           </button>
         )}
+        <button
+          className={`debug-tabs__tab ${activeTab === 'air' ? 'debug-tabs__tab--active' : ''}`}
+          onClick={() => setActiveTab('air')}
+        >
+          Air
+        </button>
         <button
           className={`debug-tabs__tab ${activeTab === 'tuning' ? 'debug-tabs__tab--active' : ''}`}
           onClick={() => setActiveTab('tuning')}
@@ -374,6 +523,18 @@ export function DebugPanel({
             </div>
           </div>
         )}
+
+        {activeTab === 'air' &&
+          (airStatus ? (
+            <>
+              <AirConditionsCard air={airStatus} />
+              <AirSensorCard air={airStatus} />
+            </>
+          ) : (
+            <div className="debug-panel__section">
+              <p className="debug-panel__empty">Waiting for air conditions...</p>
+            </div>
+          ))}
 
         {activeTab === 'tuning' && (
           <div className="debug-panel__section">

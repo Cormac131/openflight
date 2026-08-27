@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional
 
@@ -22,7 +23,14 @@ from flask_cors import CORS
 from flask_socketio import SocketIO
 
 from .air_density import AirConditions, AirConditionsError
-from .ballistics import AIR_DENSITY_STD, density_carry_ratio, resolve_launch, simulate
+from .ballistics import (
+    AIR_DENSITY_STD,
+    CLUB_TYPICAL_LAUNCH_ANGLE_DEG,
+    LaunchConditions,
+    density_carry_ratio,
+    resolve_launch,
+    simulate,
+)
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, ClubType, Shot
 from .ops243 import (
     UART_BAUD_COMMANDS,
@@ -188,6 +196,84 @@ def current_air_conditions() -> AirConditions:
         if remembered is not None:
             return remembered
     return air_conditions
+
+
+# Reference driver used only to express a density difference as yards, which
+# is the unit an operator can actually judge. Tour-average launch.
+_CARRY_EFFECT_BALL_SPEED_MPH = 167.0
+_CARRY_EFFECT_SPIN_RPM = 2600.0
+
+
+@lru_cache(maxsize=64)
+def _carry_effect_yards(density_kg_m3: float, normalization_kg_m3: float) -> float:
+    """
+    Driver carry difference, in yards, between one density and the reference.
+
+    Runs the real ballistic model, so it costs two RK4 integrations — far too
+    much to repeat for every barometer sample on a Pi. Cached on densities
+    already rounded to 4 decimal places by the caller, which in practice means
+    one computation per genuine change in the air rather than one per reading.
+    """
+    ratio = density_carry_ratio(
+        _CARRY_EFFECT_BALL_SPEED_MPH,
+        ClubType.DRIVER,
+        _CARRY_EFFECT_SPIN_RPM,
+        actual_density=density_kg_m3,
+        reference_density=normalization_kg_m3,
+    )
+    reference_carry = simulate(
+        LaunchConditions(
+            ball_speed_mph=_CARRY_EFFECT_BALL_SPEED_MPH,
+            launch_angle_v=CLUB_TYPICAL_LAUNCH_ANGLE_DEG[ClubType.DRIVER],
+            launch_angle_h=0.0,
+            spin_rpm=_CARRY_EFFECT_SPIN_RPM,
+            spin_axis_deg=0.0,
+            spin_source="club_typical",
+        ),
+        air_density=normalization_kg_m3,
+    ).carry_yards
+    return reference_carry * (ratio - 1.0)
+
+
+def _air_status_payload() -> dict:
+    """
+    Everything the diagnostics Air tab needs, sensor fitted or not.
+
+    Always reports the resolved conditions and where they came from, because
+    air density affects carry whether it was measured or assumed, and the
+    difference between those two cases is worth up to 14 yd. Sensor detail is
+    added only when a barometer exists.
+    """
+    conditions = current_air_conditions()
+    density = round(conditions.density_kg_m3, 4)
+    normalization = round(carry_normalization_density, 4)
+    payload = {
+        "source": conditions.source,
+        "density_kg_m3": density,
+        "pressure_hpa": round(conditions.pressure_pa / 100.0, 2),
+        "temperature_c": round(conditions.temperature_c, 2),
+        "elevation_ft": (
+            None if conditions.elevation_ft is None else round(conditions.elevation_ft, 0)
+        ),
+        "normalization_density_kg_m3": normalization,
+        "density_delta_pct": round((density / normalization - 1.0) * 100.0, 2),
+        "driver_carry_delta_yards": round(_carry_effect_yards(density, normalization), 1),
+        "sensor": dict(barometer_runtime_config),
+    }
+    if barometer_service is not None:
+        selection = barometer_service.reading_for_shot()
+        payload["reading"] = selection.to_dict()
+    return payload
+
+
+def _emit_air_status() -> None:
+    """Push the current air state to connected UI clients."""
+    socketio.emit("air_status", _air_status_payload())
+
+
+def _on_barometer_reading(_snapshot) -> None:
+    """Publish each accepted barometer reading to the diagnostics tab."""
+    _emit_air_status()
 
 
 def _air_differs_from_normalization(conditions: AirConditions) -> bool:
@@ -1387,6 +1473,7 @@ def init_barometer(
             temperature_offset_c=temperature_offset_c,
             elevation_m=air_conditions.elevation_m,
             sample_hz=sample_hz,
+            on_reading=_on_barometer_reading,
         )
         service.start()
         # One full sample window plus slack, so a healthy sensor reports its
@@ -2133,6 +2220,7 @@ def handle_connect():
     _emit_sim_snapshot()
     if power_monitor and power_monitor.status:
         socketio.emit("power_status", power_monitor.status.to_dict())
+    socketio.emit("air_status", _air_status_payload())
     if monitor:
         socketio.emit("session_state", _session_state_payload(include_runtime_meta=True))
         socketio.emit("trigger_status", _get_trigger_status())

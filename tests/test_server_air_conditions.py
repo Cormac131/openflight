@@ -408,3 +408,108 @@ class TestBarometerAloneNeedsNoConfiguration:
         monkeypatch.setattr(server_module, "barometer_service", never_read)
 
         assert server_module.current_air_conditions() is DENVER
+
+
+class TestAirStatusPayload:
+    """The diagnostics Air tab's data contract."""
+
+    def test_reports_assumed_conditions_when_nothing_is_fitted(self, monkeypatch):
+        monkeypatch.setattr(server_module, "air_conditions", AirConditions.standard())
+        monkeypatch.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+        monkeypatch.setattr(server_module, "barometer_service", None)
+        monkeypatch.setattr(server_module, "barometer_runtime_config", {"enabled": False})
+
+        payload = server_module._air_status_payload()
+        assert payload["source"] == "standard"
+        assert payload["density_delta_pct"] == 0.0
+        assert payload["driver_carry_delta_yards"] == 0.0
+        assert payload["sensor"]["enabled"] is False
+        # No sensor means no reading block to render.
+        assert "reading" not in payload
+
+    def test_expresses_the_density_difference_as_driver_carry(self, monkeypatch):
+        monkeypatch.setattr(server_module, "air_conditions", DENVER)
+        monkeypatch.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+        monkeypatch.setattr(server_module, "barometer_service", None)
+
+        payload = server_module._air_status_payload()
+        assert payload["source"] == "config"
+        assert payload["density_delta_pct"] < 0
+        # The same +14 yd that shows up everywhere else for Denver.
+        assert payload["driver_carry_delta_yards"] == pytest.approx(14.0, abs=1.5)
+
+    def test_includes_the_sensor_reading_when_one_exists(self, monkeypatch):
+        monkeypatch.setattr(server_module, "air_conditions", AirConditions.standard())
+        monkeypatch.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+        monkeypatch.setattr(
+            server_module, "barometer_service", _loaded_barometer(83400.0, 20.0)
+        )
+
+        payload = server_module._air_status_payload()
+        assert payload["source"] == "sensor"
+        assert payload["reading"]["status"] == "ok"
+        assert payload["reading"]["pressure_hpa"] == pytest.approx(834.0, abs=0.1)
+
+    def test_exposes_raw_and_corrected_temperature(self, monkeypatch):
+        """Self-heating has to stay visible rather than hidden by the offset."""
+        monkeypatch.setattr(server_module, "air_conditions", AirConditions.standard())
+        monkeypatch.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+        monkeypatch.setattr(
+            server_module,
+            "barometer_service",
+            _loaded_barometer(101325.0, 26.2, temperature_offset_c=-4.7),
+        )
+
+        reading = server_module._air_status_payload()["reading"]
+        assert reading["raw_temperature_c"] == pytest.approx(26.2, abs=0.01)
+        assert reading["temperature_c"] == pytest.approx(21.5, abs=0.01)
+
+    def test_carry_effect_is_cached_across_repeated_payloads(self, monkeypatch):
+        """
+        The effect runs two RK4 integrations, far too slow to repeat for every
+        barometer sample on a Pi. Densities are rounded before lookup, so a
+        steady sensor computes it once.
+        """
+        monkeypatch.setattr(server_module, "air_conditions", DENVER)
+        monkeypatch.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+        monkeypatch.setattr(server_module, "barometer_service", None)
+
+        server_module._carry_effect_yards.cache_clear()
+        for _ in range(5):
+            server_module._air_status_payload()
+        info = server_module._carry_effect_yards.cache_info()
+        assert info.misses == 1
+        assert info.hits == 4
+
+
+class TestBarometerReadingObserver:
+    def test_each_accepted_reading_is_published(self):
+        published = []
+        service = BarometerService(
+            _StubBarometerSensor(101325.0, 20.0),
+            window_samples=1,
+            on_reading=published.append,
+        )
+        service.add_sample(service.sensor.read())
+        service.add_sample(service.sensor.read())
+        assert len(published) == 2
+
+    def test_rejected_readings_are_not_published(self):
+        published = []
+        service = BarometerService(
+            _StubBarometerSensor(0.0, 20.0), window_samples=1, on_reading=published.append
+        )
+        service.add_sample(service.sensor.read())
+        assert published == []
+
+    def test_a_throwing_observer_does_not_break_sampling(self):
+        """A broken debug display must never stop the rig measuring air."""
+
+        def explode(_snapshot):
+            raise RuntimeError("socket gone")
+
+        service = BarometerService(
+            _StubBarometerSensor(101325.0, 20.0), window_samples=1, on_reading=explode
+        )
+        assert service.add_sample(service.sensor.read()) is not None
+        assert service.current_conditions() is not None
