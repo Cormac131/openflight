@@ -2808,6 +2808,14 @@ class TestOnShotDetected:
         assert session_log.shots[0]["launch_angle_vertical_source"] == "estimated"
         assert session_log.shots[0]["carry_spin_adjusted"] > 0
 
+    @staticmethod
+    def _assert_finalization_coordinator_empty():
+        with server_module._shot_finalization_lock:
+            assert not server_module._shot_finalization_order
+            assert not server_module._shot_finalization_registered
+            assert not server_module._shot_finalization_ready
+            assert server_module._shot_finalization_running is False
+
     def test_enrichment_queue_has_hard_capacity(self):
         assert server_module._SHOT_ENRICHMENT_QUEUE_CAPACITY > 0
         assert (
@@ -3056,9 +3064,7 @@ class TestOnShotDetected:
 
         assert attempts == [1, 2]
         assert len(logged_errors) == 1
-        assert not server_module._shot_finalization_order
-        assert not server_module._shot_finalization_ready
-        assert server_module._shot_finalization_running is False
+        self._assert_finalization_coordinator_empty()
 
     def test_queue_overflow_preserves_shot_order_and_hardware_identity(self, monkeypatch):
         emitted, session_log = self._record_finalization(monkeypatch)
@@ -3174,9 +3180,106 @@ class TestOnShotDetected:
         ] == expected_enriched
         assert [(row["shot_number"], row["impact_timestamp"]) for row in final_shots] == expected
         assert simulator_shots == expected
-        assert not server_module._shot_finalization_order
-        assert not server_module._shot_finalization_ready
-        assert server_module._shot_finalization_running is False
+        self._assert_finalization_coordinator_empty()
+
+    def test_stuck_head_deadline_bounds_coordinator_and_finalizes_ops_in_order(self, monkeypatch):
+        emitted, session_log = self._record_finalization(monkeypatch)
+        dump_started = threading.Event()
+        release_dump = threading.Event()
+        first_shot_logged = threading.Event()
+        all_shots_logged = threading.Event()
+        background_threads = []
+        simulator_shots = []
+        coordinator_sizes = []
+        enrichment_queue = self._enrichment_queue()
+        shot_count = 20
+        shots = [self._shot(second) for second in range(shot_count)]
+
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", enrichment_queue)
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(server_module, "_SHOT_ENRICHMENT_DEADLINE_S", 0.05, raising=False)
+        monkeypatch.setattr(server_module, "_SHOT_FINALIZATION_CAPACITY", 4, raising=False)
+
+        original_log_shot = session_log.log_shot
+
+        def log_shot(**shot_data):
+            original_log_shot(**shot_data)
+            if len(session_log.shots) == 1:
+                first_shot_logged.set()
+            if len(session_log.shots) == shot_count:
+                all_shots_logged.set()
+
+        session_log.log_shot = log_shot
+
+        def block_first_enrichment(shot):
+            if shot.shot_number == 1:
+                dump_started.set()
+                assert release_dump.wait(5.0)
+            shot.launch_angle_vertical = 42.0
+            shot.launch_angle_vertical_source = "iwr6843"
+            return server_module._ShotEnrichmentResult()
+
+        def start_background_task(target, *args, **kwargs):
+            thread = threading.Thread(target=target, args=args, kwargs=kwargs, daemon=True)
+            background_threads.append(thread)
+            thread.start()
+            return thread
+
+        monkeypatch.setattr(
+            server_module,
+            "_enrich_shot_from_optional_hardware",
+            block_first_enrichment,
+        )
+        monkeypatch.setattr(server_module.socketio, "start_background_task", start_background_task)
+        monkeypatch.setattr(
+            server_module,
+            "_forward_shot_to_simulators",
+            lambda shot: simulator_shots.append(shot.shot_number),
+        )
+
+        on_shot_detected(shots[0])
+        assert dump_started.wait(2.0)
+        assert first_shot_logged.wait(2.0)
+        assert not release_dump.is_set(), "deadline must not wait for hardware to return"
+
+        def submit_remaining_shots():
+            for shot in shots[1:]:
+                on_shot_detected(shot)
+                with server_module._shot_finalization_lock:
+                    coordinator_sizes.append(
+                        (
+                            len(server_module._shot_finalization_order),
+                            len(server_module._shot_finalization_registered),
+                            len(server_module._shot_finalization_ready),
+                        )
+                    )
+
+        callbacks = threading.Thread(target=submit_remaining_shots, daemon=True)
+        callbacks.start()
+        try:
+            callbacks.join(timeout=5.0)
+            assert not callbacks.is_alive(), "OPS callbacks must not wait for stuck hardware"
+            assert max(size[0] for size in coordinator_sizes) <= 4
+            assert max(size[1] for size in coordinator_sizes) <= 4
+            assert max(size[2] for size in coordinator_sizes) <= 4
+            assert all_shots_logged.wait(2.0)
+            assert not release_dump.is_set(), "overflow must not wait for hardware to return"
+        finally:
+            release_dump.set()
+
+        callbacks.join(timeout=2.0)
+        for thread in background_threads:
+            thread.join(timeout=2.0)
+
+        final_shots = [payload["shot"] for event, payload in emitted if event == "shot_update"]
+        assert [row["shot_number"] for row in final_shots] == list(range(1, shot_count + 1))
+        assert [row["shot_number"] for row in session_log.shots] == list(range(1, shot_count + 1))
+        assert all(row["launch_angle_vertical_source"] == "estimated" for row in final_shots)
+        assert all(row["carry_spin_adjusted"] > 0 for row in final_shots)
+        assert all(shot.launch_angle_vertical_source == "estimated" for shot in shots)
+        assert simulator_shots == list(range(1, shot_count + 1))
+        self._assert_finalization_coordinator_empty()
 
     def test_kld7_uses_shot_impact_timestamp(self, monkeypatch):
         """K-LD7 selection should be anchored to the OPS243 impact timestamp."""
