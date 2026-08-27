@@ -148,9 +148,9 @@ test('switches between primary navigation views', async ({ page }) => {
   await expect(page.locator('.panel-footer__count')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Shots' })).toContainText('2');
 
-  await page.getByRole('button', { name: 'Players' }).click();
-  await expect(page.getByRole('region', { name: 'Players' })).toBeVisible();
-  await expect(page.locator('.panel-header').getByRole('button', { name: 'Add player' })).toBeVisible();
+  await page.getByRole('button', { name: 'Profiles' }).click();
+  await expect(page.getByRole('region', { name: 'Profiles' })).toBeVisible();
+  await expect(page.locator('.panel-header').getByRole('button', { name: 'Add profile' })).toBeVisible();
   await expect(page.locator('.panel-footer__units')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Simulate shot' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Change club' })).toHaveCount(0);
@@ -193,24 +193,24 @@ test('switches between primary navigation views', async ({ page }) => {
   await expect(page.locator('.panel-footer__count')).toHaveCount(0);
 });
 
-test('selecting a player opens Live and does not offer delete on the active player', async ({ page }) => {
+test('selecting a profile opens Live and does not offer delete on the active profile', async ({ page }) => {
   await gotoApp(page);
   await dismissPicker(page);
 
-  await page.getByRole('button', { name: 'Players' }).click();
-  await page.getByRole('button', { name: 'Add player' }).click();
+  await page.getByRole('button', { name: 'Profiles' }).click();
+  await page.getByRole('button', { name: 'Add profile' }).click();
   await page.getByPlaceholder('Name').fill('Alex');
-  await page.getByRole('dialog', { name: 'Add player' }).getByRole('button', { name: 'Add player' }).click();
+  await page.getByRole('dialog', { name: 'Add profile' }).getByRole('button', { name: 'Add profile' }).click();
 
-  await expect(page.getByLabel('Remove Player 1')).toBeVisible();
+  await expect(page.getByLabel('Remove Profile 1')).toBeVisible();
   await expect(page.getByLabel('Remove Alex')).toHaveCount(0);
 
-  await page.locator('.players-panel__card').filter({ hasText: 'Player 1' }).click();
+  await page.locator('.profiles-panel__card').filter({ hasText: 'Profile 1' }).click();
   await expect(page.locator('.panel-header__title')).toHaveText('Live');
-  await expect(page.locator('.panel-header__subtitle')).toHaveText('Player 1');
+  await expect(page.locator('.panel-header__subtitle')).toHaveText('Profile 1');
 });
 
-test('confirms before clearing and only removes that player, then returns to Live', async ({ page }) => {
+test('confirms before clearing and only removes that profile, then returns to Live', async ({ page }) => {
   await withControlSocket(async (socket) => {
     await simulateShot(socket);
   });
@@ -218,10 +218,10 @@ test('confirms before clearing and only removes that player, then returns to Liv
   await gotoApp(page);
   await dismissPicker(page);
 
-  await page.getByRole('button', { name: 'Players' }).click();
-  await page.getByRole('button', { name: 'Add player' }).click();
+  await page.getByRole('button', { name: 'Profiles' }).click();
+  await page.getByRole('button', { name: 'Add profile' }).click();
   await page.getByPlaceholder('Name').fill('Alex');
-  await page.getByRole('dialog', { name: 'Add player' }).getByRole('button', { name: 'Add player' }).click();
+  await page.getByRole('dialog', { name: 'Add profile' }).getByRole('button', { name: 'Add profile' }).click();
   await expect(page.getByLabel('Remove Alex')).toHaveCount(0);
 
   await withControlSocket(async (socket) => {
@@ -233,7 +233,7 @@ test('confirms before clearing and only removes that player, then returns to Liv
 
   const dialog = page.getByRole('dialog', { name: "Clear Alex's session?" });
   await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText("This removes Alex's shots. Other players are kept.");
+  await expect(dialog).toContainText("This removes Alex's shots. Other profiles are kept.");
 
   await dialog.getByRole('button', { name: 'Cancel' }).click();
   await expect(dialog).toHaveCount(0);
@@ -246,10 +246,79 @@ test('confirms before clearing and only removes that player, then returns to Liv
   await expect(page.locator('.panel-header__subtitle')).toHaveText('Alex');
   await expect(page.getByText('Ready', { exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Players' }).click();
-  await page.locator('.players-panel__card').filter({ hasText: 'Player 1' }).click();
+  await page.getByRole('button', { name: 'Profiles' }).click();
+  await page.locator('.profiles-panel__card').filter({ hasText: 'Profile 1' }).click();
   await page.getByRole('button', { name: 'Shots' }).click();
   await expect(page.locator('.shots-panel__row')).toHaveCount(1);
+});
+
+test('clicking the rename control opens the rename dialog and renames the profile', async ({ page }) => {
+  await gotoApp(page);
+  await dismissPicker(page);
+
+  await page.getByRole('button', { name: 'Profiles' }).click();
+  await page.getByRole('button', { name: 'Add profile' }).click();
+  await page.getByRole('textbox').fill('Rnage');
+  await page.getByRole('button', { name: 'Add profile' }).last().click();
+
+  await page.getByLabel('Rename Rnage').click();
+  const dialog = page.getByRole('dialog', { name: 'Rename profile' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('textbox')).toHaveValue('Rnage');
+
+  await dialog.getByRole('textbox').fill('Range');
+  await dialog.getByRole('button', { name: 'Rename profile' }).click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.profiles-panel__card').filter({ hasText: 'Range' })).toBeVisible();
+  await expect(page.locator('.profiles-panel__card').filter({ hasText: 'Rnage' })).toHaveCount(0);
+});
+
+test('pressing Enter in the name dialog confirms the rename', async ({ page }) => {
+  await gotoApp(page);
+  await dismissPicker(page);
+
+  await page.getByRole('button', { name: 'Profiles' }).click();
+  await page.getByRole('button', { name: 'Add profile' }).click();
+  await page.getByRole('textbox').fill('Rnage');
+  await page.getByRole('button', { name: 'Add profile' }).last().click();
+
+  await page.getByLabel('Rename Rnage').click();
+  await page.getByRole('textbox').fill('Range');
+  await page.getByRole('textbox').press('Enter');
+
+  await expect(page.getByRole('dialog', { name: 'Rename profile' })).toHaveCount(0);
+  await expect(page.locator('.profiles-panel__card').filter({ hasText: 'Range' })).toBeVisible();
+});
+
+test('renaming a profile keeps its shots', async ({ page }) => {
+  await gotoApp(page);
+  await dismissPicker(page);
+
+  await page.getByRole('button', { name: 'Profiles' }).click();
+  await page.getByRole('button', { name: 'Add profile' }).click();
+  await page.getByRole('textbox').fill('Rnage');
+  await page.getByRole('button', { name: 'Add profile' }).last().click();
+
+  // The server makes the new profile active as soon as it's created.
+  await withControlSocket(async (socket) => {
+    await simulateShot(socket);
+  });
+
+  await page.getByLabel('Rename Rnage').click();
+  await page.getByRole('textbox').fill('Range');
+  await page.getByRole('button', { name: 'Rename profile' }).last().click();
+
+  // The header subtitle also renders the active profile's name, so scope to
+  // the roster card to avoid an ambiguous match.
+  const renamedCard = page.locator('.profiles-panel__card').filter({ hasText: 'Range' });
+  await expect(renamedCard).toBeVisible();
+  await expect(page.locator('.profiles-panel__card').filter({ hasText: 'Rnage' })).toHaveCount(0);
+
+  await renamedCard.click();
+  await page.getByRole('button', { name: 'Shots' }).click();
+  await expect(page.locator('.shots-panel__row')).toHaveCount(1);
+  await expect(page.locator('.shots-panel__profile-name')).toHaveText('Range');
 });
 
 test('scrolls the shots list by dragging on a row', async ({ page }) => {

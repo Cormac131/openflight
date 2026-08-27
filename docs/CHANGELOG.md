@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Profiles replace players.** Shots are now attributed to a server-owned profile
+  (a person *or* a place) with a stable id, persisted to
+  `~/.config/openflight/profiles.json`. Profiles can be renamed without orphaning
+  their shots. The socket exposes a single authoritative `profiles` snapshot plus
+  `set_active_profile` / `add_profile` / `rename_profile` / `remove_profile`.
+  Breaking: `set_player` / `player_changed` are gone, `Shot.player_name` is replaced
+  by `profile_id` + `profile_name`, and existing browser-local player rosters are
+  discarded.
 - **Automatic OV9281 exposure control.** High-speed camera capture now measures
   the impact area every five seconds, restores the last known-good setting at
   startup, and selects a shutter/gain combination that preserves club contrast
@@ -16,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shot analysis is withheld when lighting is unsuitable, but radar processing
   and shot display continue normally with an operator-facing lighting warning.
 - **Instrument-panel kiosk UI.** The dashboard is a tabbed shell (Live, Stats,
-  Shots, Camera, Players, Debug) instead of the previous stacked shot and stats
+  Shots, Camera, Profiles, Debug) instead of the previous stacked shot and stats
   views. Tap a Live metric to pin it top-left while keeping all ten metrics
   visible. The footer logo opens units, dark/light theme, language, simulator,
   and ball-detection status; a persistent footer power button opens the shutdown
