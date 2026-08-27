@@ -587,9 +587,48 @@ configure_kld7_latency() {
     fi
 }
 
+wait_for_server() {
+    for _ in {1..30}; do
+        if curl -s "http://$HOST:$PORT" > /dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.5
+    done
+    curl -s "http://$HOST:$PORT" > /dev/null 2>&1
+}
+
+# Swap in any release openflight-update.timer already downloaded/built in the
+# background (see scripts/setup/openflight-update.timer). A safe no-op when
+# auto-update isn't installed/enabled, or nothing is pending. Prints
+# "Applied ..." only when it actually swapped the ~/openflight symlink — used
+# below to decide whether a failed startup should trigger a rollback.
+UPDATE_JUST_APPLIED=false
+
+apply_pending_update() {
+    local updater="$PROJECT_DIR/.venv/bin/openflight-update"
+    [ -x "$updater" ] || return 0
+
+    local apply_output
+    if ! apply_output=$("$updater" apply 2>&1); then
+        warn "openflight-update apply failed:"
+        warn "$apply_output"
+        return 0
+    fi
+    [ -n "$apply_output" ] && log "$apply_output"
+
+    if echo "$apply_output" | grep -q "^Applied "; then
+        # Our shell is still cd'd into the *old* release dir by inode, even
+        # though $PROJECT_DIR (the ~/openflight symlink path) is unchanged —
+        # re-cd to actually follow the symlink into the newly applied release.
+        cd "$PROJECT_DIR"
+        UPDATE_JUST_APPLIED=true
+    fi
+}
+
 trap cleanup SIGINT SIGTERM
 
 cd "$PROJECT_DIR"
+apply_pending_update
 
 # Build server command
 SERVER_CMD="openflight-server --web-port $PORT"
@@ -908,12 +947,20 @@ SERVER_PID=$!
 
 # Wait for server to be ready
 log "Waiting for server to start..."
-for i in {1..30}; do
-    if curl -s "http://$HOST:$PORT" > /dev/null 2>&1; then
-        break
+if ! wait_for_server; then
+    if [ "$UPDATE_JUST_APPLIED" = true ]; then
+        warn "Server failed to start on the newly applied release; rolling back..."
+        kill "$SERVER_PID" 2>/dev/null || true
+        wait "$SERVER_PID" 2>/dev/null || true
+        if "$PROJECT_DIR/.venv/bin/openflight-update" rollback; then
+            cd "$PROJECT_DIR"
+            log "Rolled back; retrying server start..."
+            uv run ${OPENFLIGHT_UV_RUN_ARGS:-} $SERVER_CMD &
+            SERVER_PID=$!
+            wait_for_server
+        fi
     fi
-    sleep 0.5
-done
+fi
 
 if ! curl -s "http://$HOST:$PORT" > /dev/null 2>&1; then
     error "Server failed to start"

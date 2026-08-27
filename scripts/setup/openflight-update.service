@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenFlight auto-updater (check GitHub releases, prepare in background)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=coleman
+WorkingDirectory=/home/coleman/openflight
+# Uses the venv's console script; only ever downloads/builds a candidate
+# release into ~/openflight-releases — never touches the live install or
+# restarts anything. The actual swap happens at the next natural restart,
+# via `openflight-update apply` in start-kiosk.sh.
+ExecStart=/home/coleman/openflight/.venv/bin/openflight-update check

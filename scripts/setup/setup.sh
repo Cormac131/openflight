@@ -320,6 +320,36 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
         info "Skipped. Enable later by re-running this script, or see"
         info "    docs/cloud-sync.md"
     fi
+
+    # --- Auto-update from GitHub releases (opt-in) ---
+    echo ""
+    info "Auto-update checks GitHub for a newer release every ~45 minutes and"
+    info "prepares it in the background (download, deps, UI) without touching"
+    info "this kiosk while it's running. The new version only swaps in at the"
+    info "next restart (crash, reboot, or a manual restart), with automatic"
+    info "rollback if it fails to start."
+    echo ""
+    if confirm "Enable automatic updates for this Pi?" "N"; then
+        log "Migrating this checkout into the release layout..."
+        if openflight-update bootstrap --install-dir "$PROJECT_DIR"; then
+            log "Installing the auto-update timer (checks every ~45 min)..."
+            for unit in openflight-update.service openflight-update.timer; do
+                sed -e "s|^User=.*|User=$USER|" \
+                    -e "s|/home/coleman/openflight|$PROJECT_DIR|g" \
+                    "$SCRIPT_DIR/$unit" | sudo tee "/etc/systemd/system/$unit" > /dev/null
+            done
+            sudo systemctl daemon-reload
+            sudo systemctl enable --now openflight-update.timer
+            log "Auto-update timer installed and enabled ✓"
+            info "Check state any time with: openflight-update status"
+        else
+            warn "Bootstrap failed — auto-update was not enabled."
+            warn "  Fix the issue above and re-run: openflight-update bootstrap"
+        fi
+    else
+        info "Skipped. Enable later by re-running this script, or see"
+        info "    docs/raspberry-pi-setup.md → Auto-Update"
+    fi
 elif [ "$PLATFORM" == "pi" ]; then
     info "Skipping hardware setup ($([ "$INTERACTIVE" == "false" ] && echo "non-interactive" || echo "--deps-only"))."
     info "Run ./scripts/setup/setup.sh again without flags to configure hardware."

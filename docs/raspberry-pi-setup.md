@@ -233,6 +233,47 @@ sudo systemctl restart openflight
 
 </details>
 
+### Auto-Update from GitHub Releases
+
+The setup script can enable automatic updates: a background timer checks
+GitHub every ~45 minutes for a newer [release](https://github.com/jewbetcha/openflight/releases),
+downloads it, installs its dependencies, and smoke-tests it — all without
+touching the running kiosk. The new version only swaps in at the next
+restart (crash, reboot, or a manual `systemctl restart openflight`), and if
+it fails to start, the previous release is automatically restored.
+
+On first enable, the wizard migrates your existing git clone into a
+release-directory layout (`~/openflight-releases/<tag>/`, with
+`~/openflight` becoming a symlink to the active one) so it can keep the
+current and previous release side by side for instant rollback. It refuses
+to do this if `git status` isn't clean, so it never discards local changes —
+commit or stash first.
+
+<details>
+<summary>Manual steps and status</summary>
+
+```bash
+# Enable (also runs once during scripts/setup/setup.sh)
+uv run openflight-update bootstrap --install-dir ~/openflight
+sudo cp scripts/setup/openflight-update.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now openflight-update.timer
+```
+
+```bash
+openflight-update status                     # active/pending/previous release, last check
+uv run openflight-update check --dry-run      # see what a check would do, without changing anything
+uv run openflight-update apply --tag v0.3.0 --dry-run   # same, for a specific release
+sudo systemctl disable --now openflight-update.timer    # disable auto-update
+```
+
+</details>
+
+For maintainers: cutting a release is `git tag vX.Y.Z && git push --tags`
+against a commit already on `main` — `.github/workflows/release.yml` verifies
+the tag matches `pyproject.toml`'s version, builds the UI, and publishes the
+GitHub Release with a `ui-dist.tar.gz` asset attached.
+
 ## Running OpenFlight
 
 ### Kiosk Mode (Fullscreen — Recommended)

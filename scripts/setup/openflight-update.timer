@@ -1,0 +1,14 @@
+[Unit]
+Description=Check for a newer OpenFlight release every ~45 minutes
+
+[Timer]
+# Fire shortly after boot, then every 45 minutes. RandomizedDelaySec spreads
+# load so a fleet of Pis doesn't hit the GitHub API in lockstep (ETag
+# conditional requests already make repeat "no update" checks cheap).
+OnBootSec=5min
+OnUnitActiveSec=45min
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target
