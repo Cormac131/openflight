@@ -63,6 +63,46 @@ export async function waitForEvent<T>(socket: Socket, event: string, timeoutMs =
   });
 }
 
+interface ClubTag {
+  uid: string;
+  uid_display: string;
+  club: string;
+}
+
+interface ClubTagsPayload {
+  tags: ClubTag[];
+  enabled: boolean;
+}
+
+/** Read the learned club tags, and assert the backend was started with --nfc. */
+export async function clubTags(socket: Socket): Promise<ClubTag[]> {
+  const payload = waitForEvent<ClubTagsPayload>(socket, 'club_tags');
+  socket.emit('get_club_tags');
+  const { tags, enabled } = await payload;
+  expect(enabled, 'backend must run with --nfc for the club tag tests').toBe(true);
+  return tags;
+}
+
+/** Forget every learned tag, so each test starts from an empty registry. */
+export async function resetClubTags(socket: Socket) {
+  for (const tag of await clubTags(socket)) {
+    const updated = waitForEvent(socket, 'club_tags');
+    socket.emit('forget_club_tag', { uid: tag.uid });
+    await updated;
+  }
+}
+
+/**
+ * Present a tag to the mock reader, as if it had been tapped on the antenna.
+ * Resolves once the reader thread has reported it, so callers do not race the
+ * poll interval.
+ */
+export async function presentTag(socket: Socket, uid: string) {
+  const scan = waitForEvent<{ uid: string; club: string | null }>(socket, 'nfc_scan');
+  socket.emit('simulate_nfc_scan', { uid });
+  return scan;
+}
+
 export async function resetSession(socket: Socket) {
   const statePromise = waitForEvent<{ shots?: Array<{ player_name?: string }> }>(socket, 'session_state');
   socket.emit('get_session');

@@ -1,11 +1,19 @@
 import { defineConfig, devices } from '@playwright/test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const PORT = 5173;
 const HOST = '127.0.0.1';
 const BASE_URL = `http://${HOST}:${PORT}`;
 const CONFIG_DIR = fileURLToPath(new URL('.', import.meta.url));
-const BACKEND_ARGS = `--mock --host ${HOST} --web-port 8080 --no-camera --no-logging`;
+// Learned club tags go to a scratch file, never the operator's real
+// ~/.openflight/club_tags.json. --mock makes --nfc use the mock reader, so the
+// tag flow is driven over the control socket with no PN532 attached.
+const CLUB_TAGS_FILE = join(tmpdir(), 'openflight-e2e-club-tags.json');
+const BACKEND_ARGS =
+  `--mock --host ${HOST} --web-port 8080 --no-camera --no-logging ` +
+  `--nfc --nfc-tags-file ${CLUB_TAGS_FILE}`;
 const BACKEND_COMMAND =
   process.env.CI
     ? `python -m openflight.server ${BACKEND_ARGS}`
