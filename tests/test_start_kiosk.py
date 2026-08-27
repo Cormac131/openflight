@@ -495,3 +495,19 @@ def test_auto_options_are_not_forwarded_without_the_auto_flag():
     )
 
     assert "--sound-sensitivity-envelope-address" not in command_arguments
+
+
+def test_sound_sensitivity_device_is_forwarded():
+    command_arguments = (
+        _dry_run("--sound-sensitivity", "--sound-sensitivity-device", "ds3502")
+        .stdout.strip()
+        .split()
+    )
+
+    assert command_arguments[command_arguments.index("--sound-sensitivity-device") + 1] == "ds3502"
+
+
+def test_the_server_picks_the_default_device_when_none_is_named():
+    command_arguments = _dry_run("--sound-sensitivity").stdout.strip().split()
+
+    assert "--sound-sensitivity-device" not in command_arguments

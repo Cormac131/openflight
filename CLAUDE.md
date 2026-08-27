@@ -136,18 +136,18 @@ uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 ```bash
 scripts/start-kiosk.sh              # Default: rolling buffer + sound trigger
 scripts/start-kiosk.sh --mock       # Development mode without hardware
-scripts/start-kiosk.sh --sound-sensitivity             # With the optional DS3502 digipot on SEN-14262 R17
+scripts/start-kiosk.sh --sound-sensitivity             # With the optional digipot on SEN-14262 R17
 scripts/start-kiosk.sh --kld7                          # With K-LD7 angle radars (deprecated; auto-detects horizontal)
 ```
 
 ### Sound Trigger Testing
 
 ```bash
-# Sweep the optional DS3502 sensitivity pot
-uv run python scripts/hardware-test/test_ds3502.py --sweep
+# Sweep the optional sensitivity pot (--device ds3502 for the other part)
+uv run python scripts/hardware-test/test_digipot.py --sweep
 
 # Find the step where room noise starts firing the trigger (stop the server first)
-uv run python scripts/hardware-test/test_ds3502.py --noise-floor
+uv run python scripts/hardware-test/test_digipot.py --noise-floor
 
 # Test persistent rolling buffer + hardware trigger (recommended)
 uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
@@ -162,7 +162,7 @@ uv run python scripts/hardware-test/test_sound_trigger_hardware.py
 React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ──► OPS243Radar
                               │                │
                               │                └── SoundTrigger (SEN-14262 → HOST_INT)
-                              │                     └── SoundSensitivityService (DS3502 digipot on R17, optional)
+                              │                     └── SoundSensitivityService (MCP4017/DS3502 digipot on R17, optional)
                               │                          └── AutoGainController (ADS1115 on ENVELOPE, optional)
                               │
                               ├── IWR6843Runtime (optional, 60 GHz → launch angle & club path)
@@ -193,7 +193,7 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
 - `club_data.py` - Canonical club physics parameters, lofts, typical speeds, and optimal spin
 - `iwr6843/` - TI IWR6843 mmWave radar driver, L3 raw dump parser, LCMF-v1 launch angle & club path
 - `inclinometer.py` - LIS3DH accelerometer tilt compensation service
-- `sensitivity/` - DS3502 I2C digital pot on the SEN-14262 R17 pad; UI-controlled sound-trigger sensitivity
+- `sensitivity/` - I2C digital pot on the SEN-14262 R17 pad (MCP4017 preferred, DS3502 supported); UI-controlled sound-trigger sensitivity
 - `sim/` - Simulator connectors (OpenGolfSim, GSPro, E6 Connect, Garmin) and network transports
 - `cloud/` - Telemetry, cloud configuration, session upload, and push error handling
 - `rolling_buffer/` - Trigger strategies, I/Q processor, spin detection
@@ -240,7 +240,12 @@ SEN-14262 GND  → Pi GND (shared with OPS243-A)
 
 A through-hole resistor must be soldered into **R17** on the SEN-14262 to reduce preamp gain at 3.3V (47kΩ recommended, lower for noisy environments).
 
-**Optional DS3502 digital pot:** fitting one to the R17 pads instead of a fixed resistor makes sensitivity adjustable from the Debug page (Sound tab). Step 0 is least sensitive, 127 most. Enabled with `--sound-sensitivity`; it is I2C at 0x28 on the existing bus and claims **no GPIOs**. The DS3502 is only 10kΩ end-to-end, so a fixed series resistor (33kΩ default, `--sound-sensitivity-series-ohms`) shifts its span onto R17's 33–47kΩ operating range. The chip reads its wiper back and stores it in its own EEPROM, so there is no calibration and no config file.
+**Optional digital pot:** fitting one to the R17 pads instead of a fixed resistor makes sensitivity adjustable from the Debug page (Sound tab). Step 0 is least sensitive, 127 most. Enabled with `--sound-sensitivity`; I2C on the existing bus, claims **no GPIOs**. Two parts are supported via `--sound-sensitivity-device`:
+
+- **MCP4017 100kΩ (`mcp401x`, default)** at fixed address 0x2f. Spans R17's range with nothing in series. Its wiper is volatile and powers up mid-scale, so the setting is saved to `~/.config/openflight/sound_sensitivity.json` and re-applied at startup. **Buy the -4017, not the -4018/-4019: their terminal B is grounded internally, which R17's feedback position cannot tolerate.**
+- **DS3502 10kΩ (`ds3502`)** at 0x28–0x2b. Needs a fixed series resistor (33kΩ default, `--sound-sensitivity-series-ohms`) to reach R17's 33–47kΩ range, which leaves auto gain only ~1.2× of travel. Stores its wiper in its own EEPROM.
+
+Both read their wiper back, so there is no calibration step. Shared resistance maths lives in `sensitivity/potentiometer.py`.
 
 **Optional closed-loop auto gain:** with `--sound-sensitivity-auto`, an ADS1115 (0x48) on the detector's `ENVELOPE` output lets the server trim the pot between shots to hold envelope peaks in a target band (60–80% of the detector supply by default). It decides on a median of recent shots, clears that history on every move, and acts immediately on clipping. Note this is a **trim, not a wide-range AGC**: R17 works against the fixed 100kΩ R3, so the pot's whole travel is only ~1.2× of gain with the 33kΩ series resistor — less than the default band spans, so the loop warns at startup and mostly holds unless the band is narrowed or the series resistor reduced.
 

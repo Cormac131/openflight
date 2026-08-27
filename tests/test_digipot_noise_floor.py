@@ -1,4 +1,4 @@
-"""Noise-floor sweep and argument logic for the DS3502 bring-up script."""
+"""Noise-floor sweep and argument logic for the digipot bring-up script."""
 
 import argparse
 import itertools
@@ -8,10 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-# test_ds3502.py is a script -- import it as a module, as test_diagnose.py does.
+# test_digipot.py is a script -- import it as a module, as test_diagnose.py does.
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "hardware-test"))
 
-import test_ds3502 as script  # noqa: E402
+import test_digipot as script  # noqa: E402
 
 from openflight.sensitivity import MAX_POSITION  # noqa: E402
 
@@ -82,18 +82,18 @@ class TestRecommendPosition:
 
 class TestSweepPositions:
     def test_both_ends_are_always_visited(self):
-        positions = script.sweep_positions(8)
+        positions = script.sweep_positions(8, MAX_POSITION)
 
         assert positions[0] == 0
         assert positions[-1] == MAX_POSITION
 
     def test_no_duplicate_end_when_the_step_divides_the_range(self):
-        positions = script.sweep_positions(MAX_POSITION)
+        positions = script.sweep_positions(MAX_POSITION, MAX_POSITION)
 
         assert len(positions) == len(set(positions))
 
     def test_a_step_of_one_visits_every_step(self):
-        assert len(script.sweep_positions(1)) == MAX_POSITION + 1
+        assert len(script.sweep_positions(1, MAX_POSITION)) == MAX_POSITION + 1
 
 
 class TestObserveStep:
@@ -146,7 +146,8 @@ class TestObserveStep:
 class TestValidateArgs:
     def _parser_and_args(self, **overrides):
         defaults = {
-            "address": 0x28,
+            "device": "mcp401x",
+            "address": None,
             "position": None,
             "sweep_step": 8,
             "sweep_dwell": 2.0,
@@ -166,9 +167,24 @@ class TestValidateArgs:
 
         script.validate_args(parser, args)
 
-    @pytest.mark.parametrize("address", [0x27, 0x2C, 0x18])
-    def test_an_address_outside_the_jumper_range_is_refused(self, address):
+    @pytest.mark.parametrize("address", [0x28, 0x2E, 0x48])
+    def test_an_address_the_mcp401x_cannot_use_is_refused(self, address):
+        # Fixed at 0x2f, so any override would only reach another device.
         self._expect_error(address=address)
+
+    def test_the_mcp401x_fixed_address_is_accepted(self):
+        parser, args = self._parser_and_args(address=0x2F)
+
+        script.validate_args(parser, args)
+
+    @pytest.mark.parametrize("address", [0x27, 0x2C])
+    def test_an_address_outside_the_ds3502_range_is_refused(self, address):
+        self._expect_error(device="ds3502", address=address)
+
+    def test_a_ds3502_jumper_address_is_accepted(self):
+        parser, args = self._parser_and_args(device="ds3502", address=0x2A)
+
+        script.validate_args(parser, args)
 
     @pytest.mark.parametrize("step", [0, -1, MAX_POSITION + 1])
     def test_an_unusable_sweep_step_is_refused(self, step):

@@ -101,13 +101,15 @@ class AutoGainDecision:
         }
 
 
-def achievable_gain_range(series_ohms: float = DEFAULT_SERIES_OHMS) -> float:
+def achievable_gain_range(series_ohms: float = DEFAULT_SERIES_OHMS, model=None) -> float:
     """Return the gain ratio between the wiper's two end stops.
 
     This is the loop's entire authority. R17 works against the board's fixed
     100 kOhm R3, so a 10 kOhm pot behind a large series resistor moves the
     preamp leg very little — 33 kOhm gives about 1.21x end to end.
     """
+    if model is not None:
+        return model.gain_range()
     return preamp_feedback_ohms(MAX_POSITION, series_ohms) / preamp_feedback_ohms(0, series_ohms)
 
 
@@ -116,18 +118,18 @@ def band_ratio(target_low: float, target_high: float) -> float:
     return target_high / target_low
 
 
-def has_authority(target_low: float, target_high: float, series_ohms: float) -> bool:
+def has_authority(target_low: float, target_high: float, series_ohms: float, model=None) -> bool:
     """True when the loop can actually move a peak across its target band.
 
     A band wider than the achievable gain range is inert: once a peak is inside
     it, no reachable wiper step can push it out, so the loop holds forever and
     looks broken when it is merely out of travel.
     """
-    return achievable_gain_range(series_ohms) > band_ratio(target_low, target_high)
+    return achievable_gain_range(series_ohms, model) > band_ratio(target_low, target_high)
 
 
 def position_for_gain_ratio(
-    position: int, ratio: float, series_ohms: float = DEFAULT_SERIES_OHMS
+    position: int, ratio: float, series_ohms: float = DEFAULT_SERIES_OHMS, model=None
 ) -> int:
     """Return the step whose preamp resistance is ``ratio`` times this one's.
 
@@ -137,6 +139,12 @@ def position_for_gain_ratio(
     rather than scaling the index — cheap, and exact against the same model the
     UI reports.
     """
+    if model is not None:
+        desired = model.preamp_at(position) * ratio
+        return min(
+            range(model.max_position + 1),
+            key=lambda step: abs(model.preamp_at(step) - desired),
+        )
     desired = preamp_feedback_ohms(position, series_ohms) * ratio
     return min(
         range(POSITION_COUNT),
@@ -158,6 +166,7 @@ class AutoGainController:
         max_step: int = DEFAULT_MAX_STEP,
         damping: float = DEFAULT_DAMPING,
         commit_after_stable: int = DEFAULT_COMMIT_AFTER_STABLE,
+        model=None,
     ):
         if not 0.0 < target_low < target_high < 1.0:
             raise ValueError("target band must satisfy 0 < low < high < 1")
@@ -168,7 +177,10 @@ class AutoGainController:
         if not 0.0 < damping <= 1.0:
             raise ValueError("damping must be within (0, 1]")
         self.series_ohms = series_ohms
-        if not has_authority(target_low, target_high, series_ohms):
+        # When a pot is supplied its own model decides the range; the loose
+        # series_ohms path stays for callers that have no pot to hand.
+        self.model = model
+        if not has_authority(target_low, target_high, series_ohms, model):
             logger.warning(
                 "[SENSITIVITY] Auto gain has little authority: the %.0f%%-%.0f%% band spans "
                 "%.2fx but a %.0f ohm series resistor only allows %.2fx end to end. The loop "
@@ -177,7 +189,7 @@ class AutoGainController:
                 target_high * 100,
                 band_ratio(target_low, target_high),
                 series_ohms,
-                achievable_gain_range(series_ohms),
+                achievable_gain_range(series_ohms, model),
             )
         self.target_low = target_low
         self.target_high = target_high
@@ -199,7 +211,9 @@ class AutoGainController:
         self._peaks.clear()
         self._stable_shots = 0
 
-    def observe(self, fraction: float, position: int, *, clipped: bool = False):
+    def observe(  # pylint: disable=too-many-return-statements
+        self, fraction: float, position: int, *, clipped: bool = False
+    ):
         """Fold one shot's envelope peak in and return the resulting decision.
 
         Args:
@@ -265,13 +279,16 @@ class AutoGainController:
                 shots_considered=considered,
             )
 
-        modelled = position_for_gain_ratio(position, self.target_centre / median, self.series_ohms)
+        modelled = position_for_gain_ratio(
+            position, self.target_centre / median, self.series_ohms, self.model
+        )
         target = self._damped_target(position, modelled)
         direction = RAISE if target > position else LOWER
 
         if target == position:
+            top = self.model.max_position if self.model is not None else MAX_POSITION
             at_end = (position == 0 and median > self.target_high) or (
-                position == MAX_POSITION and median < self.target_low
+                position == top and median < self.target_low
             )
             if at_end:
                 self.reset()
@@ -322,4 +339,5 @@ class AutoGainController:
             # Never stall on rounding: a correction worth making is worth one step.
             damped = 1 if step > 0 else -1
         damped = max(-self.max_step, min(self.max_step, damped))
-        return max(0, min(MAX_POSITION, position + damped))
+        top = self.model.max_position if self.model is not None else MAX_POSITION
+        return max(0, min(top, position + damped))

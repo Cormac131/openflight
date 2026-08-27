@@ -282,7 +282,7 @@ class TestGainModel:
         window the series resistor chooses, not a wide-range AGC -- and the
         controller's at_limit message saying to change that resistor is the
         important output when a setup falls outside it."""
-        from openflight.sensitivity import preamp_feedback_ohms
+        from openflight.sensitivity.ds3502 import preamp_feedback_ohms
 
         span = preamp_feedback_ohms(MAX_POSITION) / preamp_feedback_ohms(0)
 
@@ -293,7 +293,7 @@ class TestConvergence:
     def test_the_loop_settles_inside_the_band(self):
         """A simulated detector whose envelope tracks preamp gain must be
         driven into the band and stay there, not oscillate around it."""
-        from openflight.sensitivity import preamp_feedback_ohms
+        from openflight.sensitivity.ds3502 import preamp_feedback_ohms
 
         controller = build()
         position = 0
@@ -311,3 +311,63 @@ class TestConvergence:
         assert controller.target_low <= final <= controller.target_high
         # And once there it stops moving.
         assert actions[-5:] == [HOLD] * 5
+
+
+class TestPerDeviceModel:
+    """The controller must work against whatever pot is fitted. A 100k MCP401X
+    and a 10k DS3502 behind a 33k series resistor give wildly different
+    authority, and the loop's behaviour has to follow the real part."""
+
+    def _pot(self, cls, **kwargs):
+        return cls(**kwargs)
+
+    def test_a_100k_pot_gives_the_loop_real_authority(self):
+        from openflight.sensitivity import MockMCP401X, has_authority
+
+        pot = MockMCP401X()
+
+        assert has_authority(0.60, 0.80, pot.series_ohms, pot) is True
+
+    def test_a_10k_pot_behind_a_33k_series_resistor_does_not(self):
+        from openflight.sensitivity import MockDS3502, has_authority
+
+        pot = MockDS3502()
+
+        assert has_authority(0.60, 0.80, pot.series_ohms, pot) is False
+
+    def test_corrections_are_computed_from_the_fitted_pot(self):
+        from openflight.sensitivity import MockDS3502, MockMCP401X, position_for_gain_ratio
+
+        wide = position_for_gain_ratio(64, 1.4, model=MockMCP401X())
+        narrow = position_for_gain_ratio(64, 1.4, model=MockDS3502())
+
+        # The 100k part can deliver 1.4x; the 10k one saturates trying.
+        assert wide < MAX_POSITION
+        assert narrow == MAX_POSITION
+
+    def test_the_loop_settles_on_a_100k_pot(self):
+        from openflight.sensitivity import MockMCP401X
+
+        pot = MockMCP401X()
+        controller = build(model=pot)
+        position = 0
+        scale = 0.70 / pot.preamp_at(70)
+
+        for _ in range(80):
+            fraction = min(1.0, pot.preamp_at(position) * scale)
+            decision = controller.observe(fraction, position, clipped=fraction >= 0.98)
+            position = decision.next_position
+
+        final = min(1.0, pot.preamp_at(position) * scale)
+        assert controller.target_low <= final <= controller.target_high
+
+    def test_end_stops_follow_the_fitted_pot(self):
+        from openflight.sensitivity import MockMCP401X
+
+        pot = MockMCP401X()
+        controller = build(model=pot, max_step=MAX_POSITION, damping=1.0)
+
+        decision = feed(controller, [0.02] * 3, pot.max_position)
+
+        assert decision.action == AT_LIMIT
+        assert decision.next_position == pot.max_position

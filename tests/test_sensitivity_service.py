@@ -3,7 +3,7 @@
 import pytest
 
 from openflight.sensitivity import (
-    DEFAULT_SERIES_OHMS,
+    DS3502_SERIES_OHMS as DEFAULT_SERIES_OHMS,
     MAX_POSITION,
     MockDS3502,
     SoundSensitivityService,
@@ -239,3 +239,97 @@ class TestDisabledState:
 
     def test_disabled_state_carries_a_failure_reason(self):
         assert disabled_state("no device at 0x28").to_dict()["error"] == "no device at 0x28"
+
+
+class TestVolatilePersistence:
+    """The MCP401X has no EEPROM and comes up at mid-scale, so the service has
+    to keep the setting itself. The DS3502 keeps its own and must not get a
+    redundant file."""
+
+    def build(self, tmp_path, **kwargs):
+        from openflight.sensitivity import MockMCP401X
+
+        pot = MockMCP401X(**kwargs)
+        return (
+            SoundSensitivityService(pot, config_path=tmp_path / "sound_sensitivity.json"),
+            pot,
+        )
+
+    def test_a_volatile_pot_saves_the_setting_to_a_file(self, tmp_path):
+        from openflight.sensitivity import load_position
+
+        service, _ = self.build(tmp_path)
+        service.start()
+
+        service.set_position(90)
+
+        assert load_position(tmp_path / "sound_sensitivity.json") == 90
+
+    def test_a_volatile_pot_restores_the_saved_setting_at_startup(self, tmp_path):
+        from openflight.sensitivity import save_position
+
+        save_position(90, tmp_path / "sound_sensitivity.json")
+        service, _ = self.build(tmp_path)
+
+        assert service.start().position == 90
+
+    def test_a_volatile_pot_with_nothing_saved_keeps_its_power_on_value(self, tmp_path):
+        from openflight.sensitivity.mcp401x import POWER_ON_POSITION
+
+        service, _ = self.build(tmp_path)
+
+        assert service.start().position == POWER_ON_POSITION
+
+    def test_a_self_persisting_pot_gets_no_file(self, tmp_path):
+        service = SoundSensitivityService(
+            MockDS3502(), config_path=tmp_path / "sound_sensitivity.json"
+        )
+        service.start()
+
+        service.set_position(90)
+
+        assert not (tmp_path / "sound_sensitivity.json").exists()
+
+    def test_a_self_persisting_pot_is_left_alone_at_startup(self, tmp_path):
+        pot = MockDS3502()
+        pot.open()
+        pot.set_position(90, store=True)
+        pot.close()
+        service = SoundSensitivityService(pot, config_path=tmp_path / "s.json")
+
+        assert service.start().position == 90
+
+    def test_an_unwritable_file_reports_but_keeps_the_applied_position(self, tmp_path):
+        blocked = tmp_path / "sound_sensitivity.json"
+        blocked.mkdir()
+        service, _ = self.build(tmp_path)
+        service.start()
+
+        state = service.set_position(64)
+
+        assert state.position == 64
+        assert "not saved" in state.error
+
+    def test_the_service_reports_which_kind_of_pot_is_fitted(self, tmp_path):
+        volatile, _ = self.build(tmp_path)
+        persistent = SoundSensitivityService(MockDS3502(), config_path=tmp_path / "s.json")
+
+        assert volatile.persists_in_hardware is False
+        assert persistent.persists_in_hardware is True
+
+    def test_bounds_come_from_the_fitted_pot(self, tmp_path):
+        service, pot = self.build(tmp_path)
+        service.start()
+
+        assert service.state().max_position == pot.max_position
+
+    def test_resistances_come_from_the_fitted_pot(self, tmp_path):
+        # A 100k MCP401X and a 10k DS3502 report very different numbers for the
+        # same step; the service must not assume either.
+        service, pot = self.build(tmp_path)
+        service.start()
+
+        state = service.set_position(64)
+
+        assert state.resistance_ohms == pytest.approx(pot.resistance_at(64))
+        assert state.preamp_feedback_ohms == pytest.approx(pot.preamp_at(64))

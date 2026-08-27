@@ -58,6 +58,7 @@ IWR6843_HORIZONTAL_PHASE_REFERENCE_RAD=""
 INCLINOMETER=false
 INCLINOMETER_ZERO_OFFSET=""
 SOUND_SENSITIVITY=false
+SOUND_SENSITIVITY_DEVICE=""
 SOUND_SENSITIVITY_I2C_BUS=""
 SOUND_SENSITIVITY_ADDRESS=""
 SOUND_SENSITIVITY_SERIES_OHMS=""
@@ -313,6 +314,10 @@ while [[ $# -gt 0 ]]; do
         --sound-sensitivity)
             SOUND_SENSITIVITY=true
             shift
+            ;;
+        --sound-sensitivity-device)
+            SOUND_SENSITIVITY_DEVICE="$2"
+            shift 2
             ;;
         --sound-sensitivity-i2c-bus)
             SOUND_SENSITIVITY_I2C_BUS="$2"
@@ -792,6 +797,7 @@ fi
 
 if [ "$SOUND_SENSITIVITY" = true ]; then
     SERVER_CMD="$SERVER_CMD --sound-sensitivity"
+    [ -n "$SOUND_SENSITIVITY_DEVICE" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-device $SOUND_SENSITIVITY_DEVICE"
     [ -n "$SOUND_SENSITIVITY_I2C_BUS" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-i2c-bus $SOUND_SENSITIVITY_I2C_BUS"
     [ -n "$SOUND_SENSITIVITY_ADDRESS" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-address $SOUND_SENSITIVITY_ADDRESS"
     [ -n "$SOUND_SENSITIVITY_SERIES_OHMS" ] && SERVER_CMD="$SERVER_CMD --sound-sensitivity-series-ohms $SOUND_SENSITIVITY_SERIES_OHMS"

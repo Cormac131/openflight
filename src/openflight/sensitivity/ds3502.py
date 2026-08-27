@@ -29,6 +29,14 @@ import logging
 import time
 from typing import Optional, Protocol
 
+from .potentiometer import (
+    ResistanceModel,
+    position_for_resistance as _position_for_resistance,
+    preamp_feedback_ohms as _preamp_feedback_ohms,
+    resistance_ohms as _resistance_ohms,
+    sensitivity_percent as _sensitivity_percent,
+)
+
 logger = logging.getLogger(__name__)
 
 # 7-bit wiper: 128 positions, 0..127.
@@ -77,10 +85,21 @@ class SMBusLike(Protocol):  # pylint: disable=unnecessary-ellipsis
         ...  # pylint: disable=unnecessary-ellipsis
 
 
+def _constants(series_ohms: float) -> dict:
+    return {
+        "max_position": MAX_POSITION,
+        "series_ohms": series_ohms,
+        # The DS3502's own wiper resistance is negligible beside the series
+        # resistor this part needs, so it is not modelled separately.
+        "wiper_ohms": 0.0,
+        "end_to_end_ohms": END_TO_END_OHMS,
+    }
+
+
 def resistance_ohms(position: int, series_ohms: float = DEFAULT_SERIES_OHMS) -> float:
     """Return what R17 presents at ``position``: series resistor plus wiper."""
     _validate_position(position)
-    return series_ohms + END_TO_END_OHMS * position / MAX_POSITION
+    return _resistance_ohms(position, **_constants(series_ohms))
 
 
 def preamp_feedback_ohms(position: int, series_ohms: float = DEFAULT_SERIES_OHMS) -> float:
@@ -89,24 +108,18 @@ def preamp_feedback_ohms(position: int, series_ohms: float = DEFAULT_SERIES_OHMS
     R17 in parallel with the board's 100 kOhm R3. Lower means less gain, so a
     lower wiper position is a *less* sensitive detector.
     """
-    pot_ohms = resistance_ohms(position, series_ohms)
-    return pot_ohms * SEN14262_R3_OHMS / (pot_ohms + SEN14262_R3_OHMS)
+    return _preamp_feedback_ohms(resistance_ohms(position, series_ohms))
 
 
 def sensitivity_percent(position: int) -> float:
     """Return ``position`` as a 0-100% share of the wiper's travel."""
     _validate_position(position)
-    return 100.0 * position / MAX_POSITION
+    return _sensitivity_percent(position, MAX_POSITION)
 
 
 def position_for_resistance(ohms: float, series_ohms: float = DEFAULT_SERIES_OHMS) -> int:
-    """Return the wiper step whose R17 resistance is closest to ``ohms``.
-
-    Lets the setup guides keep talking in resistor values while the UI works in
-    steps. Clamps, so a target outside the span returns the nearest end.
-    """
-    raw = round((ohms - series_ohms) * MAX_POSITION / END_TO_END_OHMS)
-    return max(0, min(MAX_POSITION, int(raw)))
+    """Return the wiper step whose R17 resistance is closest to ``ohms``. Clamps."""
+    return _position_for_resistance(ohms, **_constants(series_ohms))
 
 
 def _validate_position(position: int) -> None:
@@ -131,11 +144,17 @@ def validate_address(address: int) -> int:
     return address
 
 
-class DS3502:
+class DS3502(ResistanceModel):
     """Wiper control for one DS3502 on an I2C bus.
 
     Not thread-safe; :class:`SoundSensitivityService` owns the lock.
     """
+
+    #: The wiper survives a power cycle in the chip's own EEPROM.
+    persists_in_hardware = True
+    max_position = MAX_POSITION
+    wiper_ohms = 0.0
+    end_to_end_ohms = END_TO_END_OHMS
 
     def __init__(
         self,
@@ -257,8 +276,13 @@ class DS3502:
         return self._bus
 
 
-class MockDS3502:
+class MockDS3502(ResistanceModel):
     """In-memory stand-in used by ``--mock`` so the UI control works off-Pi."""
+
+    persists_in_hardware = True
+    max_position = MAX_POSITION
+    wiper_ohms = 0.0
+    end_to_end_ohms = END_TO_END_OHMS
 
     def __init__(self, *, series_ohms: float = DEFAULT_SERIES_OHMS, **_kwargs):
         self.series_ohms = series_ohms

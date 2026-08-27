@@ -136,20 +136,28 @@ class TestInit:
 
         config = server_module.sound_sensitivity_runtime_config
         assert config["enabled"] is True
-        assert config["device"] == "ds3502"
+        assert config["device"] == "mcp401x"
         assert config["simulated"] is True
 
     def test_the_runtime_config_records_the_bus_address_and_series_resistor(self, monkeypatch):
         monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
 
         server_module.init_sound_sensitivity(
-            bus_number=3, address=0x2A, series_ohms=39_000.0, simulated=True
+            device="ds3502", bus_number=3, address=0x2A, series_ohms=39_000.0, simulated=True
         )
 
         config = server_module.sound_sensitivity_runtime_config
+        assert config["device"] == "ds3502"
         assert config["i2c_bus"] == 3
         assert config["i2c_address"] == "0x2a"
         assert config["series_ohms"] == 39_000.0
+
+    def test_the_mcp401x_is_the_default_device(self, monkeypatch):
+        monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
+
+        server_module.init_sound_sensitivity(simulated=True)
+
+        assert server_module.sound_sensitivity_runtime_config["device"] == "mcp401x"
 
     def test_an_explicit_position_is_applied(self, monkeypatch):
         monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
@@ -190,14 +198,39 @@ class TestArgumentValidation:
             server_module.main()
         return exc_info.value
 
-    @pytest.mark.parametrize("address", ["0x27", "0x2c", "0x18"])
-    def test_an_address_outside_the_jumper_range_is_refused(self, monkeypatch, capsys, address):
+    @pytest.mark.parametrize("address", ["0x28", "0x2e", "0x48"])
+    def test_an_address_the_mcp401x_cannot_use_is_refused(self, monkeypatch, capsys, address):
+        # Fixed at 0x2f: an override could only ever reach another device.
         error = self._run(
             monkeypatch, ["--sound-sensitivity", "--sound-sensitivity-address", address]
         )
 
         assert error.code == 2
+        assert "MCP401X address is fixed" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("address", ["0x27", "0x2c"])
+    def test_an_address_outside_the_ds3502_range_is_refused(self, monkeypatch, capsys, address):
+        error = self._run(
+            monkeypatch,
+            [
+                "--sound-sensitivity",
+                "--sound-sensitivity-device",
+                "ds3502",
+                "--sound-sensitivity-address",
+                address,
+            ],
+        )
+
+        assert error.code == 2
         assert "DS3502 address must be within" in capsys.readouterr().err
+
+    def test_each_device_defaults_to_its_own_address_and_series_resistor(self, monkeypatch):
+        from openflight.sensitivity import DEVICES
+
+        assert DEVICES["mcp401x"]["address"] == 0x2F
+        assert DEVICES["mcp401x"]["series_ohms"] == 0.0
+        assert DEVICES["ds3502"]["address"] == 0x28
+        assert DEVICES["ds3502"]["series_ohms"] == 33_000.0
 
     def test_a_negative_series_resistor_is_refused(self, monkeypatch, capsys):
         error = self._run(

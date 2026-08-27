@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **MCP4017 100 kΩ digipot support, now the preferred part.**
+  `--sound-sensitivity-device` picks between `mcp401x` (default) and `ds3502`.
+  The MCP4017 spans R17's whole 33–47 kΩ range with nothing in series, where the
+  10 kΩ DS3502 needs a series resistor and is left with only ~1.2× of gain
+  travel — so the closed loop finally has authority to work with. Its wiper is
+  volatile and powers up mid-scale, so OpenFlight saves the setting to
+  `~/.config/openflight/sound_sensitivity.json` and re-applies it at startup;
+  the DS3502 continues to use its own EEPROM. Shared resistance maths moved to
+  `sensitivity/potentiometer.py` so the service, the UI payload and the gain
+  controller all work from whichever part is fitted.
+
+  **Buy the MCP4017, not the MCP4018 or MCP4019.** They share an address, a
+  protocol and this driver, but the -4018 and -4019 connect terminal `B`
+  internally to ground — and R17 sits in the preamp's feedback path, where
+  neither end is at ground.
+
+  The bench script is now `scripts/hardware-test/test_digipot.py` and takes
+  `--device`.
 - **Software-adjustable sound trigger sensitivity.** An optional **Adafruit
   DS3502** I2C digital potentiometer fitted to the SEN-14262's `R17` pads puts
   the detector's preamp gain under software control, replacing the soldered

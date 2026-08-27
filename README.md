@@ -39,7 +39,7 @@ Doppler radar, with an optional TI IWR6843 angle radar.
 | 7" Touchscreen | Shows shot data | $46 |
 | SparkFun SEN-14262 | Impact sound trigger for shot capture | $18 |
 | Power supply + accessories | | $27 |
-| Adafruit DS3502 + series resistor | Tune trigger sensitivity from the UI (**optional**) | $7 |
+| MCP4017 100kΩ digital pot | Tune trigger sensitivity from the UI (**optional**) | $2 |
 | **Subtotal, no angle radar** | | **~$400** |
 | TI IWR6843LEVM + cable | Launch angle, experimental club path | $156 |
 | **Total with angle radar** | | **~$556** |
@@ -117,7 +117,7 @@ scripts/start-kiosk.sh --mock
 # With Geekworm X1202/X1206 battery monitoring
 scripts/start-kiosk.sh --battery geekworm
 
-# With the optional DS3502 digital pot on the sound detector's R17 pads,
+# With the optional digital pot on the sound detector's R17 pads,
 # so trigger sensitivity is a slider on the Debug page
 scripts/start-kiosk.sh --sound-sensitivity
 
@@ -317,7 +317,7 @@ uv run pytest tests/ -v
 ## Documentation
 
 - **[Parts List](docs/PARTS.md)** — What to buy
-- **[Sound Trigger Wiring](docs/sound-trigger-wiring.md)** — How to wire the sound trigger, and the optional DS3502 sensitivity control
+- **[Sound Trigger Wiring](docs/sound-trigger-wiring.md)** — How to wire the sound trigger, and the optional digital sensitivity control
 - **[Raspberry Pi Setup](docs/raspberry-pi-setup.md)** — Full setup guide
 - **[Battery Monitoring](docs/battery/README.md)** — Provider architecture, UI states, and shared Pi support
 - **[Geekworm X1202/X1206 Operator Guide](docs/battery/geekworm.md)** — Batteries, Pi setup, native telemetry, and warnings

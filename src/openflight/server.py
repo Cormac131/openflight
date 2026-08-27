@@ -1375,9 +1375,10 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
 
 def init_sound_sensitivity(
     *,
+    device: str = "mcp401x",
     bus_number: int = 1,
-    address: int = 0x28,
-    series_ohms: float = 33_000.0,
+    address: Optional[int] = None,
+    series_ohms: Optional[float] = None,
     position: Optional[int] = None,
     simulated: bool = False,
     auto: bool = False,
@@ -1394,11 +1395,15 @@ def init_sound_sensitivity(
     failure here is logged and reported to the UI rather than fatal.
 
     Args:
+        device: Which pot is fitted -- ``mcp401x`` (preferred) or ``ds3502``.
         bus_number: I2C bus the pot is on. It shares the bus with the
             inclinometer and any UPS fuel gauge, and claims no GPIOs.
-        address: DS3502 address, 0x28-0x2b per its A0/A1 jumpers.
+        address: I2C address. Defaults to the part's own: 0x2f for the
+            MCP401X, which is fixed, and 0x28 for the DS3502.
         series_ohms: Fixed resistor in series with the wiper in the R17 path.
-            Must match what is fitted, or every reported resistance is wrong.
+            Defaults per device -- none for a 100k MCP401X, 33k for the 10k
+            DS3502. Must match what is fitted, or every reported resistance is
+            wrong.
         position: Wiper step to force for this run. Omitted, the position the
             chip restored from its own EEPROM is left alone.
         simulated: Use the in-memory pot so ``--mock`` can drive the UI control
@@ -1417,17 +1422,20 @@ def init_sound_sensitivity(
 
     from .sensitivity import (  # pylint: disable=import-outside-toplevel
         ADS1115,
-        DS3502,
+        DEVICES,
         AutoGainController,
         EnvelopeMonitor,
         MockADS1115,
-        MockDS3502,
         SoundSensitivityService,
     )
 
+    spec = DEVICES[device]
+    address = spec["address"] if address is None else address
+    series_ohms = spec["series_ohms"] if series_ohms is None else series_ohms
+
     requested = {
         "requested": True,
-        "device": "ds3502",
+        "device": device,
         "simulated": simulated,
         "i2c_bus": bus_number,
         "i2c_address": f"0x{address:02x}",
@@ -1440,7 +1448,7 @@ def init_sound_sensitivity(
         requested["detector_volts"] = detector_volts
     service = None
     try:
-        pot_cls = MockDS3502 if simulated else DS3502
+        pot_cls = spec["mock"] if simulated else spec["driver"]
         pot = pot_cls(bus_number=bus_number, address=address, series_ohms=series_ohms)
         envelope = None
         controller = None
@@ -1465,7 +1473,7 @@ def init_sound_sensitivity(
         sound_sensitivity_runtime_config = {**requested, "enabled": True, "state": state.to_dict()}
         print(
             "Sound sensitivity control enabled "
-            f"(DS3502 step {state.position}, ~{state.resistance_ohms:.0f} ohm R17"
+            f"({device} step {state.position}, ~{state.resistance_ohms:.0f} ohm R17"
             f"{', auto gain from ENVELOPE' if auto else ''})"
         )
         return True
@@ -4719,6 +4727,16 @@ def main():
         ),
     )
     parser.add_argument(
+        "--sound-sensitivity-device",
+        choices=("mcp401x", "ds3502"),
+        default="mcp401x",
+        help=(
+            "Which digipot is fitted to R17. 'mcp401x' (default) covers the "
+            "MCP4017 100k -- buy that variant, not the MCP4018, whose B "
+            "terminal is grounded internally"
+        ),
+    )
+    parser.add_argument(
         "--sound-sensitivity-i2c-bus",
         type=int,
         default=1,
@@ -4727,16 +4745,20 @@ def main():
     parser.add_argument(
         "--sound-sensitivity-address",
         type=lambda value: int(value, 0),
-        default=0x28,
-        help="DS3502 I2C address, 0x28-0x2b per its A0/A1 jumpers (default: 0x28)",
+        default=None,
+        help=(
+            "Digipot I2C address. Defaults to the part's own: 0x2f for the "
+            "MCP401X (fixed), 0x28 for the DS3502"
+        ),
     )
     parser.add_argument(
         "--sound-sensitivity-series-ohms",
         type=float,
-        default=33_000.0,
+        default=None,
         help=(
-            "Fixed resistor in series with the DS3502 wiper in the R17 path "
-            "(default: 33000). Must match what is fitted"
+            "Fixed resistor in series with the wiper in the R17 path. Defaults "
+            "per device: none for a 100k MCP401X, 33000 for the 10k DS3502. "
+            "Must match what is fitted"
         ),
     )
     parser.add_argument(
@@ -5080,16 +5102,19 @@ def main():
     if args.iwr6843 and (args.iwr6843_tee_m <= 0 or args.iwr6843_net_m <= 0):
         parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
     if args.sound_sensitivity:
-        from .sensitivity import (  # pylint: disable=import-outside-toplevel
-            MAX_POSITION,
-            validate_address,
-        )
+        from .sensitivity import DEVICES, MAX_POSITION  # pylint: disable=import-outside-toplevel
 
-        try:
-            validate_address(args.sound_sensitivity_address)
-        except ValueError as error:
-            parser.error(str(error))
-        if args.sound_sensitivity_series_ohms < 0:
+        if args.sound_sensitivity_address is not None:
+            try:
+                DEVICES[args.sound_sensitivity_device]["validate_address"](
+                    args.sound_sensitivity_address
+                )
+            except ValueError as error:
+                parser.error(str(error))
+        if (
+            args.sound_sensitivity_series_ohms is not None
+            and args.sound_sensitivity_series_ohms < 0
+        ):
             parser.error("--sound-sensitivity-series-ohms cannot be negative")
         if args.sound_sensitivity_position is not None and not (
             0 <= args.sound_sensitivity_position <= MAX_POSITION
@@ -5331,6 +5356,7 @@ def main():
 
     if args.sound_sensitivity:
         if not init_sound_sensitivity(
+            device=args.sound_sensitivity_device,
             bus_number=args.sound_sensitivity_i2c_bus,
             address=args.sound_sensitivity_address,
             series_ohms=args.sound_sensitivity_series_ohms,

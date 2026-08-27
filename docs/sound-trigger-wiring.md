@@ -159,20 +159,22 @@ untouched.
 
 This is optional. Skip it if a fixed resistor works for where you hit.
 
-### Why It Works, and Why It Needs a Series Resistor
+### Why It Works (and When a Series Resistor Is Needed)
 
 `R17` sits in parallel with the SEN-14262's onboard 100 kΩ `R3`, and together
 they set the preamp's gain. A **lower** parallel resistance means **less gain**,
 so a lower R17 makes the detector **less** sensitive.
 
-The DS3502 is **10 kΩ end-to-end, which is not enough on its own.** This guide's
-recommended R17 is 47 kΩ; 10 kΩ in parallel with `R3` gives a 9.1 kΩ preamp leg
-against 32 kΩ at that baseline, so *every* setting would be far less sensitive
-than the documented starting point — the detector would likely miss strikes
-outright.
+**A 100 kΩ MCP4017 needs nothing in series.** Its span covers 0 to 100 kΩ, so
+this guide's 33 kΩ and 47 kΩ settings both land comfortably inside it — at steps
+42 and 60 of 127. Leave `--sound-sensitivity-series-ohms` alone.
 
-**A fixed resistor in series with the wiper** shifts the pot's 10 kΩ span up to
-where it is useful:
+**A 10 kΩ DS3502 cannot reach the operating point unaided.** The recommended R17
+is 47 kΩ; 10 kΩ in parallel with `R3` gives a 9.1 kΩ preamp leg against 32 kΩ at
+that baseline, so *every* setting would be far less sensitive than the
+documented starting point — the detector would likely miss strikes outright. A
+fixed resistor in series with the wiper shifts its span up to where it is
+useful:
 
 | Series resistor | R17 span | Preamp leg | Suits |
 |-----------------|----------|------------|-------|
@@ -188,20 +190,23 @@ where it is useful:
 Resolution is **79 Ω per step** across 128 steps, concentrated entirely in the
 useful region.
 
-### Why the DS3502 Rather Than a Three-Wire Pot
+### Why I2C Rather Than a Three-Wire Pot
 
 Parts like the X9C104 use a three-wire pulse protocol with no readback. That
 combination is unforgiving: the wiper position exists only as a guess in
 software, an electrically noisy pulse train silently miscounts, and nothing can
-detect the drift. The DS3502 avoids all of it:
+detect the drift. Both supported parts avoid all of it:
 
 - **I2C**, so there is no pulse train to get wrong, and no timing to tune.
 - **The wiper reads back**, so the position OpenFlight shows is measured, not
   remembered — it cannot drift out of sync.
-- **The wiper is non-volatile**, so the chip itself remembers the setting across
-  a power cycle; nothing on the Pi re-applies it.
-- **It claims no GPIOs.** It shares the I2C bus the inclinometer and any UPS
+- **They claim no GPIOs.** They share the I2C bus the inclinometer and any UPS
   fuel gauge already use.
+
+The DS3502 additionally keeps its setting in its own EEPROM. The MCP4017's wiper
+is volatile and returns to mid-scale on every power-up, so OpenFlight saves the
+setting to `~/.config/openflight/sound_sensitivity.json` and re-applies it at
+startup instead — the difference is invisible in use.
 
 ### Parts
 
@@ -306,12 +311,14 @@ resistor in the wiper leg:
 scripts/start-kiosk.sh --sound-sensitivity
 ```
 
-Add `--sound-sensitivity-series-ohms 39000` (or whatever you fitted) if it is
-not the 33 kΩ default. On startup the server prints the step it found:
+On startup the server prints the step it found:
 
 ```
-Sound sensitivity control enabled (DS3502 step 64, ~38039 ohm R17)
+Sound sensitivity control enabled (mcp401x step 64, ~50494 ohm R17)
 ```
+
+On a DS3502, add `--sound-sensitivity-device ds3502` and
+`--sound-sensitivity-series-ohms` if you fitted something other than 33 kΩ.
 
 If the pot cannot be reached, the server logs a warning and carries on — the
 detector keeps whatever gain the hardware is at, and the Debug page shows the
@@ -321,17 +328,18 @@ prerequisite for detecting a shot.
 | Flag | Purpose |
 |------|---------|
 | `--sound-sensitivity` | Enable the control (off by default) |
-| `--sound-sensitivity-series-ohms N` | The series resistor you fitted (default 33000) |
-| `--sound-sensitivity-address N` | DS3502 address, 0x28–0x2b (default 0x28) |
+| `--sound-sensitivity-device` | `mcp401x` (default) or `ds3502` |
+| `--sound-sensitivity-series-ohms N` | The series resistor you fitted. Defaults per device: none for the MCP4017, 33000 for the DS3502 |
+| `--sound-sensitivity-address N` | I2C address. Defaults per device; the MCP4017's 0x2f is fixed |
 | `--sound-sensitivity-i2c-bus N` | I2C bus (default 1) |
-| `--sound-sensitivity-position N` | Force step `N` (0–127) for this run, without storing it |
+| `--sound-sensitivity-position N` | Force step `N` (0–127) for this run, without persisting it |
 
 ### Step 5: Verify with a Meter
 
 Sweep the wiper and watch the resistance across the R17 pads:
 
 ```bash
-uv run python scripts/hardware-test/test_ds3502.py --sweep
+uv run python scripts/hardware-test/test_digipot.py --sweep
 ```
 
 **Power the SEN-14262 down first**, or better, lift one lead off the pads. R17
@@ -350,7 +358,7 @@ A meter proves the resistance moved. It cannot tell you whether *sensitivity*
 moved. For that, sweep while counting `GATE` edges on the trigger line:
 
 ```bash
-uv run python scripts/hardware-test/test_ds3502.py --noise-floor
+uv run python scripts/hardware-test/test_digipot.py --noise-floor
 ```
 
 Run it in the room you hit in, as quiet as it gets during play, and do not hit
@@ -505,27 +513,33 @@ without spending a write per shot on a part with finite endurance.
 
 ### Where the Setting Lives
 
-**On the chip.** Every change from the UI is committed to the DS3502's own
-EEPROM, so it survives a power cycle with no file on the Pi and nothing to
-re-apply at startup. OpenFlight reads the wiper back at boot and reports
-whatever it finds.
+**It depends on the part, and OpenFlight handles both.**
 
-`--sound-sensitivity-position` is the one exception: it steers a single run
-without writing EEPROM, so it never overwrites what you deliberately stored.
+- **MCP4017** — the wiper is RAM only and powers up at mid-scale, so the setting
+  is saved to `~/.config/openflight/sound_sensitivity.json` and re-applied when
+  the server starts.
+- **DS3502** — every change is committed to the chip's own EEPROM, so it
+  survives a power cycle with nothing on the Pi. OpenFlight reads the wiper back
+  at boot and reports whatever it finds.
+
+`--sound-sensitivity-position` is the exception on either part: it steers a
+single run without persisting, so it never overwrites what you deliberately
+set.
 
 ### Digipot Wiring Checklist
 
-- [ ] `V+`/`RH` solder jumper **cut** on the DS3502
+- [ ] MCP4017 (**not** MCP4018/4019 — their `B` terminal is grounded internally)
+- [ ] `V+`/`RH` solder jumper **cut** — DS3502 only
 - [ ] Power and I2C by **one** of:
       - Dupont: `VCC` → Pi 3.3 V (pin 1/17), `GND` → Pi GND (pin 9),
         `SDA` → pin 3, `SCL` → pin 5
       - STEMMA QT: JST-SH cable from the LIS3DH's spare port
-- [ ] DS3502 `V+` → Pi 5 V (physical pin 2 or 4) — a separate wire either way
+- [ ] DS3502 `V+` → Pi 5 V (physical pin 2 or 4) — a separate wire either way, DS3502 only
 - [ ] `i2cdetect -y 1` shows the pot at 0x28
-- [ ] DS3502 `RW` → series resistor → one R17 pad
-- [ ] DS3502 `RL` → the other R17 pad; `RH` left unconnected
+- [ ] MCP4017 `W` and `B` → the two R17 pads (nothing in series), **or**
+      DS3502 `RW` → series resistor → one pad and `RL` → the other, `RH` unconnected
 - [ ] No fixed resistor left soldered in R17 (it would parallel the pot)
-- [ ] `--sound-sensitivity` passed to the server, with `--sound-sensitivity-series-ohms` if not 33 kΩ
+- [ ] `--sound-sensitivity` passed to the server, with `--sound-sensitivity-device ds3502` and `--sound-sensitivity-series-ohms` if not on the default MCP4017
 
 For the optional closed loop:
 
@@ -574,12 +588,15 @@ The server could not claim the GPIO lines.
 
 The server could not reach the DS3502.
 
-1. `i2cdetect -y 1` — the pot should appear at `28`. Nothing there means
-   wiring, power, or the wrong bus. On a STEMMA QT chain, check the cable is in
-   the LIS3DH's *spare* port and fully clicked in at both ends.
-2. Check `V+` has 4.5 V or more, and that its jumper to `RH` is cut. Without
-   bias the chip answers on I2C while the wiper does nothing — which looks like
-   a dead pot but is a two-minute fix.
+1. `i2cdetect -y 1` — the pot should appear at `2f` (MCP4017) or `28`
+   (DS3502). Nothing there means wiring, power, or the wrong bus. On a STEMMA QT
+   chain, check the cable is in the LIS3DH's *spare* port and clicked in at both
+   ends.
+2. **DS3502 only:** check `V+` has 4.5 V or more, and that its jumper to `RH` is
+   cut. Without bias the chip answers on I2C while the wiper does nothing —
+   which looks like a dead pot but is a two-minute fix.
+3. Check `--sound-sensitivity-device` matches the part you fitted; the two use
+   different addresses, so the wrong one finds nothing.
 3. Confirm I2C is enabled (`sudo raspi-config`) and the user is in the `i2c`
    group.
 4. If the `A0`/`A1` jumpers are set, pass the matching
@@ -591,7 +608,7 @@ The chip is answering on I2C (the server would have errored otherwise), so the
 problem is on the resistor side.
 
 1. Power the detector down, then sweep with a meter across the R17 pads:
-   `uv run python scripts/hardware-test/test_ds3502.py --sweep`. A reading stuck
+   `uv run python scripts/hardware-test/test_digipot.py --sweep`. A reading stuck
    at one value means a cold joint on `RW`, `RL`, the series resistor, or a pad.
 2. Check no fixed resistor is still soldered into R17 — it parallels the pot and
    flattens its range.
@@ -619,7 +636,7 @@ gain, smaller for less) rather than looking for a software setting.
 The series resistor decides where the 10 kΩ span sits. If the detector is too
 sensitive even at step 0, fit a smaller one (27 kΩ); if it is not sensitive
 enough at step 127, fit a larger one (39 kΩ). See the table in
-[Why It Works](#why-it-works-and-why-it-needs-a-series-resistor).
+[Why It Works](#why-it-works-and-when-a-series-resistor-is-needed).
 
 ### Digital pot: meter readings do not track the step
 

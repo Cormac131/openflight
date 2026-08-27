@@ -42,16 +42,27 @@ This is entirely optional. A build with a soldered R17 works exactly as before.
 
 | Part | Description | Link | ~Price |
 |------|-------------|------|--------|
+| **Microchip MCP4017T-104E/LT** | **Preferred.** I2C 100 kΩ digital potentiometer, SC70-6. Spans R17's whole range with nothing in series | [Microchip](https://www.microchip.com/en-us/product/mcp4017) | $1 |
+| **Wiring** | 4 wires: `VDD`/`GND`/`SDA`/`SCL` to the Pi, plus 2 short leads from `B` and `W` to the R17 pads | Any | $1 |
+
+Or, if you already have one:
+
+| Part | Description | Link | ~Price |
+|------|-------------|------|--------|
 | **Adafruit DS3502** | I2C 10 kΩ digital potentiometer with STEMMA QT / Qwiic | [Adafruit product 4286](https://www.adafruit.com/product/4286) | $5 |
-| **Series resistor** | **Required** — 33 kΩ unless your room says otherwise; shifts the pot's 10 kΩ span onto R17's operating range | Any electronics supplier | $1 |
+| **Series resistor** | **Required with the DS3502** — 33 kΩ typical; shifts its 10 kΩ span onto R17's operating range | Any electronics supplier | $1 |
 | **Wiring** | Either 5 Dupont jumpers, or one JST-SH STEMMA QT cable chained off the LIS3DH plus a single jumper for `V+` | Any | $1–5 |
 
-> **The 10 kΩ pot cannot do this alone.** R17's recommended value is 47 kΩ, and
-> 10 kΩ in parallel with the board's 100 kΩ R3 gives a 9.1 kΩ preamp leg against
-> 32 kΩ at that baseline — the detector would be far less sensitive at *every*
-> setting. A fixed series resistor shifts the span onto the useful range; 33 kΩ
-> gives 33–43 kΩ, matching the guide's documented window. Tell the server which
-> value you fitted with `--sound-sensitivity-series-ohms`.
+> **⚠ MCP4017, not MCP4018 or MCP4019.** They share an address, a protocol and
+> this codebase, but not their terminals: the -4018 and -4019 have terminal `B`
+> connected internally to ground, and R17 sits in the preamp's feedback path
+> where neither end is at ground. Only the MCP4017's floating pair works here.
+
+> **Why 100 kΩ matters.** The 10 kΩ DS3502 needs a series resistor to reach
+> R17's 33–47 kΩ range at all, and that leaves the optional
+> [closed-loop auto gain](sound-trigger-wiring.md#optional-closed-loop-auto-gain-ads1115)
+> only ~1.2× of travel to work with. A 100 kΩ part needs nothing in series and
+> gives the loop real authority.
 
 > **It claims no GPIOs.** The DS3502 shares the I2C bus the inclinometer and any
 > UPS fuel gauge already use, sitting at 0x28. If the LIS3DH is fitted, one
@@ -186,7 +197,7 @@ camera; the standard setup does not install its optional software dependencies.
 |----------|--------|
 | Core (OPS243, Pi 5, Display) | $355 |
 | Sound Trigger (SEN-14262 + resistor + wires) | $18 |
-| Software sensitivity control (DS3502 + resistor + wiring) — **optional** | $7 |
+| Software sensitivity control (MCP4017 + wiring) — **optional** | $2 |
 | Closed-loop auto gain (ADS1115 + wire) — **optional** | $16 |
 | Power & Accessories | $27 |
 | **Subtotal, no angle radar** | **~$400** |

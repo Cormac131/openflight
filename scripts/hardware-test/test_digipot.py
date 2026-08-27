@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bench-test the DS3502 digital pot fitted to the SEN-14262 R17 pads.
+"""Bench-test the digital pot fitted to the SEN-14262 R17 pads.
 
 Three modes:
 
@@ -18,17 +18,14 @@ Three modes:
     DS3502 holds its position with nothing connected, so there is no --hold to
     worry about; add ``--store`` to commit it to the chip's EEPROM.
 
-Wiring (see docs/sound-trigger-wiring.md):
-    DS3502 VCC -> Pi 3.3V     DS3502 SDA -> Pi SDA (BCM2, physical 3)
-    DS3502 GND -> Pi GND      DS3502 SCL -> Pi SCL (BCM3, physical 5)
-    DS3502 V+  -> Pi 5V       (analog supply, needs 4.5V or more)
-    DS3502 RL  -> one R17 pad
-    DS3502 RW  -> series resistor -> the other R17 pad
+Covers both supported parts; pass ``--device`` to pick one. See
+docs/sound-trigger-wiring.md for the wiring of each.
 
 Usage:
-    uv run python scripts/hardware-test/test_ds3502.py --sweep
-    uv run python scripts/hardware-test/test_ds3502.py --noise-floor
-    uv run python scripts/hardware-test/test_ds3502.py --position 64 --store
+    uv run python scripts/hardware-test/test_digipot.py --sweep
+    uv run python scripts/hardware-test/test_digipot.py --noise-floor
+    uv run python scripts/hardware-test/test_digipot.py --position 64 --store
+    uv run python scripts/hardware-test/test_digipot.py --device ds3502 --sweep
 
 Stop the OpenFlight server first if you are also using --noise-floor: it holds
 the trigger GPIO.
@@ -39,15 +36,7 @@ import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-from openflight.sensitivity import (
-    DEFAULT_ADDRESS,
-    DEFAULT_SERIES_OHMS,
-    DS3502,
-    MAX_POSITION,
-    preamp_feedback_ohms,
-    resistance_ohms,
-    validate_address,
-)
+from openflight.sensitivity import DEFAULT_DEVICE, DEVICES
 
 QUIET = "quiet"
 ACTIVE = "active"
@@ -122,20 +111,20 @@ def recommend_position(
     )
 
 
-def describe(position: int, series_ohms: float) -> str:
+def describe(pot, position: int) -> str:
     """One line of what a step means at the R17 pads and in the preamp."""
     return (
-        f"step {position:3d}/{MAX_POSITION}  "
-        f"R17 ~{resistance_ohms(position, series_ohms) / 1000:6.2f} kohm  "
-        f"preamp ~{preamp_feedback_ohms(position, series_ohms) / 1000:5.2f} kohm"
+        f"step {position:3d}/{pot.max_position}  "
+        f"R17 ~{pot.resistance_at(position) / 1000:6.2f} kohm  "
+        f"preamp ~{pot.preamp_at(position) / 1000:5.2f} kohm"
     )
 
 
-def sweep_positions(step: int) -> List[int]:
+def sweep_positions(step: int, max_position: int) -> List[int]:
     """Steps to visit, always including both ends of the range."""
-    positions = list(range(0, MAX_POSITION + 1, step))
-    if positions[-1] != MAX_POSITION:
-        positions.append(MAX_POSITION)
+    positions = list(range(0, max_position + 1, step))
+    if positions[-1] != max_position:
+        positions.append(max_position)
     return positions
 
 
@@ -193,14 +182,14 @@ def run_noise_floor(pot, args) -> Optional[int]:
         print(f"  {'-' * 4}  {'-' * 9}  {'-' * 6}  {'-' * 6}  {'-' * 9}")
 
         observations = []
-        for position in sweep_positions(args.sweep_step):
+        for position in sweep_positions(args.sweep_step, pot.max_position):
             pot.set_position(position)
             time.sleep(args.settle)
             observation = observe_step(gate, position, args.sweep_dwell)
             observations.append(observation)
             print(
                 f"  {observation.position:>4}  "
-                f"{resistance_ohms(observation.position, pot.series_ohms) / 1000:>7.2f}k  "
+                f"{pot.resistance_at(observation.position) / 1000:>7.2f}k  "
                 f"{observation.edges:>6}  "
                 f"{observation.high_fraction * 100:>5.0f}%  "
                 f"{observation.verdict}"
@@ -209,7 +198,7 @@ def run_noise_floor(pot, args) -> Optional[int]:
         target, explanation = recommend_position(observations, margin=args.margin)
         print(f"\n{explanation}")
         if target is not None:
-            print(f"\nSuggested setting: {describe(target, pot.series_ohms)}")
+            print(f"\nSuggested setting: {describe(pot, target)}")
             print(
                 "\nThis only finds the ceiling. Now confirm the floor: set that step "
                 "in Debug > Sound and check real strikes still register."
@@ -219,16 +208,17 @@ def run_noise_floor(pot, args) -> Optional[int]:
         gate.close()
 
 
-def validate_args(parser, args) -> None:
+def validate_args(parser, args, max_position: int = 127) -> None:
     """Reject argument combinations that would fail partway through a run."""
-    try:
-        validate_address(args.address)
-    except ValueError as error:
-        parser.error(str(error))
-    if args.position is not None and not 0 <= args.position <= MAX_POSITION:
-        parser.error(f"--position must be within 0..{MAX_POSITION}")
-    if not 1 <= args.sweep_step <= MAX_POSITION:
-        parser.error(f"--sweep-step must be within 1..{MAX_POSITION}")
+    if args.address is not None:
+        try:
+            DEVICES[args.device]["validate_address"](args.address)
+        except ValueError as error:
+            parser.error(str(error))
+    if args.position is not None and not 0 <= args.position <= max_position:
+        parser.error(f"--position must be within 0..{max_position}")
+    if not 1 <= args.sweep_step <= max_position:
+        parser.error(f"--sweep-step must be within 1..{max_position}")
     if args.margin < 0:
         parser.error("--margin cannot be negative")
     if args.series_ohms < 0:
@@ -244,25 +234,26 @@ def validate_args(parser, args) -> None:
 def main() -> None:
     """Parse arguments and run the requested bring-up mode."""
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--device",
+        choices=tuple(DEVICES),
+        default=DEFAULT_DEVICE,
+        help=f"Which digipot is fitted (default: {DEFAULT_DEVICE})",
+    )
     parser.add_argument("--i2c-bus", type=int, default=1, help="I2C bus number (default: 1)")
     parser.add_argument(
         "--address",
         type=lambda value: int(value, 0),
-        default=DEFAULT_ADDRESS,
-        help=f"DS3502 I2C address, 0x28-0x2b (default: 0x{DEFAULT_ADDRESS:02x})",
+        default=None,
+        help="I2C address; defaults to the selected device's own",
     )
     parser.add_argument(
         "--series-ohms",
         type=float,
-        default=DEFAULT_SERIES_OHMS,
-        help=f"Series resistor fitted in the R17 path (default: {DEFAULT_SERIES_OHMS:.0f})",
-    )
-    parser.add_argument(
-        "--position",
-        type=int,
         default=None,
-        help=f"Park the wiper at this step (0..{MAX_POSITION})",
+        help="Series resistor fitted in the R17 path; defaults per device",
     )
+    parser.add_argument("--position", type=int, default=None, help="Park the wiper at this step")
     parser.add_argument(
         "--store", action="store_true", help="Commit the parked position to the chip's EEPROM"
     )
@@ -282,7 +273,7 @@ def main() -> None:
         "--sweep-step",
         type=int,
         default=8,
-        help=f"Steps between sweep stops, 1..{MAX_POSITION} (default: 8)",
+        help="Steps between sweep stops (default: 8)",
     )
     parser.add_argument(
         "--sweep-dwell",
@@ -303,20 +294,25 @@ def main() -> None:
         help=f"Steps to back off from the noise floor (default: {DEFAULT_MARGIN_STEPS})",
     )
     args = parser.parse_args()
+    spec = DEVICES[args.device]
+    # Validate before constructing: the drivers check the address in __init__,
+    # and a traceback is a worse answer than a one-line CLI error.
     validate_args(parser, args)
+    address = spec["address"] if args.address is None else args.address
+    series_ohms = spec["series_ohms"] if args.series_ohms is None else args.series_ohms
+    pot = spec["driver"](bus_number=args.i2c_bus, address=address, series_ohms=series_ohms)
 
-    pot = DS3502(bus_number=args.i2c_bus, address=args.address, series_ohms=args.series_ohms)
     suggested = None
     try:
-        print(f"Opening DS3502 at 0x{args.address:02x} on i2c-{args.i2c_bus}")
+        print(f"Opening {args.device} at 0x{address:02x} on i2c-{args.i2c_bus}")
         pot.open()
-        print(f"  found, wiper at {describe(pot.position, pot.series_ohms)}")
+        print(f"  found, wiper at {describe(pot, pot.position)}")
 
         if args.sweep:
             print("\nSweeping. Put a meter across the R17 pads.\n")
-            for position in sweep_positions(args.sweep_step):
+            for position in sweep_positions(args.sweep_step, pot.max_position):
                 pot.set_position(position)
-                print(f"  {describe(position, pot.series_ohms)}")
+                print(f"  {describe(pot, position)}")
                 time.sleep(args.sweep_dwell)
 
         if args.noise_floor:
@@ -329,8 +325,13 @@ def main() -> None:
         else:
             target = pot.position
         pot.set_position(target, store=args.store)
-        print(f"\nParked at {describe(target, pot.series_ohms)}")
-        if args.store:
+        print(f"\nParked at {describe(pot, target)}")
+        if not pot.persists_in_hardware:
+            print(
+                "This part's wiper is volatile: a power cycle returns it to mid-scale. "
+                "Set it in Debug > Sound and the server will restore it at startup."
+            )
+        elif args.store:
             print("Committed to the chip's EEPROM; it will come back here after a power cycle.")
         else:
             print(
