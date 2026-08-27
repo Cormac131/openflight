@@ -2737,10 +2737,22 @@ class TestOnShotDetected:
         def __init__(self):
             self.stats = {"shots_detected": 0}
             self.shots = []
+            self.iwr6843_captures = []
+            self.camera_captures = []
+            self.all_shots_logged = threading.Event()
 
         def log_shot(self, **shot_data):
             self.stats["shots_detected"] += 1
+            shot_data.setdefault("shot_number", self.stats["shots_detected"])
             self.shots.append(shot_data)
+            if len(self.shots) == 4:
+                self.all_shots_logged.set()
+
+        def log_iwr6843_capture(self, **capture_data):
+            self.iwr6843_captures.append(capture_data)
+
+        def log_camera_capture(self, **capture_data):
+            self.camera_captures.append(capture_data)
 
     @staticmethod
     def _shot(second: int = 0) -> Shot:
@@ -3001,22 +3013,107 @@ class TestOnShotDetected:
         assert [event for event, _payload in emitted] == ["shot", "shot_update"]
         self._assert_finalized_once(emitted, session_log)
 
-    def test_stuck_hardware_cannot_grow_enrichment_queue_without_bound(self, monkeypatch):
+    def test_queue_backpressure_preserves_shot_order_and_hardware_identity(self, monkeypatch):
         emitted, session_log = self._record_finalization(monkeypatch)
+        dump_started = threading.Event()
+        release_dump = threading.Event()
+        all_initial_shots_emitted = threading.Event()
+        background_threads = []
+        simulator_shots = []
         enrichment_queue = self._enrichment_queue()
         monkeypatch.setattr(server_module, "shot_enrichment_queue", enrichment_queue)
-        monkeypatch.setattr(server_module, "shot_enrichment_task", object())
-        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(server_module, "_shot_sequence_number", 0, raising=False)
 
-        for second in range(5):
-            on_shot_detected(self._shot(second))
+        class BlockingIWRRuntime:
+            @staticmethod
+            def process_shot(**kwargs):
+                if kwargs["impact_timestamp"] == 100.0:
+                    dump_started.set()
+                    assert release_dump.wait(5.0)
+                return SimpleNamespace(capture=None, measurement=None, club_path=None)
 
-        assert enrichment_queue.qsize() == server_module._SHOT_ENRICHMENT_QUEUE_CAPACITY
-        assert [event for event, _payload in emitted].count("shot") == 5
-        assert [event for event, _payload in emitted].count("shot_update") == 3
-        assert len(session_log.shots) == 3
-        assert all(row["launch_angle_vertical_source"] == "estimated" for row in session_log.shots)
-        assert all(row["carry_spin_adjusted"] > 0 for row in session_log.shots)
+        class CameraRuntime:
+            camera_analysis_eligible = False
+
+            @staticmethod
+            def capture_for_shot(impact_timestamp, timeout_s):
+                del timeout_s
+                return SimpleNamespace(
+                    trigger_timestamp=impact_timestamp,
+                    path=None,
+                    metadata={},
+                    error="test capture",
+                    valid=False,
+                    sequence=int(impact_timestamp),
+                )
+
+        def start_background_task(target, *args, **kwargs):
+            thread = threading.Thread(target=target, args=args, kwargs=kwargs, daemon=True)
+            background_threads.append(thread)
+            thread.start()
+            return thread
+
+        monkeypatch.setattr(server_module, "iwr6843_runtime", BlockingIWRRuntime())
+        monkeypatch.setattr(server_module, "camera_capture_runtime", CameraRuntime())
+        monkeypatch.setattr(server_module.socketio, "start_background_task", start_background_task)
+
+        def record_emit(event, payload):
+            emitted.append((event, payload))
+            if event == "shot" and sum(name == "shot" for name, _payload in emitted) == 4:
+                all_initial_shots_emitted.set()
+
+        monkeypatch.setattr(server_module.socketio, "emit", record_emit)
+        monkeypatch.setattr(
+            server_module,
+            "_forward_shot_to_simulators",
+            lambda shot: simulator_shots.append((shot.shot_number, shot.impact_timestamp)),
+        )
+
+        shots = [self._shot(second) for second in range(4)]
+        on_shot_detected(shots[0])
+        assert dump_started.wait(2.0)
+
+        on_shot_detected(shots[1])
+        on_shot_detected(shots[2])
+        assert enrichment_queue.full()
+
+        overflow_callback = threading.Thread(
+            target=on_shot_detected,
+            args=(shots[3],),
+            daemon=True,
+        )
+        overflow_callback.start()
+        assert all_initial_shots_emitted.wait(2.0)
+        try:
+            overflow_callback.join(timeout=0.25)
+            assert overflow_callback.is_alive(), "queue overflow must apply FIFO backpressure"
+            assert not session_log.shots
+        finally:
+            release_dump.set()
+
+        assert session_log.all_shots_logged.wait(5.0)
+        overflow_callback.join(timeout=2.0)
+        for thread in background_threads:
+            thread.join(timeout=2.0)
+        assert not overflow_callback.is_alive()
+        assert all(not thread.is_alive() for thread in background_threads)
+
+        expected = [(index, shot.impact_timestamp) for index, shot in enumerate(shots, start=1)]
+        initial_shots = [payload["shot"] for event, payload in emitted if event == "shot"]
+        final_shots = [payload["shot"] for event, payload in emitted if event == "shot_update"]
+        assert [(row["shot_number"], row["impact_timestamp"]) for row in initial_shots] == expected
+        assert [
+            (row["shot_number"], row["impact_timestamp"]) for row in session_log.shots
+        ] == expected
+        assert [
+            (row["shot_number"], row["shot_timestamp"]) for row in session_log.iwr6843_captures
+        ] == expected
+        assert [
+            (row["shot_number"], row["shot_timestamp"]) for row in session_log.camera_captures
+        ] == expected
+        assert [(row["shot_number"], row["impact_timestamp"]) for row in final_shots] == expected
+        assert simulator_shots == expected
 
     def test_kld7_uses_shot_impact_timestamp(self, monkeypatch):
         """K-LD7 selection should be anchored to the OPS243 impact timestamp."""

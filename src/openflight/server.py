@@ -192,6 +192,9 @@ shot_enrichment_queue: queue.Queue[tuple[Shot, str, float | None]] = queue.Queue
 )
 shot_enrichment_task = None
 shot_enrichment_task_lock = threading.Lock()
+_shot_sequence_number = 0
+_shot_sequence_lock = threading.Lock()
+_shot_callback_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -202,6 +205,33 @@ class _ShotEnrichmentResult:
     kld7_ms: float | None = None
     camera_capture_ms: float | None = None
     camera_data: dict | None = None
+
+
+def _assign_shot_number(shot: Shot) -> None:
+    """Give a shot one stable session identity before any async work starts."""
+    global _shot_sequence_number  # pylint: disable=global-statement
+
+    if shot.shot_number is not None:
+        return
+    with _shot_sequence_lock:
+        if shot.shot_number is None:
+            _shot_sequence_number += 1
+            shot.shot_number = _shot_sequence_number
+
+
+def _reset_shot_sequence() -> None:
+    """Start shot identities at one for a newly started logging session."""
+    global _shot_sequence_number  # pylint: disable=global-statement
+
+    with _shot_sequence_lock:
+        _shot_sequence_number = 0
+
+
+def _shot_number_for_log(shot: Shot, session_log) -> int:
+    """Use detection identity, retaining compatibility for direct helper calls."""
+    if shot.shot_number is not None:
+        return shot.shot_number
+    return session_log.stats.get("shots_detected", 0) + 1
 
 
 def _run_shutdown_step(name: str, callback) -> None:
@@ -914,6 +944,7 @@ calculated_spin_enabled = False
 def shot_to_dict(shot: Shot) -> dict:
     """Convert Shot to JSON-serializable dict."""
     return {
+        "shot_number": shot.shot_number,
         "ball_speed_mph": round(shot.ball_speed_mph, 1),
         "ball_speed_raw_mph": (
             round(shot.ball_speed_raw_mph, 1) if shot.ball_speed_raw_mph else None
@@ -928,6 +959,7 @@ def shot_to_dict(shot: Shot) -> dict:
         "club": shot.club.value,
         "player_name": shot.player_name,
         "timestamp": shot.timestamp.isoformat(),
+        "impact_timestamp": shot.impact_timestamp,
         "peak_magnitude": shot.peak_magnitude,
         # Launch angle data
         "launch_angle_vertical": shot.launch_angle_vertical,
@@ -2685,7 +2717,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
         session_log = get_session_logger()
         if session_log:
             session_log.log_iwr6843_capture(
-                shot_number=session_log.stats.get("shots_detected", 0) + 1,
+                shot_number=_shot_number_for_log(shot, session_log),
                 shot_timestamp=shot.impact_timestamp,
                 trigger_timestamp=(capture.trigger_timestamp if capture is not None else None),
                 capture_path=(str(capture.path) if capture and capture.path else None),
@@ -3246,7 +3278,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
 
                 if session_log and raw_buffer:
                     session_log.log_kld7_buffer(
-                        shot_number=session_log.stats.get("shots_detected", 0) + 1,
+                        shot_number=_shot_number_for_log(shot, session_log),
                         shot_timestamp=shot_ts,
                         orientation="vertical",
                         buffer_frames=raw_buffer,
@@ -3343,7 +3375,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
 
                 if session_log and raw_buffer_h:
                     session_log.log_kld7_buffer(
-                        shot_number=session_log.stats.get("shots_detected", 0) + 1,
+                        shot_number=_shot_number_for_log(shot, session_log),
                         shot_timestamp=shot_ts,
                         orientation="horizontal",
                         buffer_frames=raw_buffer_h,
@@ -3459,7 +3491,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
             camera_capture_ms = (time.time() - camera_capture_start) * 1000.0
             session_log = get_session_logger()
             if session_log:
-                shot_number = session_log.stats.get("shots_detected", 0) + 1
+                shot_number = _shot_number_for_log(shot, session_log)
                 if camera_capture is not None:
                     session_log.log_camera_capture(
                         shot_number=shot_number,
@@ -3609,6 +3641,7 @@ def _finalize_shot_detected(
         session_log = get_session_logger()
         if session_log:
             session_log.log_shot(
+                shot_number=shot.shot_number,
                 ball_speed_mph=shot.ball_speed_mph,
                 club_speed_mph=shot.club_speed_mph,
                 smash_factor=shot.smash_factor,
@@ -3848,11 +3881,16 @@ def _defer_shot_enrichment(
     emit_event: str,
     initial_ui_ms: float | None,
 ) -> None:
-    """Queue slow enrichments on a FIFO background worker."""
+    """Queue slow enrichments with bounded, order-preserving backpressure."""
     global shot_enrichment_task  # pylint: disable=global-statement
 
     with shot_enrichment_task_lock:
-        shot_enrichment_queue.put_nowait((shot, emit_event, initial_ui_ms))
+        if shot_enrichment_queue.full():
+            logger.warning(
+                "[SERVER] Shot enrichment queue is full (%d waiting); applying FIFO backpressure",
+                _SHOT_ENRICHMENT_QUEUE_CAPACITY,
+            )
+        shot_enrichment_queue.put((shot, emit_event, initial_ui_ms))
         if shot_enrichment_task is not None:
             return
         try:
@@ -3871,7 +3909,14 @@ def _defer_shot_enrichment(
 
 
 def on_shot_detected(shot: Shot) -> None:
+    """Serialize detection order before publishing or queueing a shot."""
+    with _shot_callback_lock:
+        _handle_shot_detected(shot)
+
+
+def _handle_shot_detected(shot: Shot) -> None:
     """Publish OPS metrics promptly, then enrich optional hardware data."""
+    _assign_shot_number(shot)
     shot.player_name = current_player_name
     logger.info("[SERVER] Shot callback: %.1f mph", shot.ball_speed_mph)
 
@@ -3891,16 +3936,6 @@ def on_shot_detected(shot: Shot) -> None:
     final_event = "shot_update" if emitted else "shot"
     try:
         _defer_shot_enrichment(
-            shot,
-            emit_event=final_event,
-            initial_ui_ms=initial_ui_ms,
-        )
-    except queue.Full:
-        logger.warning(
-            "[SERVER] Shot enrichment queue is full (%d waiting); skipping optional hardware",
-            _SHOT_ENRICHMENT_QUEUE_CAPACITY,
-        )
-        _finalize_shot_detected(
             shot,
             emit_event=final_event,
             initial_ui_ms=initial_ui_ms,
@@ -4065,6 +4100,7 @@ def start_monitor(
         )
 
     monitor.connect()
+    _reset_shot_sequence()
 
     if swing_speed_mode:
         swing_config = swing_speed_kwargs or {}
