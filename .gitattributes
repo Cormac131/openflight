@@ -1,0 +1,25 @@
+# Keep working-tree line endings as LF on every OS. Windows core.autocrlf
+# otherwise checks out CRLF, which makes `prettier --check` fail locally
+# while CI (Ubuntu) still passes.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.otf binary
+*.zip binary
+*.gz binary
+*.pkl binary
+*.mp4 binary
+*.webm binary
+*.pdf binary
+*.bin binary
+*.elf binary
+*.hex binary

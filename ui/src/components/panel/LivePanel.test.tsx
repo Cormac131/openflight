@@ -265,7 +265,15 @@ describe('LivePanel', () => {
   it('still warns on the ready screen so a swing is not taken without a ball', () => {
     const html = text(
       renderToString(
-        <LivePanel shot={null} shots={[]} profileId="james" profileName="James" clubLabel="DR" ballDetectionEnabled ballDetected={false} />
+        <LivePanel
+          shot={null}
+          shots={[]}
+          profileId="james"
+          profileName="James"
+          clubLabel="DR"
+          ballDetectionEnabled
+          ballDetected={false}
+        />
       )
     );
 

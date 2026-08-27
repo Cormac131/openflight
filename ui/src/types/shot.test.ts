@@ -3,8 +3,7 @@ import type { Shot } from './shot';
 import { filterShotsByProfile, excludeShotsByProfile } from './shot';
 
 describe('filterShotsByProfile', () => {
-  const shotWith = (profileId: string | undefined): Shot =>
-    ({ profile_id: profileId, ball_speed_mph: 100 }) as Shot;
+  const shotWith = (profileId: string | undefined): Shot => ({ profile_id: profileId, ball_speed_mph: 100 }) as Shot;
 
   it('keeps only shots stamped with the given profile id', () => {
     const shots = [shotWith('aaa'), shotWith('bbb'), shotWith('aaa')];
@@ -33,8 +32,7 @@ describe('filterShotsByProfile', () => {
 });
 
 describe('excludeShotsByProfile', () => {
-  const shotWith = (profileId: string | undefined): Shot =>
-    ({ profile_id: profileId, ball_speed_mph: 100 }) as Shot;
+  const shotWith = (profileId: string | undefined): Shot => ({ profile_id: profileId, ball_speed_mph: 100 }) as Shot;
 
   it('drops only the given profile and keeps unstamped shots', () => {
     const shots = [shotWith('aaa'), shotWith('bbb'), shotWith(undefined)];
