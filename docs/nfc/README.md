@@ -22,7 +22,7 @@ The hardware this integration targets is:
 
 | Part | Product |
 |------|---------|
-| NFC reader breakout | [Adafruit PN532 NFC/RFID Controller Breakout, product 364](https://www.adafruit.com/product/364) |
+| NFC reader breakout | [Adafruit PN532 NFC/RFID Controller Breakout, product 364](https://www.adafruit.com/product/364), or any generic **PN532 V3 module** (the red Elechouse-style board sold as "PN532 NFC RFID V3 Kit") |
 | Club tags | NTAG213 / NTAG215 or MIFARE Classic stickers, 25 mm round, one per club |
 | Solderless cable kit | 4-pin JST SH 1.0 mm STEMMA QT/Qwiic cable kit, or female-Dupont jumpers |
 | Mounting | Thin double-sided mounting tape or nonconductive standoffs |
@@ -33,6 +33,25 @@ butt end of the shaft.
 
 Do not buy a bare PN532 chip. Use a breakout with the regulator, antenna, and
 I2C pull-ups already installed.
+
+### Generic PN532 V3 Modules
+
+The cheap red "PN532 V3" boards work: same NXP silicon, same command set, same
+`0x24` address, and no software difference at all. Their larger PCB antenna
+usually reads a little further than the Adafruit board's, which suits a club
+tapped against the enclosure. Three things differ in practice:
+
+- The mode switches are usually silkscreened **SET0/SET1** rather than
+  SEL0/SEL1. See the next section — read the table printed on your board.
+- Their I2C pull-up resistors tie to the module's own `VCC`, so the rail you
+  power them from is the voltage the Pi's SDA/SCL see. **Power from 3.3 V.**
+  See the warning under [Wiring](#wiring).
+- Pin order on the headers varies between clones. Match by label, never by
+  position in a photo.
+
+These kits normally include a MIFARE Classic card and keyfob. Both are
+ISO14443A, so they read fine and are useful for bring-up before the club
+stickers arrive.
 
 ## How Club Selection Works
 
@@ -62,16 +81,23 @@ potentially damage the Pi or the reader.
 
 ## Set The PN532 To I2C Mode
 
-The Adafruit breakout ships in UART/HSU mode. Move the two onboard DIP switches
-to select I2C **before** wiring:
+PN532 boards ship in UART/HSU mode. Move the two onboard DIP switches to select
+I2C **before** wiring. On both the Adafruit breakout and Elechouse-style V3
+modules that is:
 
 | Switch | Position for I2C |
 |--------|------------------|
-| SEL0 | ON |
-| SEL1 | OFF |
+| SEL0 / SET0 | ON (1) |
+| SEL1 / SET1 | OFF (0) |
 
-The board is unresponsive on I2C until both switches are set. This is the most
-common reason `i2cdetect` shows nothing.
+> [!IMPORTANT]
+> Clone boards do not all label or orient their switches the same way. Every
+> board prints its own mode table beside the switches — **that table wins over
+> this one.** Look for the row marked I2C and match it.
+
+The board is unresponsive on I2C until both switches are set, and it latches the
+interface mode at power-up: change the switches, then power-cycle the Pi. This
+is the most common reason `i2cdetect` shows nothing.
 
 ## Wiring
 
@@ -95,8 +121,17 @@ Yellow  SCL         ------------------>  physical pin 5  (GPIO3/SCL)
 > Use physical pin numbers exactly as shown. GPIO/BCM numbers are a different
 > numbering system. Do not connect the PN532 to a 5 V GPIO-header pin.
 
-Cable colors are not a universal standard. If using a different cable, verify
-each conductor against the breakout labels before powering the Pi.
+> [!WARNING]
+> **Power the reader from 3.3 V, not 5 V** — even though most PN532 V3 modules
+> accept 5 V on `VCC` and their listings advertise it. The module's I2C pull-up
+> resistors tie to its own `VCC` rail, so a 5 V-powered module pulls the Pi's
+> SDA/SCL up to 5 V. Those GPIOs are 3.3 V only and are not 5 V tolerant.
+
+Cable colors are not a universal standard, and header pin order varies between
+clone boards. Verify each conductor against the silkscreen labels before
+powering the Pi. On V3 modules the I2C signals are the `SDA` and `SCL` pins of
+the 4-pin header; the same physical pins carry the UART signals in HSU mode, so
+they may be labelled `SDA(TXD)` and `SCL(RXD)`.
 
 The I2C bus is shared. The PN532 (`0x24`) and the LIS3DH inclinometer (`0x18`)
 use different addresses and coexist on bus 1 without a second set of power pins,
@@ -185,8 +220,8 @@ uv run python scripts/hardware-test/read_pn532.py --count 5
 # Teach the next tag presented, without starting the kiosk
 uv run python scripts/hardware-test/read_pn532.py --assign 7-iron
 
-# Probe a non-default address or bus while troubleshooting
-uv run python scripts/hardware-test/read_pn532.py --address 0x48 --bus 0
+# Probe a non-default bus while troubleshooting
+uv run python scripts/hardware-test/read_pn532.py --bus 0
 ```
 
 ## Learn The Club Tags
@@ -294,15 +329,22 @@ entry.
 
 ### `0x24` Is Missing From `i2cdetect`
 
-1. Confirm the SEL0/SEL1 switches are set for I2C (SEL0 ON, SEL1 OFF).
+1. Confirm the mode switches are set for I2C, per the table printed on the
+   board, and that the Pi was power-cycled afterwards.
 2. Confirm `/dev/i2c-1` exists and I2C is enabled, then reboot.
 3. Recheck blue to physical pin 3 and yellow to physical pin 5.
 4. Confirm black is on ground and red is on 3.3 V.
 5. Reseat both ends of the cable.
 6. Run `i2cdetect -y 1` again.
 
-Some PN532 breakouts respond at `0x48` in I2C mode. If the scan shows `48`, pass
-`--nfc-i2c-address 0x48`.
+The PN532's I2C address is fixed in silicon and cannot be changed, so a scan
+that finds nothing is a wiring or mode problem, never an address problem.
+
+Datasheets and Arduino libraries often quote the PN532's address as `0x48`.
+That is the same address written in 8-bit form, with the read/write bit
+included; `i2cdetect` and Linux both use the 7-bit form, `0x24`. Do not pass
+`--nfc-i2c-address 0x48` — the two are the same device, and the 7-bit value is
+the one this driver wants.
 
 ### `Device at 0x24 is not a PN532`
 
@@ -314,8 +356,12 @@ model with `i2cdetect -y 1`.
 
 The reader is addressable but not answering. This is almost always mode
 selection: a board still in UART or SPI mode ACKs nothing on I2C. Re-check the
-DIP switches, then power-cycle the Pi — the PN532 latches its interface mode at
-power-up.
+DIP switches against the table printed on the board, then power-cycle the Pi —
+the PN532 latches its interface mode at power-up.
+
+On a clone whose switch table is ambiguous, there are only four combinations.
+Trying each one, power-cycling between attempts, is faster than guessing at the
+silkscreen.
 
 ### Permission Denied On `/dev/i2c-1`
 
