@@ -56,4 +56,14 @@ describe('ProfileNameDialog', () => {
 
     expect(confirmButton).not.toContain('disabled=""');
   });
+
+  it('ships an on-screen keyboard and keeps the native OSK down', () => {
+    const html = render();
+
+    expect(html).toContain('aria-label="Keyboard"');
+    expect(html).toContain('>Q<');
+    expect(html).toContain('aria-label="Backspace"');
+    expect(html).toContain('aria-label="Space"');
+    expect(html).toContain('inputMode="none"');
+  });
 });

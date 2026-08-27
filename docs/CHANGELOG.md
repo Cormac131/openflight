@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **On-screen keyboard for profile names.** Adding or renaming a profile on the
+  Pi kiosk now shows a full-screen keyboard. Chromium in `--kiosk` mode does not
+  surface a system keyboard, so the native text field was unusable on the
+  touchscreen.
+
 ### Added
 - **Profiles replace players.** Shots are now attributed to a server-owned profile
   (a person *or* a place) with a stable id, persisted to

@@ -240,7 +240,10 @@ test('confirms before clearing and only removes that profile, then returns to Li
   await expect(page.locator('.panel-header__title')).toHaveText('Stats');
 
   await page.locator('.panel-header').getByRole('button', { name: 'Clear session' }).click();
-  await page.getByRole('dialog', { name: "Clear Alex's session?" }).getByRole('button', { name: 'Clear session' }).click();
+  await page
+    .getByRole('dialog', { name: "Clear Alex's session?" })
+    .getByRole('button', { name: 'Clear session' })
+    .click();
 
   await expect(page.locator('.panel-header__title')).toHaveText('Live');
   await expect(page.locator('.panel-header__subtitle')).toHaveText('Alex');
@@ -272,6 +275,28 @@ test('clicking the rename control opens the rename dialog and renames the profil
   await expect(dialog).toHaveCount(0);
   await expect(page.locator('.profiles-panel__card').filter({ hasText: 'Range' })).toBeVisible();
   await expect(page.locator('.profiles-panel__card').filter({ hasText: 'Rnage' })).toHaveCount(0);
+});
+
+test('types a new profile name with the on-screen keyboard', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 400 });
+  await gotoApp(page);
+  await dismissPicker(page);
+
+  await page.getByRole('button', { name: 'Profiles' }).click();
+  await page.getByRole('button', { name: 'Add profile' }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'Add profile' });
+  await expect(dialog.getByRole('group', { name: 'Keyboard' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Q', exact: true })).toBeInViewport();
+  await expect(dialog.getByRole('button', { name: 'Add profile', exact: true })).toBeInViewport();
+  await dialog.getByRole('button', { name: 'A', exact: true }).click();
+  await dialog.getByRole('button', { name: 'L', exact: true }).click();
+  await dialog.getByRole('button', { name: 'E', exact: true }).click();
+  await dialog.getByRole('button', { name: 'X', exact: true }).click();
+  await expect(dialog.getByRole('textbox')).toHaveValue('Alex');
+
+  await dialog.getByRole('button', { name: 'Add profile', exact: true }).click();
+  await expect(page.locator('.profiles-panel__card').filter({ hasText: 'Alex' })).toBeVisible();
 });
 
 test('pressing Enter in the name dialog confirms the rename', async ({ page }) => {

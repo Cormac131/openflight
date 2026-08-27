@@ -111,6 +111,13 @@ export const en = {
   'profiles.shots': '{count} shots',
   'profiles.shot': '{count} shot',
   'profiles.namePlaceholder': 'Name',
+  'profiles.closeDialog': 'Close',
+  'keyboard.aria': 'Keyboard',
+  'keyboard.backspace': 'Backspace',
+  'keyboard.space': 'Space',
+  'keyboard.shift': 'Shift',
+  'keyboard.letters': 'Letters',
+  'keyboard.numbers': 'Numbers',
 
   'camera.notConnected': 'Camera not connected',
   'camera.detectionOff': 'Ball detection off',

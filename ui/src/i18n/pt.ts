@@ -113,6 +113,13 @@ export const pt: Messages = {
   'profiles.shots': '{count} tacadas',
   'profiles.shot': '{count} tacada',
   'profiles.namePlaceholder': 'Nome',
+  'profiles.closeDialog': 'Fechar',
+  'keyboard.aria': 'Teclado',
+  'keyboard.backspace': 'Apagar',
+  'keyboard.space': 'Espaço',
+  'keyboard.shift': 'Shift',
+  'keyboard.letters': 'Letras',
+  'keyboard.numbers': 'Números',
 
   'camera.notConnected': 'Câmera não conectada',
   'camera.detectionOff': 'Detecção de bola desligada',

@@ -113,6 +113,13 @@ export const fr: Messages = {
   'profiles.shots': '{count} coups',
   'profiles.shot': '{count} coup',
   'profiles.namePlaceholder': 'Nom',
+  'profiles.closeDialog': 'Fermer',
+  'keyboard.aria': 'Clavier',
+  'keyboard.backspace': 'Retour arrière',
+  'keyboard.space': 'Espace',
+  'keyboard.shift': 'Majuscule',
+  'keyboard.letters': 'Lettres',
+  'keyboard.numbers': 'Chiffres',
 
   'camera.notConnected': 'Caméra non connectée',
   'camera.detectionOff': 'Détection de balle désactivée',

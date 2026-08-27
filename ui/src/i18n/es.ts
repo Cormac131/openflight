@@ -113,6 +113,13 @@ export const es: Messages = {
   'profiles.shots': '{count} golpes',
   'profiles.shot': '{count} golpe',
   'profiles.namePlaceholder': 'Nombre',
+  'profiles.closeDialog': 'Cerrar',
+  'keyboard.aria': 'Teclado',
+  'keyboard.backspace': 'Borrar',
+  'keyboard.space': 'Espacio',
+  'keyboard.shift': 'Mayúsculas',
+  'keyboard.letters': 'Letras',
+  'keyboard.numbers': 'Números',
 
   'camera.notConnected': 'Cámara no conectada',
   'camera.detectionOff': 'Detección de bola desactivada',
