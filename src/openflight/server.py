@@ -14,6 +14,7 @@ import statistics
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -195,6 +196,10 @@ shot_enrichment_task_lock = threading.Lock()
 _shot_sequence_number = 0
 _shot_sequence_lock = threading.Lock()
 _shot_callback_lock = threading.Lock()
+_shot_finalization_lock = threading.Lock()
+_shot_finalization_order: deque[int] = deque()
+_shot_finalization_ready: dict[int, "_PendingShotFinalization"] = {}
+_shot_finalization_running = False
 
 
 @dataclass(frozen=True)
@@ -207,24 +212,49 @@ class _ShotEnrichmentResult:
     camera_data: dict | None = None
 
 
+@dataclass(frozen=True)
+class _PendingShotFinalization:
+    """A completed enrichment waiting for its detection-order publication turn."""
+
+    shot: Shot
+    emit_event: str
+    initial_ui_ms: float | None
+    enrichment: _ShotEnrichmentResult
+
+
 def _assign_shot_number(shot: Shot) -> None:
     """Give a shot one stable session identity before any async work starts."""
     global _shot_sequence_number  # pylint: disable=global-statement
 
-    if shot.shot_number is not None:
-        return
     with _shot_sequence_lock:
         if shot.shot_number is None:
             _shot_sequence_number += 1
             shot.shot_number = _shot_sequence_number
+        else:
+            _shot_sequence_number = max(_shot_sequence_number, shot.shot_number)
 
 
 def _reset_shot_sequence() -> None:
     """Start shot identities at one for a newly started logging session."""
     global _shot_sequence_number  # pylint: disable=global-statement
+    global _shot_finalization_running  # pylint: disable=global-statement
 
     with _shot_sequence_lock:
         _shot_sequence_number = 0
+    with _shot_finalization_lock:
+        _shot_finalization_order.clear()
+        _shot_finalization_ready.clear()
+        _shot_finalization_running = False
+
+
+def _register_shot_for_finalization(shot: Shot) -> None:
+    """Record callback order independently from optional hardware completion."""
+    if shot.shot_number is None:
+        raise ValueError("shot must have a stable number before registration")
+    with _shot_finalization_lock:
+        if shot.shot_number in _shot_finalization_order:
+            raise ValueError(f"shot #{shot.shot_number} is already registered")
+        _shot_finalization_order.append(shot.shot_number)
 
 
 def _shot_number_for_log(shot: Shot, session_log) -> int:
@@ -3798,12 +3828,93 @@ def _finish_shot_detected(
             exc=error,
         )
 
-    _finalize_shot_detected(
+    _queue_shot_finalization(
         shot,
         emit_event=emit_event,
         initial_ui_ms=initial_ui_ms,
         enrichment=enrichment,
     )
+
+
+def _queue_shot_finalization(
+    shot: Shot,
+    *,
+    emit_event: str,
+    initial_ui_ms: float | None,
+    enrichment: _ShotEnrichmentResult | None = None,
+) -> None:
+    """Record a ready shot and drain any consecutive detection-order results."""
+    _queue_ordered_shot_finalization(
+        _PendingShotFinalization(
+            shot=shot,
+            emit_event=emit_event,
+            initial_ui_ms=initial_ui_ms,
+            enrichment=(enrichment if enrichment is not None else _ShotEnrichmentResult()),
+        )
+    )
+
+
+def _queue_ordered_shot_finalization(pending: _PendingShotFinalization) -> None:
+    """Publish a completed shot only after every earlier detection is published."""
+    global _shot_finalization_running  # pylint: disable=global-statement
+
+    shot_number = pending.shot.shot_number
+    if shot_number is None:
+        raise ValueError("shot must have a stable number before finalization")
+
+    with _shot_finalization_lock:
+        if shot_number not in _shot_finalization_order:
+            raise ValueError(f"shot #{shot_number} is not registered for finalization")
+        if shot_number in _shot_finalization_ready:
+            logger.warning("[SERVER] Shot #%d is already waiting for finalization", shot_number)
+            return
+        _shot_finalization_ready[shot_number] = pending
+        if _shot_finalization_running:
+            return
+        _shot_finalization_running = True
+
+    _drain_ordered_shot_finalizations()
+
+
+def _drain_ordered_shot_finalizations() -> None:
+    """Drain consecutive ready shots on exactly one publishing caller."""
+    global _shot_finalization_running  # pylint: disable=global-statement
+
+    while True:
+        with _shot_finalization_lock:
+            if not _shot_finalization_order:
+                _shot_finalization_running = False
+                return
+            next_shot_number = _shot_finalization_order[0]
+            pending = _shot_finalization_ready.pop(next_shot_number, None)
+            if pending is None:
+                _shot_finalization_running = False
+                return
+            _shot_finalization_order.popleft()
+
+        try:
+            _finalize_shot_detected(
+                pending.shot,
+                emit_event=pending.emit_event,
+                initial_ui_ms=pending.initial_ui_ms,
+                enrichment=pending.enrichment,
+            )
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.error(
+                "[SERVER] Ordered shot finalization failed: %s",
+                error,
+                exc_info=True,
+            )
+            log_session_error(
+                "Ordered shot finalization failed",
+                component="server",
+                context={
+                    "stage": "ordered_finalization",
+                    "shot_number": pending.shot.shot_number,
+                    "ball_speed_mph": pending.shot.ball_speed_mph,
+                },
+                exc=error,
+            )
 
 
 def _emit_initial_ops_shot(shot: Shot) -> bool:
@@ -3881,16 +3992,11 @@ def _defer_shot_enrichment(
     emit_event: str,
     initial_ui_ms: float | None,
 ) -> None:
-    """Queue slow enrichments with bounded, order-preserving backpressure."""
+    """Queue optional hardware work without blocking the OPS capture callback."""
     global shot_enrichment_task  # pylint: disable=global-statement
 
     with shot_enrichment_task_lock:
-        if shot_enrichment_queue.full():
-            logger.warning(
-                "[SERVER] Shot enrichment queue is full (%d waiting); applying FIFO backpressure",
-                _SHOT_ENRICHMENT_QUEUE_CAPACITY,
-            )
-        shot_enrichment_queue.put((shot, emit_event, initial_ui_ms))
+        shot_enrichment_queue.put_nowait((shot, emit_event, initial_ui_ms))
         if shot_enrichment_task is not None:
             return
         try:
@@ -3917,6 +4023,7 @@ def on_shot_detected(shot: Shot) -> None:
 def _handle_shot_detected(shot: Shot) -> None:
     """Publish OPS metrics promptly, then enrich optional hardware data."""
     _assign_shot_number(shot)
+    _register_shot_for_finalization(shot)
     shot.player_name = current_player_name
     logger.info("[SERVER] Shot callback: %.1f mph", shot.ball_speed_mph)
 
@@ -3940,13 +4047,25 @@ def _handle_shot_detected(shot: Shot) -> None:
             emit_event=final_event,
             initial_ui_ms=initial_ui_ms,
         )
+    except queue.Full:
+        logger.warning(
+            "[SERVER] Shot enrichment queue is full (%d waiting); "
+            "skipping optional hardware for shot #%d",
+            _SHOT_ENRICHMENT_QUEUE_CAPACITY,
+            shot.shot_number,
+        )
+        _queue_shot_finalization(
+            shot,
+            emit_event=final_event,
+            initial_ui_ms=initial_ui_ms,
+        )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning(
             "[SERVER] Could not defer shot enrichment: %s",
             error,
             exc_info=True,
         )
-        _finalize_shot_detected(
+        _queue_shot_finalization(
             shot,
             emit_event=final_event,
             initial_ui_ms=initial_ui_ms,
@@ -4713,13 +4832,13 @@ def main():
         "--camera-capture-exposure-us",
         type=int,
         default=1000,
-        help="Manual exposure fallback; the Camera tab can switch out of automatic mode.",
+        help="Exposure seed used by the one-time startup calibration.",
     )
     parser.add_argument(
         "--camera-capture-gain",
         type=float,
         default=4.0,
-        help="Manual gain fallback; the Camera tab can switch out of automatic mode.",
+        help="Analogue-gain seed used by the one-time startup calibration.",
     )
     parser.add_argument(
         "--camera-capture-mount-height-m",

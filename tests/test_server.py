@@ -2733,10 +2733,15 @@ class TestKLD7PostShotCaptureDelay:
 class TestOnShotDetected:
     """Tests for live shot processing in the server."""
 
+    @pytest.fixture(autouse=True)
+    def _reset_ordered_pipeline(self):
+        server_module._reset_shot_sequence()
+
     class RecordingSessionLog:
         def __init__(self):
             self.stats = {"shots_detected": 0}
             self.shots = []
+            self.rolling_buffer_captures = []
             self.iwr6843_captures = []
             self.camera_captures = []
             self.all_shots_logged = threading.Event()
@@ -2750,6 +2755,9 @@ class TestOnShotDetected:
 
         def log_iwr6843_capture(self, **capture_data):
             self.iwr6843_captures.append(capture_data)
+
+        def log_rolling_buffer_capture(self, **capture_data):
+            self.rolling_buffer_captures.append(capture_data)
 
         def log_camera_capture(self, **capture_data):
             self.camera_captures.append(capture_data)
@@ -3013,7 +3021,46 @@ class TestOnShotDetected:
         assert [event for event, _payload in emitted] == ["shot", "shot_update"]
         self._assert_finalized_once(emitted, session_log)
 
-    def test_queue_backpressure_preserves_shot_order_and_hardware_identity(self, monkeypatch):
+    def test_ordered_finalizer_failure_does_not_strand_later_shot(self, monkeypatch):
+        attempts = []
+        logged_errors = []
+        shots = [self._shot(0), self._shot(1)]
+        for shot_number, shot in enumerate(shots, start=1):
+            shot.shot_number = shot_number
+            server_module._register_shot_for_finalization(shot)
+
+        def finalize(shot, **_kwargs):
+            attempts.append(shot.shot_number)
+            if shot.shot_number == 1:
+                raise RuntimeError("final publish failed")
+
+        monkeypatch.setattr(server_module, "_finalize_shot_detected", finalize)
+        monkeypatch.setattr(
+            server_module,
+            "log_session_error",
+            lambda *args, **kwargs: logged_errors.append((args, kwargs)),
+        )
+
+        server_module._queue_shot_finalization(
+            shots[1],
+            emit_event="shot_update",
+            initial_ui_ms=10.0,
+        )
+        assert attempts == []
+
+        server_module._queue_shot_finalization(
+            shots[0],
+            emit_event="shot_update",
+            initial_ui_ms=10.0,
+        )
+
+        assert attempts == [1, 2]
+        assert len(logged_errors) == 1
+        assert not server_module._shot_finalization_order
+        assert not server_module._shot_finalization_ready
+        assert server_module._shot_finalization_running is False
+
+    def test_queue_overflow_preserves_shot_order_and_hardware_identity(self, monkeypatch):
         emitted, session_log = self._record_finalization(monkeypatch)
         dump_started = threading.Event()
         release_dump = threading.Event()
@@ -3071,6 +3118,12 @@ class TestOnShotDetected:
         )
 
         shots = [self._shot(second) for second in range(4)]
+        for shot_number, shot in enumerate(shots, start=1):
+            shot.shot_number = shot_number
+            session_log.log_rolling_buffer_capture(
+                shot_number=shot_number,
+                shot_timestamp=shot.impact_timestamp,
+            )
         on_shot_detected(shots[0])
         assert dump_started.wait(2.0)
 
@@ -3086,8 +3139,10 @@ class TestOnShotDetected:
         overflow_callback.start()
         assert all_initial_shots_emitted.wait(2.0)
         try:
-            overflow_callback.join(timeout=0.25)
-            assert overflow_callback.is_alive(), "queue overflow must apply FIFO backpressure"
+            overflow_callback.join(timeout=1.0)
+            assert not overflow_callback.is_alive(), (
+                "OPS callback must not wait for optional hardware"
+            )
             assert not session_log.shots
         finally:
             release_dump.set()
@@ -3107,13 +3162,21 @@ class TestOnShotDetected:
             (row["shot_number"], row["impact_timestamp"]) for row in session_log.shots
         ] == expected
         assert [
-            (row["shot_number"], row["shot_timestamp"]) for row in session_log.iwr6843_captures
+            (row["shot_number"], row["shot_timestamp"])
+            for row in session_log.rolling_buffer_captures
         ] == expected
+        expected_enriched = expected[:3]
+        assert [
+            (row["shot_number"], row["shot_timestamp"]) for row in session_log.iwr6843_captures
+        ] == expected_enriched
         assert [
             (row["shot_number"], row["shot_timestamp"]) for row in session_log.camera_captures
-        ] == expected
+        ] == expected_enriched
         assert [(row["shot_number"], row["impact_timestamp"]) for row in final_shots] == expected
         assert simulator_shots == expected
+        assert not server_module._shot_finalization_order
+        assert not server_module._shot_finalization_ready
+        assert server_module._shot_finalization_running is False
 
     def test_kld7_uses_shot_impact_timestamp(self, monkeypatch):
         """K-LD7 selection should be anchored to the OPS243 impact timestamp."""
