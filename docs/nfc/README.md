@@ -471,6 +471,24 @@ OpenFlight reached an I2C device at that address, but its identity byte was not
 the PN532's. Check for another device using `0x24` and verify the breakout
 model with `i2cdetect -y 1`.
 
+### `OSError: [Errno 121] Remote I/O error`
+
+`i2cdetect` still shows `24`, but the first status poll after a command raises
+`[Errno 121] Remote I/O error`. That is the PN532 NACKing I2C reads while it
+is busy — its normal "not ready" signal — not a missing chip. Current OpenFlight
+retries those NACKs until the command timeout.
+
+If you still see a traceback after updating, the Pi's hardware I2C controller
+is likely aborting clock-stretch instead of waiting. Slow the bus and reboot:
+
+```bash
+# Raspberry Pi OS Bookworm: /boot/firmware/config.txt
+# Older images: /boot/config.txt
+dtparam=i2c_arm=on,i2c_arm_baudrate=10000
+```
+
+Then re-run `uv run python scripts/hardware-test/read_pn532.py`.
+
 ### `PN532 did not acknowledge the command`
 
 The reader is addressable but not answering. This is almost always mode

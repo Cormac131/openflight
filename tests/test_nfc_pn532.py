@@ -73,15 +73,20 @@ class FakeTransport:
     whatever length the driver asks for.
     """
 
-    def __init__(self, reads):
+    def __init__(self, reads, *, nack_polls: int = 0):
         self.reads = list(reads)
         self.writes = []
         self.closed = False
+        # Real silicon NACKs I2C reads until a frame is waiting (Linux errno 121).
+        self.nack_polls = nack_polls
 
     def write(self, data):
         self.writes.append(bytes(data))
 
     def read(self, length):
+        if length == 1 and self.nack_polls:
+            self.nack_polls -= 1
+            raise OSError(121, "Remote I/O error")
         if not self.reads:
             raise AssertionError("PN532 driver read past the end of the script")
         chunk = self.reads[0]
@@ -206,6 +211,28 @@ class TestReaderLifecycle:
 
         with pytest.raises(PN532FrameError, match="Expected ACK"):
             reader.open()
+
+    def test_open_retries_when_the_pn532_nacks_until_ready(self):
+        # The PN532 NACKs I2C status polls while it is busy. That is "not ready",
+        # not a dead bus: i2cdetect still shows 0x24, and the next poll succeeds.
+        transport = FakeTransport(
+            [ACK_READ, FIRMWARE_RESPONSE, ACK_READ, RF_CONFIG_RESPONSE, ACK_READ, SAM_RESPONSE],
+            nack_polls=3,
+        )
+        reader = PN532I2C(transport=transport)
+
+        reader.open()
+
+        assert reader.firmware_version == "1.6"
+        assert transport.nack_polls == 0
+
+    def test_a_reader_that_never_becomes_ready_times_out(self):
+        transport = FakeTransport([], nack_polls=10**9)
+        reader = PN532I2C(transport=transport, ack_timeout_s=0.05)
+
+        with pytest.raises(NfcReaderError, match="did not acknowledge"):
+            reader.open()
+        assert transport.closed is True
 
     def test_reading_before_open_is_an_error(self):
         with pytest.raises(NfcReaderError, match="not open"):

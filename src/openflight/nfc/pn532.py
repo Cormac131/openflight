@@ -390,8 +390,18 @@ class PN532I2C:
             time.sleep(0.005)
 
     def _ready(self) -> bool:
-        """True once the PN532 has a frame waiting."""
-        return bool(self._require_transport().read(1)[0] & I2C_READY)
+        """True once the PN532 has a frame waiting.
+
+        The PN532 NACKs I2C reads while it is busy (Linux errno 121). That is
+        the normal "not ready yet" signal — the chip is on the bus, it just
+        has nothing to hand back — so treat it as False and let the caller
+        retry until its timeout.
+        """
+        try:
+            status = self._require_transport().read(1)
+        except OSError:
+            return False
+        return bool(status) and bool(status[0] & I2C_READY)
 
     def _require_transport(self) -> I2CTransport:
         if self._transport is None or not self._opened:
