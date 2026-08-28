@@ -1,5 +1,7 @@
 """Tests for the PN532 I2C driver and its frame codec."""
 
+import errno
+
 import pytest
 
 from openflight.nfc import ndef
@@ -14,6 +16,8 @@ from openflight.nfc.pn532 import (
     SPI_STATREAD,
     SpiTransport,
     build_frame,
+    disable_kernel_chip_select,
+    parse_frame,
     parse_frame,
     parse_passive_target,
     parse_passive_target_uid,
@@ -495,6 +499,31 @@ class _FakeIrq:
 
 
 class TestSpiTransport:
+    def test_kernel_cs_disable_ignores_einval(self):
+        class _Spi:
+            @property
+            def no_cs(self):
+                return False
+
+            @no_cs.setter
+            def no_cs(self, _value):
+                raise OSError(errno.EINVAL, "Invalid argument")
+
+        disable_kernel_chip_select(_Spi())
+
+    def test_kernel_cs_disable_reraises_other_oserrors(self):
+        class _Spi:
+            @property
+            def no_cs(self):
+                return False
+
+            @no_cs.setter
+            def no_cs(self, _value):
+                raise OSError(errno.EIO, "I/O error")
+
+        with pytest.raises(OSError) as raised:
+            disable_kernel_chip_select(_Spi())
+        assert raised.value.errno == errno.EIO
     def test_reverse_byte_swaps_lsb_and_msb(self):
         assert reverse_byte(0x01) == 0x80
         assert reverse_byte(0x80) == 0x01
@@ -536,6 +565,16 @@ class TestSpiTransport:
 
         assert transport.read(1) == bytes([0x01])
         assert spi.xfers == []
+
+    def test_probe_status_returns_decoded_and_raw_bytes(self):
+        spi = _FakeSpi(replies=[[0, reverse_byte(0x01)]])
+        transport = SpiTransport(spi=spi, irq=_FakeIrq(active=False))
+
+        status, raw = transport.probe_status()
+
+        assert status == 0x01
+        assert raw[1] == reverse_byte(0x01)
+        assert spi.xfers[0][0] == reverse_byte(SPI_STATREAD)
 
     def test_ready_falls_back_to_statread_when_irq_is_idle(self):
         spi = _FakeSpi(replies=[[0, reverse_byte(0x01)]])

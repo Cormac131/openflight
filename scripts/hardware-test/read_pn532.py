@@ -13,6 +13,41 @@ from openflight.nfc import (
     ClubTagRegistry,
     format_uid,
 )
+from openflight.nfc.pn532 import SpiTransport
+
+
+def _probe_spi(args: argparse.Namespace) -> None:
+    """Print STATREAD so a silent SPI link is visible without a firmware ACK."""
+    transport = SpiTransport(
+        bus_number=args.spi_bus,
+        device=args.spi_device,
+        irq_gpio=args.irq_gpio,
+    )
+    try:
+        transport.wakeup()
+        irq = getattr(transport._irq, "is_active", None)
+        print(
+            f"SPI-{args.spi_bus}.{args.spi_device}  "
+            f"NSS GPIO{transport.cs_gpio}  IRQ GPIO{args.irq_gpio} "
+            f"irq_active={irq}"
+        )
+        print("STATREAD  decoded  raw     hint")
+        for _ in range(8):
+            status, raw = transport.probe_status()
+            if status == 0x01:
+                hint = "chip answered"
+            elif status == 0x00:
+                hint = "silent (swap MOSI/MISO or check NSS/SCK)"
+            elif status == 0xFF:
+                hint = "MISO floating or stuck high"
+            else:
+                hint = "unexpected"
+            shown = "??" if status is None else f"{status:02x}"
+            print(f"          0x{shown}      {raw.hex()}  {hint}")
+            time.sleep(0.05)
+        print("Need 0x01. 0x00/0xff means SPI is not talking to the PN532.")
+    finally:
+        transport.close()
 
 
 def main() -> None:
@@ -49,6 +84,11 @@ def main() -> None:
         default=DEFAULT_I2C_ADDRESS,
         help=f"PN532 I2C address if --interface i2c (default: 0x{DEFAULT_I2C_ADDRESS:02x})",
     )
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="Dump SPI STATREAD bytes without waiting for a firmware ACK",
+    )
     parser.add_argument("--interval", type=float, default=0.2, help="Seconds between polls")
     parser.add_argument("--count", type=int, default=0, help="Tags to print; 0 runs forever")
     parser.add_argument(
@@ -63,6 +103,12 @@ def main() -> None:
         help="Learn the next tag presented as CLUB (e.g. 7-iron) and exit",
     )
     args = parser.parse_args()
+
+    if args.probe:
+        if args.interface != "spi":
+            parser.error("--probe is SPI-only; for I2C use: sudo i2cdetect -y 1")
+        _probe_spi(args)
+        return
 
     registry = ClubTagRegistry(args.tags_file)
     reader = PN532I2C(

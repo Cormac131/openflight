@@ -135,6 +135,18 @@ def reverse_byte(value: int) -> int:
     return result
 
 
+def disable_kernel_chip_select(spi) -> None:
+    """Ask the kernel not to pulse CE. Pi spidev often rejects SPI_NO_CS."""
+    try:
+        spi.no_cs = True
+    except OSError as error:
+        if error.errno != errno.EINVAL:
+            raise
+        logger.debug("[NFC] SPI_NO_CS unsupported; driving NSS as GPIO")
+    except AttributeError:
+        pass
+
+
 class SpiTransport:
     """I2CTransport-shaped SPI adapter for the PN532.
 
@@ -172,8 +184,7 @@ class SpiTransport:
             self._spi.open(bus_number, device)
             self._spi.max_speed_hz = SPI_CLOCK_HZ
             self._spi.mode = 0
-            # Elechouse toggles SS as a GPIO. Leave CE0 to us.
-            self._spi.no_cs = True
+            disable_kernel_chip_select(self._spi)
         else:
             self._spi = spi
         if self._owns_cs or self._owns_irq:
@@ -252,6 +263,23 @@ class SpiTransport:
     def _deselect(self) -> None:
         if self._cs is not None:
             self._cs.off()
+
+    def probe_status(self) -> tuple[Optional[int], bytes]:
+        """One STATREAD. Returns (decoded status byte, raw wire bytes).
+
+        ``0x01`` means the chip answered. ``0x00`` / ``0xff`` means MISO is
+        silent or MOSI/MISO are swapped — this is the SPI equivalent of i2cdetect.
+        """
+        self._select()
+        try:
+            outgoing = [reverse_byte(SPI_STATREAD), reverse_byte(0x00)]
+            raw = bytes(self._spi.xfer2(outgoing))
+        finally:
+            self._deselect()
+        decoded = bytes(reverse_byte(byte) for byte in raw)
+        status = decoded[1] if len(decoded) > 1 else None
+        self._last_spi_status = status
+        return status, raw
 
     def _irq_ready(self) -> bool:
         if self._irq is not None and bool(self._irq.is_active):
