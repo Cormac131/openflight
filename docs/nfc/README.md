@@ -406,14 +406,14 @@ for the inclinometer) and reboot. Then `ls -l /dev/spidev0.0`.
 
 ### `PN532 did not acknowledge the command`
 
-The SPI write happened, but IRQ never went active. Almost always mode
-selection: the board is still in UART or I2C. Match the **SPI** row printed
-on the board, then power-cycle — the chip latches the interface at power-up.
-On a clone whose table is ambiguous, try all four switch pairs, power-cycling
-between them.
+The SPI write happened, but the chip never reported ready. Match the **SPI**
+row printed on the board, then power-cycle. On a clone whose table is
+ambiguous, try all four switch pairs, power-cycling between them.
 
-Also confirm `IRQ` is on physical pin 15 (GPIO22), not `RSTO`. `RSTO` is an
-output; leave it unconnected.
+Also confirm `NSS` is on physical pin 24 (CE0), MOSI/MISO/SCK are not
+swapped, and `IRQ` is on physical pin 15 (GPIO22) not `RSTO`. The driver
+polls SPI status as well as IRQ, so a missing IRQ wire should not block ACK
+if the SPI header is correct.
 
 ### Permission Denied On `/dev/spidev0.0`
 

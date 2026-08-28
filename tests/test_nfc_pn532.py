@@ -11,6 +11,7 @@ from openflight.nfc.pn532 import (
     PN532FrameError,
     SPI_DATAREAD,
     SPI_DATAWRITE,
+    SPI_STATREAD,
     SpiTransport,
     build_frame,
     parse_frame,
@@ -239,9 +240,16 @@ class TestReaderLifecycle:
         transport = FakeTransport([], nack_polls=10**9)
         reader = PN532I2C(transport=transport, ack_timeout_s=0.05)
 
-        with pytest.raises(NfcReaderError, match="did not acknowledge"):
+        with pytest.raises(NfcReaderError, match="SPI row"):
             reader.open()
         assert transport.closed is True
+
+    def test_i2c_ack_timeout_mentions_the_i2c_row(self):
+        transport = FakeTransport([], nack_polls=10**9)
+        reader = PN532I2C(transport=transport, interface="i2c", ack_timeout_s=0.05)
+
+        with pytest.raises(NfcReaderError, match="I2C row"):
+            reader.open()
 
     def test_a_status_poll_timeout_is_not_swallowed_as_a_nack(self):
         # Errno 110 is the Pi aborting clock-stretch, not the PN532 saying
@@ -448,11 +456,16 @@ class TestTagTypeDetection:
 
 
 class _FakeSpi:
-    def __init__(self):
+    def __init__(self, replies=None):
         self.xfers = []
+        self._replies = list(replies or [])
 
     def xfer2(self, data):
         self.xfers.append(list(data))
+        if self._replies:
+            reply = self._replies.pop(0)
+            padded = list(reply) + [0] * max(0, len(data) - len(reply))
+            return padded[: len(data)]
         return [0] * len(data)
 
     def close(self):
@@ -485,11 +498,22 @@ class TestSpiTransport:
         assert [reverse_byte(byte) for byte in spi.xfers[0][1:]] == [HOST_TO_PN532, 0x02]
 
     def test_a_one_byte_read_is_the_irq_ready_bit(self):
-        transport = SpiTransport(spi=_FakeSpi(), irq=_FakeIrq(active=True))
+        spi = _FakeSpi()
+        transport = SpiTransport(spi=spi, irq=_FakeIrq(active=True))
 
         assert transport.read(1) == bytes([0x01])
+        assert spi.xfers == []
 
+    def test_ready_falls_back_to_statread_when_irq_is_idle(self):
+        spi = _FakeSpi(replies=[[0, reverse_byte(0x01)]])
+        transport = SpiTransport(spi=spi, irq=_FakeIrq(active=False))
+
+        assert transport.read(1) == bytes([0x01])
+        assert spi.xfers[0][0] == reverse_byte(SPI_STATREAD)
+
+    def test_idle_irq_and_busy_status_is_not_ready(self):
         transport = SpiTransport(spi=_FakeSpi(), irq=_FakeIrq(active=False))
+
         assert transport.read(1) == bytes([0x00])
 
     def test_a_frame_read_uses_dataread_and_prepends_status(self):

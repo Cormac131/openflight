@@ -139,7 +139,8 @@ class SpiTransport:
     SPI uses a leading opcode (write / status / read) and LSB-first bytes.
     The reader still sees I2C-style transactions: ``read(1)`` is the ready
     bit, longer reads start with a dummy status byte so ``[1:]`` is the frame.
-    Ready comes from the IRQ pin (active low) instead of stretching SCL.
+    Ready is IRQ (active low) when that pin is asserted; otherwise the driver
+    polls SPI ``STATREAD``. Adafruit's SPI driver does not use IRQ at all.
     """
 
     def __init__(
@@ -209,8 +210,8 @@ class SpiTransport:
             self._spi.close()
 
     def _irq_ready(self) -> bool:
-        if self._irq is not None:
-            return bool(self._irq.is_active)
+        if self._irq is not None and bool(self._irq.is_active):
+            return True
         status = self._xfer(bytes([SPI_STATREAD, 0x00]))
         return len(status) > 1 and status[1] == I2C_READY
 
@@ -530,6 +531,14 @@ class PN532I2C:
                     raise PN532FrameError(f"Expected ACK, got {frame.hex()}")
                 return
             if time.monotonic() >= deadline:
+                if self.interface == "spi":
+                    raise NfcReaderError(
+                        "PN532 did not acknowledge the command. "
+                        "Match the DIP switches to the SPI row printed on the "
+                        "board, confirm IRQ is on physical pin 15 (GPIO22) not "
+                        "RSTO, then power-cycle — the chip latches mode at "
+                        "power-up."
+                    )
                 raise NfcReaderError(
                     "PN532 did not acknowledge the command. "
                     "Check the DIP switches against the I2C row printed on the "
