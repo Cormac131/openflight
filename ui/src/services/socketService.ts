@@ -6,7 +6,6 @@ import { useDebugStore } from '../stores/useDebugStore';
 import { useNfcStore } from '../stores/useNfcStore';
 import {
   type Shot,
-  type SessionStats,
   type SessionState,
   type TriggerDiagnostic,
   type TriggerDiagnosticUpdate,
@@ -16,7 +15,7 @@ import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } 
 import type { PowerStatus } from '../types/power';
 import type { ClubTagWrite, ClubTagsPayload, NfcScan } from '../types/nfc';
 import { getServerOrigin } from '../utils/serverOrigin';
-import { handleShotMessage } from './handleShotMessage';
+import { handleShotMessage, handleShotUpdate, type ShotMessage, type ShotUpdateMessage } from './handleShotMessage';
 import { ingestSocketPlayerName } from './playerSocketSync';
 import { ingestSessionClub } from './sessionClubSync';
 import { remainingShotsAfterClear } from './sessionClear';
@@ -72,8 +71,12 @@ class SocketService {
       }
     });
 
-    this.socket.on('shot', (data: { shot: Shot; stats: SessionStats }) => {
+    this.socket.on('shot', (data: ShotMessage) => {
       handleShotMessage(data);
+    });
+
+    this.socket.on('shot_update', (data: ShotUpdateMessage) => {
+      handleShotUpdate(data);
     });
 
     // Swing-speed mode also emits a normal `shot` event, handled above, so the

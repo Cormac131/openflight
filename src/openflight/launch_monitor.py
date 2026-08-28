@@ -205,6 +205,7 @@ class Shot:
         club_speed_mph: Peak club head speed detected (mph), if available
         smash_factor: Ratio of ball speed to club speed (typically 1.4-1.5 for driver)
         timestamp: When the shot was detected
+        shot_number: Stable session sequence assigned when the server receives the shot
         impact_timestamp: Epoch timestamp aligned to impact/OPS trigger time
         impact_timestamp_kld7: Ball-contact instant used by the K-LD7
             geometry launch-angle estimator. This currently mirrors the
@@ -242,10 +243,12 @@ class Shot:
         carry_spin_adjusted: Carry distance adjusted for spin (yards)
         mode: Shot source — "streaming", "rolling-buffer", or "mock"
         readings_data: Serialized readings for session logging
+        camera_replay: Public replay metadata for a matched high-speed capture
     """
 
     ball_speed_mph: float
     timestamp: datetime
+    shot_number: Optional[int] = None
     impact_timestamp: Optional[float] = None
     impact_timestamp_kld7: Optional[float] = None
     club_speed_mph: Optional[float] = None
@@ -288,6 +291,7 @@ class Shot:
     mode: str = "rolling-buffer"
     player_name: str = "Player 1"
     readings_data: Optional[list] = None
+    camera_replay: Optional[dict] = None
     angle_source: Optional[str] = None  # "radar", "camera", "estimated", or None
     club_angle_deg: Optional[float] = None  # Club angle of attack from K-LD7 (vertical)
     club_path_deg: Optional[float] = None  # Club path: IWR6843, or K-LD7 (deprecated, horizontal)

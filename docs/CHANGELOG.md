@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Attack angle no longer inflated by 1/cos(club path).** The camera club
+  delivery divided vertical speed by the forward component alone instead of the
+  full horizontal speed, overstating attack angle on any shot with club path.
+
 ### Added
 - **NFC club tags.** An optional PN532 reader selects the club when a tagged
   club is tapped against it. Tags carry nothing but their factory UID: the first
@@ -23,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   host link is SPI on `/dev/spidev0.0` (CE0, GPIO8) with IRQ on GPIO22
   (physical pin 15); I2C is a fallback only because it shares the
   inclinometer bus. See [PN532 NFC Club Tags](nfc/README.md).
+- **Automatic OV9281 exposure control.** High-speed camera capture now measures
+  the impact area every five seconds, restores the last known-good setting at
+  startup, and selects a shutter/gain combination that preserves club contrast
+  without excessive clipping or motion blur. Large lighting changes re-enter
+  fast convergence while smaller changes require confirmation. Camera-derived
+  shot analysis is withheld when lighting is unsuitable, but radar processing
+  and shot display continue normally with an operator-facing lighting warning.
 - **Instrument-panel kiosk UI.** The dashboard is a tabbed shell (Live, Stats,
   Shots, Camera, Players, Debug) instead of the previous stacked shot and stats
   views. Tap a Live metric to pin it top-left while keeping all ten metrics
@@ -40,6 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallbacks for horizontal launch, club path, and angle of attack. The Camera
   tab adds live alignment, crop, orientation, and lighting controls while the
   rolling buffer remains armed. See [OV9281 Camera](camera/README.md).
+- **On-demand camera shot replay.** Camera-backed shots can open a 60 FPS
+  slow-motion impact player from Live or Shots, with touch controls, scrubbing,
+  and a trigger-frame impact marker. MP4 conversion starts only after a manual
+  Replay selection, caches the result beside the raw capture, and reports
+  retryable preparation or playback failures without affecting shot results.
 - **Battery and external-power status for Raspberry Pi UPS boards.** OpenFlight
   can now display charging state and battery percentage, issue dismissible 20%
   and 10% warnings while discharging, and record throttled power telemetry in
