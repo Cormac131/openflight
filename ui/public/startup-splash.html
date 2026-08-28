@@ -229,6 +229,78 @@
           grid-template-columns: 1fr;
         }
       }
+
+      @media (max-height: 430px) {
+        main {
+          padding-block: 10px;
+        }
+
+        .logo {
+          width: min(40vw, 210px);
+          margin-bottom: 4px;
+        }
+
+        h1 {
+          font-size: clamp(24px, 4vw, 30px);
+        }
+
+        .message {
+          margin-top: 4px;
+        }
+
+        .components {
+          margin-top: 10px;
+        }
+
+        .elapsed {
+          margin-top: 8px;
+        }
+
+        body.failed main {
+          padding-block: 4px;
+        }
+
+        body.failed .logo {
+          width: min(32vw, 160px);
+          margin-bottom: 0;
+        }
+
+        body.failed h1 {
+          font-size: clamp(22px, 3.5vw, 28px);
+        }
+
+        body.failed .message {
+          margin-top: 2px;
+          font-size: 14px;
+        }
+
+        body.failed .components {
+          gap: 4px;
+          margin-top: 8px;
+        }
+
+        body.failed .component {
+          padding-block: 5px;
+        }
+
+        body.failed .error-details {
+          margin-top: 6px;
+          padding: 8px 12px;
+        }
+
+        body.failed .recovery {
+          font-size: 14px;
+        }
+
+        body.failed .log-location {
+          margin-top: 4px;
+          font-size: 11px;
+        }
+
+        body.failed .dismiss {
+          margin-top: 8px;
+        }
+      }
     </style>
   </head>
   <body>
