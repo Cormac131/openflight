@@ -4,6 +4,10 @@ The PN532 is the reader in the club-tag setup. The supported host link on the
 OpenFlight Pi is SPI with the IRQ pin — I2C clock-stretching on the shared
 inclinometer/battery bus can wedge those devices. I2C remains as a fallback
 when a transport is injected or ``interface='i2c'`` is set.
+
+This driver only inventories ISO14443A (Type 2 / MIFARE Classic). ICODE SLIX
+and other ISO15693 tags are out of scope: the PN532 RF frontend does not do
+Type 5.
 """
 
 from __future__ import annotations

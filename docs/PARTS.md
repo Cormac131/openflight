@@ -109,10 +109,14 @@ the selected club when the club is tapped against the reader.
 | Part | Description | Link | ~Price |
 |------|-------------|------|--------|
 | **PN532 reader** | NFC/RFID reader; set the DIP switches to SPI, wire SPI + IRQ, and power it from 3.3 V | [Adafruit product 364](https://www.adafruit.com/product/364), or any generic "PN532 V3 Kit" module | $8–$40 |
-| **NTAG213/215 stickers** | 25 mm adhesive tags, one per club; use on-metal tags for metal grip caps | Any NFC tag supplier | ~$10 / 20 |
+| **NTAG213/215 stickers** | 25 mm adhesive tags, one per club; use on-metal tags for metal grip caps. Do not rely on Shot Scope ICODE SLIX tags — the PN532 cannot read them | Any NFC tag supplier | ~$10 / 20 |
 
 > The **ST25DV16K is a tag, not a reader** — it cannot read the tags on your
 > clubs. A reader IC such as the PN532 is required.
+>
+> Shot Scope grip tags that are NXP ICODE SLIX are ISO15693. Keep the PN532
+> and add an NTAG sticker; a PN5180 would be needed to read the Shot Scope
+> tags themselves.
 
 See the **[PN532 NFC Club Tag Guide](nfc/README.md)** for wiring, mounting,
 learning tags, startup flags, and troubleshooting.

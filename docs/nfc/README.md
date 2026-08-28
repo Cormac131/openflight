@@ -23,13 +23,20 @@ The hardware this integration targets is:
 | Part | Product |
 |------|---------|
 | NFC reader breakout | [Adafruit PN532 NFC/RFID Controller Breakout, product 364](https://www.adafruit.com/product/364), or any generic **PN532 V3 module** (the red Elechouse-style board sold as "PN532 NFC RFID V3 Kit") |
-| Club tags | NTAG213 / NTAG215 or MIFARE Classic stickers, 25 mm round, one per club |
+| Club tags | NTAG213 / NTAG215 or MIFARE Classic stickers, 25 mm round, one per club. Not Shot Scope ICODE SLIX tags (see below). |
 | Solderless cable kit | Female-Dupont jumpers for SPI (NSS, MOSI, MISO, SCK, IRQ, 3.3 V, GND) |
 | Mounting | Thin double-sided mounting tape or nonconductive standoffs |
 
 Any ISO14443A tag works: only the factory-programmed UID is read, never the
 NDEF contents. Buy tags with an adhesive back sized to fit a grip cap or the
 butt end of the shaft.
+
+The PN532 is the supported reader. Firmware open and ISO14443A UIDs are
+working on SPI; keep using that. Stick an NTAG on the grip even if the club
+already has a Shot Scope tag. Shot Scope black RFID tags are NXP ICODE SLIX
+(ISO15693 / NFC Type 5). The PN532 cannot inventory those, so a tap of a Shot
+Scope tag will do nothing. Leave the Shot Scope tag for the watch; OpenFlight
+uses the NTAG.
 
 Do not buy a bare PN532 chip. Use a breakout with the regulator and antenna
 already installed.
@@ -482,6 +489,8 @@ previous file could not be parsed.
 - Confirm `--nfc` was actually passed; without it the reader is never opened.
 - Run `read_pn532.py` to separate a reader problem from a kiosk problem.
 - Check the log for repeated `[NFC] Read failed` lines, which point at wiring.
+- A Shot Scope ICODE SLIX tag will never appear. Confirm with the kit card or
+  an NTAG sticker first.
 
 ## Current Limitations
 
@@ -491,8 +500,10 @@ previous file could not be parsed.
   them would need key authentication and block writes.
 - A tag holding non-club data is never overwritten by the rig; erase it with a
   phone first.
-- Only ISO14443A tags are read at all. ISO15693 (NFC Type 5, including ST25DV)
-  tags are not, since the PN532's Type 5 support is not implemented here.
+- Only ISO14443A tags are read. ISO15693 / NFC Type 5 — including NXP ICODE
+  SLIX, SLIX2, ST25DV, and Shot Scope watch RFID tags — is a hardware limit of
+  the PN532, not a missing poll in this driver. A later reader (PN5180 class)
+  would be required to use those tags instead of NTAG stickers.
 - SPI bus, CE, IRQ GPIO, and tag file are command-line settings rather than a
   persisted rig configuration file.
 - The reader selects clubs only; it does not switch players or start sessions.
