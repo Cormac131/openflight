@@ -197,6 +197,23 @@ The wizard also installs the required FTDI low-latency rule. See
 [Legacy K-LD7 Setup](kld7.md) for mounting and startup, and
 [K-LD7 Troubleshooting](kld7-troubleshooting.md) for serial failures.
 
+### Desktop Launcher And Startup Splash
+
+OpenFlight can display component progress immediately after a desktop launch
+without opening a terminal window. Install or refresh the user-local wrapper
+and desktop entry with:
+
+```bash
+cd ~/openflight
+scripts/setup/install_desktop_launcher.sh
+```
+
+The installer uses checkout-specific launcher and desktop filenames, preserving
+multiple OpenFlight installations on the same Pi. Machine-specific device paths
+and calibration remain outside Git. See the
+[Startup Splash Screen](splash-screen.md) guide for configuration, screenshots,
+error recovery, updating existing launchers, and rollback.
+
 ### Auto-Start on Boot
 
 The setup script installs and enables a systemd service configured for your
