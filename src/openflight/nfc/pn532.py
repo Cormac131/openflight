@@ -222,8 +222,8 @@ class SpiTransport:
             time.sleep(CS_WAKE_S)
             self._deselect()
             return
-        dummy_bytes = max(1, int(SPI_CLOCK_HZ * CS_WAKE_S / 8))
-        self._xfer(bytes(dummy_bytes))
+        self._xfer(b"\x00")
+        time.sleep(CS_WAKE_S)
 
     def write(self, data: bytes) -> None:
         """Send one command frame with the SPI data-write opcode."""
@@ -431,9 +431,11 @@ class PN532I2C:
             wakeup = getattr(self._transport, "wakeup", None)
             if wakeup is not None:
                 wakeup()
-            # The PN532 needs a beat after the bus opens before it will ACK a
-            # command. Injected transports (tests, mock) are already awake.
-            time.sleep(0.1)
+            # I2C needs a beat after the bus opens. SPI must send GetFirmware
+            # while still awake — a 100ms gap after dummy clocks lets the chip
+            # sleep, and STATREAD then stays 0x00 (probe writes immediately).
+            if self.interface != "spi":
+                time.sleep(0.1)
         self._opened = True
         try:
             self.firmware_version = self._read_firmware_version()
@@ -586,9 +588,12 @@ class PN532I2C:
         """Send one command and return its response payload (command echo stripped)."""
         transport = self._require_transport()
         transport.write(build_frame(bytes([HOST_TO_PN532]) + command))
-        # The chip stretches SCL while it parses the frame. Give it a moment
-        # before the first status poll so the Pi is not sampling a stretch.
-        time.sleep(0.002)
+        # Hardware SPI: first STATREAD is 0x00; READY arrives ~50ms later.
+        # Injected test transports have no STATREAD; keep the I2C-length beat.
+        if self.interface == "spi" and hasattr(transport, "probe_status"):
+            time.sleep(0.05)
+        else:
+            time.sleep(0.002)
         self._await_ack()
 
         deadline = time.monotonic() + timeout_s
@@ -636,7 +641,7 @@ class PN532I2C:
                     "Check the DIP switches against the I2C row printed on the "
                     "board, then power-cycle — the chip latches mode at power-up."
                 )
-            time.sleep(0.005)
+            time.sleep(0.01 if self.interface == "spi" else 0.005)
 
     def _ready(self) -> bool:
         """True once the PN532 has a frame waiting.

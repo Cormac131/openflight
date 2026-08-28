@@ -538,7 +538,7 @@ class TestSpiTransport:
         transport.wakeup()
 
         assert len(spi.xfers) == 1
-        assert len(spi.xfers[0]) >= 1
+        assert len(spi.xfers[0]) == 1
 
     def test_injected_spi_does_not_claim_ce0(self):
         transport = SpiTransport(spi=_FakeSpi(), irq=_FakeIrq(active=True))
