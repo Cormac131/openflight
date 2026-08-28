@@ -13,7 +13,12 @@ from openflight.nfc import (
     ClubTagRegistry,
     format_uid,
 )
-from openflight.nfc.pn532 import SpiTransport
+from openflight.nfc.pn532 import (
+    COMMAND_GET_FIRMWARE_VERSION,
+    HOST_TO_PN532,
+    SpiTransport,
+    build_frame,
+)
 
 
 def _probe_spi(args: argparse.Namespace) -> None:
@@ -35,21 +40,23 @@ def _probe_spi(args: argparse.Namespace) -> None:
             f"SPI-{args.spi_bus}.{args.spi_device}  {nss}  "
             f"IRQ GPIO{args.irq_gpio} irq_active={irq}"
         )
+        transport.write(build_frame(bytes([HOST_TO_PN532, COMMAND_GET_FIRMWARE_VERSION])))
+        print("Sent GetFirmwareVersion, polling STATREAD...")
         print("STATREAD  decoded  raw     hint")
         for _ in range(8):
             status, raw = transport.probe_status()
             if status == 0x01:
-                hint = "chip answered"
+                hint = "READY — chip answered"
             elif status == 0x00:
-                hint = "silent (swap MOSI/MISO or check NSS/SCK)"
+                hint = "not ready (NSS/SCK/DIP) or still busy"
             elif status == 0xFF:
-                hint = "MISO floating or stuck high"
+                hint = "MISO floating — check pin 21"
             else:
                 hint = "unexpected"
             shown = "??" if status is None else f"{status:02x}"
             print(f"          0x{shown}      {raw.hex()}  {hint}")
             time.sleep(0.05)
-        print("Need 0x01. 0x00/0xff means SPI is not talking to the PN532.")
+        print("Need 0x01 after the command. Idle 0x00 before a command is normal.")
     finally:
         transport.close()
 
