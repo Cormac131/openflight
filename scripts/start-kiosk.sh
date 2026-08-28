@@ -133,6 +133,12 @@ BOOT_CONFIG_PATHS=(
     /boot/openflight.conf            # Bullseye and earlier
     /etc/openflight/openflight.conf  # manual installs
 )
+# Tests (and a field override) point at one file without touching /boot.
+if [ -n "${OPENFLIGHT_BOOT_CONFIG:-}" ]; then
+    BOOT_CONFIG_PATHS=("$OPENFLIGHT_BOOT_CONFIG")
+fi
+# Keys that would become commands if exported into this script.
+BOOT_CONFIG_FORBIDDEN=" OPENFLIGHT_DETECT_CMD OPENFLIGHT_BOOT_CONFIG "
 
 load_boot_config() {
     local file="$1" line key value
@@ -150,6 +156,10 @@ load_boot_config() {
         # Tolerate quoted values, which is what most people write.
         value="${value%\"}"; value="${value#\"}"
         value="${value%\'}"; value="${value#\'}"
+        if [[ "$BOOT_CONFIG_FORBIDDEN" == *" $key "* ]]; then
+            echo "[OpenFlight] Ignoring $key in $file (not a setting)" >&2
+            continue
+        fi
         # Already exported (or set on the command line)? Leave it alone.
         if [ -z "${!key:-}" ]; then
             export "$key=$value"
@@ -197,11 +207,17 @@ elif [ "$AUTO_HARDWARE" = true ]; then
     # non-technical owner than a script that exits before anything appears.
     # OPENFLIGHT_DETECT_CMD exists so the ordering rule above can be tested
     # without hardware, and so a field debug can substitute a canned profile.
-    DETECT_CMD="${OPENFLIGHT_DETECT_CMD:-uv run --quiet python -m openflight.provisioning --no-camera}"
-    # Captured into a variable rather than piped into mapfile: `mapfile < <(cmd)`
-    # reports mapfile's exit status, so a detector that died would look like a
-    # detector that found nothing.
-    if DETECTED_OUTPUT="$(cd "$PROJECT_DIR" && eval "$DETECT_CMD")"; then
+    # It is never taken from openflight.conf (see BOOT_CONFIG_FORBIDDEN).
+    # The default path is a fixed argv, not eval, so a space in a session
+    # location cannot become a second command.
+    if [ -n "${OPENFLIGHT_DETECT_CMD:-}" ]; then
+        DETECT_STATUS=0
+        DETECTED_OUTPUT="$(cd "$PROJECT_DIR" && eval "$OPENFLIGHT_DETECT_CMD")" || DETECT_STATUS=$?
+    else
+        DETECT_STATUS=0
+        DETECTED_OUTPUT="$(cd "$PROJECT_DIR" && uv run --quiet python -m openflight.provisioning --no-camera)" || DETECT_STATUS=$?
+    fi
+    if [ "$DETECT_STATUS" -eq 0 ]; then
         [ -n "$DETECTED_OUTPUT" ] && mapfile -t DETECTED_FLAGS <<< "$DETECTED_OUTPUT"
     else
         echo "[OpenFlight] Hardware detection failed; continuing with defaults" >&2
@@ -595,6 +611,28 @@ error() {
     echo -e "${RED}[OpenFlight]${NC} $1"
 }
 
+wait_for_firstboot() {
+    # Graphical autostart cannot start a system oneshot as UID 1000. systemd
+    # orders firstboot Before=graphical.target; this wait covers a race if
+    # that ordering is lost on a given image.
+    command -v systemctl >/dev/null 2>&1 || return 0
+    systemctl cat openflight-firstboot.service >/dev/null 2>&1 || return 0
+    local waited=0 state
+    while [ "$waited" -lt 300 ]; do
+        state="$(systemctl show -p ActiveState --value openflight-firstboot.service 2>/dev/null || true)"
+        case "$state" in
+            activating)
+                log "Waiting for first-boot provisioning to finish..."
+                sleep 1
+                waited=$((waited + 1))
+                ;;
+            *)
+                return 0
+                ;;
+        esac
+    done
+}
+
 # Mount tilt has no safe default (a wrong value silently biases the launch
 # angle), so it must be provided whenever the K-LD7 radars are enabled. Set
 # KLD7_MOUNT_TILT or pass --kld7-mount-tilt; measure it with a phone
@@ -921,6 +959,8 @@ if [ "$DRY_RUN" = true ]; then
     echo "$SERVER_CMD"
     exit 0
 fi
+
+wait_for_firstboot
 
 # Ensure the environment is in sync (uv recreates/repairs .venv as needed,
 # so a moved project dir self-heals instead of failing with "command not found")

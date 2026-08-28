@@ -1,13 +1,14 @@
 [Unit]
 Description=OpenFlight first-boot hardware provisioning
 Documentation=file:///opt/openflight/docs/sd-card-image.md
-# Runs before the kiosk so provisioning never races the server for the radar's
-# serial port. systemd-udev-settle is deprecated in general, but it is the
-# right tool here: detection is a one-shot snapshot of the USB bus, and taking
-# it before enumeration finishes would miss a radar that is simply slow.
-After=multi-user.target systemd-udev-settle.service
+# Must finish before the graphical session: the kiosk autostart opens the
+# radar's serial port, and firstboot writes rolling-buffer mode to that same
+# port. Ordering against multi-user.target does not block graphical.target,
+# and a Before= on a unit the image never installs is a no-op — the kiosk
+# starts from /etc/xdg/autostart, not a systemd service.
+After=local-fs.target systemd-udev-settle.service userconfig.service
 Wants=systemd-udev-settle.service
-Before=openflight.service
+Before=graphical.target
 ConditionPathExists=/opt/openflight/scripts/image/firstboot.sh
 
 [Service]
@@ -21,4 +22,4 @@ StandardOutput=journal+console
 StandardError=journal+console
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target

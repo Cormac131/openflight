@@ -127,7 +127,7 @@ if [ -z "$BASE_IMAGE" ]; then
         (cd "$WORK_DIR" && sha256sum -c "$(basename "$BASE_IMAGE.sha256")") \
             || die "Checksum mismatch on $BASE_NAME — refusing to build."
     else
-        warn "No published checksum for $BASE_NAME; continuing unverified"
+        die "No published checksum for $BASE_NAME — refusing to build an unverified OS."
     fi
 fi
 
@@ -195,6 +195,20 @@ mkdir -p "$MOUNT_ROOT/opt/openflight"
     | tar -x -C "$MOUNT_ROOT/opt/openflight"
 # Record what was built, so a support request can start from a commit.
 (cd "$PROJECT_DIR" && git rev-parse HEAD) > "$MOUNT_ROOT/opt/openflight/.image-revision"
+
+# Build the UI on the host. The chroot's apt nodejs is whatever Debian ships
+# (often too old for Vite 8); the UI is architecture-independent JS.
+log "Building the UI on the host"
+if ! command -v npm >/dev/null 2>&1; then
+    die "npm is required on the build host (Node 20+). Install it or pass a tree that already has ui/dist."
+fi
+(
+    cd "$PROJECT_DIR/ui"
+    npm ci --no-audit --no-fund
+    npm run build
+)
+rm -rf "$MOUNT_ROOT/opt/openflight/ui/dist"
+cp -a "$PROJECT_DIR/ui/dist" "$MOUNT_ROOT/opt/openflight/ui/dist"
 
 cp /usr/bin/qemu-aarch64-static "$MOUNT_ROOT/usr/bin/"
 

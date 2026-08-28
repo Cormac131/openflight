@@ -110,12 +110,14 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[list[str]] = None) -> int:
     """Entry point. Returns 0 unless a required device is missing."""
     args = parse_args(argv)
+    site = SiteConfig.from_env()
 
     profile = detect_hardware(
         probe_iwr6843=args.probe_iwr6843,
         include_camera=not args.no_camera,
+        include_uart=site.ops243_uart,
     )
-    plan = profile_to_flags(profile, SiteConfig.from_env())
+    plan = profile_to_flags(profile, site)
 
     if args.write:
         path = Path(args.write)

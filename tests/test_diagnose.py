@@ -112,11 +112,13 @@ class TestDetectOps243Port:
 
 
 class TestDetectKld7Ports:
-    def _make_port(self, device, desc="", mfg=""):
+    def _make_port(self, device, desc="", mfg="", vid=None, pid=None):
         p = MagicMock()
         p.device = device
         p.description = desc
         p.manufacturer = mfg
+        p.vid = vid
+        p.pid = pid
         return p
 
     @patch("serial.tools.list_ports.comports")
@@ -129,7 +131,7 @@ class TestDetectKld7Ports:
     @patch("serial.tools.list_ports.comports")
     def test_finds_cp210x_port(self, mock_comports):
         mock_comports.return_value = [
-            self._make_port("/dev/ttyUSB1", desc="CP210x UART Bridge"),
+            self._make_port("/dev/ttyUSB1", desc="CP210x UART Bridge", vid=0x10C4, pid=0xEA60),
         ]
         assert diagnose.detect_kld7_ports() == ["/dev/ttyUSB1"]
 
@@ -137,7 +139,7 @@ class TestDetectKld7Ports:
     def test_finds_two_ports(self, mock_comports):
         mock_comports.return_value = [
             self._make_port("/dev/ttyUSB0", desc="FTDI USB-Serial"),
-            self._make_port("/dev/ttyUSB1", desc="CP210x UART"),
+            self._make_port("/dev/ttyUSB1", desc="CP210x UART", vid=0x10C4, pid=0xEA60),
         ]
         assert diagnose.detect_kld7_ports() == ["/dev/ttyUSB0", "/dev/ttyUSB1"]
 

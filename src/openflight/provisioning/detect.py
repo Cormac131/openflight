@@ -44,7 +44,7 @@ _KLD7_USB_IDS = frozenset({(0x0403, 0x6001), (0x0403, 0x6014), (0x10C4, 0xEA60)}
 # Not every platform fills in vid/pid, and USB-serial adapters are swapped
 # often enough that the ID list will never be complete. These strings, matched
 # against the adapter's description and manufacturer, are the backstop.
-_KLD7_DESCRIPTION_KEYWORDS = ("ftdi", "cp210", "usb-serial", "uart", "silicon labs")
+_KLD7_DESCRIPTION_KEYWORDS = ("ftdi",)
 
 # The CP2105 Enhanced interface — the one the L3-dump firmware talks on.
 _CP2105_ENHANCED_LOCATION_SUFFIX = ":1.0"
@@ -168,7 +168,7 @@ def _describes(port: _PortLike, keywords: Sequence[str]) -> bool:
 def detect_ops243_port(
     comports: Optional[ComportsFn] = None,
     *,
-    include_uart: bool = True,
+    include_uart: bool = False,
     path_exists: Callable[[str], bool] = os.path.exists,
 ) -> Optional[str]:
     """Find the OPS243-A.
@@ -177,13 +177,11 @@ def detect_ops243_port(
     usbmodem on macOS. The K-LD7 and IWR6843 bridges never do, so the device
     name alone identifies it.
 
-    The GPIO-UART wiring has no USB descriptors to match on, so it is only
-    reported when the USB search comes up empty *and* ``/dev/ttyAMA0`` exists.
-    Guessing UART first would shadow a perfectly good USB radar.
-
-    ``include_uart=False`` restricts the answer to USB. Callers that are
-    asking "is a USB radar enumerated?" — such as the UART preflight check,
-    where a USB radar is the *problem* — need that narrower question.
+    The GPIO-UART wiring has no USB descriptors to match on. ``/dev/ttyAMA0``
+    exists on every Pi with UART enabled, so treating the node as a radar
+    would claim an OPS243 on USB-only kits whose cable was unplugged. UART
+    is therefore opt-in (``include_uart=True`` / ``OPS243_UART`` in the boot
+    config). USB still wins when both are present.
     """
     comports = comports or _default_comports
     try:
@@ -402,6 +400,7 @@ def detect_hardware(
     path_exists: Callable[[str], bool] = os.path.exists,
     probe_iwr6843: bool = False,
     include_camera: bool = True,
+    include_uart: bool = False,
 ) -> HardwareProfile:
     """Run every probe once and return the combined profile.
 
@@ -420,7 +419,7 @@ def detect_hardware(
 
     devices: list[DetectedDevice] = []
 
-    ops_port = detect_ops243_port(_snapshot, path_exists=path_exists)
+    ops_port = detect_ops243_port(_snapshot, path_exists=path_exists, include_uart=include_uart)
     devices.append(
         DetectedDevice(
             kind=DeviceKind.OPS243,

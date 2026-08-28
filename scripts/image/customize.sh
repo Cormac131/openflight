@@ -47,12 +47,11 @@ rm -rf /var/lib/apt/lists/*
 # Python environment
 # ──────────────────────────────────────────────────────────────────────
 log "Installing uv"
-# Pinned to /usr/local/bin so it is on PATH for root, the owner's account,
-# and systemd units alike — uv's own installer would drop it in one home
-# directory that the image cannot predict.
+# Pinned so a broken or unexpected installer cannot poison every card from
+# this image. UV_INSTALL_DIR keeps it on PATH for root, the owner, and systemd.
 export UV_INSTALL_DIR=/usr/local/bin
 export UV_UNMANAGED_INSTALL=/usr/local/bin
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/0.8.22/install.sh | sh
 
 log "Building the Python environment"
 cd "$PROJECT_DIR"
@@ -63,8 +62,12 @@ uv sync --extra ui --quiet
 
 log "Building the UI"
 cd "$PROJECT_DIR/ui"
-npm ci --no-audit --no-fund
-npm run build
+if [ -f dist/index.html ]; then
+    log "UI already built on the host; skipping npm"
+else
+    npm ci --no-audit --no-fund
+    npm run build
+fi
 # node_modules is 200+ MB and is not needed at runtime — ui/dist is what the
 # server serves. start-kiosk.sh reinstalls it if a rebuild is ever needed.
 rm -rf node_modules

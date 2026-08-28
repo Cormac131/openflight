@@ -39,8 +39,42 @@ _ENV_SESSION_LOCATION = "SESSION_LOCATION"
 _ENV_IWR6843_TEE_M = "IWR6843_TEE_M"
 _ENV_IWR6843_NET_M = "IWR6843_NET_M"
 _ENV_ENABLE_SIM = "OPENFLIGHT_ENABLE_SIM"
+_ENV_OPS243_UART = "OPS243_UART"
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+# Same files start-kiosk.sh reads. Firstboot does not export them, so the
+# detector CLI loads the file itself when called with from_env().
+BOOT_CONFIG_PATHS = (
+    "/boot/firmware/openflight.conf",
+    "/boot/openflight.conf",
+    "/etc/openflight/openflight.conf",
+)
+_BOOT_CONFIG_FORBIDDEN = frozenset({"OPENFLIGHT_DETECT_CMD", "OPENFLIGHT_BOOT_CONFIG"})
+
+
+def parse_boot_config(path: str) -> dict[str, str]:
+    """Parse NAME=VALUE lines the way start-kiosk.sh does."""
+    parsed: dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return parsed
+    for raw in lines:
+        line = raw.split("#", 1)[0].strip()
+        if not line or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if not key.isidentifier() or key in _BOOT_CONFIG_FORBIDDEN:
+            continue
+        value = value.strip()
+        if (value.startswith('"') and value.endswith('"')) or (
+            value.startswith("'") and value.endswith("'")
+        ):
+            value = value[1:-1]
+        parsed[key] = value
+    return parsed
 
 
 @dataclass(frozen=True)
@@ -59,11 +93,25 @@ class SiteConfig:
     iwr6843_tee_m: Optional[str] = None
     iwr6843_net_m: Optional[str] = None
     enable_sim: bool = False
+    ops243_uart: bool = False
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "SiteConfig":
-        """Read the boot-config values out of the environment."""
-        env = os.environ if env is None else env
+        """Read the boot-config values out of the environment.
+
+        When ``env`` is omitted, values already exported win over the first
+        readable file in :data:`BOOT_CONFIG_PATHS`, matching start-kiosk.sh.
+        """
+        if env is None:
+            merged: dict[str, str] = {}
+            override = os.environ.get("OPENFLIGHT_BOOT_CONFIG")
+            paths = (override,) if override else BOOT_CONFIG_PATHS
+            for candidate in paths:
+                if candidate and os.path.isfile(candidate):
+                    merged.update(parse_boot_config(candidate))
+                    break
+            merged.update(os.environ)
+            env = merged
 
         def value(key: str) -> Optional[str]:
             raw = (env.get(key) or "").strip()
@@ -77,6 +125,7 @@ class SiteConfig:
             iwr6843_tee_m=value(_ENV_IWR6843_TEE_M),
             iwr6843_net_m=value(_ENV_IWR6843_NET_M),
             enable_sim=(value(_ENV_ENABLE_SIM) or "").lower() in _TRUTHY,
+            ops243_uart=(value(_ENV_OPS243_UART) or "").lower() in _TRUTHY,
         )
 
 

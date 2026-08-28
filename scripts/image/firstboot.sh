@@ -85,9 +85,21 @@ check_reprovision_marker() {
 # Imager creates; anything else on the machine is a later addition.
 hand_project_to_owner() {
     local owner
-    owner="$(getent passwd 1000 | cut -d: -f1)"
+    local attempt
+    # Imager creates UID 1000 during first boot. userconfig.service usually
+    # finishes before us, but a slow card still loses the race; retry rather
+    # than leaving /opt/openflight root-owned for a kiosk uv sync that then
+    # exits under set -e and never shows the UI.
+    for attempt in $(seq 1 30); do
+        owner="$(getent passwd 1000 | cut -d: -f1)"
+        if [ -n "$owner" ]; then
+            break
+        fi
+        log "No user account at UID 1000 yet (attempt $attempt/30)"
+        sleep 2
+    done
     if [ -z "$owner" ]; then
-        log "No user account at UID 1000 yet; leaving $PROJECT_DIR owned by root"
+        log "No user account at UID 1000; leaving $PROJECT_DIR owned by root"
         return 1
     fi
     if [ "$(stat -c '%U' "$PROJECT_DIR")" = "$owner" ]; then
@@ -157,8 +169,17 @@ main() {
 
     case "$stage" in
         configure)
-            hand_project_to_owner
-            detect_hardware
+            if ! hand_project_to_owner; then
+                announce "Waiting for the user account Raspberry Pi Imager creates. Reboot once it exists."
+                return 1
+            fi
+            if ! detect_hardware; then
+                # Stay on configure so the next boot retries the radar flash.
+                # Writing "done" here is how a transient uv failure permanently
+                # skipped the firmware workaround.
+                announce "Hardware detection failed; will retry next boot. See $LOG_FILE."
+                return 0
+            fi
             install_ftdi_latency_rule
 
             if ! ops243_present; then
@@ -178,6 +199,10 @@ main() {
                 log "Powering off so the radar restarts in rolling-buffer mode"
                 sync
                 systemctl poweroff
+                # poweroff returns as soon as shutdown is queued. Returning
+                # here would let RemainAfterExit mark us done and graphical
+                # start the kiosk in the seconds before the machine dies.
+                exec sleep infinity
             else
                 # The radar answered detection but not configuration. Carry on
                 # to the kiosk: ball speed still works, only the sound trigger
@@ -188,7 +213,10 @@ main() {
             ;;
 
         verify)
-            hand_project_to_owner
+            if ! hand_project_to_owner; then
+                announce "Waiting for the user account Raspberry Pi Imager creates. Reboot once it exists."
+                return 1
+            fi
             detect_hardware
             if self_test; then
                 announce "Hardware self-test passed."

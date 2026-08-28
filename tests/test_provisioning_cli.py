@@ -33,6 +33,7 @@ SITE_ENV_KEYS = (
     "IWR6843_TEE_M",
     "IWR6843_NET_M",
     "OPENFLIGHT_ENABLE_SIM",
+    "OPS243_UART",
 )
 
 
@@ -87,6 +88,31 @@ class TestFlagsOutput:
         detected["profile"] = HardwareProfile()
         assert cli.main([]) == 0
         assert capsys.readouterr().out == ""
+
+
+class TestUartOptIn:
+    def test_does_not_probe_the_gpio_uart_by_default(self, detected, monkeypatch):
+        recorded = {}
+
+        def _detect_hardware(**kwargs):
+            recorded.update(kwargs)
+            return detected["profile"]
+
+        monkeypatch.setattr(cli, "detect_hardware", _detect_hardware)
+        assert cli.main([]) == 0
+        assert recorded.get("include_uart") is False
+
+    def test_probes_the_gpio_uart_when_the_boot_config_opts_in(self, detected, monkeypatch):
+        recorded = {}
+
+        def _detect_hardware(**kwargs):
+            recorded.update(kwargs)
+            return detected["profile"]
+
+        monkeypatch.setattr(cli, "detect_hardware", _detect_hardware)
+        monkeypatch.setenv("OPS243_UART", "true")
+        assert cli.main([]) == 0
+        assert recorded.get("include_uart") is True
 
 
 class TestJsonOutput:

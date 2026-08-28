@@ -1,17 +1,16 @@
 """Tests for the kiosk entry script flag wiring."""
 
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+from posix_shell import find_bash
 
 # The contract under test is the bash script's flag forwarding; without a
-# POSIX shell there is nothing to exercise. With one present (e.g. Git Bash
-# on Windows) --dry-run works everywhere.
-pytestmark = pytest.mark.skipif(
-    shutil.which("bash") is None, reason="start-kiosk.sh contract tests need bash"
-)
+# POSIX shell there is nothing to exercise. Prefer Git Bash on Windows:
+# WSL's system32 bash.exe does not inherit subprocess env vars.
+BASH = find_bash()
+pytestmark = pytest.mark.skipif(BASH is None, reason="start-kiosk.sh contract tests need bash")
 
 
 def _dry_run(*args: str, check: bool = True):
@@ -20,7 +19,7 @@ def _dry_run(*args: str, check: bool = True):
     # NotADirectoryError in CreateProcess).
     repo_root = Path(__file__).resolve().parents[1]
     return subprocess.run(
-        ["bash", "scripts/start-kiosk.sh", *args, "--dry-run"],
+        [BASH, "scripts/start-kiosk.sh", *args, "--dry-run"],
         cwd=repo_root,
         check=check,
         capture_output=True,

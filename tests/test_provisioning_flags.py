@@ -168,12 +168,27 @@ class TestSiteConfig:
                 "IWR6843_TEE_M": "1.4",
                 "IWR6843_NET_M": "3.2",
                 "OPENFLIGHT_ENABLE_SIM": "true",
+                "OPS243_UART": "true",
             }
         )
         assert site.kld7_mount_tilt_deg == "12.5"
         assert site.session_location == "garage"
         assert site.iwr6843_net_m == "3.2"
         assert site.enable_sim is True
+        assert site.ops243_uart is True
+
+    def test_uart_opt_in_defaults_off(self):
+        assert SiteConfig.from_env({}).ops243_uart is False
+
+    def test_from_env_reads_a_boot_config_file(self, tmp_path, monkeypatch):
+        conf = tmp_path / "openflight.conf"
+        conf.write_text("OPS243_UART=true\nSESSION_LOCATION=bay\n", encoding="utf-8")
+        monkeypatch.setenv("OPENFLIGHT_BOOT_CONFIG", str(conf))
+        monkeypatch.delenv("OPS243_UART", raising=False)
+        monkeypatch.delenv("SESSION_LOCATION", raising=False)
+        site = SiteConfig.from_env()
+        assert site.ops243_uart is True
+        assert site.session_location == "bay"
 
     def test_blank_values_are_treated_as_unset(self):
         """An owner who deletes a value but leaves the key must not set an empty flag."""

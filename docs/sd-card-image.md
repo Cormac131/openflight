@@ -85,9 +85,9 @@ or adding one later, needs no reconfiguration.
 | Hardware                | How it is recognised                          | Effect                              |
 | ----------------------- | --------------------------------------------- | ----------------------------------- |
 | OPS243-A (USB)          | CDC-ACM device (`/dev/ttyACM*`)                | `--radar-port <port>`               |
-| OPS243-A (GPIO UART)    | `/dev/ttyAMA0`, only when no USB radar is found | `--radar-port /dev/ttyAMA0`        |
+| OPS243-A (GPIO UART)    | `OPS243_UART=true` in `openflight.conf`, then `/dev/ttyAMA0` | `--radar-port /dev/ttyAMA0` |
 | IWR6843                 | CP2105 (`10c4:ea70`) or XDS110 (`0451:bef3`)   | `--iwr6843 --iwr6843-port <port>`   |
-| K-LD7 (deprecated)      | `/dev/kld7_*` udev names, else FTDI/CP2102     | `--kld7 …`, only if tilt is known   |
+| K-LD7 (deprecated)      | `/dev/kld7_*` udev names, else FTDI/CP2102 USB IDs | `--kld7 …`, only if tilt is known |
 | LIS3DH inclinometer     | I2C `WHO_AM_I` = `0x33` at `0x18`/`0x19`       | `--inclinometer`                    |
 | Geekworm UPS            | MAX17043 at `0x36` reading a plausible voltage | `--battery geekworm`                |
 | CSI camera              | `rpicam-hello --list-cameras`                  | reported only, never enabled        |
@@ -104,6 +104,11 @@ because the obvious behaviour would be worse:
   production radar path and their dependencies are an optional extra, so
   enabling one would turn a working image into a failing one the moment
   somebody plugs a camera in.
+- **GPIO UART is opt-in.** `/dev/ttyAMA0` exists on every Pi with UART
+  enabled. Treating that node as an OPS243 would make an unplugged USB
+  radar look like a UART-wired one, and the fault screen would say the
+  wrong thing. Set `OPS243_UART=true` in `openflight.conf` if yours is
+  wired to the 40-pin header.
 
 Detected flags are *prepended* to whatever else is on the command line, so
 anything typed by hand still wins:
@@ -184,7 +189,10 @@ prompt suppressed, since there is no keyboard to dismiss it with.
 The kiosk starts from `/etc/xdg/autostart` rather than a systemd service
 because the image cannot know the username Imager will create; first boot
 hands `/opt/openflight` to whichever account exists at UID 1000 and adds it
-to `dialout`, `i2c`, `gpio`, and `video`.
+to `dialout`, `i2c`, `gpio`, and `video`. First-boot provisioning is a
+systemd oneshot `Before=graphical.target`, so it finishes (and, when the
+radar flash needs it, powers the unit off) before the desktop session
+opens the serial port.
 
 ### Branding
 
@@ -210,6 +218,7 @@ uv run --extra image python scripts/image/make_branding.py --out /tmp/branding
 ```bash
 sudo apt install qemu-user-static binfmt-support xz-utils parted \
                  e2fsprogs kpartx curl
+# Node 20+ on the *build host* (the UI is compiled there, not in the Pi chroot)
 sudo ./scripts/image/build-image.sh
 ```
 

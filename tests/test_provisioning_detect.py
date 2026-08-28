@@ -94,9 +94,18 @@ class TestDetectOps243Port:
         )
         assert found is None
 
-    def test_falls_back_to_gpio_uart_when_no_usb_radar(self):
+    def test_uart_node_alone_is_not_an_ops243(self):
+        """The Pi always has /dev/ttyAMA0 once UART is enabled. That is not a radar."""
         found = detect_ops243_port(
             comports_of(),
+            path_exists=lambda p: p == "/dev/ttyAMA0",
+        )
+        assert found is None
+
+    def test_gpio_uart_is_used_only_when_opted_in(self):
+        found = detect_ops243_port(
+            comports_of(),
+            include_uart=True,
             path_exists=lambda p: p == "/dev/ttyAMA0",
         )
         assert found == "/dev/ttyAMA0"
@@ -229,19 +238,28 @@ class TestDetectKld7Ports:
         )
         assert found == ["/dev/ttyUSB1"]
 
-    def test_falls_back_to_description(self):
+    def test_falls_back_to_ftdi_description(self):
         found = detect_kld7_ports(
-            comports_of(port("/dev/ttyUSB0", description="FTDI USB-Serial")),
+            comports_of(port("/dev/ttyUSB0", description="FTDI FT232R")),
             path_exists=lambda _p: False,
         )
         assert found == ["/dev/ttyUSB0"]
 
-    def test_falls_back_to_manufacturer(self):
+    def test_generic_uart_description_is_not_a_kld7(self):
+        """'uart' / 'usb-serial' match almost any adapter, including a missing-VID IWR."""
+        found = detect_kld7_ports(
+            comports_of(port("/dev/ttyUSB0", description="USB-Serial UART Bridge")),
+            path_exists=lambda _p: False,
+        )
+        assert found == []
+
+    def test_manufacturer_alone_is_not_enough(self):
+        """VID/PID or an FTDI description; 'Silicon Labs' also matches the IWR6843."""
         found = detect_kld7_ports(
             comports_of(port("/dev/ttyUSB0", manufacturer="Silicon Labs")),
             path_exists=lambda _p: False,
         )
-        assert found == ["/dev/ttyUSB0"]
+        assert found == []
 
     def test_excludes_the_iwr6843_sharing_the_bus(self):
         """The CP2105 also says "CP210x"; the USB ID has to win over the string."""
@@ -465,12 +483,22 @@ class TestDetectHardware:
         )
         assert profile.present_kinds() == (DeviceKind.OPS243,)
 
-    def test_uart_wiring_is_labelled(self):
+    def test_uart_node_alone_is_not_present(self):
         profile = detect_hardware(
             comports=comports_of(),
             bus_factory=bus_factory_for(FakeBus()),
             path_exists=lambda p: p == "/dev/ttyAMA0",
             include_camera=False,
+        )
+        assert not profile.has(DeviceKind.OPS243)
+
+    def test_uart_wiring_is_labelled_when_opted_in(self):
+        profile = detect_hardware(
+            comports=comports_of(),
+            bus_factory=bus_factory_for(FakeBus()),
+            path_exists=lambda p: p == "/dev/ttyAMA0",
+            include_camera=False,
+            include_uart=True,
         )
         ops = profile.get(DeviceKind.OPS243)
         assert ops.address == "/dev/ttyAMA0"
