@@ -58,6 +58,10 @@ IWR6843_HORIZONTAL_PHASE_REFERENCE_RAD=""
 INCLINOMETER=false
 INCLINOMETER_ZERO_OFFSET=""
 NFC=false
+NFC_INTERFACE=""
+NFC_SPI_BUS=""
+NFC_SPI_DEVICE=""
+NFC_IRQ_GPIO=""
 NFC_I2C_BUS=""
 NFC_I2C_ADDRESS=""
 NFC_TAGS_FILE=""
@@ -306,6 +310,22 @@ while [[ $# -gt 0 ]]; do
         --nfc)
             NFC=true
             shift
+            ;;
+        --nfc-interface)
+            NFC_INTERFACE="$2"
+            shift 2
+            ;;
+        --nfc-spi-bus)
+            NFC_SPI_BUS="$2"
+            shift 2
+            ;;
+        --nfc-spi-device)
+            NFC_SPI_DEVICE="$2"
+            shift 2
+            ;;
+        --nfc-irq-gpio)
+            NFC_IRQ_GPIO="$2"
+            shift 2
             ;;
         --nfc-i2c-bus)
             NFC_I2C_BUS="$2"
@@ -757,6 +777,10 @@ fi
 
 if [ "$NFC" = true ]; then
     SERVER_CMD="$SERVER_CMD --nfc"
+    [ -n "$NFC_INTERFACE" ] && SERVER_CMD="$SERVER_CMD --nfc-interface $NFC_INTERFACE"
+    [ -n "$NFC_SPI_BUS" ] && SERVER_CMD="$SERVER_CMD --nfc-spi-bus $NFC_SPI_BUS"
+    [ -n "$NFC_SPI_DEVICE" ] && SERVER_CMD="$SERVER_CMD --nfc-spi-device $NFC_SPI_DEVICE"
+    [ -n "$NFC_IRQ_GPIO" ] && SERVER_CMD="$SERVER_CMD --nfc-irq-gpio $NFC_IRQ_GPIO"
     [ -n "$NFC_I2C_BUS" ] && SERVER_CMD="$SERVER_CMD --nfc-i2c-bus $NFC_I2C_BUS"
     [ -n "$NFC_I2C_ADDRESS" ] && SERVER_CMD="$SERVER_CMD --nfc-i2c-address $NFC_I2C_ADDRESS"
     [ -n "$NFC_TAGS_FILE" ] && SERVER_CMD="$SERVER_CMD --nfc-tags-file $NFC_TAGS_FILE"

@@ -24,28 +24,27 @@ The hardware this integration targets is:
 |------|---------|
 | NFC reader breakout | [Adafruit PN532 NFC/RFID Controller Breakout, product 364](https://www.adafruit.com/product/364), or any generic **PN532 V3 module** (the red Elechouse-style board sold as "PN532 NFC RFID V3 Kit") |
 | Club tags | NTAG213 / NTAG215 or MIFARE Classic stickers, 25 mm round, one per club |
-| Solderless cable kit | 4-pin JST SH 1.0 mm STEMMA QT/Qwiic cable kit, or female-Dupont jumpers |
+| Solderless cable kit | Female-Dupont jumpers for SPI (NSS, MOSI, MISO, SCK, IRQ, 3.3 V, GND) |
 | Mounting | Thin double-sided mounting tape or nonconductive standoffs |
 
 Any ISO14443A tag works: only the factory-programmed UID is read, never the
 NDEF contents. Buy tags with an adhesive back sized to fit a grip cap or the
 butt end of the shaft.
 
-Do not buy a bare PN532 chip. Use a breakout with the regulator, antenna, and
-I2C pull-ups already installed.
+Do not buy a bare PN532 chip. Use a breakout with the regulator and antenna
+already installed.
 
 ### Generic PN532 V3 Modules
 
-The cheap red "PN532 V3" boards work: same NXP silicon, same command set, same
-`0x24` address, and no software difference at all. Their larger PCB antenna
-usually reads a little further than the Adafruit board's, which suits a club
-tapped against the enclosure. Three things differ in practice:
+The cheap red "PN532 V3" boards work: same NXP silicon, same command set, and
+no software difference. Their larger PCB antenna usually reads a little
+further than the Adafruit board's, which suits a club tapped against the
+enclosure. Three things differ in practice:
 
 - The mode switches are usually silkscreened **SET0/SET1** rather than
   SEL0/SEL1. See the next section — read the table printed on your board.
-- Their I2C pull-up resistors tie to the module's own `VCC`, so the rail you
-  power them from is the voltage the Pi's SDA/SCL see. **Power from 3.3 V.**
-  See the warning under [Wiring](#wiring).
+- Their I2C pull-up resistors (unused in SPI mode) tie to the module's own
+  `VCC`. **Still power from 3.3 V.** See the warning under [Wiring](#wiring).
 - Pin order on the headers varies between clones. Match by label, never by
   position in a photo.
 
@@ -91,115 +90,67 @@ Shut down the Pi and remove power before connecting or moving GPIO wires. A
 misplaced 3.3 V lead can short the Pi, cause reboot loops or a black screen, and
 potentially damage the Pi or the reader.
 
-## Set The PN532 To I2C Mode
+## Set The PN532 To SPI Mode
 
 PN532 boards ship in UART/HSU mode. Move the two onboard DIP switches to select
-I2C **before** wiring. On both the Adafruit breakout and Elechouse-style V3
-modules that is:
+**SPI** before wiring. On both the Adafruit breakout and Elechouse-style V3
+modules that is typically the opposite of I2C:
 
-| Switch | Position for I2C |
+| Switch | Position for SPI |
 |--------|------------------|
-| SEL0 / SET0 | ON (1) |
-| SEL1 / SET1 | OFF (0) |
+| SEL0 / SET0 | OFF (0) |
+| SEL1 / SET1 | ON (1) |
 
 > [!IMPORTANT]
 > Clone boards do not all label or orient their switches the same way. Every
 > board prints its own mode table beside the switches — **that table wins over
-> this one.** Look for the row marked I2C and match it.
+> this one.** Look for the row marked SPI and match it.
 
-The board is unresponsive on I2C until both switches are set, and it latches the
-interface mode at power-up: change the switches, then power-cycle the Pi. This
-is the most common reason `i2cdetect` shows nothing.
+The chip latches the interface at power-up: change the switches, then
+power-cycle. Do not leave it in I2C. I2C shares SDA/SCL with the LIS3DH and
+the Geekworm fuel gauge; a PN532 that stretches SCL takes those devices down with
+it.
 
 ## Wiring
+
+SPI uses its own pins. Leave physical pins 3 and 5 for the inclinometer.
 
 ```text
 PN532 breakout                           Raspberry Pi GPIO header
 
-Red     VCC / 3.3V  ------------------>  physical pin 17 (3.3V)
-Black   GND         ------------------>  physical pin 20 (GND)
-Blue    SDA         ------------------>  physical pin 3  (GPIO2/SDA)
-Yellow  SCL         ------------------>  physical pin 5  (GPIO3/SCL)
+NSS / SS    ---------------------------->  physical pin 24 (GPIO8 / SPI0 CE0)
+MOSI        ---------------------------->  physical pin 19 (GPIO10 / MOSI)
+MISO        ---------------------------->  physical pin 21 (GPIO9 / MISO)
+SCK         ---------------------------->  physical pin 23 (GPIO11 / SCLK)
+IRQ         ---------------------------->  physical pin 15 (GPIO22)
+RSTO        --- leave unconnected ---
+VCC / 3.3V  ---------------------------->  physical pin 17 (3.3V)
+GND         ---------------------------->  physical pin 20 (GND)
 ```
 
-| Cable color | Signal | Raspberry Pi physical pin | Pi signal |
-|-------------|--------|---------------------------|-----------|
-| Red | `VCC` / `3.3V` | **17** | 3.3 V power |
-| Black | `GND` | **20** | Ground |
-| Blue | `SDA` | **3** | GPIO2 / I2C SDA |
-| Yellow | `SCL` | **5** | GPIO3 / I2C SCL |
+| PN532 | Raspberry Pi physical pin | Pi signal |
+|-------|---------------------------|-----------|
+| `NSS` / `SS` / `SSEL` | **24** | GPIO8 / SPI0 CE0 |
+| `MOSI` | **19** | GPIO10 |
+| `MISO` | **21** | GPIO9 |
+| `SCK` | **23** | GPIO11 |
+| `IRQ` | **15** | GPIO22 |
+| `RSTO` | — | leave unconnected (chip output, not a reset input) |
+| `VCC` / `3.3V` | **17** | 3.3 V power |
+| `GND` | **20** | Ground |
 
 > [!WARNING]
-> Use physical pin numbers exactly as shown. GPIO/BCM numbers are a different
-> numbering system. Do not connect the PN532 to a 5 V GPIO-header pin.
+> **RSTO is not reset.** It is `RSTOUT_N`, an output that goes low while the chip
+> is in reset. Do not drive it from a Pi GPIO. A reset *into* the chip is
+> `RSTPD_N`, which Elechouse V3 boards usually do not break out.
 
 > [!WARNING]
-> **Power the reader from 3.3 V, not 5 V** — even though most PN532 V3 modules
-> accept 5 V on `VCC` and their listings advertise it. The module's I2C pull-up
-> resistors tie to its own `VCC` rail, so a 5 V-powered module pulls the Pi's
-> SDA/SCL up to 5 V. Those GPIOs are 3.3 V only and are not 5 V tolerant.
+> Power the reader from **3.3 V**, not 5 V. Elechouse SPI is 3.3 V TTL. Stay
+> off GPIO6 (Geekworm charger), GPIO16 (HAT), GPIO17 (sound trigger), and
+> GPIO14/15 (OPS UART).
 
-Cable colors are not a universal standard, and header pin order varies between
-clone boards. Verify each conductor against the silkscreen labels before
-powering the Pi. On V3 modules the I2C signals are the `SDA` and `SCL` pins of
-the 4-pin header; the same physical pins carry the UART signals in HSU mode, so
-they may be labelled `SDA(TXD)` and `SCL(RXD)`.
-
-The I2C bus is shared. The PN532 (`0x24`) and the LIS3DH inclinometer (`0x18`)
-use different addresses and coexist on bus 1 without a second set of power pins,
-as long as each connection is secure.
-
-### Daisy-Chaining From An Existing STEMMA QT Board
-
-A spare STEMMA QT port on a board already in the enclosure is a tidy way to tap
-the I2C bus, and it removes the 5 V hazard above entirely: STEMMA QT and Qwiic
-are 3.3 V by definition. Use it for `SDA`, `SCL`, and `GND`.
-
-> [!WARNING]
-> **Do not take the PN532's power from a downstream STEMMA QT port.** Run its
-> `VCC` on its own wire to a Pi 3.3 V header pin (physical **1** or **17**).
-
-The PN532 is not a sensor-sized load. It draws roughly 100 mA while its RF field
-is energised and can peak near 150 mA with a large antenna, against the few
-milliamps a STEMMA QT chain is laid out for. Pulled through an upstream
-breakout, that current crosses the breakout's own 3.3 V regulator, its traces,
-and two JST-SH connectors before reaching the reader.
-
-On the LIS3DH specifically it is worse than it looks. Its STEMMA QT port is fed
-from the breakout's onboard 3.3 V regulator, and this build supplies that
-regulator's input with 3.3 V from Pi pin 17 (see the
-[inclinometer guide](../inclinometer/README.md#wiring)) — so the regulator is
-already in dropout and its output sits below 3.3 V before the PN532 asks for
-anything. Every RF burst then pulls it lower.
-
-The failure this produces is not a clean one. Expect tags that read only when
-almost touching, taps that are missed at random, or a reader that ACKs commands
-while `InListPassiveTarget` never finds a target. It can also brown out the
-sensor upstream of it: an NFC reader hung off the LIS3DH's power can show up as
-`sensor_error` or `stale` inclinometer readings on shots, quietly degrading the
-launch-angle correction.
-
-The Pi's own 3.3 V rail supplies 100 mA without complaint. Wire it directly:
-
-```text
-Qwiic/STEMMA QT cable from an existing board   PN532 module
-
-Blue    SDA         ------------------------>  SDA
-Yellow  SCL         ------------------------>  SCL
-Black   GND         ------------------------>  GND
-Red     3.3V        --- leave disconnected ---
-
-Raspberry Pi GPIO header
-
-physical pin 17 (3.3V)  ------------------->  VCC
-```
-
-Ground may come through the Qwiic cable — what matters is that the reader and
-the Pi share one. A separate `GND` wire to physical pin 20 alongside `VCC` is
-better for the return path of a 150 mA burst, and costs one jumper.
-
-Tape or trim the unused red lead. It is a live 3.3 V socket on a loose flying
-end, and inside a metal enclosure that is a short waiting to happen.
+Match pins by silkscreen label. On V3 modules SPI is the 4-pin `NSS/MOSI/MISO/SCK`
+header plus `IRQ` on the neighbouring header.
 
 ## Mounting And Read Range
 
@@ -212,39 +163,34 @@ Two things kill read range:
 - **Metal behind the tag.** A tag stuck directly to a steel shaft or a metal
   grip cap detunes the antenna. Use ferrite-backed ("on-metal") tags there, or
   mount the tag on the rubber grip instead.
+
 - **Metal behind the reader.** Keep the PN532 antenna at least 10 mm clear of
   the Pi, the radar shielding, and any enclosure metal.
 
 Tag the butt end of the grip, not the head. The head is the part that swings.
 
-## Enable I2C On The Pi
+## Enable SPI On The Pi
 
-Enable the Pi header I2C interface and reboot:
+Keep I2C enabled for the inclinometer and Geekworm gauge. Add SPI and reboot:
 
 ```bash
-sudo raspi-config nonint do_i2c 0
+# Raspberry Pi OS Bookworm: /boot/firmware/config.txt
+dtparam=i2c_arm=on
+dtparam=spi=on
+```
+
+```bash
 sudo reboot
 ```
 
-After reconnecting over SSH, verify that bus 1 exists:
+After reconnecting over SSH:
 
 ```bash
-ls -l /dev/i2c-1
+ls -l /dev/spidev0.0
 ```
 
-To scan the bus, install `i2c-tools` if needed and run:
-
-```bash
-sudo apt-get install -y i2c-tools
-i2cdetect -y 1
-```
-
-The default PN532 address is `0x24`, so the scan should contain `24`:
-
-```text
-     0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
-20: -- -- -- -- 24 -- -- -- -- -- -- -- -- -- -- --
-```
+`i2cdetect` will **not** show the PN532. That is expected. The inclinometer
+should still appear at `18` and the fuel gauge at `36 UU`.
 
 ## Install Software
 
@@ -254,8 +200,14 @@ From the OpenFlight checkout:
 uv sync
 ```
 
-The Linux installation includes `smbus2`, which the PN532 driver uses to talk to
-`/dev/i2c-1`.
+The Linux installation includes `spidev` and `gpiozero`, which the PN532 driver
+uses for `/dev/spidev0.0` and the IRQ pin. Add the OpenFlight user to the `spi`
+and `gpio` groups if `Permission denied` appears:
+
+```bash
+sudo usermod -aG spi,gpio "$USER"
+sudo reboot
+```
 
 ## Verify Raw Reads
 
@@ -268,7 +220,7 @@ uv run python scripts/hardware-test/read_pn532.py
 Example output:
 
 ```text
-PN532 detected on I2C-1 at 0x24 (firmware 1.6)
+PN532 detected on SPI-0.0 IRQ GPIO22 (firmware 1.6)
 Club tags: 3 learned in /home/pi/.openflight/club_tags.json
 Present a tag to the antenna (Ctrl-C to stop)...
 04:A2:B1:C3  7-iron
@@ -284,8 +236,8 @@ uv run python scripts/hardware-test/read_pn532.py --count 5
 # Teach the next tag presented, without starting the kiosk
 uv run python scripts/hardware-test/read_pn532.py --assign 7-iron
 
-# Probe a non-default bus while troubleshooting
-uv run python scripts/hardware-test/read_pn532.py --bus 0
+# Probe a non-default SPI device or IRQ pin
+uv run python scripts/hardware-test/read_pn532.py --spi-device 1 --irq-gpio 23
 ```
 
 ## Learn The Club Tags
@@ -400,13 +352,14 @@ Example production startup:
 scripts/start-kiosk.sh --nfc
 ```
 
-With a non-default bus, address, or tag file:
+With a non-default SPI device, IRQ pin, or tag file:
 
 ```bash
 scripts/start-kiosk.sh \
   --nfc \
-  --nfc-i2c-bus 1 \
-  --nfc-i2c-address 0x24 \
+  --nfc-spi-bus 0 \
+  --nfc-spi-device 0 \
+  --nfc-irq-gpio 22 \
   --nfc-tags-file /home/pi/bags/sunday.json
 ```
 
@@ -435,7 +388,7 @@ learn-and-select flow can be exercised on a laptop with no PN532 attached.
 The `session_start` entry records:
 
 - Whether the reader initialized.
-- Reader type, I2C bus, and address.
+- Reader type, host interface (SPI by default), SPI bus/CE, and IRQ GPIO.
 - Tag file path and how many tags were loaded.
 - Initialization error, when there was one.
 
@@ -446,76 +399,46 @@ action taken.
 
 ## Troubleshooting
 
-### `0x24` Is Missing From `i2cdetect`
+### `/dev/spidev0.0` Is Missing
 
-1. Confirm the mode switches are set for I2C, per the table printed on the
-   board, and that the Pi was power-cycled afterwards.
-2. Confirm `/dev/i2c-1` exists and I2C is enabled, then reboot.
-3. Recheck blue to physical pin 3 and yellow to physical pin 5.
-4. Confirm black is on ground and red is on 3.3 V.
-5. Reseat both ends of the cable.
-6. Run `i2cdetect -y 1` again.
-
-The PN532's I2C address is fixed in silicon and cannot be changed, so a scan
-that finds nothing is a wiring or mode problem, never an address problem.
-
-Datasheets and Arduino libraries often quote the PN532's address as `0x48`.
-That is the same address written in 8-bit form, with the read/write bit
-included; `i2cdetect` and Linux both use the 7-bit form, `0x24`. Do not pass
-`--nfc-i2c-address 0x48` — the two are the same device, and the 7-bit value is
-the one this driver wants.
-
-### `Device at 0x24 is not a PN532`
-
-OpenFlight reached an I2C device at that address, but its identity byte was not
-the PN532's. Check for another device using `0x24` and verify the breakout
-model with `i2cdetect -y 1`.
-
-### `OSError: [Errno 121] Remote I/O error`
-
-`i2cdetect` still shows `24`, but the first status poll after a command raises
-`[Errno 121] Remote I/O error`. That is the PN532 NACKing I2C reads while it
-is busy — its normal "not ready" signal — not a missing chip. Current OpenFlight
-retries those NACKs until the command timeout.
-
-If you still see a traceback after updating, the Pi's hardware I2C controller
-is likely aborting clock-stretch instead of waiting. Slow the bus and reboot:
-
-```bash
-# Raspberry Pi OS Bookworm: /boot/firmware/config.txt
-# Older images: /boot/config.txt
-dtparam=i2c_arm=on,i2c_arm_baudrate=10000
-```
-
-Then re-run `uv run python scripts/hardware-test/read_pn532.py`.
+Add `dtparam=spi=on` to `/boot/firmware/config.txt` (keep `dtparam=i2c_arm=on`
+for the inclinometer) and reboot. Then `ls -l /dev/spidev0.0`.
 
 ### `PN532 did not acknowledge the command`
 
-The reader is addressable but not answering. This is almost always mode
-selection: a board still in UART or SPI mode ACKs nothing on I2C. Re-check the
-DIP switches against the table printed on the board, then power-cycle the Pi —
-the PN532 latches its interface mode at power-up.
+The SPI write happened, but IRQ never went active. Almost always mode
+selection: the board is still in UART or I2C. Match the **SPI** row printed
+on the board, then power-cycle — the chip latches the interface at power-up.
+On a clone whose table is ambiguous, try all four switch pairs, power-cycling
+between them.
 
-On a clone whose switch table is ambiguous, there are only four combinations.
-Trying each one, power-cycling between attempts, is faster than guessing at the
-silkscreen.
+Also confirm `IRQ` is on physical pin 15 (GPIO22), not `RSTO`. `RSTO` is an
+output; leave it unconnected.
 
-### Permission Denied On `/dev/i2c-1`
-
-Add the OpenFlight user to the `i2c` group, then log out and back in or reboot:
+### Permission Denied On `/dev/spidev0.0`
 
 ```bash
-sudo usermod -aG i2c "$USER"
+sudo usermod -aG spi,gpio "$USER"
 sudo reboot
 ```
 
+`gpio` is required for the IRQ pin as well as `spi` for `/dev/spidev0.0`.
+
+### `i2cdetect` Still Shows `24`
+
+The PN532 is still on I2C. That is the old wiring. Power down, move the DIP
+switches to SPI, wire NSS/MOSI/MISO/SCK/IRQ as in [Wiring](#wiring), and
+unplug SDA/SCL from pins 3 and 5. After a power-cycle, `i2cdetect -y 1`
+should show `18` and `36 UU` only — never `24`.
+
+Do not set `dtparam=i2c_arm=off`. That takes down the LIS3DH while the
+Geekworm address can still print `UU`.
+
 ### Tags Read Intermittently Or Only At One Angle
 
-- Check the power path first. If `VCC` comes from a downstream STEMMA QT port
-  rather than a Pi 3.3 V header pin, fix that before chasing anything else —
-  see [Daisy-Chaining From An Existing STEMMA QT
-  Board](#daisy-chaining-from-an-existing-stemma-qt-board). A reader that
-  browns out mid-burst reads exactly like a range problem.
+- Confirm `VCC` is a Pi 3.3 V header pin (physical pin 17), not a downstream
+  STEMMA QT port on the LIS3DH. RF bursts of about 100 mA through that
+  board's regulator can brown out the inclinometer.
 - Move the reader further from metal, especially the radar shielding.
 - Switch to on-metal (ferrite-backed) tags if the tag sits on a metal cap.
 - Tap flat against the antenna coil, not edge-on.
@@ -569,6 +492,6 @@ previous file could not be parsed.
   phone first.
 - Only ISO14443A tags are read at all. ISO15693 (NFC Type 5, including ST25DV)
   tags are not, since the PN532's Type 5 support is not implemented here.
-- Reader bus, address, and tag file are command-line settings rather than a
+- SPI bus, CE, IRQ GPIO, and tag file are command-line settings rather than a
   persisted rig configuration file.
 - The reader selects clubs only; it does not switch players or start sessions.

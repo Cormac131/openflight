@@ -1375,6 +1375,10 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
 
 def init_nfc(
     *,
+    interface: str = "spi",
+    spi_bus: int = 0,
+    spi_device: int = 0,
+    irq_gpio: int = 22,
     bus_number: int = 1,
     address: int = 0x24,
     tags_path: str | None = None,
@@ -1384,7 +1388,8 @@ def init_nfc(
 
     The registry loads even when the reader itself fails to come up, so tags
     already learned stay listed in the UI and the failure is visible there
-    instead of only in the log.
+    instead of only in the log. SPI is the supported host link so a wedged
+    reader cannot take down the inclinometer on I2C.
     """
     global nfc_service  # pylint: disable=global-statement
     global club_tag_registry  # pylint: disable=global-statement
@@ -1397,11 +1402,29 @@ def init_nfc(
         NfcService,
     )
 
+    link = {
+        "interface": interface,
+        "spi_bus": spi_bus,
+        "spi_device": spi_device,
+        "irq_gpio": irq_gpio,
+        "i2c_bus": bus_number,
+        "i2c_address": f"0x{address:02x}",
+    }
+
     service = None
     try:
         club_tag_registry = ClubTagRegistry(tags_path)
         reader = (
-            MockTagReader() if use_mock_reader else PN532I2C(bus_number=bus_number, address=address)
+            MockTagReader()
+            if use_mock_reader
+            else PN532I2C(
+                interface=interface,
+                spi_bus=spi_bus,
+                spi_device=spi_device,
+                irq_gpio=irq_gpio,
+                bus_number=bus_number,
+                address=address,
+            )
         )
         service = NfcService(reader, club_tag_registry, on_scan=_on_nfc_scan)
         service.start()
@@ -1409,8 +1432,7 @@ def init_nfc(
         nfc_runtime_config = {
             "enabled": True,
             "reader": reader.name,
-            "i2c_bus": bus_number,
-            "i2c_address": f"0x{address:02x}",
+            **link,
             "tags_path": str(club_tag_registry.path),
             "known_tags": len(club_tag_registry),
         }
@@ -1429,7 +1451,7 @@ def init_nfc(
         log_session_error(
             "NFC reader initialization failed",
             component="nfc",
-            context={"i2c_bus": bus_number, "i2c_address": f"0x{address:02x}"},
+            context=link,
             exc=error,
         )
         nfc_service = None
@@ -1437,8 +1459,7 @@ def init_nfc(
             "enabled": False,
             "requested": True,
             "reader": "mock" if use_mock_reader else "pn532",
-            "i2c_bus": bus_number,
-            "i2c_address": f"0x{address:02x}",
+            **link,
             "tags_path": str(club_tag_registry.path) if club_tag_registry else None,
             "known_tags": len(club_tag_registry) if club_tag_registry else 0,
             "error": str(error),
@@ -4774,16 +4795,40 @@ def main():
         help="Enable the PN532 NFC reader so club tags select the club",
     )
     parser.add_argument(
+        "--nfc-interface",
+        choices=("spi", "i2c"),
+        default="spi",
+        help="PN532 host link (default: spi). I2C is a fallback only.",
+    )
+    parser.add_argument(
+        "--nfc-spi-bus",
+        type=int,
+        default=0,
+        help="SPI bus the PN532 is on (default: 0, /dev/spidev0.0)",
+    )
+    parser.add_argument(
+        "--nfc-spi-device",
+        type=int,
+        default=0,
+        help="SPI chip-select / CE the PN532 is on (default: 0, GPIO8 CE0)",
+    )
+    parser.add_argument(
+        "--nfc-irq-gpio",
+        type=int,
+        default=22,
+        help="BCM GPIO for the PN532 IRQ pin (default: 22, physical pin 15)",
+    )
+    parser.add_argument(
         "--nfc-i2c-bus",
         type=int,
         default=1,
-        help="I2C bus the PN532 is on (default: 1)",
+        help="I2C bus the PN532 is on if --nfc-interface i2c (default: 1)",
     )
     parser.add_argument(
         "--nfc-i2c-address",
         type=lambda value: int(value, 0),
         default=0x24,
-        help="PN532 I2C address (default: 0x24)",
+        help="PN532 I2C address if --nfc-interface i2c (default: 0x24)",
     )
     parser.add_argument(
         "--nfc-tags-file",
@@ -5294,6 +5339,10 @@ def main():
 
     if args.nfc:
         if not init_nfc(
+            interface=args.nfc_interface,
+            spi_bus=args.nfc_spi_bus,
+            spi_device=args.nfc_spi_device,
+            irq_gpio=args.nfc_irq_gpio,
             bus_number=args.nfc_i2c_bus,
             address=args.nfc_i2c_address,
             tags_path=args.nfc_tags_file,

@@ -38,6 +38,7 @@ dependencies = [
     "gpiozero>=2.0.1; sys_platform == 'linux'",
     "lgpio>=0.2.2.0; sys_platform == 'linux'",
     "smbus2>=0.5.0; sys_platform == 'linux'",
+    "spidev>=3.6; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]

@@ -9,10 +9,14 @@ from openflight.nfc.pn532 import (
     PN532_TO_HOST,
     PN532I2C,
     PN532FrameError,
+    SPI_DATAREAD,
+    SPI_DATAWRITE,
+    SpiTransport,
     build_frame,
     parse_frame,
     parse_passive_target,
     parse_passive_target_uid,
+    reverse_byte,
 )
 from openflight.nfc.reader import NfcReaderError, TagWriteError
 
@@ -73,17 +77,22 @@ class FakeTransport:
     whatever length the driver asks for.
     """
 
-    def __init__(self, reads, *, nack_polls: int = 0):
+    def __init__(self, reads, *, nack_polls: int = 0, poll_timeouts: int = 0):
         self.reads = list(reads)
         self.writes = []
         self.closed = False
         # Real silicon NACKs I2C reads until a frame is waiting (Linux errno 121).
         self.nack_polls = nack_polls
+        # The Pi I2C controller times out (errno 110) when the PN532 stretches SCL.
+        self.poll_timeouts = poll_timeouts
 
     def write(self, data):
         self.writes.append(bytes(data))
 
     def read(self, length):
+        if length == 1 and self.poll_timeouts:
+            self.poll_timeouts -= 1
+            raise TimeoutError(110, "Connection timed out")
         if length == 1 and self.nack_polls:
             self.nack_polls -= 1
             raise OSError(121, "Remote I/O error")
@@ -231,6 +240,17 @@ class TestReaderLifecycle:
         reader = PN532I2C(transport=transport, ack_timeout_s=0.05)
 
         with pytest.raises(NfcReaderError, match="did not acknowledge"):
+            reader.open()
+        assert transport.closed is True
+
+    def test_a_status_poll_timeout_is_not_swallowed_as_a_nack(self):
+        # Errno 110 is the Pi aborting clock-stretch, not the PN532 saying
+        # "not ready". Treating it as a NACK hides the real failure behind
+        # "did not acknowledge the command".
+        transport = FakeTransport([], poll_timeouts=10**9)
+        reader = PN532I2C(transport=transport, ack_timeout_s=0.05)
+
+        with pytest.raises(NfcReaderError, match="timed out"):
             reader.open()
         assert transport.closed is True
 
@@ -425,3 +445,64 @@ class TestTagTypeDetection:
 
     def test_no_target_reports_nothing(self):
         assert parse_passive_target(bytes([0x00])) is None
+
+
+class _FakeSpi:
+    def __init__(self):
+        self.xfers = []
+
+    def xfer2(self, data):
+        self.xfers.append(list(data))
+        return [0] * len(data)
+
+    def close(self):
+        pass
+
+
+class _FakeIrq:
+    def __init__(self, active=False):
+        self.is_active = active
+
+    def close(self):
+        pass
+
+
+class TestSpiTransport:
+    def test_reverse_byte_swaps_lsb_and_msb(self):
+        assert reverse_byte(0x01) == 0x80
+        assert reverse_byte(0x80) == 0x01
+        assert reverse_byte(0x00) == 0x00
+        assert reverse_byte(0xFF) == 0xFF
+        assert reverse_byte(reverse_byte(0xD4)) == 0xD4
+
+    def test_write_prefixes_datawrite_and_bit_reverses(self):
+        spi = _FakeSpi()
+        transport = SpiTransport(spi=spi, irq=_FakeIrq(active=True))
+
+        transport.write(bytes([HOST_TO_PN532, 0x02]))
+
+        assert spi.xfers[0][0] == reverse_byte(SPI_DATAWRITE)
+        assert [reverse_byte(byte) for byte in spi.xfers[0][1:]] == [HOST_TO_PN532, 0x02]
+
+    def test_a_one_byte_read_is_the_irq_ready_bit(self):
+        transport = SpiTransport(spi=_FakeSpi(), irq=_FakeIrq(active=True))
+
+        assert transport.read(1) == bytes([0x01])
+
+        transport = SpiTransport(spi=_FakeSpi(), irq=_FakeIrq(active=False))
+        assert transport.read(1) == bytes([0x00])
+
+    def test_a_frame_read_uses_dataread_and_prepends_status(self):
+        spi = _FakeSpi()
+        transport = SpiTransport(spi=spi, irq=_FakeIrq(active=True))
+
+        frame = transport.read(3)
+
+        assert frame[0] == 0x01
+        assert spi.xfers[0][0] == reverse_byte(SPI_DATAREAD)
+        assert len(spi.xfers[0]) == 3
+
+    def test_an_unknown_interface_is_rejected(self):
+        with pytest.raises(ValueError, match="spi"):
+            PN532I2C(interface="uart")
+

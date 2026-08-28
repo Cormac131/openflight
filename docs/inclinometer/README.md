@@ -322,11 +322,9 @@ OpenFlight has not received a recent stable reading. Check the I2C connection,
 sensor mounting, and logs for sample errors. The shot is still processed using
 the configured IWR tilt.
 
-If a PN532 NFC reader is powered from this breakout's spare STEMMA QT port, move
-its `VCC` to a Pi 3.3 V header pin. The reader's RF bursts draw about 100 mA
-through this board's regulator and can brown out the LIS3DH itself. See
-[Daisy-Chaining From An Existing STEMMA QT
-Board](../nfc/README.md#daisy-chaining-from-an-existing-stemma-qt-board).
+Do not put a PN532 NFC reader on this I2C bus (including the spare STEMMA QT
+port). The supported NFC link is SPI plus IRQ, so a clock-stretching reader
+cannot wedge the LIS3DH. See [PN532 NFC Club Tag Setup](../nfc/README.md).
 
 ### Effective Tilt Looks Wrong
 

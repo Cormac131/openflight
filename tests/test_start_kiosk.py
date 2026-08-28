@@ -419,10 +419,14 @@ def test_nfc_options_are_forwarded():
     command_arguments = (
         _dry_run(
             "--nfc",
-            "--nfc-i2c-bus",
-            "3",
-            "--nfc-i2c-address",
-            "0x25",
+            "--nfc-interface",
+            "spi",
+            "--nfc-spi-bus",
+            "0",
+            "--nfc-spi-device",
+            "0",
+            "--nfc-irq-gpio",
+            "22",
             "--nfc-tags-file",
             "/tmp/tags.json",
         )
@@ -430,9 +434,31 @@ def test_nfc_options_are_forwarded():
         .split()
     )
 
+    assert command_arguments[command_arguments.index("--nfc-interface") + 1] == "spi"
+    assert command_arguments[command_arguments.index("--nfc-spi-bus") + 1] == "0"
+    assert command_arguments[command_arguments.index("--nfc-spi-device") + 1] == "0"
+    assert command_arguments[command_arguments.index("--nfc-irq-gpio") + 1] == "22"
+    assert command_arguments[command_arguments.index("--nfc-tags-file") + 1] == "/tmp/tags.json"
+
+
+def test_nfc_i2c_fallback_options_are_forwarded():
+    command_arguments = (
+        _dry_run(
+            "--nfc",
+            "--nfc-interface",
+            "i2c",
+            "--nfc-i2c-bus",
+            "3",
+            "--nfc-i2c-address",
+            "0x25",
+        )
+        .stdout.strip()
+        .split()
+    )
+
+    assert command_arguments[command_arguments.index("--nfc-interface") + 1] == "i2c"
     assert command_arguments[command_arguments.index("--nfc-i2c-bus") + 1] == "3"
     assert command_arguments[command_arguments.index("--nfc-i2c-address") + 1] == "0x25"
-    assert command_arguments[command_arguments.index("--nfc-tags-file") + 1] == "/tmp/tags.json"
 
 
 def test_nfc_options_are_not_forwarded_without_the_flag():

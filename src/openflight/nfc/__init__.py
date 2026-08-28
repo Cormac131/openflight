@@ -3,7 +3,14 @@
 from . import ndef
 from .mock import MockTagReader
 from .models import ClubTag, InvalidTagUidError, TagScan, format_uid, normalize_uid
-from .pn532 import DEFAULT_I2C_ADDRESS, DEFAULT_I2C_BUS, PN532I2C
+from .pn532 import (
+    DEFAULT_I2C_ADDRESS,
+    DEFAULT_I2C_BUS,
+    DEFAULT_IRQ_GPIO,
+    DEFAULT_SPI_BUS,
+    DEFAULT_SPI_DEVICE,
+    PN532I2C,
+)
 from .reader import NfcReaderError, TagRead, TagReader, TagWriteError
 from .registry import DEFAULT_REGISTRY_PATH, ClubTagRegistry, UnknownClubError, validate_club_id
 from .service import NfcService
@@ -14,6 +21,9 @@ __all__ = [
     "ClubTagRegistry",
     "DEFAULT_I2C_ADDRESS",
     "DEFAULT_I2C_BUS",
+    "DEFAULT_IRQ_GPIO",
+    "DEFAULT_SPI_BUS",
+    "DEFAULT_SPI_DEVICE",
     "DEFAULT_REGISTRY_PATH",
     "InvalidTagUidError",
     "MockTagReader",

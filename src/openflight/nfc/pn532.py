@@ -1,14 +1,14 @@
-"""NXP PN532 I2C driver, scoped to reading passive-tag UIDs.
+"""NXP PN532 driver, scoped to reading passive-tag UIDs.
 
-The PN532 is the reader in the club-tag setup: the tags themselves are cheap
-passive NTAG/MIFARE stickers on the club grips, which carry no power and cannot
-initiate anything. Only the UID is used -- the club mapping lives on the Pi in
-``ClubTagRegistry``, so a tag never needs to be written and a blank sticker
-straight off the roll works.
+The PN532 is the reader in the club-tag setup. The supported host link on the
+OpenFlight Pi is SPI with the IRQ pin — I2C clock-stretching on the shared
+inclinometer/battery bus can wedge those devices. I2C remains as a fallback
+when a transport is injected or ``interface='i2c'`` is set.
 """
 
 from __future__ import annotations
 
+import errno
 import logging
 import time
 from typing import Optional, Protocol
@@ -21,6 +21,14 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_I2C_ADDRESS = 0x24
 DEFAULT_I2C_BUS = 1
+DEFAULT_SPI_BUS = 0
+DEFAULT_SPI_DEVICE = 0
+DEFAULT_IRQ_GPIO = 22
+SPI_CLOCK_HZ = 1_000_000
+
+SPI_STATREAD = 0x02
+SPI_DATAWRITE = 0x01
+SPI_DATAREAD = 0x03
 
 PREAMBLE = 0x00
 START_CODE_1 = 0x00
@@ -30,6 +38,9 @@ HOST_TO_PN532 = 0xD4
 PN532_TO_HOST = 0xD5
 ACK_FRAME = bytes([0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00])
 I2C_READY = 0x01
+# Linux reports a PN532 NACK-while-busy as EREMOTEIO (121). Some I2C
+# controllers report the same condition as EIO (5). Neither is a hung bus.
+_NOT_READY_ERRNOS = {errno.EIO, getattr(errno, "EREMOTEIO", 121)}
 
 COMMAND_GET_FIRMWARE_VERSION = 0x02
 COMMAND_SAM_CONFIGURATION = 0x14
@@ -113,6 +124,102 @@ class SMBusTransport:
         self._bus.close()
 
 
+def reverse_byte(value: int) -> int:
+    """Swap bit order. The PN532 SPI is LSB-first; Pi hardware SPI is not."""
+    result = 0
+    for _ in range(8):
+        result = (result << 1) | (value & 1)
+        value >>= 1
+    return result
+
+
+class SpiTransport:
+    """I2CTransport-shaped SPI adapter for the PN532.
+
+    SPI uses a leading opcode (write / status / read) and LSB-first bytes.
+    The reader still sees I2C-style transactions: ``read(1)`` is the ready
+    bit, longer reads start with a dummy status byte so ``[1:]`` is the frame.
+    Ready comes from the IRQ pin (active low) instead of stretching SCL.
+    """
+
+    def __init__(
+        self,
+        *,
+        bus_number: int = DEFAULT_SPI_BUS,
+        device: int = DEFAULT_SPI_DEVICE,
+        irq_gpio: int = DEFAULT_IRQ_GPIO,
+        spi=None,
+        irq=None,
+    ):
+        self.bus_number = bus_number
+        self.device = device
+        self.irq_gpio = irq_gpio
+        self._owns_spi = spi is None
+        self._owns_irq = irq is None
+        if spi is None:
+            import spidev  # pylint: disable=import-outside-toplevel,import-error
+
+            self._spi = spidev.SpiDev()
+            self._spi.open(bus_number, device)
+            self._spi.max_speed_hz = SPI_CLOCK_HZ
+            self._spi.mode = 0
+        else:
+            self._spi = spi
+        if irq is None:
+            from gpiozero import DigitalInputDevice  # pylint: disable=import-outside-toplevel
+
+            from ..gpio_factory import (  # pylint: disable=import-outside-toplevel
+                ensure_lgpio_pin_factory,
+            )
+
+            ensure_lgpio_pin_factory()
+            # IRQ is active-low. pull_up=True makes gpiozero treat low as active.
+            self._irq = DigitalInputDevice(irq_gpio, pull_up=True)
+        else:
+            self._irq = irq
+        self._closed = False
+
+    def wakeup(self) -> None:
+        """Clock a dummy byte so a sleeping PN532 will listen on SPI."""
+        self._xfer(b"\x00")
+        time.sleep(0.01)
+
+    def write(self, data: bytes) -> None:
+        """Send one command frame with the SPI data-write opcode."""
+        self._xfer(bytes([SPI_DATAWRITE]) + data)
+
+    def read(self, length: int) -> bytes:
+        """I2C-shaped read: one byte is ready status, longer reads are frames."""
+        if length == 1:
+            return bytes([I2C_READY if self._irq_ready() else 0])
+        incoming = self._xfer(bytes([SPI_DATAREAD]) + bytes(length - 1))
+        return bytes([I2C_READY]) + incoming[1:]
+
+    def close(self) -> None:
+        """Release SPI and the IRQ pin once."""
+        if self._closed:
+            return
+        self._closed = True
+        if self._owns_irq and self._irq is not None:
+            try:
+                self._irq.close()
+            except AttributeError:
+                pass
+        if self._owns_spi:
+            self._spi.close()
+
+    def _irq_ready(self) -> bool:
+        if self._irq is not None:
+            return bool(self._irq.is_active)
+        status = self._xfer(bytes([SPI_STATREAD, 0x00]))
+        return len(status) > 1 and status[1] == I2C_READY
+
+    def _xfer(self, data: bytes) -> bytes:
+        outgoing = [reverse_byte(byte) for byte in data]
+        incoming = self._spi.xfer2(outgoing)
+        return bytes(reverse_byte(byte) for byte in incoming)
+
+
 def build_frame(data: bytes) -> bytes:
     """Wrap a command payload (TFI included) in a PN532 normal information frame."""
     if not 1 <= len(data) <= 254:
@@ -192,7 +299,7 @@ def parse_passive_target_uid(payload: bytes) -> Optional[str]:
 
 
 class PN532I2C:
-    """Read passive-tag UIDs from a PN532 over I2C."""
+    """Read passive-tag UIDs from a PN532. SPI+IRQ is the hardware default."""
 
     name = "pn532"
 
@@ -202,11 +309,21 @@ class PN532I2C:
         bus_number: int = DEFAULT_I2C_BUS,
         address: int = DEFAULT_I2C_ADDRESS,
         transport: I2CTransport | None = None,
-        ack_timeout_s: float = 0.5,
+        ack_timeout_s: float = 2.0,
+        interface: str = "spi",
+        spi_bus: int = DEFAULT_SPI_BUS,
+        spi_device: int = DEFAULT_SPI_DEVICE,
+        irq_gpio: int = DEFAULT_IRQ_GPIO,
     ):
+        if interface not in ("spi", "i2c"):
+            raise ValueError(f"PN532 interface must be 'spi' or 'i2c', got {interface!r}")
         self.bus_number = bus_number
         self.address = address
         self.ack_timeout_s = ack_timeout_s
+        self.interface = interface
+        self.spi_bus = spi_bus
+        self.spi_device = spi_device
+        self.irq_gpio = irq_gpio
         self._transport = transport
         self._opened = False
         self.firmware_version: Optional[str] = None
@@ -216,7 +333,22 @@ class PN532I2C:
     def open(self) -> None:
         """Wake the reader, confirm its identity, and configure it for polling."""
         if self._transport is None:
-            self._transport = SMBusTransport(bus_number=self.bus_number, address=self.address)
+            if self.interface == "spi":
+                self._transport = SpiTransport(
+                    bus_number=self.spi_bus,
+                    device=self.spi_device,
+                    irq_gpio=self.irq_gpio,
+                )
+            else:
+                self._transport = SMBusTransport(
+                    bus_number=self.bus_number, address=self.address
+                )
+            wakeup = getattr(self._transport, "wakeup", None)
+            if wakeup is not None:
+                wakeup()
+            # The PN532 needs a beat after the bus opens before it will ACK a
+            # command. Injected transports (tests, mock) are already awake.
+            time.sleep(0.1)
         self._opened = True
         try:
             self.firmware_version = self._read_firmware_version()
@@ -228,12 +360,21 @@ class PN532I2C:
         except Exception:
             self.close()
             raise
-        logger.info(
-            "[NFC] PN532 ready on I2C-%d at 0x%02x (firmware %s)",
-            self.bus_number,
-            self.address,
-            self.firmware_version,
-        )
+        if self.interface == "spi":
+            logger.info(
+                "[NFC] PN532 ready on SPI-%d.%d IRQ GPIO%d (firmware %s)",
+                self.spi_bus,
+                self.spi_device,
+                self.irq_gpio,
+                self.firmware_version,
+            )
+        else:
+            logger.info(
+                "[NFC] PN532 ready on I2C-%d at 0x%02x (firmware %s)",
+                self.bus_number,
+                self.address,
+                self.firmware_version,
+            )
 
     def close(self) -> None:
         """Release the bus."""
@@ -360,6 +501,9 @@ class PN532I2C:
         """Send one command and return its response payload (command echo stripped)."""
         transport = self._require_transport()
         transport.write(build_frame(bytes([HOST_TO_PN532]) + command))
+        # The chip stretches SCL while it parses the frame. Give it a moment
+        # before the first status poll so the Pi is not sampling a stretch.
+        time.sleep(0.002)
         self._await_ack()
 
         deadline = time.monotonic() + timeout_s
@@ -386,7 +530,11 @@ class PN532I2C:
                     raise PN532FrameError(f"Expected ACK, got {frame.hex()}")
                 return
             if time.monotonic() >= deadline:
-                raise NfcReaderError("PN532 did not acknowledge the command")
+                raise NfcReaderError(
+                    "PN532 did not acknowledge the command. "
+                    "Check the DIP switches against the I2C row printed on the "
+                    "board, then power-cycle — the chip latches mode at power-up."
+                )
             time.sleep(0.005)
 
     def _ready(self) -> bool:
@@ -399,8 +547,16 @@ class PN532I2C:
         """
         try:
             status = self._require_transport().read(1)
-        except OSError:
-            return False
+        except TimeoutError as error:
+            raise NfcReaderError(
+                "PN532 I2C read timed out (clock stretching). "
+                "Keep i2c_arm_baudrate=10000, or use software I2C "
+                "(dtoverlay=i2c-gpio) if 10 kHz is not enough."
+            ) from error
+        except OSError as error:
+            if error.errno in _NOT_READY_ERRNOS:
+                return False
+            raise
         return bool(status) and bool(status[0] & I2C_READY)
 
     def _require_transport(self) -> I2CTransport:
