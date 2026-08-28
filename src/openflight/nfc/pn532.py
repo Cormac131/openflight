@@ -24,7 +24,7 @@ DEFAULT_I2C_BUS = 1
 DEFAULT_SPI_BUS = 0
 DEFAULT_SPI_DEVICE = 0
 DEFAULT_IRQ_GPIO = 22
-DEFAULT_CS_GPIO = 8  # physical pin 24, SPI0 CE0 — driven as GPIO like Elechouse SS
+DEFAULT_CS_GPIO = None  # None = kernel CE0 (pin 24). Use a free GPIO only if NSS is moved off CE0.
 SPI_CLOCK_HZ = 1_000_000
 CS_WAKE_S = 0.002
 
@@ -154,8 +154,10 @@ class SpiTransport:
     The reader still sees I2C-style transactions: ``read(1)`` is the ready
     bit, longer reads start with a dummy status byte so ``[1:]`` is the frame.
     Ready is IRQ (active low) when that pin is asserted; otherwise the driver
-    polls SPI ``STATREAD``. NSS is driven as a GPIO (Elechouse ``SS``): the
-    kernel CE0 pulse is too short to wake a sleeping PN532.
+    polls SPI ``STATREAD``. NSS on pin 24 is kernel SPI0 CE0 — that pin is
+    busy as soon as ``/dev/spidev0.0`` is opened, so it cannot be claimed as
+    a gpiozero output. A separate ``cs_gpio`` is only for a dedicated NSS
+    wire (soonuse GPIO4), not CE0.
     """
 
     def __init__(
@@ -164,7 +166,7 @@ class SpiTransport:
         bus_number: int = DEFAULT_SPI_BUS,
         device: int = DEFAULT_SPI_DEVICE,
         irq_gpio: int = DEFAULT_IRQ_GPIO,
-        cs_gpio: int = DEFAULT_CS_GPIO,
+        cs_gpio: Optional[int] = DEFAULT_CS_GPIO,
         spi=None,
         irq=None,
         cs=None,
@@ -175,7 +177,7 @@ class SpiTransport:
         self.cs_gpio = cs_gpio
         self._owns_spi = spi is None
         self._owns_irq = irq is None
-        self._owns_cs = cs is None and spi is None
+        self._owns_cs = cs is None and spi is None and cs_gpio is not None
         self._last_spi_status: Optional[int] = None
         if spi is None:
             import spidev  # pylint: disable=import-outside-toplevel,import-error
@@ -184,7 +186,8 @@ class SpiTransport:
             self._spi.open(bus_number, device)
             self._spi.max_speed_hz = SPI_CLOCK_HZ
             self._spi.mode = 0
-            disable_kernel_chip_select(self._spi)
+            if self._owns_cs:
+                disable_kernel_chip_select(self._spi)
         else:
             self._spi = spi
         if self._owns_cs or self._owns_irq:
@@ -213,10 +216,14 @@ class SpiTransport:
         self._closed = False
 
     def wakeup(self) -> None:
-        """Hold NSS low for 2 ms, matching Elechouse PN532_SPI::wakeup."""
-        self._select()
-        time.sleep(CS_WAKE_S)
-        self._deselect()
+        """Wake the PN532. Kernel CE0 stays asserted for the dummy clocks."""
+        if self._cs is not None:
+            self._select()
+            time.sleep(CS_WAKE_S)
+            self._deselect()
+            return
+        dummy_bytes = max(1, int(SPI_CLOCK_HZ * CS_WAKE_S / 8))
+        self._xfer(bytes(dummy_bytes))
 
     def write(self, data: bytes) -> None:
         """Send one command frame with the SPI data-write opcode."""

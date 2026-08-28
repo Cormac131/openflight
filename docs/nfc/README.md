@@ -149,8 +149,9 @@ GND         ---------------------------->  physical pin 20 (GND)
 > off GPIO6 (Geekworm charger), GPIO16 (HAT), GPIO17 (sound trigger), and
 > GPIO14/15 (OPS UART).
 
-NSS / SS is **required**. The driver drives it as a GPIO (Elechouse `SS`),
-not as a brief kernel CE0 pulse. IRQ is optional.
+NSS / SS is **required** on physical pin 24 (kernel SPI0 CE0). The driver
+cannot claim GPIO8 as a gpiozero pin — SPI already owns it (`GPIO busy`).
+IRQ is optional.
 
 ## Mounting And Read Range
 

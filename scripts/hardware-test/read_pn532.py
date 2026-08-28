@@ -26,10 +26,14 @@ def _probe_spi(args: argparse.Namespace) -> None:
     try:
         transport.wakeup()
         irq = getattr(transport._irq, "is_active", None)
+        nss = (
+            f"NSS GPIO{transport.cs_gpio}"
+            if transport.cs_gpio is not None
+            else "NSS kernel CE0 pin 24"
+        )
         print(
-            f"SPI-{args.spi_bus}.{args.spi_device}  "
-            f"NSS GPIO{transport.cs_gpio}  IRQ GPIO{args.irq_gpio} "
-            f"irq_active={irq}"
+            f"SPI-{args.spi_bus}.{args.spi_device}  {nss}  "
+            f"IRQ GPIO{args.irq_gpio} irq_active={irq}"
         )
         print("STATREAD  decoded  raw     hint")
         for _ in range(8):

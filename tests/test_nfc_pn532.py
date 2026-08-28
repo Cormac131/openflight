@@ -531,6 +531,20 @@ class TestSpiTransport:
         assert reverse_byte(0xFF) == 0xFF
         assert reverse_byte(reverse_byte(0xD4)) == 0xD4
 
+    def test_wakeup_without_gpio_cs_clocks_dummy_bytes(self):
+        spi = _FakeSpi()
+        transport = SpiTransport(spi=spi, irq=_FakeIrq(active=True))
+
+        transport.wakeup()
+
+        assert len(spi.xfers) == 1
+        assert len(spi.xfers[0]) >= 1
+
+    def test_injected_spi_does_not_claim_ce0(self):
+        transport = SpiTransport(spi=_FakeSpi(), irq=_FakeIrq(active=True))
+
+        assert transport._cs is None
+
     def test_wakeup_holds_nss_low_then_releases(self):
         cs = _FakeCs()
         spi = _FakeSpi()
