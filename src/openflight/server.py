@@ -207,7 +207,7 @@ _shot_finalization_order: deque[int] = deque()
 _shot_finalization_registered: dict[int, "_RegisteredShotFinalization"] = {}
 _shot_finalization_ready: dict[int, "_PendingShotFinalization"] = {}
 _shot_finalization_running = False
-_shot_finalization_watchdog: threading.Thread | None = None
+_shot_finalization_worker: threading.Thread | None = None
 
 
 @dataclass(frozen=True)
@@ -275,11 +275,8 @@ def _register_shot_for_finalization(
     needs_watchdog: bool = False,
 ) -> None:
     """Record callback order and the bounded OPS-only fallback for a shot."""
-    global _shot_finalization_running  # pylint: disable=global-statement
-
     if shot.shot_number is None:
         raise ValueError("shot must have a stable number before registration")
-    should_drain = False
     with _shot_finalization_condition:
         if shot.shot_number in _shot_finalization_registered:
             raise ValueError(f"shot #{shot.shot_number} is already registered")
@@ -292,69 +289,120 @@ def _register_shot_for_finalization(
                 time.monotonic() + _SHOT_ENRICHMENT_DEADLINE_S if needs_watchdog else None
             ),
         )
-        if needs_watchdog:
-            _ensure_shot_finalization_watchdog_locked()
-        if (
-            len(_shot_finalization_order) > _SHOT_FINALIZATION_CAPACITY
-            and not _shot_finalization_running
-        ):
-            _shot_finalization_running = True
-            should_drain = True
+        _ensure_shot_finalization_worker_locked()
         _shot_finalization_condition.notify_all()
 
-    if should_drain:
-        _drain_ordered_shot_finalizations()
 
+def _ensure_shot_finalization_worker_locked() -> None:
+    """Start the exclusive finalization worker; caller holds the condition lock."""
+    global _shot_finalization_worker  # pylint: disable=global-statement
 
-def _ensure_shot_finalization_watchdog_locked() -> None:
-    """Start the single deadline watchdog; caller must hold the condition lock."""
-    global _shot_finalization_watchdog  # pylint: disable=global-statement
-
-    if _shot_finalization_watchdog is not None and _shot_finalization_watchdog.is_alive():
+    if _shot_finalization_worker is not None and _shot_finalization_worker.is_alive():
         return
-    _shot_finalization_watchdog = threading.Thread(
-        target=_shot_finalization_watchdog_loop,
-        name="shot-finalization-watchdog",
+    _shot_finalization_worker = threading.Thread(
+        target=_shot_finalization_worker_loop,
+        name="shot-finalization",
         daemon=True,
     )
-    _shot_finalization_watchdog.start()
+    _shot_finalization_worker.start()
 
 
-def _shot_finalization_watchdog_loop() -> None:
-    """Finalize an overdue ordered head OPS-only, independent of stuck hardware."""
+def _shot_finalization_worker_loop() -> None:
+    """Exclusively finalize ready, overdue, or capacity-evicted shots in order."""
     global _shot_finalization_running  # pylint: disable=global-statement
-    global _shot_finalization_watchdog  # pylint: disable=global-statement
+    global _shot_finalization_worker  # pylint: disable=global-statement
 
     current_thread = threading.current_thread()
     try:
         while True:
-            should_drain = False
             with _shot_finalization_condition:
-                if not _shot_finalization_order:
-                    if _shot_finalization_watchdog is current_thread:
-                        _shot_finalization_watchdog = None
-                    _shot_finalization_condition.notify_all()
-                    return
-                head = _shot_finalization_registered[_shot_finalization_order[0]]
-                if head.deadline_monotonic is None:
-                    _shot_finalization_condition.wait()
-                    continue
-                remaining_s = head.deadline_monotonic - time.monotonic()
-                if remaining_s > 0:
-                    _shot_finalization_condition.wait(timeout=remaining_s)
-                    continue
-                if _shot_finalization_running:
-                    _shot_finalization_condition.wait()
-                    continue
-                _shot_finalization_running = True
-                should_drain = True
+                while True:
+                    if not _shot_finalization_order:
+                        _shot_finalization_running = False
+                        if _shot_finalization_worker is current_thread:
+                            _shot_finalization_worker = None
+                        _shot_finalization_condition.notify_all()
+                        return
 
-            if should_drain:
-                _drain_ordered_shot_finalizations()
+                    next_shot_number = _shot_finalization_order[0]
+                    registered = _shot_finalization_registered[next_shot_number]
+                    pending = _shot_finalization_ready.get(next_shot_number)
+                    deadline_expired = (
+                        registered.deadline_monotonic is not None
+                        and time.monotonic() >= registered.deadline_monotonic
+                    )
+                    over_capacity = len(_shot_finalization_order) > _SHOT_FINALIZATION_CAPACITY
+                    if pending is not None or deadline_expired or over_capacity:
+                        _shot_finalization_order.popleft()
+                        del _shot_finalization_registered[next_shot_number]
+                        _shot_finalization_ready.pop(next_shot_number, None)
+                        _shot_finalization_running = True
+                        _shot_finalization_condition.notify_all()
+                        break
+
+                    _shot_finalization_running = False
+                    wait_timeout_s = None
+                    if registered.deadline_monotonic is not None:
+                        wait_timeout_s = max(
+                            0.0,
+                            registered.deadline_monotonic - time.monotonic(),
+                        )
+                    _shot_finalization_condition.wait(timeout=wait_timeout_s)
+
+            if pending is None:
+                reason = "deadline" if deadline_expired else "coordinator capacity"
+                logger.warning(
+                    "[SERVER] Shot #%d optional enrichment exceeded %s; finalizing OPS-only",
+                    next_shot_number,
+                    reason,
+                )
+                pending = _PendingShotFinalization(
+                    shot=registered.shot,
+                    emit_event=registered.emit_event,
+                    initial_ui_ms=registered.initial_ui_ms,
+                    enrichment=_ShotEnrichmentResult(),
+                )
+            elif pending.shot is not registered.shot:
+                for shot_field in fields(Shot):
+                    setattr(
+                        registered.shot,
+                        shot_field.name,
+                        getattr(pending.shot, shot_field.name),
+                    )
+                pending = replace(pending, shot=registered.shot)
+
+            try:
+                _finalize_shot_detected(
+                    pending.shot,
+                    emit_event=pending.emit_event,
+                    initial_ui_ms=pending.initial_ui_ms,
+                    enrichment=pending.enrichment,
+                )
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                logger.error(
+                    "[SERVER] Ordered shot finalization failed: %s",
+                    error,
+                    exc_info=True,
+                )
+                log_session_error(
+                    "Ordered shot finalization failed",
+                    component="server",
+                    context={
+                        "stage": "ordered_finalization",
+                        "shot_number": pending.shot.shot_number,
+                        "ball_speed_mph": pending.shot.ball_speed_mph,
+                    },
+                    exc=error,
+                )
+            finally:
+                with _shot_finalization_condition:
+                    _shot_finalization_running = False
+                    _shot_finalization_condition.notify_all()
     finally:
         with _shot_finalization_condition:
-            if _shot_finalization_watchdog is current_thread:
-                _shot_finalization_watchdog = None
+            _shot_finalization_running = False
+            if _shot_finalization_worker is current_thread:
+                _shot_finalization_worker = None
             _shot_finalization_condition.notify_all()
 
 
@@ -3950,7 +3998,7 @@ def _queue_shot_finalization(
     enrichment: _ShotEnrichmentResult | None = None,
     final_shot: Shot | None = None,
 ) -> None:
-    """Record a ready shot and drain any consecutive detection-order results."""
+    """Record a ready shot for the exclusive finalization worker."""
     _queue_ordered_shot_finalization(
         _PendingShotFinalization(
             shot=final_shot if final_shot is not None else shot,
@@ -3967,8 +4015,7 @@ def _queue_ordered_shot_finalization(
     *,
     source_shot: Shot,
 ) -> None:
-    """Publish a completed shot only after every earlier detection is published."""
-    global _shot_finalization_running  # pylint: disable=global-statement
+    """Make a completed shot visible to the ordered finalization worker."""
 
     shot_number = pending.shot.shot_number
     if shot_number is None:
@@ -3986,86 +4033,8 @@ def _queue_ordered_shot_finalization(
             logger.warning("[SERVER] Shot #%d is already waiting for finalization", shot_number)
             return
         _shot_finalization_ready[shot_number] = pending
-        if _shot_finalization_running:
-            _shot_finalization_condition.notify_all()
-            return
-        _shot_finalization_running = True
+        _ensure_shot_finalization_worker_locked()
         _shot_finalization_condition.notify_all()
-
-    _drain_ordered_shot_finalizations()
-
-
-def _drain_ordered_shot_finalizations() -> None:
-    """Drain consecutive ready shots on exactly one publishing caller."""
-    global _shot_finalization_running  # pylint: disable=global-statement
-
-    while True:
-        with _shot_finalization_condition:
-            if not _shot_finalization_order:
-                _shot_finalization_running = False
-                _shot_finalization_condition.notify_all()
-                return
-            next_shot_number = _shot_finalization_order[0]
-            registered = _shot_finalization_registered[next_shot_number]
-            pending = _shot_finalization_ready.pop(next_shot_number, None)
-            deadline_expired = (
-                registered.deadline_monotonic is not None
-                and time.monotonic() >= registered.deadline_monotonic
-            )
-            over_capacity = len(_shot_finalization_order) > _SHOT_FINALIZATION_CAPACITY
-            if pending is None and not deadline_expired and not over_capacity:
-                _shot_finalization_running = False
-                _shot_finalization_condition.notify_all()
-                return
-            _shot_finalization_order.popleft()
-            del _shot_finalization_registered[next_shot_number]
-            _shot_finalization_condition.notify_all()
-
-        if pending is None:
-            reason = "deadline" if deadline_expired else "coordinator capacity"
-            logger.warning(
-                "[SERVER] Shot #%d optional enrichment exceeded %s; finalizing OPS-only",
-                next_shot_number,
-                reason,
-            )
-            pending = _PendingShotFinalization(
-                shot=registered.shot,
-                emit_event=registered.emit_event,
-                initial_ui_ms=registered.initial_ui_ms,
-                enrichment=_ShotEnrichmentResult(),
-            )
-        elif pending.shot is not registered.shot:
-            for shot_field in fields(Shot):
-                setattr(
-                    registered.shot,
-                    shot_field.name,
-                    getattr(pending.shot, shot_field.name),
-                )
-            pending = replace(pending, shot=registered.shot)
-
-        try:
-            _finalize_shot_detected(
-                pending.shot,
-                emit_event=pending.emit_event,
-                initial_ui_ms=pending.initial_ui_ms,
-                enrichment=pending.enrichment,
-            )
-        except Exception as error:  # pylint: disable=broad-exception-caught
-            logger.error(
-                "[SERVER] Ordered shot finalization failed: %s",
-                error,
-                exc_info=True,
-            )
-            log_session_error(
-                "Ordered shot finalization failed",
-                component="server",
-                context={
-                    "stage": "ordered_finalization",
-                    "shot_number": pending.shot.shot_number,
-                    "ball_speed_mph": pending.shot.ball_speed_mph,
-                },
-                exc=error,
-            )
 
 
 def _emit_initial_ops_shot(shot: Shot) -> bool:
@@ -4096,6 +4065,35 @@ def _emit_initial_ops_shot(shot: Shot) -> bool:
             exc=error,
         )
         return False
+
+
+def _emit_ops_enrichment_skipped(shot: Shot, *, reason: str) -> None:
+    """Immediately clear provisional hardware progress when admission fails."""
+    skipped_hardware = []
+    if iwr6843_runtime is not None:
+        skipped_hardware.append("iwr6843")
+    if camera_capture_runtime is not None:
+        skipped_hardware.append("camera")
+    try:
+        socketio.emit(
+            "shot_update",
+            {
+                "shot": shot_to_dict(shot),
+                "stats": monitor.get_session_stats() if monitor else {},
+                "pending": {},
+                "enrichment": {
+                    "status": "skipped",
+                    "reason": reason,
+                    "hardware": skipped_hardware,
+                },
+            },
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning(
+            "[SERVER] Failed to clear skipped shot enrichment status: %s",
+            error,
+            exc_info=True,
+        )
 
 
 def _has_slow_shot_enrichment(shot: Shot) -> bool:
@@ -4215,6 +4213,8 @@ def _handle_shot_detected(shot: Shot) -> None:
             _SHOT_ENRICHMENT_QUEUE_CAPACITY,
             shot.shot_number,
         )
+        if emitted:
+            _emit_ops_enrichment_skipped(shot, reason="queue_full")
         _queue_shot_finalization(
             shot,
             emit_event=final_event,
@@ -4226,6 +4226,8 @@ def _handle_shot_detected(shot: Shot) -> None:
             error,
             exc_info=True,
         )
+        if emitted:
+            _emit_ops_enrichment_skipped(shot, reason="worker_unavailable")
         _queue_shot_finalization(
             shot,
             emit_event=final_event,

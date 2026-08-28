@@ -11,6 +11,17 @@ export interface ShotMessage {
   };
 }
 
+export interface ShotUpdateMessage {
+  shot: Shot;
+  stats: SessionStats;
+  pending?: Record<string, boolean>;
+  enrichment?: {
+    status: 'skipped';
+    reason: string;
+    hardware: string[];
+  };
+}
+
 export function handleShotMessage(data: ShotMessage) {
   const shotStore = useShotStore.getState();
   shotStore.addShot(data.shot);
@@ -24,6 +35,6 @@ export function handleShotMessage(data: ShotMessage) {
   playSwingCapturedCue();
 }
 
-export function handleShotUpdate(data: { shot: Shot; stats: SessionStats }) {
+export function handleShotUpdate(data: ShotUpdateMessage) {
   useShotStore.getState().updateShot(data.shot);
 }

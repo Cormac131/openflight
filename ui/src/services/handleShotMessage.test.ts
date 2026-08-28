@@ -179,4 +179,37 @@ describe('handleShotMessage', () => {
     expect(useShotStore.getState().shotProcessingPhase).toBe('camera_processing');
     expect(useShotStore.getState().shotProcessingShotTimestamp).toBe(ballShot.timestamp);
   });
+
+  it('clears hardware feedback immediately when enrichment is skipped', async () => {
+    vi.stubGlobal('window', {} as Window & typeof globalThis);
+
+    const { handleShotMessage, handleShotUpdate } = await import('./handleShotMessage');
+    const { useShotStore } = await import('../stores/useShotStore');
+    const stats = {
+      shot_count: 1,
+      avg_ball_speed: 145,
+      max_ball_speed: 145,
+      min_ball_speed: 145,
+      avg_club_speed: null,
+      avg_smash_factor: null,
+      avg_carry_est: 0,
+    };
+
+    handleShotMessage({ shot: ballShot, stats, pending: { iwr6843: true } });
+    handleShotUpdate({
+      shot: ballShot,
+      stats,
+      pending: {},
+      enrichment: {
+        status: 'skipped',
+        reason: 'queue_full',
+        hardware: ['iwr6843'],
+      },
+    });
+
+    const state = useShotStore.getState();
+    expect(state.shotProcessingPhase).toBeNull();
+    expect(state.shotProcessingShotTimestamp).toBeNull();
+    expect(state.shots).toEqual([ballShot]);
+  });
 });

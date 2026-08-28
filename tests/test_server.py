@@ -31,6 +31,19 @@ from openflight.server import (
 from openflight.swing_speed import SwingSpeedEvent
 
 
+def _wait_for_shot_finalization_idle(timeout_s: float = 2.0) -> None:
+    """Wait until the asynchronous ordered finalizer has published every shot."""
+    with server_module._shot_finalization_condition:
+        idle = server_module._shot_finalization_condition.wait_for(
+            lambda: (
+                not server_module._shot_finalization_order
+                and not server_module._shot_finalization_running
+            ),
+            timeout=timeout_s,
+        )
+    assert idle, "shot finalization coordinator did not become idle"
+
+
 class TestCameraCaptureSettings:
     """Tests for live-safe Camera tab controls."""
 
@@ -1082,6 +1095,7 @@ class TestSessionErrorLogging:
             club=ClubType.DRIVER,
         )
         on_shot_detected(shot)
+        _wait_for_shot_finalization_idle()
 
         assert logged_errors
         assert logged_errors[0][0] == "Angle/spin-axis post-processing failed"
@@ -2736,6 +2750,8 @@ class TestOnShotDetected:
     @pytest.fixture(autouse=True)
     def _reset_ordered_pipeline(self):
         server_module._reset_shot_sequence()
+        yield
+        _wait_for_shot_finalization_idle()
 
     class RecordingSessionLog:
         def __init__(self):
@@ -2799,8 +2815,16 @@ class TestOnShotDetected:
         return emitted, session_log
 
     @staticmethod
-    def _assert_finalized_once(emitted, session_log):
-        updates = [payload for event, payload in emitted if event == "shot_update"]
+    def _final_update_payloads(emitted):
+        return [
+            payload
+            for event, payload in emitted
+            if event == "shot_update" and payload.get("enrichment", {}).get("status") != "skipped"
+        ]
+
+    @classmethod
+    def _assert_finalized_once(cls, emitted, session_log):
+        updates = cls._final_update_payloads(emitted)
         assert len(updates) == 1
         assert updates[0]["shot"]["launch_angle_vertical_source"] == "estimated"
         assert updates[0]["shot"]["carry_spin_adjusted"] > 0
@@ -2815,6 +2839,10 @@ class TestOnShotDetected:
             assert not server_module._shot_finalization_registered
             assert not server_module._shot_finalization_ready
             assert server_module._shot_finalization_running is False
+
+    @staticmethod
+    def _wait_for_finalization_coordinator_idle(timeout_s: float = 2.0):
+        _wait_for_shot_finalization_idle(timeout_s)
 
     def test_enrichment_queue_has_hard_capacity(self):
         assert server_module._SHOT_ENRICHMENT_QUEUE_CAPACITY > 0
@@ -2875,6 +2903,8 @@ class TestOnShotDetected:
             callback.join(timeout=2.0)
             for thread in background_threads:
                 thread.join(timeout=2.0)
+
+        self._wait_for_finalization_coordinator_idle()
 
         assert [event for event, _payload in emitted].count("shot") == 1
         updates = [payload for event, payload in emitted if event == "shot_update"]
@@ -2941,6 +2971,7 @@ class TestOnShotDetected:
         shot = self._shot()
         on_shot_detected(shot)
         worker_targets[0]()
+        self._wait_for_finalization_coordinator_idle()
 
         assert enrichment_calls == [shot.timestamp]
         self._assert_finalized_once(emitted, session_log)
@@ -2964,18 +2995,16 @@ class TestOnShotDetected:
             worker_targets.append(target)
             return object()
 
-        def finish(shot, *, emit_event, initial_ui_ms=None):
-            del initial_ui_ms
-            server_module.socketio.emit(
-                emit_event,
-                {"shot": shot_to_dict(shot), "stats": {}},
-            )
-
         monkeypatch.setattr(server_module.socketio, "start_background_task", capture_worker)
-        monkeypatch.setattr(server_module, "_finish_shot_detected", finish)
+        monkeypatch.setattr(
+            server_module,
+            "_enrich_shot_from_optional_hardware",
+            lambda _shot: server_module._ShotEnrichmentResult(),
+        )
 
         on_shot_detected(self._shot())
         worker_targets[0]()
+        self._wait_for_finalization_coordinator_idle()
 
         assert [event for event, _payload in emitted] == ["shot", "shot_update"]
         assert emitted[0][1]["pending"] == {"camera": True}
@@ -2994,8 +3023,19 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(self._shot())
+        self._wait_for_finalization_coordinator_idle()
 
-        assert [event for event, _payload in emitted] == ["shot", "shot_update"]
+        assert [event for event, _payload in emitted] == [
+            "shot",
+            "shot_update",
+            "shot_update",
+        ]
+        assert emitted[1][1]["pending"] == {}
+        assert emitted[1][1]["enrichment"] == {
+            "status": "skipped",
+            "reason": "worker_unavailable",
+            "hardware": ["camera"],
+        }
         self._assert_finalized_once(emitted, session_log)
         assert enrichment_queue.empty()
 
@@ -3024,6 +3064,7 @@ class TestOnShotDetected:
         shot = self._shot()
         on_shot_detected(shot)
         worker_targets[0]()
+        self._wait_for_finalization_coordinator_idle()
 
         assert enrichment_calls == [shot.timestamp]
         assert [event for event, _payload in emitted] == ["shot", "shot_update"]
@@ -3061,6 +3102,7 @@ class TestOnShotDetected:
             emit_event="shot_update",
             initial_ui_ms=10.0,
         )
+        self._wait_for_finalization_coordinator_idle()
 
         assert attempts == [1, 2]
         assert len(logged_errors) == 1
@@ -3162,8 +3204,21 @@ class TestOnShotDetected:
 
         expected = [(index, shot.impact_timestamp) for index, shot in enumerate(shots, start=1)]
         initial_shots = [payload["shot"] for event, payload in emitted if event == "shot"]
-        final_shots = [payload["shot"] for event, payload in emitted if event == "shot_update"]
+        skipped_updates = [
+            payload
+            for event, payload in emitted
+            if event == "shot_update" and payload.get("enrichment", {}).get("status") == "skipped"
+        ]
+        final_shots = [payload["shot"] for payload in self._final_update_payloads(emitted)]
         assert [(row["shot_number"], row["impact_timestamp"]) for row in initial_shots] == expected
+        assert len(skipped_updates) == 1
+        assert skipped_updates[0]["shot"]["shot_number"] == 4
+        assert skipped_updates[0]["pending"] == {}
+        assert skipped_updates[0]["enrichment"] == {
+            "status": "skipped",
+            "reason": "queue_full",
+            "hardware": ["iwr6843", "camera"],
+        }
         assert [
             (row["shot_number"], row["impact_timestamp"]) for row in session_log.shots
         ] == expected
@@ -3181,6 +3236,56 @@ class TestOnShotDetected:
         assert [(row["shot_number"], row["impact_timestamp"]) for row in final_shots] == expected
         assert simulator_shots == expected
         self._assert_finalization_coordinator_empty()
+
+    def test_capacity_eviction_never_finalizes_on_ops_callback(self, monkeypatch):
+        enrichment_queue = self._enrichment_queue()
+        finalization_started = threading.Event()
+        finalization_finished = threading.Event()
+        release_finalization = threading.Event()
+        worker_token = object()
+
+        monkeypatch.setattr(server_module, "shot_enrichment_queue", enrichment_queue)
+        monkeypatch.setattr(server_module, "shot_enrichment_task", None)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(server_module, "camera_capture_runtime", None)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module, "_SHOT_ENRICHMENT_DEADLINE_S", 30.0)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "start_background_task",
+            lambda *_args, **_kwargs: worker_token,
+        )
+
+        def block_finalization(*_args, **_kwargs):
+            finalization_started.set()
+            try:
+                assert release_finalization.wait(5.0)
+            finally:
+                finalization_finished.set()
+
+        monkeypatch.setattr(server_module, "_finalize_shot_detected", block_finalization)
+
+        for second in range(server_module._SHOT_FINALIZATION_CAPACITY):
+            on_shot_detected(self._shot(second))
+
+        fifth_callback = threading.Thread(
+            target=on_shot_detected,
+            args=(self._shot(server_module._SHOT_FINALIZATION_CAPACITY),),
+            daemon=True,
+        )
+        fifth_callback.start()
+        assert finalization_started.wait(2.0)
+        try:
+            fifth_callback.join(timeout=1.0)
+            assert not fifth_callback.is_alive(), (
+                "capacity eviction must not run finalization on the OPS callback"
+            )
+        finally:
+            release_finalization.set()
+            fifth_callback.join(timeout=2.0)
+            assert finalization_finished.wait(2.0)
+            server_module._reset_shot_sequence()
 
     def test_stuck_head_deadline_bounds_coordinator_and_finalizes_ops_in_order(self, monkeypatch):
         emitted, session_log = self._record_finalization(monkeypatch)
@@ -3246,7 +3351,12 @@ class TestOnShotDetected:
         def submit_remaining_shots():
             for shot in shots[1:]:
                 on_shot_detected(shot)
-                with server_module._shot_finalization_lock:
+                with server_module._shot_finalization_condition:
+                    bounded = server_module._shot_finalization_condition.wait_for(
+                        lambda: len(server_module._shot_finalization_order) <= 4,
+                        timeout=1.0,
+                    )
+                    assert bounded
                     coordinator_sizes.append(
                         (
                             len(server_module._shot_finalization_order),
@@ -3272,7 +3382,7 @@ class TestOnShotDetected:
         for thread in background_threads:
             thread.join(timeout=2.0)
 
-        final_shots = [payload["shot"] for event, payload in emitted if event == "shot_update"]
+        final_shots = [payload["shot"] for payload in self._final_update_payloads(emitted)]
         assert [row["shot_number"] for row in final_shots] == list(range(1, shot_count + 1))
         assert [row["shot_number"] for row in session_log.shots] == list(range(1, shot_count + 1))
         assert all(row["launch_angle_vertical_source"] == "estimated" for row in final_shots)
@@ -3324,6 +3434,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert ("ball", 1234.5) in calls
         assert ("club", 1234.5) in calls
@@ -3380,6 +3491,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert snapshot_calls == [True]
         assert logged_buffers[0]["buffer_frames"][0]["radc_b64"] == "AQID"
@@ -3436,6 +3548,7 @@ class TestOnShotDetected:
 
         with caplog.at_level(logging.WARNING, logger="openflight.server"):
             on_shot_detected(shot)
+            self._wait_for_finalization_coordinator_idle()
 
         assert any("raw RADC replay payload missing" in r.message for r in caplog.records)
 
@@ -3471,6 +3584,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert shot.angle_source == "estimated"
         assert shot.launch_angle_vertical == pytest.approx(20.5)
@@ -3513,6 +3627,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert shot.launch_angle_vertical == pytest.approx(10.7)
         assert shot.launch_angle_vertical_source == "radar"
@@ -3556,6 +3671,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         # Lane disagreement no longer silently replaces the measurement:
         # shown as radar with single-dot (marginal) confidence
@@ -3631,6 +3747,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert shot.launch_angle_vertical == pytest.approx(19.9)
         assert shot.launch_angle_vertical_source == "radar"
@@ -3712,6 +3829,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert shot.launch_angle_vertical == pytest.approx(19.9)
         assert shot.launch_angle_vertical_source == "radar"
@@ -3783,6 +3901,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         # Marginal accept: shown as radar with single-dot confidence
         # instead of silently replaced by the club estimate
@@ -3830,6 +3949,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert shot.angle_source == "estimated"
         assert shot.launch_angle_vertical == pytest.approx(20.5)
@@ -3877,6 +3997,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert shot.launch_angle_horizontal == pytest.approx(16.1)
         assert shot.launch_angle_horizontal_source == "radar"
@@ -3917,6 +4038,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert shot.launch_angle_horizontal == pytest.approx(0.0)
         assert shot.launch_angle_horizontal_source == "estimated"
@@ -3969,6 +4091,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert shot.launch_angle_horizontal == pytest.approx(-2.2)
         assert shot.launch_angle_horizontal_source == "radar"
@@ -4022,6 +4145,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert shot.launch_angle_horizontal == pytest.approx(0.0)
         assert shot.launch_angle_horizontal_source == "estimated"
@@ -4075,6 +4199,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert shot.launch_angle_horizontal == pytest.approx(0.0)
         assert shot.launch_angle_horizontal_source == "estimated"
@@ -4117,6 +4242,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert shot.angle_source == "radar"
         assert shot.launch_angle_vertical == pytest.approx(18.7)
@@ -4139,6 +4265,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert shot.angle_source == "estimated"
         assert shot.launch_angle_vertical == pytest.approx(20.5)
@@ -4181,6 +4308,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert shot.club_angle_deg is None, (
             f"AoA of +31° should be rejected, got {shot.club_angle_deg}"
@@ -4219,6 +4347,7 @@ class TestOnShotDetected:
         )
 
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
         assert shot.angle_source == "radar"
         assert shot.launch_angle_vertical == pytest.approx(18.7)
@@ -4249,6 +4378,7 @@ class TestOnShotDetected:
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
         monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
         on_shot_detected(shot)
+        self._wait_for_finalization_coordinator_idle()
 
     def test_spin_axis_emitted_when_horizontal_confidence_clears_gate(self, monkeypatch):
         shot = self._spin_axis_shot(horizontal_confidence=server_module.SPIN_AXIS_MIN_CONFIDENCE)
@@ -4356,6 +4486,7 @@ class TestCarryComputation:
         )
 
         on_shot_detected(shot)
+        _wait_for_shot_finalization_idle()
 
         assert "conditions" in captured, "simulate() should have been called"
         assert captured["conditions"].spin_source == "measured"
@@ -4385,6 +4516,7 @@ class TestCarryComputation:
         )
 
         on_shot_detected(shot)
+        _wait_for_shot_finalization_idle()
 
         assert shot.carry_spin_adjusted is not None
         assert shot.carry_spin_adjusted > 0
@@ -4418,6 +4550,7 @@ class TestCarryComputation:
         )
 
         on_shot_detected(shot)
+        _wait_for_shot_finalization_idle()
 
         assert shot.carry_spin_adjusted is not None
         assert shot.carry_spin_adjusted > 0
