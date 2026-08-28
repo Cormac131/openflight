@@ -24,7 +24,9 @@ DEFAULT_I2C_BUS = 1
 DEFAULT_SPI_BUS = 0
 DEFAULT_SPI_DEVICE = 0
 DEFAULT_IRQ_GPIO = 22
+DEFAULT_CS_GPIO = 8  # physical pin 24, SPI0 CE0 — driven as GPIO like Elechouse SS
 SPI_CLOCK_HZ = 1_000_000
+CS_WAKE_S = 0.002
 
 SPI_STATREAD = 0x02
 SPI_DATAWRITE = 0x01
@@ -140,7 +142,8 @@ class SpiTransport:
     The reader still sees I2C-style transactions: ``read(1)`` is the ready
     bit, longer reads start with a dummy status byte so ``[1:]`` is the frame.
     Ready is IRQ (active low) when that pin is asserted; otherwise the driver
-    polls SPI ``STATREAD``. Adafruit's SPI driver does not use IRQ at all.
+    polls SPI ``STATREAD``. NSS is driven as a GPIO (Elechouse ``SS``): the
+    kernel CE0 pulse is too short to wake a sleeping PN532.
     """
 
     def __init__(
@@ -149,14 +152,19 @@ class SpiTransport:
         bus_number: int = DEFAULT_SPI_BUS,
         device: int = DEFAULT_SPI_DEVICE,
         irq_gpio: int = DEFAULT_IRQ_GPIO,
+        cs_gpio: int = DEFAULT_CS_GPIO,
         spi=None,
         irq=None,
+        cs=None,
     ):
         self.bus_number = bus_number
         self.device = device
         self.irq_gpio = irq_gpio
+        self.cs_gpio = cs_gpio
         self._owns_spi = spi is None
         self._owns_irq = irq is None
+        self._owns_cs = cs is None and spi is None
+        self._last_spi_status: Optional[int] = None
         if spi is None:
             import spidev  # pylint: disable=import-outside-toplevel,import-error
 
@@ -164,43 +172,71 @@ class SpiTransport:
             self._spi.open(bus_number, device)
             self._spi.max_speed_hz = SPI_CLOCK_HZ
             self._spi.mode = 0
+            # Elechouse toggles SS as a GPIO. Leave CE0 to us.
+            self._spi.no_cs = True
         else:
             self._spi = spi
-        if irq is None:
-            from gpiozero import DigitalInputDevice  # pylint: disable=import-outside-toplevel
+        if self._owns_cs or self._owns_irq:
+            from gpiozero import (  # pylint: disable=import-outside-toplevel
+                DigitalInputDevice,
+                DigitalOutputDevice,
+            )
 
             from ..gpio_factory import (  # pylint: disable=import-outside-toplevel
                 ensure_lgpio_pin_factory,
             )
 
             ensure_lgpio_pin_factory()
-            # IRQ is active-low. pull_up=True makes gpiozero treat low as active.
-            self._irq = DigitalInputDevice(irq_gpio, pull_up=True)
+            if self._owns_cs:
+                # active_high=False: on() pulls NSS low (selected).
+                self._cs = DigitalOutputDevice(cs_gpio, active_high=False, initial_value=False)
+            else:
+                self._cs = cs
+            if self._owns_irq:
+                self._irq = DigitalInputDevice(irq_gpio, pull_up=True)
+            else:
+                self._irq = irq
         else:
+            self._cs = cs
             self._irq = irq
         self._closed = False
 
     def wakeup(self) -> None:
-        """Clock a dummy byte so a sleeping PN532 will listen on SPI."""
-        self._xfer(b"\x00")
-        time.sleep(0.01)
+        """Hold NSS low for 2 ms, matching Elechouse PN532_SPI::wakeup."""
+        self._select()
+        time.sleep(CS_WAKE_S)
+        self._deselect()
 
     def write(self, data: bytes) -> None:
         """Send one command frame with the SPI data-write opcode."""
-        self._xfer(bytes([SPI_DATAWRITE]) + data)
+        self._select()
+        time.sleep(CS_WAKE_S)
+        try:
+            self._xfer(bytes([SPI_DATAWRITE]) + data)
+        finally:
+            self._deselect()
 
     def read(self, length: int) -> bytes:
         """I2C-shaped read: one byte is ready status, longer reads are frames."""
         if length == 1:
             return bytes([I2C_READY if self._irq_ready() else 0])
-        incoming = self._xfer(bytes([SPI_DATAREAD]) + bytes(length - 1))
+        self._select()
+        try:
+            incoming = self._xfer(bytes([SPI_DATAREAD]) + bytes(length - 1))
+        finally:
+            self._deselect()
         return bytes([I2C_READY]) + incoming[1:]
 
     def close(self) -> None:
-        """Release SPI and the IRQ pin once."""
+        """Release SPI, NSS, and the IRQ pin once."""
         if self._closed:
             return
         self._closed = True
+        if self._owns_cs and self._cs is not None:
+            try:
+                self._cs.close()
+            except AttributeError:
+                pass
         if self._owns_irq and self._irq is not None:
             try:
                 self._irq.close()
@@ -209,11 +245,24 @@ class SpiTransport:
         if self._owns_spi:
             self._spi.close()
 
+    def _select(self) -> None:
+        if self._cs is not None:
+            self._cs.on()
+
+    def _deselect(self) -> None:
+        if self._cs is not None:
+            self._cs.off()
+
     def _irq_ready(self) -> bool:
         if self._irq is not None and bool(self._irq.is_active):
             return True
-        status = self._xfer(bytes([SPI_STATREAD, 0x00]))
-        return len(status) > 1 and status[1] == I2C_READY
+        self._select()
+        try:
+            status = self._xfer(bytes([SPI_STATREAD, 0x00]))
+        finally:
+            self._deselect()
+        self._last_spi_status = status[1] if len(status) > 1 else None
+        return self._last_spi_status == I2C_READY
 
     def _xfer(self, data: bytes) -> bytes:
         outgoing = [reverse_byte(byte) for byte in data]
@@ -300,7 +349,7 @@ def parse_passive_target_uid(payload: bytes) -> Optional[str]:
 
 
 class PN532I2C:
-    """Read passive-tag UIDs from a PN532. SPI+IRQ is the hardware default."""
+    """Read passive-tag UIDs from a PN532. SPI is the hardware default."""
 
     name = "pn532"
 
@@ -532,11 +581,19 @@ class PN532I2C:
                 return
             if time.monotonic() >= deadline:
                 if self.interface == "spi":
+                    status = getattr(self._transport, "_last_spi_status", None)
+                    status_note = (
+                        f" SPI status last 0x{status:02x}."
+                        if status is not None
+                        else ""
+                    )
                     raise NfcReaderError(
-                        "PN532 did not acknowledge the command. "
+                        "PN532 did not acknowledge the command."
+                        f"{status_note} "
+                        "NSS is physical pin 24, MOSI 19, MISO 21, SCK 23 "
+                        "(swap MOSI/MISO if status stays 0x00). "
                         "Match the DIP switches to the SPI row printed on the "
-                        "board, confirm IRQ is on physical pin 15 (GPIO22) not "
-                        "RSTO, then power-cycle — the chip latches mode at "
+                        "board, then power-cycle — the chip latches mode at "
                         "power-up."
                     )
                 raise NfcReaderError(

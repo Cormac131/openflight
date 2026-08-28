@@ -4,6 +4,7 @@ from . import ndef
 from .mock import MockTagReader
 from .models import ClubTag, InvalidTagUidError, TagScan, format_uid, normalize_uid
 from .pn532 import (
+    DEFAULT_CS_GPIO,
     DEFAULT_I2C_ADDRESS,
     DEFAULT_I2C_BUS,
     DEFAULT_IRQ_GPIO,
@@ -19,6 +20,7 @@ __all__ = [
     "ndef",
     "ClubTag",
     "ClubTagRegistry",
+    "DEFAULT_CS_GPIO",
     "DEFAULT_I2C_ADDRESS",
     "DEFAULT_I2C_BUS",
     "DEFAULT_IRQ_GPIO",

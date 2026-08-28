@@ -149,8 +149,8 @@ GND         ---------------------------->  physical pin 20 (GND)
 > off GPIO6 (Geekworm charger), GPIO16 (HAT), GPIO17 (sound trigger), and
 > GPIO14/15 (OPS UART).
 
-Match pins by silkscreen label. On V3 modules SPI is the 4-pin `NSS/MOSI/MISO/SCK`
-header plus `IRQ` on the neighbouring header.
+NSS / SS is **required**. The driver drives it as a GPIO (Elechouse `SS`),
+not as a brief kernel CE0 pulse. IRQ is optional.
 
 ## Mounting And Read Range
 

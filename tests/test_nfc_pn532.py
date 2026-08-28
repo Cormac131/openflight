@@ -472,6 +472,20 @@ class _FakeSpi:
         pass
 
 
+class _FakeCs:
+    def __init__(self):
+        self.events = []
+
+    def on(self):
+        self.events.append("select")
+
+    def off(self):
+        self.events.append("release")
+
+    def close(self):
+        pass
+
+
 class _FakeIrq:
     def __init__(self, active=False):
         self.is_active = active
@@ -487,6 +501,25 @@ class TestSpiTransport:
         assert reverse_byte(0x00) == 0x00
         assert reverse_byte(0xFF) == 0xFF
         assert reverse_byte(reverse_byte(0xD4)) == 0xD4
+
+    def test_wakeup_holds_nss_low_then_releases(self):
+        cs = _FakeCs()
+        spi = _FakeSpi()
+        transport = SpiTransport(spi=spi, irq=_FakeIrq(active=True), cs=cs)
+
+        transport.wakeup()
+
+        assert cs.events == ["select", "release"]
+        assert spi.xfers == []
+
+    def test_write_selects_nss_before_clocking(self):
+        cs = _FakeCs()
+        transport = SpiTransport(spi=_FakeSpi(), irq=_FakeIrq(active=True), cs=cs)
+
+        transport.write(bytes([HOST_TO_PN532, 0x02]))
+
+        assert cs.events[0] == "select"
+        assert cs.events[-1] == "release"
 
     def test_write_prefixes_datawrite_and_bit_reverses(self):
         spi = _FakeSpi()
