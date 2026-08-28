@@ -22,7 +22,7 @@ Doppler radar, with an optional TI IWR6843 angle radar.
 
 ### What It Measures
 
-- **Ball Speed**: 35-200 mph range with ±0.5% accuracy (OPS243-A)
+- **Ball Speed**: 15-200 mph range with ±0.5% accuracy (OPS243-A)
 - **Club Speed**: Detected from pre-impact readings (OPS243-A)
 - **Smash Factor**: Ball speed / club speed ratio
 - **Launch Angle**: Measured by the IWR6843; estimated when no trusted radar angle is available
@@ -123,7 +123,14 @@ The IWR6843 example values are not universal. Measure the geometry from the
 antenna center and follow the [operator guide](docs/iwr6843/README.md#measure-the-geometry);
 wrong values bias the result instead of producing an obvious startup error.
 
-Then open http://localhost:8080 or use the touchscreen.
+Then open http://localhost:8080 or use the touchscreen. Footer tabs switch
+between Live, Stats, Shots, Camera, Players, and Debug. Tap the footer logo for
+units, theme, and language; the footer power icon opens shutdown confirmation.
+On Live, tap a metric to pin it top-left while keeping all metrics visible. Use
+the Replay action on camera-backed shots to open a touch-friendly slow-motion
+impact clip. The MP4 is generated only when Replay is selected and is cached
+beside the raw camera capture. For a TV or tablet, use
+[TV Display Mode](#tv-display-mode).
 
 ### 5. Sync to the cloud (optional)
 
@@ -218,7 +225,7 @@ shares the OPS243 position.
 | Sample Rate    | 30 ksps                | Supports up to ~208 mph ball speed           |
 | Capture        | 4096 I/Q samples       | ~136 ms around impact                        |
 | Trigger        | Sound (SEN-14262)      | ~10 µs hardware latency via HOST_INT         |
-| Min Ball Speed | 35 mph                 | Filter club waggle and slow movements        |
+| Min Ball Speed | 15 mph                 | Minimum valid ball speed threshold (35 mph for speed-triggered mode) |
 | DC Mask        | ~15 mph exclusion zone | Reject body movement and environmental noise |
 
 These are applied automatically — the one-time flash configuration is handled

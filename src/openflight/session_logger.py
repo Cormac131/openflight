@@ -360,11 +360,29 @@ class SessionLogger:
         angle_source: Optional[str] = None,
         club_angle_deg: Optional[float] = None,
         club_path_deg: Optional[float] = None,
+        experimental_attack_angle_deg: Optional[float] = None,
+        experimental_attack_angle_status: Optional[str] = None,
+        experimental_club_path_deg: Optional[float] = None,
+        experimental_club_path_status: Optional[str] = None,
+        experimental_fused_attack_angle_deg: Optional[float] = None,
+        experimental_fused_club_path_deg: Optional[float] = None,
+        experimental_fused_status: Optional[str] = None,
+        experimental_fused_attack_angle_confidence: Optional[str] = None,
+        experimental_fused_club_path_confidence: Optional[str] = None,
+        experimental_camera_trace_deg: Optional[float] = None,
+        experimental_aoa_offset_source: Optional[str] = None,
+        iwr6843_horizontal_deg: Optional[float] = None,
+        iwr6843_horizontal_confidence: Optional[float] = None,
+        experimental_camera_horizontal_deg: Optional[float] = None,
+        experimental_camera_horizontal_confidence: Optional[float] = None,
+        experimental_camera_horizontal_status: Optional[str] = None,
+        experimental_camera_iwr_delta_deg: Optional[float] = None,
         spin_axis_deg: Optional[float] = None,
         pipeline_ms: Optional[Dict] = None,
         impact_timestamp: Optional[float] = None,
         player_name: Optional[str] = None,
         inclinometer: Optional[Dict] = None,
+        shot_number: Optional[int] = None,
     ):
         """
         Log a detected shot with all metrics.
@@ -377,6 +395,7 @@ class SessionLogger:
             club: Club type used
             peak_magnitude: Peak radar magnitude
             readings_count: Number of readings in the shot window
+            shot_number: Stable sequence assigned when the shot was detected
             readings: Optional list of individual readings that comprised the shot
             spin_rpm: Spin rate in RPM (rolling buffer mode only)
             spin_confidence: Confidence of spin detection (rolling buffer mode only)
@@ -405,9 +424,12 @@ class SessionLogger:
             return
 
         self._stats["shots_detected"] += 1
+        resolved_shot_number = (
+            shot_number if shot_number is not None else self._stats["shots_detected"]
+        )
 
         data = {
-            "shot_number": self._stats["shots_detected"],
+            "shot_number": resolved_shot_number,
             "ball_speed_mph": ball_speed_mph,
             "club_speed_mph": club_speed_mph,
             "smash_factor": smash_factor,
@@ -456,6 +478,46 @@ class SessionLogger:
             data["club_angle_deg"] = club_angle_deg
         if club_path_deg is not None:
             data["club_path_deg"] = club_path_deg
+        if experimental_attack_angle_deg is not None:
+            data["experimental_attack_angle_deg"] = experimental_attack_angle_deg
+        if experimental_attack_angle_status is not None:
+            data["experimental_attack_angle_status"] = experimental_attack_angle_status
+        if experimental_club_path_deg is not None:
+            data["experimental_club_path_deg"] = experimental_club_path_deg
+        if experimental_club_path_status is not None:
+            data["experimental_club_path_status"] = experimental_club_path_status
+        if experimental_fused_attack_angle_deg is not None:
+            data["experimental_fused_attack_angle_deg"] = experimental_fused_attack_angle_deg
+        if experimental_fused_club_path_deg is not None:
+            data["experimental_fused_club_path_deg"] = experimental_fused_club_path_deg
+        if experimental_fused_status is not None:
+            data["experimental_fused_status"] = experimental_fused_status
+        if experimental_fused_attack_angle_confidence is not None:
+            data["experimental_fused_attack_angle_confidence"] = (
+                experimental_fused_attack_angle_confidence
+            )
+        if experimental_fused_club_path_confidence is not None:
+            data["experimental_fused_club_path_confidence"] = (
+                experimental_fused_club_path_confidence
+            )
+        if experimental_camera_trace_deg is not None:
+            data["experimental_camera_trace_deg"] = experimental_camera_trace_deg
+        if experimental_aoa_offset_source is not None:
+            data["experimental_aoa_offset_source"] = experimental_aoa_offset_source
+        if iwr6843_horizontal_deg is not None:
+            data["iwr6843_horizontal_deg"] = iwr6843_horizontal_deg
+        if iwr6843_horizontal_confidence is not None:
+            data["iwr6843_horizontal_confidence"] = iwr6843_horizontal_confidence
+        if experimental_camera_horizontal_deg is not None:
+            data["experimental_camera_horizontal_deg"] = experimental_camera_horizontal_deg
+        if experimental_camera_horizontal_confidence is not None:
+            data["experimental_camera_horizontal_confidence"] = (
+                experimental_camera_horizontal_confidence
+            )
+        if experimental_camera_horizontal_status is not None:
+            data["experimental_camera_horizontal_status"] = experimental_camera_horizontal_status
+        if experimental_camera_iwr_delta_deg is not None:
+            data["experimental_camera_iwr_delta_deg"] = experimental_camera_iwr_delta_deg
         if spin_axis_deg is not None:
             data["spin_axis_deg"] = spin_axis_deg
         if pipeline_ms is not None:
@@ -487,6 +549,37 @@ class SessionLogger:
                 "confidence": confidence,
                 "positions_tracked": positions_tracked,
                 "launch_detected": launch_detected,
+            },
+        )
+
+    def log_camera_capture(
+        self,
+        *,
+        shot_number: int,
+        shot_timestamp: Optional[float],
+        trigger_timestamp: Optional[float],
+        capture_path: Optional[str],
+        metadata: Optional[Dict] = None,
+        capture_error: Optional[str] = None,
+    ):
+        """Log a high-speed camera clip saved for offline shot correlation."""
+        if not self.enabled:
+            return
+
+        self._write_entry(
+            "camera_capture",
+            {
+                "shot_number": shot_number,
+                "shot_timestamp": shot_timestamp,
+                "trigger_timestamp": trigger_timestamp,
+                "trigger_delta_ms": (
+                    (trigger_timestamp - shot_timestamp) * 1000.0
+                    if shot_timestamp is not None and trigger_timestamp is not None
+                    else None
+                ),
+                "capture_path": capture_path,
+                "capture_error": capture_error,
+                "metadata": metadata or {},
             },
         )
 

@@ -259,6 +259,47 @@ def test_server_publishes_camera_kld7_and_ops_success(tmp_path, monkeypatch):
     }
 
 
+@pytest.mark.parametrize(
+    ("camera_available", "expected_state"),
+    [(True, "ready"), (False, "skipped")],
+)
+def test_server_publishes_high_speed_camera_status_without_blocking_ops(
+    tmp_path, monkeypatch, camera_available, expected_state
+):
+    """Optional OV9281 startup should report status and preserve the OPS path."""
+    from openflight import server
+
+    status_path = tmp_path / "status.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "openflight-server",
+            "--no-camera",
+            "--no-logging",
+            "--camera-capture",
+            "--startup-status-file",
+            str(status_path),
+        ],
+    )
+    monkeypatch.setattr(server, "init_session_logger", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        server,
+        "init_camera_capture",
+        lambda **_kwargs: camera_available,
+    )
+    monkeypatch.setattr(server, "start_monitor", lambda **_kwargs: None)
+    monkeypatch.setattr(server.socketio, "run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(server, "_cleanup_hardware_for_shutdown", lambda: None)
+
+    server.main()
+
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+    states = {component["id"]: component["state"] for component in payload["components"]}
+    assert states["camera"] == expected_state
+    assert states["ops"] == "ready"
+
+
 def test_server_publishes_ops_failure_and_cleans_up(tmp_path, monkeypatch):
     from openflight import server
 

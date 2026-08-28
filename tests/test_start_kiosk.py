@@ -110,6 +110,56 @@ def test_iwr6843_overrides_are_forwarded():
     assert "--iwr6843-capture-timeout 15" in command
 
 
+def test_camera_capture_flags_are_forwarded():
+    result = _dry_run(
+        "--camera-capture",
+        "--camera-capture-width",
+        "320",
+        "--camera-capture-height",
+        "240",
+        "--camera-capture-fps",
+        "300",
+        "--camera-capture-pre-ms",
+        "150",
+        "--camera-capture-post-ms",
+        "50",
+        "--camera-capture-exposure-us",
+        "1000",
+        "--camera-capture-gain",
+        "4",
+        "--camera-capture-mount-height-m",
+        "0.20955",
+        "--camera-capture-lateral-offset-m",
+        "0.0762",
+        "--camera-capture-horizontal-offset-deg",
+        "-0.45",
+        "--camera-capture-roll-deg",
+        "2.8",
+        "--camera-capture-stream",
+        "main-y",
+        "--camera-capture-scaler-crop",
+        "256,160,768,480",
+        "--camera-capture-rotate-180",
+    )
+    command = result.stdout.strip()
+
+    assert "--camera-capture" in command
+    assert "--camera-capture-width 320" in command
+    assert "--camera-capture-height 240" in command
+    assert "--camera-capture-fps 300" in command
+    assert "--camera-capture-pre-ms 150" in command
+    assert "--camera-capture-post-ms 50" in command
+    assert "--camera-capture-exposure-us 1000" in command
+    assert "--camera-capture-gain 4" in command
+    assert "--camera-capture-mount-height-m 0.20955" in command
+    assert "--camera-capture-lateral-offset-m 0.0762" in command
+    assert "--camera-capture-horizontal-offset-deg -0.45" in command
+    assert "--camera-capture-roll-deg 2.8" in command
+    assert "--camera-capture-stream main-y" in command
+    assert "--camera-capture-scaler-crop 256,160,768,480" in command
+    assert "--camera-capture-rotate-180" in command
+
+
 def test_ops_radar_port_is_forwarded_separately_from_web_port():
     result = _dry_run("--radar-port", "/dev/serial0", "--port", "9090")
     command = result.stdout.strip()
@@ -274,11 +324,23 @@ def test_startup_splash_launches_before_environment_sync():
     script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
 
     splash_idx = script.index("\nstart_startup_splash\n")
-    sync_idx = script.index("\nif ! uv sync --quiet; then\n")
+    sync_idx = script.index('\nif ! uv sync "${UV_SYNC_ARGS[@]}"; then\n')
 
     assert splash_idx < sync_idx
     assert 'if [ "$STARTUP_SPLASH" != true ]; then' in script
     assert 'launch_kiosk_browser "$KIOSK_URL"' in script
+
+
+def test_startup_splash_includes_high_speed_camera_capture_component():
+    """The current OV9281 capture path should appear when explicitly enabled."""
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
+    splash_function = script[
+        script.index("start_startup_splash() {") : script.index("show_startup_failure() {")
+    ]
+
+    assert 'if [ "$CAMERA_CAPTURE" = true ] || [ "$NO_CAMERA" != true ]; then' in splash_function
+    assert "status_options+=(--camera)" in splash_function
 
 
 def test_startup_splash_asset_has_branding_and_redirect_contract():
@@ -365,7 +427,7 @@ def test_launcher_reports_distinct_failures_and_waits_for_dismissal():
     assert '"OpenFlight preparation failed"' in script
     assert '"server"' in script
     assert 'while [ ! -f "$STARTUP_DISMISS_FILE" ]' in script
-    assert "uv sync --quiet" in script
+    assert 'uv sync "${UV_SYNC_ARGS[@]}"' in script
     assert "npm run build" in script
 
 
@@ -378,6 +440,24 @@ def test_start_kiosk_script_has_valid_shell_syntax():
         capture_output=True,
         text=True,
     )
+
+
+def test_camera_capture_uses_system_python_for_sync_and_server_start():
+    """Camera startup must keep system Python through sync and server launch."""
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
+
+    sync_setup_idx = script.index("UV_SYNC_ARGS=(--quiet)")
+    camera_branch_idx = script.index('if [ "$CAMERA_CAPTURE" = true ]; then', sync_setup_idx)
+    export_idx = script.index("export UV_PYTHON=/usr/bin/python3", camera_branch_idx)
+    camera_sync_idx = script.index('if ! uv sync "${UV_SYNC_ARGS[@]}"; then', export_idx)
+    server_start_idx = script.index("uv run ${OPENFLIGHT_UV_RUN_ARGS:-} $SERVER_CMD &")
+
+    assert "uv venv --clear --system-site-packages --python /usr/bin/python3" in script
+    assert "UV_SYNC_ARGS+=(--extra camera)" in script
+    assert camera_branch_idx < export_idx < camera_sync_idx < server_start_idx
 
 
 def test_shutdown_requests_server_cleanup_before_forcing_process_exit():
