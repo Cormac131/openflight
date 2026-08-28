@@ -4995,13 +4995,13 @@ def main():
         "--camera-capture-exposure-us",
         type=int,
         default=1000,
-        help="Manual exposure fallback; the Camera tab can switch out of automatic mode.",
+        help="Exposure seed used by the one-time startup calibration.",
     )
     parser.add_argument(
         "--camera-capture-gain",
         type=float,
         default=4.0,
-        help="Manual gain fallback; the Camera tab can switch out of automatic mode.",
+        help="Analogue-gain seed used by the one-time startup calibration.",
     )
     parser.add_argument(
         "--camera-capture-mount-height-m",
