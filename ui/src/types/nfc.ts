@@ -15,7 +15,24 @@ export interface NfcScan {
   timestamp: number;
   club: string | null;
   known: boolean;
+  /** Where the club came from: the tag's own record, or this rig's registry. */
+  source: 'tag' | 'registry' | null;
+  /** True when the tag's memory has never been written. */
+  blank: boolean;
+  /** True when the reader can write a club onto this tag. */
+  writable: boolean;
 }
+
+/** Result of writing a club onto a tag. */
+export interface ClubTagWrite {
+  state: 'written' | 'failed';
+  uid?: string;
+  club?: string;
+  error?: string;
+}
+
+/** Where the blank-tag write flow has got to. */
+export type WriteStage = 'select' | 'confirm' | 'writing' | 'failed';
 
 export interface ClubTagsPayload {
   tags: ClubTag[];

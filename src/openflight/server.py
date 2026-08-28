@@ -1495,6 +1495,12 @@ def _on_nfc_scan(scan) -> None:
             # between releases); treat the tag as unlearned so it can be re-taught.
             socketio.emit("nfc_tag_unknown", payload)
         return
+    if scan.needs_write:
+        # A tag with nothing on it: offer to write the club onto the tag itself,
+        # rather than only recording it here against the UID.
+        logger.info("[NFC] Blank tag %s awaiting a club", scan.uid)
+        socketio.emit("nfc_tag_blank", payload)
+        return
     logger.info("[NFC] Unknown tag %s awaiting assignment", scan.uid)
     socketio.emit("nfc_tag_unknown", payload)
 
@@ -2202,6 +2208,53 @@ def handle_forget_club_tag(data):
     _emit_club_tags()
 
 
+@socketio.on("write_club_tag")
+def handle_write_club_tag(data):
+    """Write a club onto a blank tag, then mirror it into the registry.
+
+    Synchronous on purpose: the reader is a single I2C device, and the service
+    serializes this against its own polling, so returning early would only move
+    the wait somewhere the UI cannot see it.
+    """
+    from .nfc import (  # pylint: disable=import-outside-toplevel
+        InvalidTagUidError,
+        NfcReaderError,
+        UnknownClubError,
+    )
+
+    if nfc_service is None:
+        socketio.emit("club_tag_write", {"state": "failed", "error": "NFC reader is not running"})
+        return
+
+    uid = data.get("uid") if isinstance(data, dict) else None
+    club_id = data.get("club") if isinstance(data, dict) else None
+    try:
+        tag = nfc_service.write_club_tag(uid, club_id)
+    except (InvalidTagUidError, UnknownClubError) as error:
+        logger.warning("[NFC] Rejected tag write %r -> %r: %s", uid, club_id, error)
+        socketio.emit("club_tag_write", {"state": "failed", "uid": uid, "error": str(error)})
+        return
+    except NfcReaderError as error:
+        logger.warning("[NFC] Tag write failed for %r: %s", uid, error)
+        socketio.emit("club_tag_write", {"state": "failed", "uid": uid, "error": str(error)})
+        return
+    except OSError as error:
+        # The tag carries the club now, but the mirror could not be saved.
+        logger.error("[NFC] Wrote tag %r but could not persist it: %s", uid, error)
+        socketio.emit(
+            "club_tag_write",
+            {"state": "failed", "uid": uid, "error": f"Could not save club tags: {error}"},
+        )
+        return
+
+    session_log = get_session_logger()
+    if session_log:
+        session_log.log_club_tag_change("written", tag.uid, tag.club_id)
+    socketio.emit("club_tag_write", {"state": "written", "uid": tag.uid, "club": tag.club_id})
+    _emit_club_tags()
+    _apply_club(tag.club_id, source="nfc-write")
+
+
 @socketio.on("simulate_nfc_scan")
 def handle_simulate_nfc_scan(data):
     """Present a tag to the mock reader so the flow can be exercised without hardware."""
@@ -2209,9 +2262,15 @@ def handle_simulate_nfc_scan(data):
     if nfc_service is None or not hasattr(reader, "present_tag"):
         socketio.emit("club_tag_error", {"error": "Mock NFC reader is not running"})
         return
-    uid = data.get("uid") if isinstance(data, dict) else None
+    payload = data if isinstance(data, dict) else {}
+    uid = payload.get("uid")
     try:
-        reader.present_tag(uid or "04A1B2C3")
+        reader.present_tag(
+            uid or "04A1B2C3",
+            text=payload.get("text"),
+            writable=bool(payload.get("writable", True)),
+            blank=payload.get("blank"),
+        )
     except ValueError as error:
         socketio.emit("club_tag_error", {"error": str(error), "uid": uid})
 

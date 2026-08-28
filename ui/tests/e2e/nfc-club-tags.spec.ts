@@ -4,7 +4,7 @@ import {
   clubTags,
   expect,
   gotoApp,
-  presentTag,
+  presentUnwritableTag,
   resetClubTags,
   resetSession,
   setClub,
@@ -31,7 +31,7 @@ async function dismissPicker(page: Page) {
 
 /** Tap an unlearned tag and teach it a club through the kiosk prompt. */
 async function learnTag(page: Page, uid: string, section: string, tile: string) {
-  await withControlSocket((socket) => presentTag(socket, uid));
+  await withControlSocket((socket) => presentUnwritableTag(socket, uid));
   await expect(page.getByRole('dialog', { name: 'New club tag' })).toBeVisible();
   await page.getByRole('button', { name: section }).click();
   await page.getByRole('button', { name: tile, exact: true }).click();
@@ -54,7 +54,7 @@ test('asks which club an unrecognized tag belongs to, showing its UID', async ({
   await gotoApp(page);
   await dismissPicker(page);
 
-  await withControlSocket((socket) => presentTag(socket, IRON_TAG));
+  await withControlSocket((socket) => presentUnwritableTag(socket, IRON_TAG));
 
   const prompt = page.getByRole('dialog', { name: 'New club tag' });
   await expect(prompt).toBeVisible();
@@ -85,7 +85,7 @@ test('a learned tag survives a reload and still selects its club', async ({ page
   await expect(page.locator('.panel-header__club', { hasText: 'Driver' })).toBeVisible();
 
   // Second tap of a known tag: no prompt, straight to the club.
-  await withControlSocket((socket) => presentTag(socket, DRIVER_TAG));
+  await withControlSocket((socket) => presentUnwritableTag(socket, DRIVER_TAG));
 
   await expect(page.getByRole('dialog', { name: 'New club tag' })).toBeHidden();
   await expect(page.locator('.panel-header__club', { hasText: '9 Iron' })).toBeVisible();
@@ -97,7 +97,7 @@ test('shows a large confirmation naming the club, then clears it', async ({ page
   await learnTag(page, WEDGE_TAG, 'Irons', 'PW');
   await withControlSocket((socket) => setClub(socket, 'driver'));
 
-  await withControlSocket((socket) => presentTag(socket, WEDGE_TAG));
+  await withControlSocket((socket) => presentUnwritableTag(socket, WEDGE_TAG));
 
   const toast = page.getByRole('status');
   await expect(toast).toBeVisible();
@@ -117,7 +117,7 @@ test('a tag tap closes the club picker it just answered', async ({ page }) => {
   await expect(page.getByRole('dialog', { name: 'Select club' })).toBeVisible();
 
   await withControlSocket((socket) => setClub(socket, 'driver'));
-  await withControlSocket((socket) => presentTag(socket, SECOND_TAG));
+  await withControlSocket((socket) => presentUnwritableTag(socket, SECOND_TAG));
 
   await expect(page.getByRole('dialog', { name: 'Select club' })).toBeHidden();
   await expect(page.locator('.panel-header__club', { hasText: '3 Wood' })).toBeVisible();
@@ -146,7 +146,7 @@ test('a forgotten tag prompts to be learned again', async ({ page }) => {
   await learnTag(page, IRON_TAG, 'Irons', '7i');
 
   await withControlSocket(resetClubTags);
-  await withControlSocket((socket) => presentTag(socket, IRON_TAG));
+  await withControlSocket((socket) => presentUnwritableTag(socket, IRON_TAG));
 
   await expect(page.getByRole('dialog', { name: 'New club tag' })).toBeVisible();
 });

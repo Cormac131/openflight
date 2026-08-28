@@ -97,10 +97,22 @@ export async function resetClubTags(socket: Socket) {
  * Resolves once the reader thread has reported it, so callers do not race the
  * poll interval.
  */
-export async function presentTag(socket: Socket, uid: string) {
+export async function presentTag(
+  socket: Socket,
+  uid: string,
+  options: { text?: string; writable?: boolean; blank?: boolean } = {}
+) {
   const scan = waitForEvent<{ uid: string; club: string | null }>(socket, 'nfc_scan');
-  socket.emit('simulate_nfc_scan', { uid });
+  socket.emit('simulate_nfc_scan', { uid, writable: true, ...options });
   return scan;
+}
+
+/**
+ * Present a tag the reader cannot write, so it takes the learn-by-UID path
+ * rather than the blank-tag write flow.
+ */
+export async function presentUnwritableTag(socket: Socket, uid: string) {
+  return presentTag(socket, uid, { writable: false, blank: false });
 }
 
 export async function resetSession(socket: Socket) {

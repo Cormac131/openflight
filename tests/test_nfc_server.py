@@ -7,7 +7,7 @@ import pytest
 
 from openflight import server as server_module
 from openflight.launch_monitor import ClubType
-from openflight.nfc import ClubTagRegistry, MockTagReader, NfcService, TagScan
+from openflight.nfc import ClubTagRegistry, MockTagReader, NfcService, TagRead, TagScan
 
 
 class FakeMonitor:
@@ -39,7 +39,13 @@ def fixture_wired(tmp_path, monkeypatch):
         "emit",
         lambda event, payload=None: emitted.append((event, payload)),
     )
+
+    def tap(uid, **kwargs):
+        """Drive one tag presentation through the real scan handler."""
+        return service.handle_tag(TagRead(uid=uid, **kwargs))
+
     return SimpleNamespace(
+        tap=tap,
         emitted=emitted,
         registry=registry,
         reader=reader,
@@ -53,7 +59,7 @@ class TestKnownTagSelectsClub:
     def test_a_learned_tag_changes_the_club_and_tells_the_ui(self, wired):
         wired.registry.assign("04A2B1C3", "7-iron")
 
-        wired.service.handle_uid("04A2B1C3")
+        wired.tap("04A2B1C3")
 
         assert wired.monitor.clubs == [ClubType.IRON_7]
         assert wired.events("club_changed") == [{"club": "7-iron", "source": "nfc"}]
@@ -61,14 +67,14 @@ class TestKnownTagSelectsClub:
     def test_a_learned_tag_does_not_ask_the_ui_to_learn_it(self, wired):
         wired.registry.assign("04A2B1C3", "driver")
 
-        wired.service.handle_uid("04A2B1C3")
+        wired.tap("04A2B1C3")
 
         assert wired.events("nfc_tag_unknown") == []
 
     def test_every_tap_is_reported_for_the_tag_view(self, wired):
         wired.registry.assign("04A2B1C3", "pw")
 
-        wired.service.handle_uid("04A2B1C3")
+        wired.tap("04A2B1C3")
 
         assert wired.events("nfc_scan")[0]["uid_display"] == "04:A2:B1:C3"
 
@@ -77,7 +83,7 @@ class TestKnownTagSelectsClub:
         # Simulate a club id that no longer resolves, as if renamed in a release.
         monkeypatch.setattr(wired.registry, "club_for", lambda _uid: "mashie-niblick")
 
-        wired.service.handle_uid("04A2B1C3")
+        wired.tap("04A2B1C3")
 
         assert wired.monitor.clubs == []
         assert len(wired.events("nfc_tag_unknown")) == 1
@@ -85,7 +91,7 @@ class TestKnownTagSelectsClub:
 
 class TestUnknownTagPrompt:
     def test_an_unlearned_tag_asks_the_ui_to_assign_it(self, wired):
-        wired.service.handle_uid("04A2B1C3")
+        wired.tap("04A2B1C3")
 
         prompts = wired.events("nfc_tag_unknown")
         assert prompts == [
@@ -95,11 +101,14 @@ class TestUnknownTagPrompt:
                 "timestamp": prompts[0]["timestamp"],
                 "club": None,
                 "known": False,
+                "source": None,
+                "blank": False,
+                "writable": False,
             }
         ]
 
     def test_an_unlearned_tag_leaves_the_club_alone(self, wired):
-        wired.service.handle_uid("04A2B1C3")
+        wired.tap("04A2B1C3")
 
         assert wired.monitor.clubs == []
         assert wired.events("club_changed") == []
@@ -125,10 +134,10 @@ class TestAssignment:
         assert wired.events("club_tags")[-1]["tags"][0]["club"] == "driver"
 
     def test_learning_clears_suppression_so_the_next_tap_counts(self, wired):
-        wired.service.handle_uid("04A2B1C3")
+        wired.tap("04A2B1C3")
         server_module.handle_assign_club_tag({"uid": "04A2B1C3", "club": "5-iron"})
 
-        wired.service.handle_uid("04A2B1C3")
+        wired.tap("04A2B1C3")
 
         assert wired.monitor.clubs == [ClubType.IRON_5, ClubType.IRON_5]
 
@@ -184,7 +193,7 @@ class TestForgetting:
         wired.registry.assign("04A2B1C3", "driver")
         server_module.handle_forget_club_tag({"uid": "04A2B1C3"})
 
-        wired.service.handle_uid("04A2B1C3")
+        wired.tap("04A2B1C3")
 
         assert len(wired.events("nfc_tag_unknown")) == 1
 
@@ -212,14 +221,29 @@ class TestMockScanEndpoint:
     def test_simulating_a_scan_drives_the_reader(self, wired):
         wired.service.start()
         try:
+            # A simulated tag is blank and writable unless told otherwise.
             server_module.handle_simulate_nfc_scan({"uid": "04A2B1C3"})
             deadline = time.monotonic() + 3.0
-            while not wired.events("nfc_tag_unknown") and time.monotonic() < deadline:
+            while not wired.events("nfc_tag_blank") and time.monotonic() < deadline:
                 time.sleep(0.01)
         finally:
             wired.service.stop()
 
-        assert len(wired.events("nfc_tag_unknown")) == 1
+        assert len(wired.events("nfc_tag_blank")) == 1
+
+    def test_a_simulated_tag_can_carry_a_club_and_be_unwritable(self, wired):
+        wired.service.start()
+        try:
+            server_module.handle_simulate_nfc_scan(
+                {"uid": "04A2B1C3", "text": "7-iron", "writable": False}
+            )
+            deadline = time.monotonic() + 3.0
+            while not wired.events("club_changed") and time.monotonic() < deadline:
+                time.sleep(0.01)
+        finally:
+            wired.service.stop()
+
+        assert wired.events("club_changed") == [{"club": "7-iron", "source": "nfc"}]
 
     def test_a_bad_uid_in_a_simulated_scan_is_reported(self, wired):
         server_module.handle_simulate_nfc_scan({"uid": "nope"})
@@ -245,7 +269,7 @@ class TestRuntimeConfig:
         assert config["nfc"] == {"enabled": True, "reader": "pn532"}
 
     def test_scan_payloads_round_trip_through_the_scan_type(self):
-        scan = TagScan(uid="04A2B1C3", timestamp=1.5, club_id="driver")
+        scan = TagScan(uid="04A2B1C3", timestamp=1.5, club_id="driver", source="tag")
 
         assert scan.to_dict() == {
             "uid": "04A2B1C3",
@@ -253,4 +277,108 @@ class TestRuntimeConfig:
             "timestamp": 1.5,
             "club": "driver",
             "known": True,
+            "source": "tag",
+            "blank": False,
+            "writable": False,
         }
+
+
+class TestBlankTagRouting:
+    def test_a_blank_writable_tag_offers_the_write_flow(self, wired):
+        wired.tap("04A2B1C3", blank=True, writable=True)
+
+        blanks = wired.events("nfc_tag_blank")
+        assert len(blanks) == 1
+        assert blanks[0]["writable"] is True
+        assert wired.events("nfc_tag_unknown") == []
+
+    def test_a_blank_tag_the_reader_cannot_write_uses_the_learn_prompt(self, wired):
+        wired.tap("04A2B1C3", blank=True, writable=False)
+
+        assert wired.events("nfc_tag_blank") == []
+        assert len(wired.events("nfc_tag_unknown")) == 1
+
+    def test_a_tag_holding_other_data_uses_the_learn_prompt(self, wired):
+        # Overwriting somebody else's tag is not this flow's call to make.
+        wired.tap("04A2B1C3", text="https://example.com", writable=True)
+
+        assert wired.events("nfc_tag_blank") == []
+        assert len(wired.events("nfc_tag_unknown")) == 1
+
+    def test_a_tag_that_already_carries_a_club_selects_it(self, wired):
+        wired.tap("04A2B1C3", text="7-iron", writable=True)
+
+        assert wired.monitor.clubs == [ClubType.IRON_7]
+        assert wired.events("nfc_tag_blank") == []
+
+
+class TestWritingAClubToATag:
+    def _present(self, wired, uid="04A2B1C3"):
+        wired.reader.present_tag(uid)
+        wired.service.handle_tag(wired.reader.read_tag(0.1))
+
+    def test_writing_puts_the_club_on_the_tag_and_selects_it(self, wired):
+        self._present(wired)
+
+        server_module.handle_write_club_tag({"uid": "04A2B1C3", "club": "7-iron"})
+
+        assert wired.events("club_tag_write") == [
+            {"state": "written", "uid": "04A2B1C3", "club": "7-iron"}
+        ]
+        assert wired.monitor.clubs == [ClubType.IRON_7]
+
+    def test_the_written_club_is_mirrored_into_the_registry(self, wired):
+        self._present(wired)
+
+        server_module.handle_write_club_tag({"uid": "04A2B1C3", "club": "gw"})
+
+        assert ClubTagRegistry(wired.registry.path).club_for("04A2B1C3") == "gw"
+        assert wired.events("club_tags")[-1]["tags"][0]["club"] == "gw"
+
+    def test_the_next_tap_reads_the_club_off_the_tag_itself(self, wired):
+        self._present(wired)
+        server_module.handle_write_club_tag({"uid": "04A2B1C3", "club": "5-iron"})
+
+        wired.reader.present_tag("04A2B1C3")
+        wired.service.handle_tag(wired.reader.read_tag(0.1))
+
+        assert wired.events("nfc_scan")[-1]["source"] == "tag"
+
+    def test_a_tag_lifted_off_the_reader_reports_a_useful_failure(self, wired):
+        self._present(wired)
+        wired.reader.set_write_failure("Tag not on the reader")
+
+        server_module.handle_write_club_tag({"uid": "04A2B1C3", "club": "7-iron"})
+
+        assert wired.events("club_tag_write") == [
+            {"state": "failed", "uid": "04A2B1C3", "error": "Tag not on the reader"}
+        ]
+
+    def test_a_failed_write_changes_nothing(self, wired):
+        self._present(wired)
+        wired.reader.set_write_failure("Write failed at page 4")
+
+        server_module.handle_write_club_tag({"uid": "04A2B1C3", "club": "7-iron"})
+
+        assert len(wired.registry) == 0
+        assert wired.monitor.clubs == []
+
+    def test_an_unknown_club_is_refused(self, wired):
+        self._present(wired)
+
+        server_module.handle_write_club_tag({"uid": "04A2B1C3", "club": "spoon"})
+
+        assert wired.events("club_tag_write")[0]["state"] == "failed"
+        assert len(wired.registry) == 0
+
+    def test_an_unusable_uid_is_refused(self, wired):
+        server_module.handle_write_club_tag({"uid": "nope", "club": "driver"})
+
+        assert wired.events("club_tag_write")[0]["state"] == "failed"
+
+    def test_writing_without_a_reader_is_reported(self, wired, monkeypatch):
+        monkeypatch.setattr(server_module, "nfc_service", None)
+
+        server_module.handle_write_club_tag({"uid": "04A2B1C3", "club": "driver"})
+
+        assert wired.events("club_tag_write")[0]["state"] == "failed"

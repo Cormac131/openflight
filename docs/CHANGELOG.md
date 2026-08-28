@@ -14,7 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written to `~/.openflight/club_tags.json` immediately, so it survives restarts
   and can be backed up or copied between rigs. Learned tags are listed in the
   menu sheet with a Forget action for re-teaching. A tap raises a large
-  on-screen confirmation naming the club it selected. Enable with `--nfc`;
+  on-screen confirmation naming the club it selected. Presenting a blank
+  writable tag instead runs a write flow — pick a club, confirm, and the club
+  is written onto the tag as an NDEF text record, verified by reading it back,
+  and mirrored into the rig's mapping. A written tag carries its club between
+  rigs and can be read or authored by any phone NFC app. Enable with `--nfc`;
   `--mock --nfc` exercises the whole flow without hardware. See
   [PN532 NFC Club Tags](nfc/README.md).
 - **Instrument-panel kiosk UI.** The dashboard is a tabbed shell (Live, Stats,

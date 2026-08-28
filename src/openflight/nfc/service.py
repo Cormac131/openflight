@@ -8,8 +8,8 @@ import time
 from typing import Callable, Optional
 
 from .models import InvalidTagUidError, TagScan, normalize_uid
-from .reader import NfcReaderError, TagReader
-from .registry import ClubTagRegistry
+from .reader import NfcReaderError, TagRead, TagReader
+from .registry import ClubTag, ClubTagRegistry, UnknownClubError, validate_club_id
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,9 @@ DEFAULT_READ_TIMEOUT_S = 0.5
 # STEMMA cable produces a burst of errors that a reopen usually clears.
 _ERRORS_BEFORE_REOPEN = 5
 _MAX_ERROR_BACKOFF_S = 5.0
+# How long a write waits for the named tag to be back on the antenna. The
+# player confirms the club on screen first, then holds the club to the reader.
+DEFAULT_WRITE_TIMEOUT_S = 6.0
 
 
 class NfcService:
@@ -36,6 +39,7 @@ class NfcService:
         poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
         read_timeout_s: float = DEFAULT_READ_TIMEOUT_S,
         repeat_suppression_s: float = DEFAULT_REPEAT_SUPPRESSION_S,
+        write_timeout_s: float = DEFAULT_WRITE_TIMEOUT_S,
     ):
         if poll_interval_s < 0 or read_timeout_s <= 0:
             raise ValueError("poll_interval_s must be >= 0 and read_timeout_s must be > 0")
@@ -45,8 +49,12 @@ class NfcService:
         self.poll_interval_s = poll_interval_s
         self.read_timeout_s = read_timeout_s
         self.repeat_suppression_s = repeat_suppression_s
+        self.write_timeout_s = write_timeout_s
 
         self._lock = threading.Lock()
+        # The poll thread and a write from a socket handler share one I2C bus.
+        # Without this they interleave frames on it and corrupt each other.
+        self._reader_lock = threading.RLock()
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._last_uid: Optional[str] = None
@@ -61,7 +69,8 @@ class NfcService:
 
     def start(self) -> None:
         """Open the reader and begin polling. Raises if the reader is absent."""
-        self.reader.open()
+        with self._reader_lock:
+            self.reader.open()
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._poll_loop,
@@ -80,7 +89,8 @@ class NfcService:
             thread.join(timeout=self.read_timeout_s + 2.0)
         self._thread = None
         try:
-            self.reader.close()
+            with self._reader_lock:
+                self.reader.close()
         except Exception as error:  # pylint: disable=broad-exception-caught
             logger.debug("[NFC] Reader close failed: %s", error)
 
@@ -90,11 +100,12 @@ class NfcService:
         consecutive_errors = 0
         while not self._stop_event.is_set():
             try:
-                uid = self.reader.read_uid(self.read_timeout_s)
+                with self._reader_lock:
+                    tag = self.reader.read_tag(self.read_timeout_s)
                 consecutive_errors = 0
                 self._clear_error()
-                if uid:
-                    self.handle_uid(uid)
+                if tag:
+                    self.handle_tag(tag)
             except Exception as error:  # pylint: disable=broad-exception-caught
                 consecutive_errors += 1
                 self._record_error(error)
@@ -112,23 +123,24 @@ class NfcService:
         """Bounce the reader after a run of failures."""
         logger.warning("[NFC] Reopening reader after repeated read failures")
         try:
-            self.reader.close()
-            self.reader.open()
+            with self._reader_lock:
+                self.reader.close()
+                self.reader.open()
         except Exception as error:  # pylint: disable=broad-exception-caught
             self._record_error(error)
 
     # --------------------------------------------------------------- scanning
 
-    def handle_uid(self, raw_uid: str) -> Optional[TagScan]:
-        """Resolve one UID and report it. Returns None when suppressed.
+    def handle_tag(self, tag: TagRead) -> Optional[TagScan]:
+        """Resolve one tag and report it. Returns None when suppressed.
 
         Exposed directly (not only via the poll thread) so the mock path and the
         tests can drive a tap without timing games.
         """
         try:
-            uid = normalize_uid(raw_uid)
+            uid = normalize_uid(tag.uid)
         except InvalidTagUidError as error:
-            logger.warning("[NFC] Ignoring unusable tag UID %r: %s", raw_uid, error)
+            logger.warning("[NFC] Ignoring unusable tag UID %r: %s", tag.uid, error)
             return None
 
         now = time.time()
@@ -141,10 +153,15 @@ class NfcService:
             self._last_uid = uid
             self._last_uid_at = now
 
-        club_id = self.registry.club_for(uid)
-        if club_id is not None:
-            self.registry.touch(uid)
-        scan = TagScan(uid=uid, timestamp=now, club_id=club_id)
+        club_id, source = self._resolve_club(uid, tag)
+        scan = TagScan(
+            uid=uid,
+            timestamp=now,
+            club_id=club_id,
+            source=source,
+            blank=tag.blank,
+            writable=tag.writable,
+        )
         with self._lock:
             self._last_scan = scan
             self._scan_count += 1
@@ -155,6 +172,51 @@ class NfcService:
             # A UI/emit failure must not kill the poll thread.
             logger.warning("[NFC] Scan handler failed for %s: %s", uid, error, exc_info=True)
         return scan
+
+    def _resolve_club(self, uid: str, tag: TagRead) -> tuple[Optional[str], Optional[str]]:
+        """Decide which club a tag names, and where that came from.
+
+        The tag's own record wins over the registry, and the registry is
+        corrected to match. A club written onto the tag travels with the club
+        between rigs, so when the two disagree the tag is the one that was
+        deliberately set.
+        """
+        if tag.text:
+            try:
+                club_id = validate_club_id(tag.text)
+            except UnknownClubError:
+                # Somebody else's text record, or a club id from a newer
+                # release. Fall through to whatever this rig learned by UID.
+                logger.info("[NFC] Tag %s holds unrecognized text %r", uid, tag.text)
+            else:
+                if self.registry.club_for(uid) != club_id:
+                    self.registry.assign(uid, club_id)
+                else:
+                    self.registry.touch(uid)
+                return club_id, "tag"
+
+        club_id = self.registry.club_for(uid)
+        if club_id is None:
+            return None, None
+        self.registry.touch(uid)
+        return club_id, "registry"
+
+    def write_club_tag(self, uid: str, club_id: str) -> ClubTag:
+        """Write a club onto a tag, then mirror it into the registry.
+
+        The registry entry is only made once the tag reports the write back, so
+        a failed write never leaves the rig claiming a club the tag does not
+        carry.
+        """
+        club = validate_club_id(club_id)
+        key = normalize_uid(uid)
+        with self._reader_lock:
+            self.reader.write_text(key, club, self.write_timeout_s)
+        tag = self.registry.assign(key, club)
+        # The player will lift the club away and tap it again to check.
+        self.forget_recent(key)
+        logger.info("[NFC] Wrote %s to tag %s", club, key)
+        return tag
 
     def forget_recent(self, uid: str) -> None:
         """Clear repeat suppression for a UID so the next tap reports again.

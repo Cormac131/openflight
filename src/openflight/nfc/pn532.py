@@ -13,8 +13,9 @@ import logging
 import time
 from typing import Optional, Protocol
 
+from . import ndef
 from .models import normalize_uid
-from .reader import NfcReaderError
+from .reader import NfcReaderError, TagRead, TagWriteError
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,20 @@ COMMAND_GET_FIRMWARE_VERSION = 0x02
 COMMAND_SAM_CONFIGURATION = 0x14
 COMMAND_RF_CONFIGURATION = 0x32
 COMMAND_IN_LIST_PASSIVE_TARGET = 0x4A
+COMMAND_IN_DATA_EXCHANGE = 0x40
+
+# NFC Forum Type 2 (MIFARE Ultralight / NTAG) commands and layout.
+TYPE2_READ = 0x30
+TYPE2_WRITE = 0xA2
+TYPE2_SAK = 0x00
+TYPE2_PAGE_BYTES = 4
+TYPE2_READ_BYTES = 16
+CAPABILITY_CONTAINER_PAGE = 3
+CAPABILITY_CONTAINER_MAGIC = 0xE1
+FIRST_DATA_PAGE = 4
+# A club record is around twenty bytes. Reading the first four pages-worth of
+# user memory finds its TLV without waiting on a full 144-byte NTAG213 dump.
+NDEF_SCAN_BYTES = 64
 
 BAUD_TYPE_A_106KBPS = 0x00
 # Longest InListPassiveTarget answer for one ISO14443A target with a 10-byte
@@ -148,11 +163,12 @@ def parse_frame(buffer: bytes) -> bytes:
     return payload
 
 
-def parse_passive_target_uid(payload: bytes) -> Optional[str]:
-    """Return the UID from an InListPassiveTarget response payload.
+def parse_passive_target(payload: bytes) -> Optional[tuple[str, int]]:
+    """Return (UID, SAK) from an InListPassiveTarget response payload.
 
     ``payload`` starts at the target count. A count of zero is the normal
-    "nothing on the antenna" answer, not an error.
+    "nothing on the antenna" answer, not an error. The SAK (SEL_RES) is what
+    separates a writable Type 2 tag from a MIFARE Classic card.
     """
     if not payload:
         raise PN532FrameError("InListPassiveTarget response is empty")
@@ -161,11 +177,18 @@ def parse_passive_target_uid(payload: bytes) -> Optional[str]:
     # Layout: NbTg, Tg, SENS_RES(2), SEL_RES, NFCIDLength, NFCID...
     if len(payload) < 6:
         raise PN532FrameError(f"Truncated target descriptor: {payload.hex()}")
+    sak = payload[4]
     uid_length = payload[5]
     uid = payload[6 : 6 + uid_length]
     if len(uid) < uid_length:
         raise PN532FrameError(f"Truncated UID in {payload.hex()}")
-    return normalize_uid(uid.hex())
+    return normalize_uid(uid.hex()), sak
+
+
+def parse_passive_target_uid(payload: bytes) -> Optional[str]:
+    """Return just the UID from an InListPassiveTarget response payload."""
+    target = parse_passive_target(payload)
+    return target[0] if target else None
 
 
 class PN532I2C:
@@ -225,11 +248,100 @@ class PN532I2C:
 
     def read_uid(self, timeout_s: float = 0.5) -> Optional[str]:
         """Poll once for an ISO14443A tag, returning its UID or None."""
+        target = self._poll(timeout_s)
+        return target[0] if target else None
+
+    def read_tag(self, timeout_s: float = 0.5) -> Optional[TagRead]:
+        """Poll once, and read the tag's NDEF contents if it is a Type 2 tag."""
+        target = self._poll(timeout_s)
+        if target is None:
+            return None
+        uid, sak = target
+        if sak != TYPE2_SAK:
+            # MIFARE Classic and friends: usable by UID, but this driver does
+            # not speak their authenticated block protocol.
+            return TagRead(uid=uid, writable=False)
+        try:
+            memory = self._read_user_memory()
+        except NfcReaderError as error:
+            # The tag answered the poll but not the read -- it was lifted away,
+            # or it is a Type 2 lookalike. Fall back to UID-only.
+            logger.debug("[NFC] Could not read tag %s contents: %s", uid, error)
+            return TagRead(uid=uid, writable=False)
+        content = ndef.read_tag_content(memory)
+        return TagRead(uid=uid, text=content.text, blank=content.blank, writable=True)
+
+    def write_text(self, uid: str, text: str, timeout_s: float = 3.0) -> None:
+        """Write one NDEF text record to the tag with this UID.
+
+        Polls until that exact tag is on the antenna, writes, then reads back to
+        confirm. A write that cannot be verified is reported as a failure: a
+        half-written tag that silently "succeeds" would send the wrong club.
+        """
+        expected = normalize_uid(uid)
+        payload = ndef.wrap_tlv(ndef.encode_text_record(text))
+        deadline = time.monotonic() + timeout_s
+        while True:
+            target = self._poll(min(0.5, max(timeout_s, 0.1)))
+            if target is not None and target[0] == expected:
+                if target[1] != TYPE2_SAK:
+                    raise TagWriteError("This tag type cannot be written")
+                break
+            if time.monotonic() >= deadline:
+                raise TagWriteError("Tag not on the reader")
+
+        pages = [
+            payload[index : index + TYPE2_PAGE_BYTES].ljust(TYPE2_PAGE_BYTES, b"\x00")
+            for index in range(0, len(payload), TYPE2_PAGE_BYTES)
+        ]
+        for offset, page in enumerate(pages):
+            try:
+                self._exchange(bytes([TYPE2_WRITE, FIRST_DATA_PAGE + offset]) + page)
+            except NfcReaderError as error:
+                raise TagWriteError(f"Write failed at page {FIRST_DATA_PAGE + offset}") from error
+
+        if ndef.read_tag_content(self._read_user_memory()).text != text:
+            raise TagWriteError("Tag did not read back what was written")
+
+    # --------------------------------------------------------------- private
+
+    def _poll(self, timeout_s: float) -> Optional[tuple[str, int]]:
+        """Run one InListPassiveTarget, leaving any tag found selected."""
         payload = self._call(
             bytes([COMMAND_IN_LIST_PASSIVE_TARGET, 0x01, BAUD_TYPE_A_106KBPS]),
             timeout_s=timeout_s,
         )
-        return parse_passive_target_uid(payload)
+        return parse_passive_target(payload)
+
+    def _read_user_memory(self) -> bytes:
+        """Read the start of a selected Type 2 tag's user memory.
+
+        The capability container is checked first: a tag without the NDEF magic
+        byte is not NDEF-formatted, and reading TLVs out of its memory would be
+        interpreting somebody else's bytes as ours.
+        """
+        capability = self._exchange(bytes([TYPE2_READ, CAPABILITY_CONTAINER_PAGE]))
+        if not capability or capability[0] != CAPABILITY_CONTAINER_MAGIC:
+            raise NfcReaderError("Tag is not NDEF-formatted")
+
+        memory = bytearray()
+        page = FIRST_DATA_PAGE
+        while len(memory) < NDEF_SCAN_BYTES:
+            memory.extend(self._exchange(bytes([TYPE2_READ, page]))[:TYPE2_READ_BYTES])
+            page += TYPE2_READ_BYTES // TYPE2_PAGE_BYTES
+        return bytes(memory)
+
+    def _exchange(self, data: bytes, *, timeout_s: float = 0.5) -> bytes:
+        """Send one command to the selected tag and return its answer."""
+        payload = self._call(
+            bytes([COMMAND_IN_DATA_EXCHANGE, 0x01]) + data,
+            timeout_s=timeout_s,
+        )
+        if not payload:
+            raise PN532FrameError("InDataExchange returned no status")
+        if payload[0] != 0x00:
+            raise NfcReaderError(f"Tag exchange failed with status 0x{payload[0]:02x}")
+        return payload[1:]
 
     # --------------------------------------------------------------- private
 

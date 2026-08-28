@@ -2,6 +2,7 @@
 
 import pytest
 
+from openflight.nfc import ndef
 from openflight.nfc.pn532 import (
     ACK_FRAME,
     HOST_TO_PN532,
@@ -10,9 +11,10 @@ from openflight.nfc.pn532 import (
     PN532FrameError,
     build_frame,
     parse_frame,
+    parse_passive_target,
     parse_passive_target_uid,
 )
-from openflight.nfc.reader import NfcReaderError
+from openflight.nfc.reader import NfcReaderError, TagWriteError
 
 
 def _response(command_echo: int, payload: bytes) -> bytes:
@@ -28,6 +30,39 @@ SAM_RESPONSE = _response(0x15, bytes([0x15]))
 NO_TAG_RESPONSE = _response(0x4B, bytes([0x00]))
 TAG_RESPONSE = _response(0x4B, bytes([0x01, 0x01, 0x00, 0x04, 0x08, 0x04, 0x04, 0xA2, 0xB1, 0xC3]))
 ACK_READ = bytes([0x01]) + ACK_FRAME
+
+# SEL_RES (SAK) 0x00 is an NFC Forum Type 2 tag; 0x08 is a MIFARE Classic 1K.
+TYPE2_TAG_RESPONSE = _response(
+    0x4B, bytes([0x01, 0x01, 0x00, 0x44, 0x00, 0x04, 0x04, 0xA2, 0xB1, 0xC3])
+)
+CLASSIC_TAG_RESPONSE = TAG_RESPONSE
+OTHER_TYPE2_TAG_RESPONSE = _response(
+    0x4B, bytes([0x01, 0x01, 0x00, 0x44, 0x00, 0x04, 0x04, 0xA2, 0xB1, 0xFF])
+)
+CAPABILITY_CONTAINER = bytes([0xE1, 0x10, 0x12, 0x00])
+
+
+def _exchange_response(data: bytes) -> bytes:
+    """An InDataExchange answer carrying a success status and this data."""
+    return _response(0x41, bytes([0x00]) + data)
+
+
+def _memory_reads(memory: bytes) -> list[bytes]:
+    """The reads a Type 2 tag serves for one read_tag: the CC, then user memory.
+
+    A Type 2 READ returns 16 bytes from the requested page, so reading the
+    capability container at page 3 also returns the first three data pages.
+    """
+    padded = memory.ljust(64, b"\x00")
+    reads = [_exchange_response(CAPABILITY_CONTAINER + padded[:12])]
+    for offset in range(0, 64, 16):
+        reads.append(_exchange_response(padded[offset : offset + 16]))
+    return reads
+
+
+def _interleave_acks(responses):
+    """Every command is answered with an ACK frame and then its response."""
+    return [item for response in responses for item in (ACK_READ, response)]
 
 
 class FakeTransport:
@@ -208,3 +243,158 @@ class TestReadUid:
 
         with pytest.raises(NfcReaderError, match="did not answer"):
             reader.read_uid(timeout_s=0.05)
+
+
+CLUB_MEMORY = ndef.wrap_tlv(ndef.encode_text_record("7-iron"))
+
+
+class TestReadTag:
+    def test_a_type_2_tag_reports_the_club_written_on_it(self):
+        reader, _ = _open_reader(
+            ACK_READ, TYPE2_TAG_RESPONSE, *_interleave_acks(_memory_reads(CLUB_MEMORY))
+        )
+
+        tag = reader.read_tag()
+
+        assert tag.uid == "04A2B1C3"
+        assert tag.text == "7-iron"
+        assert tag.writable is True
+        assert tag.blank is False
+
+    def test_a_factory_fresh_type_2_tag_reads_as_blank_and_writable(self):
+        reader, _ = _open_reader(
+            ACK_READ, TYPE2_TAG_RESPONSE, *_interleave_acks(_memory_reads(bytes(64)))
+        )
+
+        tag = reader.read_tag()
+
+        assert tag.blank is True
+        assert tag.writable is True
+        assert tag.text is None
+
+    def test_a_mifare_classic_card_is_read_by_uid_only(self):
+        # No memory reads are scripted: attempting one would run off the script.
+        reader, _ = _open_reader(ACK_READ, CLASSIC_TAG_RESPONSE)
+
+        tag = reader.read_tag()
+
+        assert tag.uid == "04A2B1C3"
+        assert tag.writable is False
+        assert tag.blank is False
+
+    def test_a_tag_without_the_ndef_capability_container_is_not_written(self):
+        reader, _ = _open_reader(
+            ACK_READ,
+            TYPE2_TAG_RESPONSE,
+            ACK_READ,
+            _exchange_response(bytes(16)),
+        )
+
+        tag = reader.read_tag()
+
+        assert tag.writable is False
+        assert tag.text is None
+
+    def test_a_tag_lifted_away_mid_read_falls_back_to_uid_only(self):
+        reader, _ = _open_reader(
+            ACK_READ,
+            TYPE2_TAG_RESPONSE,
+            ACK_READ,
+            _response(0x41, bytes([0x13])),  # status: card not responding
+        )
+
+        tag = reader.read_tag()
+
+        assert tag.uid == "04A2B1C3"
+        assert tag.writable is False
+
+    def test_an_empty_field_returns_nothing(self):
+        reader, _ = _open_reader(ACK_READ, NO_TAG_RESPONSE)
+
+        assert reader.read_tag() is None
+
+
+class TestWriteText:
+    def _write_script(self, memory_after):
+        """Poll, four page writes, then the read-back."""
+        page_writes = [_exchange_response(b"")] * len(
+            range(0, len(ndef.wrap_tlv(ndef.encode_text_record("7-iron"))), 4)
+        )
+        return [
+            ACK_READ,
+            TYPE2_TAG_RESPONSE,
+            *_interleave_acks(page_writes),
+            *_interleave_acks(_memory_reads(memory_after)),
+        ]
+
+    def test_writing_a_club_verifies_it_by_reading_back(self):
+        reader, transport = _open_reader(*self._write_script(CLUB_MEMORY))
+
+        reader.write_text("04A2B1C3", "7-iron")
+
+        # Page writes start at page 4, the first user-memory page.
+        writes = [write for write in transport.writes if write[6] == 0x40 and write[8] == 0xA2]
+        assert [write[9] for write in writes] == [4, 5, 6, 7]
+
+    def test_a_write_that_does_not_read_back_is_a_failure(self):
+        reader, _ = _open_reader(*self._write_script(bytes(64)))
+
+        with pytest.raises(TagWriteError, match="did not read back"):
+            reader.write_text("04A2B1C3", "7-iron")
+
+    def test_writing_refuses_when_a_different_tag_is_on_the_reader(self):
+        # A club was swapped onto the reader between confirming and writing.
+        reader, _ = _open_reader(ACK_READ, OTHER_TYPE2_TAG_RESPONSE)
+
+        with pytest.raises(TagWriteError, match="not on the reader"):
+            reader.write_text("04A2B1C3", "7-iron", timeout_s=0.0)
+
+    def test_writing_refuses_when_no_tag_is_on_the_reader(self):
+        reader, _ = _open_reader(ACK_READ, NO_TAG_RESPONSE)
+
+        with pytest.raises(TagWriteError, match="not on the reader"):
+            reader.write_text("04A2B1C3", "7-iron", timeout_s=0.0)
+
+    def test_writing_waits_for_the_tag_to_come_back_to_the_reader(self):
+        reader, _ = _open_reader(
+            ACK_READ,
+            NO_TAG_RESPONSE,
+            ACK_READ,
+            TYPE2_TAG_RESPONSE,
+            *_interleave_acks([_exchange_response(b"")] * 4),
+            *_interleave_acks(_memory_reads(CLUB_MEMORY)),
+        )
+
+        reader.write_text("04A2B1C3", "7-iron", timeout_s=2.0)
+
+    def test_writing_refuses_a_tag_type_it_cannot_write(self):
+        reader, _ = _open_reader(ACK_READ, CLASSIC_TAG_RESPONSE)
+
+        with pytest.raises(TagWriteError, match="cannot be written"):
+            reader.write_text("04A2B1C3", "7-iron", timeout_s=0.01)
+
+    def test_a_refused_page_write_is_reported_with_its_page(self):
+        reader, _ = _open_reader(
+            ACK_READ,
+            TYPE2_TAG_RESPONSE,
+            ACK_READ,
+            _response(0x41, bytes([0x13])),
+        )
+
+        with pytest.raises(TagWriteError, match="page 4"):
+            reader.write_text("04A2B1C3", "7-iron")
+
+
+class TestTagTypeDetection:
+    def test_the_sak_is_reported_alongside_the_uid(self):
+        payload = bytes([0x01, 0x01, 0x00, 0x44, 0x00, 0x04, 0x04, 0xA2, 0xB1, 0xC3])
+
+        assert parse_passive_target(payload) == ("04A2B1C3", 0x00)
+
+    def test_a_mifare_classic_sak_is_preserved(self):
+        payload = bytes([0x01, 0x01, 0x00, 0x04, 0x08, 0x04, 0x04, 0xA2, 0xB1, 0xC3])
+
+        assert parse_passive_target(payload) == ("04A2B1C3", 0x08)
+
+    def test_no_target_reports_nothing(self):
+        assert parse_passive_target(bytes([0x00])) is None

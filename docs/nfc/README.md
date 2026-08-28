@@ -55,23 +55,35 @@ stickers arrive.
 
 ## How Club Selection Works
 
-Three things stay separate:
+Four things stay separate:
 
 ```text
 tag UID          = factory-programmed, unique, unchangeable
+tag contents     = the club written onto the tag, as an NDEF text record
 club mapping     = learned on the rig, stored in ~/.openflight/club_tags.json
 active club      = what the UI and shot pipeline currently use
 ```
 
-Tapping a tag looks up its UID in the mapping:
+Tapping a tag reads both its UID and its contents, then:
 
-- **Known UID** → the club is selected immediately, exactly as if it had been
-  tapped on the club picker. The picker closes if it was open.
-- **Unknown UID** → the kiosk asks which club it is. Choosing a club writes the
-  mapping to disk and selects that club.
+- **The tag names a club** → that club is selected, and the rig's mapping is
+  corrected to match. The tag wins, because a club written onto the tag is what
+  travels with the club between rigs.
+- **The tag is unwritten but its UID is known** → the mapped club is selected.
+  This is how MIFARE Classic cards and any tag learned before writing existed
+  keep working.
+- **The tag is blank and writable** → the kiosk offers to write a club onto it.
+  See [Writing A Blank Tag](#writing-a-blank-tag).
+- **The tag is unknown and cannot be written** → the kiosk asks which club it
+  is and records the mapping against its UID, as before.
 
-There is no preloaded tag list. Every mapping in the file was taught on this
-rig, which is why a bag can be re-tagged at any time without a firmware change.
+A tag holding somebody else's data — a URL, a business card — is never
+offered for writing. Overwriting it is not a decision the tap flow makes on
+your behalf; it takes the learn-by-UID path instead. To reuse such a tag,
+erase it with a phone NFC app first, and it will then read as blank.
+
+In every case the selection is the same as if the club had been tapped on the
+picker, and the picker closes if it was open.
 
 ## Power Down Before Wiring
 
@@ -300,6 +312,56 @@ different club, forget it first and tap it again.
 Two tags may point at the same club. That is deliberate: some builds tag both
 the grip and the shaft.
 
+## Writing A Blank Tag
+
+A factory-fresh NTAG sticker has nothing on it. Tap one on the reader and the
+kiosk runs the write flow:
+
+1. **Blank tag** — the club grid, with the tag's UID shown and nothing
+   preselected.
+2. **Write 7 Iron to this tag?** — a confirmation naming the club and the tag.
+   Nothing has been written yet; cancelling here leaves the tag untouched.
+3. **Hold the club on the reader...** — the club is written onto the tag, read
+   back to confirm, then mirrored into the rig's mapping and selected.
+
+The write is verified by reading the tag back. A write that cannot be confirmed
+is reported as a failure and changes nothing on the rig, so a half-written tag
+never leaves OpenFlight believing a club it does not carry.
+
+Keep the club still on the reader through step 3. If it moves, the flow reports
+**Could not write the tag** and offers a retry with the club already chosen.
+
+To re-point a written tag at a different club, erase it with a phone NFC app so
+it reads as blank again, then tap it. Forgetting a tag in the menu clears the
+rig's mapping but does not erase the tag, and the tag's own record wins on the
+next tap.
+
+## What Is Written On The Tag
+
+The club id goes onto the tag as a standard **NDEF text record** — the same
+thing a phone NFC app writes:
+
+```text
+NDEF text record, UTF-8, language "en"
+payload: "7-iron"
+```
+
+The text is the club id exactly as OpenFlight names it: `driver`, `3-wood`,
+`5-hybrid`, `7-iron`, `pw`, `gw`, `sw`, `lw`, and so on. `uv run python -c
+"from openflight.launch_monitor import ClubType; print([c.value for c in
+ClubType])"` prints the full list.
+
+Because it is ordinary NDEF, any phone with NFC Tools (or similar) can read and
+write club tags:
+
+- **Tag the whole bag from the sofa** — write each club id as a text record and
+  the rig will read them without ever running the write flow.
+- **Diagnose a tag** without the rig, by reading what it actually holds.
+- **Erase a tag** to make it blank again.
+
+A tag whose text is not a club OpenFlight recognizes is ignored, and the rig
+falls back to whatever it learned for that UID.
+
 ## Where The Mapping Lives
 
 Learned tags are stored as JSON at `~/.openflight/club_tags.json`:
@@ -353,12 +415,13 @@ and the tag file path. It then polls the reader about six times a second.
 
 For each tap, OpenFlight:
 
-1. Reads the tag UID and normalizes it (case and separators are irrelevant).
+1. Reads the tag UID and normalizes it (case and separators are irrelevant),
+   and reads the tag's contents if it is an NFC Forum Type 2 tag.
 2. Suppresses repeats of the same UID for three seconds, so a tag resting on the
    antenna is one club change rather than a stream of them.
-3. Looks the UID up in the learned mapping.
-4. Selects the mapped club and broadcasts it to every connected client, or asks
-   the kiosk to learn the tag.
+3. Takes the club from the tag's own record, else from the learned mapping.
+4. Selects that club and broadcasts it to every connected client, or asks the
+   kiosk to write the tag (blank) or learn it (unwritable).
 5. Shows a large **Club selected — 7 Iron** confirmation on the kiosk for about
    two seconds, and closes the club picker if it was open. The confirmation is
    not tappable and cannot swallow a tap while it fades.
@@ -376,9 +439,10 @@ The `session_start` entry records:
 - Tag file path and how many tags were loaded.
 - Initialization error, when there was one.
 
-Each tap writes an `nfc_scan` entry with the UID, the resolved club, and whether
-the tag was known. Learning or forgetting a tag writes a `club_tag_change`
-entry.
+Each tap writes an `nfc_scan` entry with the UID, the resolved club, where that
+club came from (`tag` or `registry`), and whether the tag was blank or writable.
+Learning, writing, or forgetting a tag writes a `club_tag_change` entry with the
+action taken.
 
 ## Troubleshooting
 
@@ -441,8 +505,27 @@ sudo reboot
 
 ### A Tag Selects The Wrong Club
 
-It was learned as that club. Open the kiosk menu, find it under **Club tags**,
-press **Forget**, then tap it again and pick the right club.
+If the club is written on the tag, the tag wins over anything the rig learned,
+so forgetting it in the menu will not help. Erase the tag with a phone NFC app
+and tap it again to run the write flow, or write the right club id straight
+onto it from the phone.
+
+If the tag carries nothing, it was learned as that club: open the kiosk menu,
+find it under **Club tags**, press **Forget**, then tap it again.
+
+### A Blank Tag Asks To Be Learned Instead Of Written
+
+The reader could not read the tag's memory, so it does not know the tag is
+blank. Either it is a MIFARE Classic tag, which this driver reads by UID only,
+or it is a Type 2 tag that has never been NDEF-formatted. Formatting it with a
+phone NFC app makes the write flow available.
+
+### "Could not write the tag"
+
+The club moved off the reader mid-write, or the tag is write-protected. Hold the
+club steady against the antenna and press **Try again**. Nothing was recorded on
+the rig, so a retry is safe. If it fails repeatedly, confirm the tag is not
+locked — some tags ship read-only, and NTAG lock bits are irreversible once set.
 
 ### The Learn Prompt Reappears For A Tag Already Learned
 
@@ -460,9 +543,14 @@ previous file could not be parsed.
 
 ## Current Limitations
 
-- Only the tag UID is used; NDEF records on the tag are ignored.
+- Only NFC Forum Type 2 tags (NTAG213/215/216, MIFARE Ultralight) can be
+  written. MIFARE Classic cards — including the card and keyfob in most PN532
+  kits — are read-only here, and work through the learn-by-UID flow. Writing
+  them would need key authentication and block writes.
+- A tag holding non-club data is never overwritten by the rig; erase it with a
+  phone first.
+- Only ISO14443A tags are read at all. ISO15693 (NFC Type 5, including ST25DV)
+  tags are not, since the PN532's Type 5 support is not implemented here.
 - Reader bus, address, and tag file are command-line settings rather than a
   persisted rig configuration file.
-- Only ISO14443A tags are read. ISO15693 (NFC Type 5, including ST25DV) tags
-  are not, since the PN532's Type 5 support is not implemented here.
 - The reader selects clubs only; it does not switch players or start sessions.

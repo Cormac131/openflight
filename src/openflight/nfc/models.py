@@ -53,16 +53,30 @@ def utc_now_iso() -> str:
 
 @dataclass(frozen=True)
 class TagScan:
-    """One tag presentation, already resolved against the registry."""
+    """One tag presentation, resolved against the tag itself and the registry."""
 
     uid: str
     timestamp: float
     club_id: Optional[str] = None
 
+    source: Optional[str] = None
+    """Where the club came from: "tag" for the tag's own record, else "registry"."""
+
+    blank: bool = False
+    """True when the tag's user memory has never been written."""
+
+    writable: bool = False
+    """True when this reader can write the club onto the tag."""
+
     @property
     def known(self) -> bool:
         """True when the tag already maps to a club."""
         return self.club_id is not None
+
+    @property
+    def needs_write(self) -> bool:
+        """True when this is an unclaimed tag the rig could write a club onto."""
+        return not self.known and self.blank and self.writable
 
     def to_dict(self) -> dict:
         """Serialize for WebSocket emission and session logging."""
@@ -72,6 +86,9 @@ class TagScan:
             "timestamp": self.timestamp,
             "club": self.club_id,
             "known": self.known,
+            "source": self.source,
+            "blank": self.blank,
+            "writable": self.writable,
         }
 
 
