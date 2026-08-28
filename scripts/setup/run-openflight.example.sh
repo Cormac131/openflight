@@ -30,8 +30,10 @@ fi
 openflight_args=(
     # --debug  # Uncomment to enable debug logging.
     --startup-splash
-    --calculated-spin
     --ballistics
+
+    # Optional measurement modes:
+    # --calculated-spin  # Replaces measured OPS spin with a kinematic estimate.
 
     # TI IWR6843 example; replace every geometry value with measurements from
     # this installation before uncommenting.

@@ -83,8 +83,8 @@ Add only the options for hardware installed on that Pi. For example:
 openflight_args=(
     # --debug  # Uncomment to enable debug logging.
     --startup-splash
-    --calculated-spin
     --ballistics
+    # --calculated-spin  # Replaces measured OPS spin with a kinematic estimate.
     --iwr6843
     --iwr6843-port /dev/serial/by-id/REPLACE_WITH_TI_SERIAL_ID
     --iwr6843-tee-m 1.372
@@ -95,6 +95,10 @@ openflight_args=(
     --battery geekworm
 )
 ```
+
+`--calculated-spin` is intentionally commented out because it replaces OPS
+spin with an opt-in kinematic estimate whenever a measured launch angle is
+available. Enable it only when that behavior is desired.
 
 The geometry above is an example, not a default. Follow the
 [IWR6843 operator guide](iwr6843/README.md#measure-the-geometry) and enter the
