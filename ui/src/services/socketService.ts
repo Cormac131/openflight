@@ -13,12 +13,7 @@ import {
 import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
 import type { PowerStatus } from '../types/power';
 import { getServerOrigin } from '../utils/serverOrigin';
-import {
-  handleShotMessage,
-  handleShotUpdate,
-  type ShotMessage,
-  type ShotUpdateMessage,
-} from './handleShotMessage';
+import { handleShotMessage, handleShotUpdate, type ShotMessage, type ShotUpdateMessage } from './handleShotMessage';
 import { ingestSocketPlayerName } from './playerSocketSync';
 import { ingestSessionClub } from './sessionClubSync';
 import { remainingShotsAfterClear } from './sessionClear';
