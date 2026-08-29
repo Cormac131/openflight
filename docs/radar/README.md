@@ -31,9 +31,22 @@ Two errors in AN-029 rev A worth knowing before copying settings out of it:
 - It gives the streaming report rate for 30 ksps / 128 samples / 4096 FFT as
   "near 200 Hz (5 ms)", where the 2025 deck gives 56 Hz (18 ms) for identical
   settings. ~200 Hz is the theoretical frame rate (128 / 30000 = 4.27 ms); 56 Hz
-  appears to include processing overhead. Rolling buffer mode doesn't depend on
-  the streaming rate either way.
+  appears to include processing overhead. The docstrings in `ops243.py` still
+  quote the older 56 Hz figure. Rolling buffer mode doesn't depend on the
+  streaming report rate either way.
 
-Table 6 of AN-029 otherwise matches the golf configuration in `src/openflight/ops243.py`,
-and adds a `R>10` speed filter that OpenFlight does not set. AN-029 page 8 cites
-OpenFlight as reference code for an OPS243-A launch monitor.
+## AN-029 Table 6 versus what we send
+
+Table 6 matches the documented golf configuration in `src/openflight/ops243.py` —
+30 ksps (`S=30`), 128-sample buffer (`S(`), 4096 FFT (`X=32`), peak detect (`K+`),
+two-object reporting (`O2`).
+
+It differs on the minimum-speed filter, which it sets to `R>10`:
+
+- `configure_for_rolling_buffer`, the production path, sets no `R>` filter at all.
+- `configure_for_speed_trigger` sets the stricter `R>20` plus `R-` for
+  outbound-only, and deliberately uses a 256-point FFT (`X=2`) rather than
+  Table 6's 4096, trading resolution for report rate.
+- `configure_for_swing_speed_training` defaults to `R>20`.
+
+AN-029 page 8 cites OpenFlight as reference code for an OPS243-A launch monitor.
