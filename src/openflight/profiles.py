@@ -24,9 +24,24 @@ from typing import Any, Dict, List, Optional, Union
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROFILES_PATH = Path.home() / ".config" / "openflight" / "profiles.json"
+PROFILES_PATH_ENV = "OPENFLIGHT_PROFILES_PATH"
 DEFAULT_PROFILE_NAME = "Profile 1"
 MAX_PROFILES = 12
 MAX_NAME_LENGTH = 40
+
+
+def resolve_profiles_path(path: Union[str, Path, None] = None) -> Path:
+    """Constructor argument, then ``OPENFLIGHT_PROFILES_PATH``, then the user default.
+
+    Tests and CI point the env var at a temp file so they cannot create or
+    rewrite ``~/.config/openflight/profiles.json``.
+    """
+    if path is not None and str(path).strip():
+        return Path(path).expanduser()
+    env_path = (os.environ.get(PROFILES_PATH_ENV) or "").strip()
+    if env_path:
+        return Path(env_path).expanduser()
+    return DEFAULT_PROFILES_PATH
 
 
 def clean_profile_name(raw: Any) -> str:
@@ -89,7 +104,7 @@ class ProfileStore:
     """
 
     def __init__(self, path: Union[str, Path, None] = None):
-        self._path = Path(path).expanduser() if path else DEFAULT_PROFILES_PATH
+        self._path = resolve_profiles_path(path)
         # One kiosk, one writer -- an in-process lock is enough; no file locking.
         self._lock = threading.Lock()
         self._profiles: List[Profile] = []

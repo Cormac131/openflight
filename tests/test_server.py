@@ -2460,6 +2460,66 @@ class TestProfileSocketHandlers:
         assert snapshot["active_profile_id"] == active.id
         assert len(snapshot["profiles"]) == 2
 
+    def test_remove_profile_refuses_when_profile_has_shots(self, store, emitted, monkeypatch):
+        doomed = store.add("Doomed")
+        store.add("Keeper")
+        monitor = MockLaunchMonitor()
+        monitor.connect()
+        monitor.start()
+        shot = monitor.simulate_shot()
+        shot.profile_id = doomed.id
+        monkeypatch.setattr(server_module, "monitor", monitor)
+
+        server_module.handle_remove_profile({"profile_id": doomed.id})
+
+        names = [entry["name"] for entry in self._last_snapshot(emitted)["profiles"]]
+        assert "Doomed" in names
+        assert [row.profile_id for row in monitor.get_shots()] == [doomed.id]
+
+    def test_remove_profile_succeeds_after_session_rows_are_cleared(
+        self, store, emitted, monkeypatch
+    ):
+        doomed = store.add("Doomed")
+        store.add("Keeper")
+        monitor = MockLaunchMonitor()
+        monitor.connect()
+        monitor.start()
+        shot = monitor.simulate_shot()
+        shot.profile_id = doomed.id
+        monkeypatch.setattr(server_module, "monitor", monitor)
+
+        server_module.handle_clear_session({"profile_id": doomed.id})
+        server_module.handle_remove_profile({"profile_id": doomed.id})
+
+        names = [entry["name"] for entry in self._last_snapshot(emitted)["profiles"]]
+        assert "Doomed" not in names
+        assert monitor.get_shots() == []
+
+    def test_remove_profile_refuses_when_profile_has_swing_speed_events(
+        self, store, emitted, monkeypatch
+    ):
+        doomed = store.add("Doomed")
+        store.add("Keeper")
+        monitor = MockSwingSpeedMonitor()
+        monitor.connect()
+        monitor.start()
+        event = SwingSpeedEvent(
+            peak_speed_mph=100.0,
+            timestamp=datetime(2026, 8, 27, 10, 0, 0),
+            duration_ms=300.0,
+            reading_count=8,
+            trigger_speed_mph=32.0,
+        )
+        event.profile_id = doomed.id
+        monitor._events[:] = [event]  # pylint: disable=protected-access
+        monkeypatch.setattr(server_module, "monitor", monitor)
+
+        server_module.handle_remove_profile({"profile_id": doomed.id})
+
+        names = [entry["name"] for entry in self._last_snapshot(emitted)["profiles"]]
+        assert "Doomed" in names
+        assert [row.profile_id for row in monitor.get_events()] == [doomed.id]
+
     def test_handlers_tolerate_non_dict_payloads(self, store, emitted):
         server_module.handle_set_active_profile(None)
         server_module.handle_add_profile("not a dict")

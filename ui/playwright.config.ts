@@ -1,5 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
+import { PROFILES_PATH_ENV, uniqueE2eProfilesPath } from './tests/e2e/isolateProfilesPath';
 
 const PORT = 5173;
 const HOST = '127.0.0.1';
@@ -10,6 +11,17 @@ const BACKEND_COMMAND =
   process.env.CI
     ? `python -m openflight.server ${BACKEND_ARGS}`
     : `uv run openflight-server ${BACKEND_ARGS}`;
+
+const E2E_PROFILES_PATH = uniqueE2eProfilesPath();
+
+function backendEnv(): { [key: string]: string } {
+  const env: { [key: string]: string } = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value;
+  }
+  env[PROFILES_PATH_ENV] = E2E_PROFILES_PATH;
+  return env;
+}
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -29,6 +41,7 @@ export default defineConfig({
       url: `http://${HOST}:8080`,
       reuseExistingServer: !process.env.CI,
       cwd: fileURLToPath(new URL('..', import.meta.url)),
+      env: backendEnv(),
     },
     {
       command: `npm run dev -- --host ${HOST} --port ${PORT} --mode test`,

@@ -31,8 +31,9 @@ export function ProfilesPanel({
   const { t } = useI18n();
   const rosterRef = useRef<HTMLDivElement>(null);
   const dragScroll = useDragScroll(rosterRef);
-  // The active profile can never be removed: deleting the profile whose shots
-  // are on screen is a trap, and the server refuses it too.
+  // Active profiles cannot be removed, nor can an inactive one that still
+  // has session rows — the server refuses both, which would otherwise
+  // orphan shots under an id that can never be selected again.
   const canRemove = profiles.length > 1;
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? null;
   const shotCounts = useMemo(() => {
@@ -88,7 +89,7 @@ export function ProfilesPanel({
                   >
                     ✎
                   </button>
-                  {canRemove && !selected ? (
+                  {canRemove && !selected && count === 0 ? (
                     <button
                       type="button"
                       className="profiles-panel__remove"

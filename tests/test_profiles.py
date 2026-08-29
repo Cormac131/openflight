@@ -1,14 +1,18 @@
 """Tests for the persistent profile roster."""
 
 import json
+from pathlib import Path
 
 import pytest
 
 from openflight.profiles import (
     DEFAULT_PROFILE_NAME,
+    DEFAULT_PROFILES_PATH,
     MAX_PROFILES,
+    PROFILES_PATH_ENV,
     Profile,
     ProfileStore,
+    resolve_profiles_path,
 )
 
 
@@ -365,3 +369,59 @@ class TestAtomicWrite:
 
         store._payload = observing_payload
         store.snapshot()
+
+
+class TestResolvePath:
+    """Roster location is constructor, then env, then the user default."""
+
+    def test_explicit_path_wins_over_env(self, store_path, tmp_path, monkeypatch):
+        monkeypatch.setenv(PROFILES_PATH_ENV, str(tmp_path / "from-env.json"))
+
+        store = ProfileStore(store_path)
+        store.add("Range")
+
+        assert store_path.exists()
+        assert not (tmp_path / "from-env.json").exists()
+
+    def test_env_is_used_when_no_path_is_given(self, tmp_path, monkeypatch):
+        isolated = tmp_path / "worker-0" / "profiles.json"
+        monkeypatch.setenv(PROFILES_PATH_ENV, str(isolated))
+
+        store = ProfileStore()
+        store.add("Alex")
+
+        assert isolated.exists()
+        names = [
+            entry["name"] for entry in json.loads(isolated.read_text(encoding="utf-8"))["profiles"]
+        ]
+        assert "Alex" in names
+
+    def test_blank_env_falls_back_to_default(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(PROFILES_PATH_ENV, "   ")
+        monkeypatch.setattr("openflight.profiles.DEFAULT_PROFILES_PATH", tmp_path / "default.json")
+
+        assert resolve_profiles_path() == tmp_path / "default.json"
+
+    def test_default_constant_is_the_user_config_location(self):
+        assert DEFAULT_PROFILES_PATH == Path.home() / ".config" / "openflight" / "profiles.json"
+
+
+class TestEnvDoesNotTouchUserConfig:
+    """E2E-style construction (no path argument) must not rewrite the user roster."""
+
+    def test_store_with_env_never_creates_or_rewrites_default_path(self, tmp_path, monkeypatch):
+        isolated = tmp_path / "e2e-worker" / "profiles.json"
+        user_roster = tmp_path / "home" / ".config" / "openflight" / "profiles.json"
+        user_roster.parent.mkdir(parents=True)
+        user_roster.write_text("do-not-touch", encoding="utf-8")
+        monkeypatch.setenv(PROFILES_PATH_ENV, str(isolated))
+        monkeypatch.setattr("openflight.profiles.DEFAULT_PROFILES_PATH", user_roster)
+
+        store = ProfileStore()
+        store.add("Alex")
+        store.add("Range")
+        store.remove(store.list()[0].id)
+
+        assert user_roster.read_text(encoding="utf-8") == "do-not-touch"
+        assert isolated.exists()
+        assert isolated != user_roster

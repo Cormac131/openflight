@@ -108,7 +108,8 @@ Client → server:
 - `rename_profile` — `{ profile_id, name }`. Renames in place; the id (and
   every shot already attributed to it) is unchanged.
 - `remove_profile` — `{ profile_id }`. The server refuses to remove the active
-  profile or the last remaining profile.
+  profile, the last remaining profile, or a profile that still has session
+  shots. Clear that profile's session first.
 - `clear_session` — `{ profile_id }` (defaults to the active profile).
   Deletes that profile's shots; other profiles are untouched.
 

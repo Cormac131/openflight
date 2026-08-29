@@ -116,8 +116,10 @@ export class MockSession {
   }
 
   removeProfile(profileId: unknown): void {
-    // Same refusals as the real store: never the active one, never the last.
+    // Same refusals as the real store: never the active one, never the last,
+    // never one that still has session rows (those would be orphaned).
     if (profileId === this.activeProfileId || this.profiles.length <= 1) return;
+    if (this.shots.some((shot) => shot.profile_id === profileId)) return;
     this.profiles = this.profiles.filter((entry) => entry.id !== profileId);
   }
 

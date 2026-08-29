@@ -53,11 +53,17 @@ describe('ProfilesPanel', () => {
     expect(rangeCard).toContain('aria-pressed="false"');
   });
 
-  it('hides remove on the active profile, shows it on the rest', () => {
-    const html = render();
+  it('hides remove on the active profile, shows it on an empty inactive one', () => {
+    const html = render({ shots: [shot('aaa'), shot('aaa')] });
 
     expect(html).not.toContain('aria-label="Remove Home"');
     expect(html).toContain('aria-label="Remove Range"');
+  });
+
+  it('hides remove on an inactive profile that still has shots', () => {
+    const html = render();
+
+    expect(html).not.toContain('aria-label="Remove Range"');
   });
 
   it('hides remove entirely when only one profile exists', () => {
@@ -74,7 +80,7 @@ describe('ProfilesPanel', () => {
   });
 
   it('groups rename and remove in a right-aligned actions cluster', () => {
-    const html = render();
+    const html = render({ shots: [shot('aaa')] });
     const clusters = [...html.matchAll(/<div class="profiles-panel__actions">[\s\S]*?<\/div>/g)].map(
       (match) => match[0]
     );

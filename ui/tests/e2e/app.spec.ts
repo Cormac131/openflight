@@ -1,5 +1,13 @@
 import { test } from '@playwright/test';
-import { expect, gotoApp, resetSession, setClub, simulateShot, withControlSocket } from './helpers';
+import {
+  expect,
+  gotoApp,
+  resetSession,
+  setClub,
+  simulateShot,
+  waitForEvent,
+  withControlSocket,
+} from './helpers';
 
 /** Dismiss the club picker that opens on every load, keeping the default club. */
 async function dismissPicker(page: import('@playwright/test').Page) {
@@ -210,6 +218,44 @@ test('selecting a profile opens Live and does not offer delete on the active pro
   await expect(page.locator('.panel-header__subtitle')).toHaveText('Profile 1');
 });
 
+test('does not allow deleting a profile that still has shots', async ({ page }) => {
+  await gotoApp(page);
+  await dismissPicker(page);
+
+  await page.getByRole('button', { name: 'Profiles' }).click();
+  await page.getByRole('button', { name: 'Add profile' }).click();
+  await page.getByPlaceholder('Name').fill('Alex');
+  await page.getByRole('dialog', { name: 'Add profile' }).getByRole('button', { name: 'Add profile' }).click();
+
+  await withControlSocket(async (socket) => {
+    await simulateShot(socket);
+  });
+
+  await page.locator('.profiles-panel__card').filter({ hasText: 'Profile 1' }).click();
+  await page.getByRole('button', { name: 'Profiles' }).click();
+
+  await expect(page.getByLabel('Remove Alex')).toHaveCount(0);
+
+  await withControlSocket(async (socket) => {
+    const snapshotPromise = waitForEvent<{ profiles: Array<{ id: string; name: string }> }>(socket, 'profiles');
+    socket.emit('get_profiles');
+    const { profiles } = await snapshotPromise;
+    const alex = profiles.find((profile) => profile.name === 'Alex');
+    expect(alex).toBeTruthy();
+
+    const afterPromise = waitForEvent<{ profiles: Array<{ name: string }> }>(socket, 'profiles');
+    socket.emit('remove_profile', { profile_id: alex!.id });
+    const after = await afterPromise;
+    expect(after.profiles.map((profile) => profile.name)).toContain('Alex');
+  });
+
+  await expect(page.locator('.profiles-panel__card').filter({ hasText: 'Alex' })).toBeVisible();
+  await page.locator('.profiles-panel__card').filter({ hasText: 'Alex' }).click();
+  await page.getByRole('button', { name: 'Shots' }).click();
+  await expect(page.locator('.shots-panel__row')).toHaveCount(1);
+  await expect(page.locator('.shots-panel__profile-name')).toHaveText('Alex');
+});
+
 test('confirms before clearing and only removes that profile, then returns to Live', async ({ page }) => {
   await withControlSocket(async (socket) => {
     await simulateShot(socket);
@@ -251,6 +297,65 @@ test('confirms before clearing and only removes that profile, then returns to Li
 
   await page.getByRole('button', { name: 'Profiles' }).click();
   await page.locator('.profiles-panel__card').filter({ hasText: 'Profile 1' }).click();
+  await page.getByRole('button', { name: 'Shots' }).click();
+  await expect(page.locator('.shots-panel__row')).toHaveCount(1);
+});
+
+test('clear-session confirmation is a centered overlay at 800×480', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+
+  await withControlSocket(async (socket) => {
+    await simulateShot(socket);
+  });
+
+  await gotoApp(page);
+  await dismissPicker(page);
+
+  await page.getByRole('button', { name: 'Stats' }).click();
+  await page.locator('.panel-header').getByRole('button', { name: 'Clear session' }).click();
+
+  const dialog = page.getByRole('dialog', { name: "Clear Profile 1's session?" });
+  await expect(dialog).toBeVisible();
+
+  const layout = await page.evaluate(() => {
+    const modal = document.querySelector('.clear-session-modal');
+    const scrim = document.querySelector('.clear-session-modal__scrim');
+    const box = document.querySelector('.clear-session-modal__dialog');
+    if (!(modal instanceof HTMLElement) || !(scrim instanceof HTMLElement) || !(box instanceof HTMLElement)) {
+      return null;
+    }
+
+    const modalStyle = getComputedStyle(modal);
+    const scrimStyle = getComputedStyle(scrim);
+    const modalRect = modal.getBoundingClientRect();
+    const scrimRect = scrim.getBoundingClientRect();
+    const dialogRect = box.getBoundingClientRect();
+    const dialogCenterX = (dialogRect.left + dialogRect.right) / 2;
+    const dialogCenterY = (dialogRect.top + dialogRect.bottom) / 2;
+
+    return {
+      modalPosition: modalStyle.position,
+      modalCoversViewport:
+        Math.abs(modalRect.width - window.innerWidth) < 4 && Math.abs(modalRect.height - window.innerHeight) < 4,
+      scrimPosition: scrimStyle.position,
+      scrimCoversModal:
+        Math.abs(scrimRect.width - modalRect.width) < 4 && Math.abs(scrimRect.height - modalRect.height) < 4,
+      dialogCentered:
+        Math.abs(dialogCenterX - window.innerWidth / 2) < 48 && Math.abs(dialogCenterY - window.innerHeight / 2) < 48,
+    };
+  });
+
+  expect(layout).not.toBeNull();
+  expect(layout?.modalPosition).toMatch(/^(absolute|fixed)$/);
+  expect(layout?.modalCoversViewport).toBe(true);
+  expect(layout?.scrimPosition).toMatch(/^(absolute|fixed)$/);
+  expect(layout?.scrimCoversModal).toBe(true);
+  expect(layout?.dialogCentered).toBe(true);
+
+  await page.locator('.clear-session-modal__scrim').click({ position: { x: 8, y: 8 } });
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.panel-header__title')).toHaveText('Stats');
+
   await page.getByRole('button', { name: 'Shots' }).click();
   await expect(page.locator('.shots-panel__row')).toHaveCount(1);
 });

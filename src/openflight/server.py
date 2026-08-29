@@ -2410,8 +2410,12 @@ def handle_rename_profile(data=None):
 
 @socketio.on("remove_profile")
 def handle_remove_profile(data=None):
-    """Delete a profile. Refused for the active or the last one."""
-    get_profile_store().remove(_payload_dict(data).get("profile_id"))
+    """Delete a profile. Refused for the active, the last, or one with session rows."""
+    profile_id = str(_payload_dict(data).get("profile_id") or "").strip()
+    if profile_id and _profile_has_session_rows(profile_id):
+        _emit_profiles()
+        return
+    get_profile_store().remove(profile_id)
     _emit_profiles()
 
 
@@ -2430,6 +2434,21 @@ def handle_set_training_implement(data):
         "training_implement_changed",
         {"implement": implement, "label": label},
     )
+
+
+def _profile_has_session_rows(profile_id: str) -> bool:
+    """True when the live session still has rows stamped with this profile."""
+    from .swing_speed import SwingSpeedMonitor  # pylint: disable=import-outside-toplevel
+
+    if not monitor or not profile_id:
+        return False
+
+    if isinstance(monitor, (SwingSpeedMonitor, MockSwingSpeedMonitor)):
+        return any(getattr(event, "profile_id", "") == profile_id for event in monitor.get_events())
+
+    if hasattr(monitor, "get_shots"):
+        return any(getattr(shot, "profile_id", "") == profile_id for shot in monitor.get_shots())
+    return False
 
 
 def _clear_profile_rows(profile_id: str) -> None:
@@ -5161,6 +5180,14 @@ def main():
     parser.add_argument(
         "--log-dir", help="Directory for session logs (default: ~/openflight_sessions)"
     )
+    parser.add_argument(
+        "--profiles-path",
+        default=None,
+        help=(
+            "Path to profiles.json (default: OPENFLIGHT_PROFILES_PATH or "
+            "~/.config/openflight/profiles.json)"
+        ),
+    )
     parser.add_argument("--no-logging", action="store_true", help="Disable session logging")
     _add_battery_arguments(parser)
     parser.add_argument(
@@ -5582,6 +5609,7 @@ def main():
     global active_kld7_radc_tuning
     global ballistics_enabled
     global battery_provider
+    global profile_store
     experimental_kld7_raw_radc_logging = args.experimental_kld7_raw_radc_logging
     experimental_kld7_radc_tuning = args.experimental_kld7_radc_tuning
     global ball_speed_correction_enabled
@@ -5598,6 +5626,7 @@ def main():
     calculated_spin_enabled = args.calculated_spin
     ballistics_enabled = args.ballistics
     battery_provider = args.battery
+    profile_store = ProfileStore(args.profiles_path)
     kld7_radc_tuning_kwargs = _kld7_radc_tuning_kwargs(args)
     active_kld7_radc_tuning = dict(kld7_radc_tuning_kwargs)
     startup_status = StartupStatusReporter(

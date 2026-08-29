@@ -70,12 +70,11 @@ interface ProfilesSnapshot {
 }
 
 /**
- * Resets the shared session between tests: clears every profile's shots (the
- * display route shows all shots unfiltered, so a shot orphaned under a
- * removed profile would still leak into later tests), switches back to the
- * seeded default profile, and removes every other profile (the backend keeps
- * state across connections, so profiles added by one test would otherwise
- * leak into the next and collide on name).
+ * Resets the shared session between tests: clears every profile's shots, then
+ * switches back to the seeded default profile and removes every other profile
+ * (the backend keeps state across connections, so profiles added by one test
+ * would otherwise leak into the next and collide on name). Removal is refused
+ * while a profile still has session rows, so shots must be cleared first.
  */
 export async function resetSession(socket: Socket) {
   const snapshotPromise = waitForEvent<ProfilesSnapshot>(socket, 'profiles');

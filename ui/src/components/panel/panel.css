@@ -1521,12 +1521,66 @@
   padding: 8px 18px 18px;
 }
 
+.clear-session-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.clear-session-modal__scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: color-mix(in srgb, var(--color-bg) 70%, transparent);
+  cursor: pointer;
+}
+
+.clear-session-modal__dialog {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  width: min(28rem, calc(100% - 48px));
+  max-height: calc(100% - 32px);
+  padding: 1.5rem 1.25rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.clear-session-modal__title {
+  font-weight: 700;
+  font-size: 1.125rem;
+  line-height: 1.25;
+  color: var(--color-text);
+}
+
 .clear-session-dialog__detail {
   margin: 0;
   font-size: 1rem;
   font-weight: 500;
   line-height: 1.35;
   color: var(--color-text-muted);
+}
+
+.clear-session-modal__actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 10px;
+  margin-top: 0.25rem;
+}
+
+.clear-session-modal__actions .panel-action {
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
 }
 
 .profile-name-modal__actions .panel-action {
@@ -1659,5 +1713,10 @@
 
   .profile-name-modal__actions {
     padding: 6px 18px 12px;
+  }
+
+  .clear-session-modal__dialog {
+    width: min(28rem, calc(100% - 32px));
+    padding: 1.25rem 1rem 1rem;
   }
 }
