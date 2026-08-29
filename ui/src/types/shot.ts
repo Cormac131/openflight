@@ -11,6 +11,7 @@ export interface CameraReplay {
 
 export interface Shot {
   mode?: 'rolling-buffer' | 'mock' | 'swing-speed';
+  shot_number?: number | null;
   ball_speed_mph: number;
   club_speed_mph: number | null;
   smash_factor: number | null;
@@ -20,6 +21,7 @@ export interface Shot {
   profile_id?: string;
   profile_name?: string;
   timestamp: string;
+  impact_timestamp?: number | null;
   peak_magnitude: number | null;
   // Launch angle data (from K-LD7 radar (deprecated), camera, or estimation)
   launch_angle_vertical: number | null;

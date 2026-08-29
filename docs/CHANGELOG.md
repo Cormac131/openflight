@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Pi kiosk now shows a full-screen keyboard. Chromium in `--kiosk` mode does not
   surface a system keyboard, so the native text field was unusable on the
   touchscreen.
+- **Attack angle no longer inflated by 1/cos(club path).** The camera club
+  delivery divided vertical speed by the forward component alone instead of the
+  full horizontal speed, overstating attack angle on any shot with club path.
 
 ### Added
 - **Profiles replace players.** Shots are now attributed to a server-owned profile
