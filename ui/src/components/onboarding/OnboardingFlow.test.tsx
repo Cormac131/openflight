@@ -14,8 +14,7 @@ describe('OnboardingFlow', () => {
     expect(html).toContain('OpenFlight');
     expect(html).toContain('Launch monitor');
     expect(html).toContain('onboarding__mark');
-    expect(html).toContain('fill="currentColor"');
-    expect(html).not.toContain('#360185');
+    expect(html).toContain('src="/openflightlogo.svg"');
     expect(html).not.toContain('Continue');
     expect(html).not.toContain('panel-footer');
   });

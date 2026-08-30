@@ -1,7 +1,6 @@
 import { useState, type MouseEventHandler, type ReactNode } from 'react';
 import { LOCALES } from '../../i18n';
 import { useI18n } from '../../i18n/useI18n';
-import Logo from '../../logo/Logo';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import {
   isLiveViewDurationMs,
@@ -163,7 +162,7 @@ export function OnboardingFlow({
         {step === 'welcome' ? (
           <div className="onboarding__welcome onboarding__welcome--start">
             <div className="onboarding__mark" aria-hidden="true">
-              <Logo size="large" variant="mono" />
+              <img className="onboarding__mark-logo" src="/openflightlogo.svg" alt="" />
             </div>
             <p className="onboarding__eyebrow">{t('onboarding.welcomeEyebrow')}</p>
             <h1 id="onboarding-title" className="onboarding__title">

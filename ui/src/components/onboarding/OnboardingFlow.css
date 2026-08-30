@@ -33,36 +33,16 @@
 }
 
 .onboarding__mark {
-  position: relative;
   display: grid;
   place-items: center;
-  width: 8.25rem;
-  height: 8.25rem;
+  width: 100%;
   margin-bottom: var(--space-lg);
-  color: var(--color-accent);
 }
 
-.onboarding__mark::before,
-.onboarding__mark::after {
-  content: '';
-  position: absolute;
-  border-radius: 50%;
-  pointer-events: none;
-}
-
-.onboarding__mark::before {
-  inset: 0;
-  border: 1px solid color-mix(in srgb, var(--color-accent) 38%, transparent);
-}
-
-.onboarding__mark::after {
-  inset: 0.65rem;
-  border: 1px solid color-mix(in srgb, var(--color-accent) 16%, transparent);
-}
-
-.onboarding__mark svg {
-  width: 4.6rem;
+.onboarding__mark-logo {
+  width: min(60vw, 20rem);
   height: auto;
+  filter: drop-shadow(0 14px 32px rgb(0 0 0 / 38%));
 }
 
 .onboarding__eyebrow {
@@ -503,13 +483,11 @@
   }
 
   .onboarding__mark {
-    width: 5.5rem;
-    height: 5.5rem;
     margin-bottom: var(--space-sm);
   }
 
-  .onboarding__mark svg {
-    width: 3.1rem;
+  .onboarding__mark-logo {
+    width: min(50vw, 14rem);
   }
 
   .onboarding__welcome--start .onboarding__title {
