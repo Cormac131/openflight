@@ -14,7 +14,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['src/**/*.test.{ts,tsx}'],
-    exclude: ['tests/e2e/**'],
+    include: ['src/**/*.test.{ts,tsx}', 'tests/**/*.test.{ts,tsx}'],
+    exclude: ['tests/e2e/**/*.spec.ts'],
   },
 });

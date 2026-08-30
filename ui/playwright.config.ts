@@ -39,7 +39,7 @@ export default defineConfig({
     {
       command: BACKEND_COMMAND,
       url: `http://${HOST}:8080`,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       cwd: fileURLToPath(new URL('..', import.meta.url)),
       env: backendEnv(),
     },
