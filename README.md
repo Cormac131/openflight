@@ -88,7 +88,9 @@ The script installs everything and walks you through the one-time hardware
 configuration (radar flash setup, legacy K-LD7 device naming, auto-start, and
 optional cloud sync) with prompts. It's safe to re-run any time.
 See the **[Raspberry Pi Setup Guide](docs/raspberry-pi-setup.md)** for
-details and troubleshooting.
+details and troubleshooting. Touchscreen installations can use the
+**[Startup Splash Screen](docs/splash-screen.md)** guide to install a
+terminal-free desktop launcher with immediate startup progress.
 
 ### 4. Hit balls
 

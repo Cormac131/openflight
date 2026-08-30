@@ -78,6 +78,7 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
   const carry = shot.carry_spin_adjusted ?? shot.estimated_carry_yards;
   const angleConfidence = launchAngleQuality(shot.launch_angle_confidence);
   const angleEstimated = shot.angle_source === 'estimated';
+  const horizontalLaunchIsCameraAssisted = shot.launch_angle_horizontal_source === 'camera_assisted_experimental';
   const fusedDeliveryAttempted = shot.experimental_fused_status != null;
   const attackAngle =
     shot.club_angle_deg ??
@@ -141,11 +142,10 @@ function buildBallStrikeMetrics(shot: Shot, unitSystem: UnitSystem): LiveMetric[
       label: t('metric.hLaunch'),
       value: formatOptionalAngle(shot.launch_angle_horizontal, true),
       unit: angleUnit(shot.launch_angle_horizontal),
-      subtext:
-        shot.launch_angle_horizontal_source === 'camera_assisted_experimental' ? t('metric.cameraAssisted') : undefined,
+      subtext: horizontalLaunchIsCameraAssisted ? t('metric.cameraAssisted') : undefined,
       estimated: markEstimated(shot.launch_angle_horizontal !== null && angleEstimated),
       confidence: shot.launch_angle_horizontal === null ? null : angleConfidence,
-      experimental: shot.launch_angle_horizontal_source === 'camera_assisted_experimental' || undefined,
+      experimental: horizontalLaunchIsCameraAssisted || undefined,
     },
     {
       id: 'spin',
