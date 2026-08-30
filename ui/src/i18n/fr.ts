@@ -163,7 +163,6 @@ export const fr: Messages = {
   'menu.shutdown': 'Éteindre',
 
   'onboarding.getStarted': 'Commencer',
-  'onboarding.welcomeEyebrow': 'Moniteur de lancement',
   'onboarding.welcomeTitle': 'OpenFlight',
   'onboarding.continue': 'Continuer',
   'onboarding.back': 'Retour',

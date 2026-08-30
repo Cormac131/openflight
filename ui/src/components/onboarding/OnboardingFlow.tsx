@@ -164,7 +164,6 @@ export function OnboardingFlow({
             <div className="onboarding__mark" aria-hidden="true">
               <img className="onboarding__mark-logo" src="/openflightlogo.svg" alt="" />
             </div>
-            <p className="onboarding__eyebrow">{t('onboarding.welcomeEyebrow')}</p>
             <h1 id="onboarding-title" className="onboarding__title onboarding__title--visually-hidden">
               {t('onboarding.welcomeTitle')}
             </h1>

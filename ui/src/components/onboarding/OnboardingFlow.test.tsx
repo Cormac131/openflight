@@ -12,7 +12,6 @@ describe('OnboardingFlow', () => {
     const html = render();
     expect(html).toContain('Get started');
     expect(html).toContain('OpenFlight');
-    expect(html).toContain('Launch monitor');
     expect(html).toContain('onboarding__mark');
     expect(html).toContain('src="/openflightlogo.svg"');
     expect(html).not.toContain('Continue');

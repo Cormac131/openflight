@@ -36,22 +36,13 @@
   display: grid;
   place-items: center;
   width: 100%;
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-xl);
 }
 
 .onboarding__mark-logo {
   width: min(60vw, 20rem);
   height: auto;
   filter: drop-shadow(0 14px 32px rgb(0 0 0 / 38%));
-}
-
-.onboarding__eyebrow {
-  margin: 0 0 var(--space-xs);
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--color-accent);
 }
 
 .onboarding__title--visually-hidden {
@@ -479,19 +470,11 @@
   }
 
   .onboarding__mark {
-    margin-bottom: var(--space-sm);
+    margin-bottom: var(--space-md);
   }
 
   .onboarding__mark-logo {
     width: min(50vw, 14rem);
-  }
-
-  .onboarding__welcome--start .onboarding__title {
-    font-size: 1.55rem;
-  }
-
-  .onboarding__welcome--start .onboarding__title::after {
-    margin-top: var(--space-sm);
   }
 
   .onboarding__welcome--start .onboarding__detail {

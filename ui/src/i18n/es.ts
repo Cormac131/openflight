@@ -163,7 +163,6 @@ export const es: Messages = {
   'menu.shutdown': 'Apagar',
 
   'onboarding.getStarted': 'Empezar',
-  'onboarding.welcomeEyebrow': 'Monitor de lanzamiento',
   'onboarding.welcomeTitle': 'OpenFlight',
   'onboarding.continue': 'Continuar',
   'onboarding.back': 'Atrás',

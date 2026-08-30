@@ -161,7 +161,6 @@ export const en = {
   'menu.shutdown': 'Shut down',
 
   'onboarding.getStarted': 'Get started',
-  'onboarding.welcomeEyebrow': 'Launch monitor',
   'onboarding.welcomeTitle': 'OpenFlight',
   'onboarding.continue': 'Continue',
   'onboarding.back': 'Back',
