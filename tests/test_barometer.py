@@ -28,7 +28,12 @@ def _temperature_bytes(temperature_c: float) -> list[int]:
 
 
 class FakeBus:
-    """Minimal BMP580 stand-in driven by the datasheet register map."""
+    """Minimal BMP580 stand-in driven by the datasheet register map.
+
+    INT_STATUS.drdy_data_reg is only visible after INT_SOURCE.drdy_data_reg_en
+    is written (BST-BMP581-DS004 4.7.1). That is the hardware timeout: the
+    chip converts, but the status bit never appears if the source is left off.
+    """
 
     def __init__(
         self,
@@ -49,6 +54,7 @@ class FakeBus:
         self.writes = []
         self.polls = 0
         self.closed = False
+        self.drdy_enabled = False
 
     def read_byte_data(self, address, register):
         assert address in (BMP580.DEFAULT_ADDRESS, BMP580.ALTERNATE_ADDRESS)
@@ -58,13 +64,15 @@ class FakeBus:
             return self.status
         if register == BMP580.INT_STATUS:
             self.polls += 1
-            if self.polls > self.drdy_after_polls:
+            if self.drdy_enabled and self.polls > self.drdy_after_polls:
                 return BMP580.DRDY_DATA_REG
             return 0x00
         raise AssertionError(f"unexpected register read 0x{register:02x}")
 
     def write_byte_data(self, address, register, value):
         self.writes.append((address, register, value))
+        if register == BMP580.INT_SOURCE:
+            self.drdy_enabled = bool(value & BMP580.DRDY_DATA_REG_EN)
 
     def read_i2c_block_data(self, address, register, length):
         assert (address, register, length) == (
@@ -100,8 +108,9 @@ class TestBMP580Driver:
         address = BMP580.DEFAULT_ADDRESS
         assert bus.writes == [
             (address, BMP580.CMD, BMP580.SOFT_RESET),
+            (address, BMP580.INT_SOURCE, BMP580.DRDY_DATA_REG_EN),
             (address, BMP580.OSR_CONFIG, BMP580.OSR_CONFIG_VALUE),
-            (address, BMP580.ODR_CONFIG, BMP580.MODE_STANDBY),
+            (address, BMP580.ODR_CONFIG, BMP580.DEEP_DIS | BMP580.MODE_STANDBY),
         ]
 
     def test_osr_config_enables_pressure_at_the_datasheet_bit_positions(self):
@@ -120,7 +129,11 @@ class TestBMP580Driver:
         sensor.read(timestamp=1.0)
 
         assert bus.writes == [
-            (BMP580.DEFAULT_ADDRESS, BMP580.ODR_CONFIG, BMP580.MODE_FORCED)
+            (
+                BMP580.DEFAULT_ADDRESS,
+                BMP580.ODR_CONFIG,
+                BMP580.DEEP_DIS | BMP580.MODE_FORCED,
+            )
         ]
 
     def test_read_waits_for_data_ready(self):
@@ -183,7 +196,11 @@ class TestBMP580Driver:
         bus.writes.clear()
         sensor.close()
         assert bus.writes == [
-            (BMP580.DEFAULT_ADDRESS, BMP580.ODR_CONFIG, BMP580.MODE_STANDBY)
+            (
+                BMP580.DEFAULT_ADDRESS,
+                BMP580.ODR_CONFIG,
+                BMP580.DEEP_DIS | BMP580.MODE_STANDBY,
+            )
         ]
 
     def test_close_is_idempotent(self):

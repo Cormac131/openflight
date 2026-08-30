@@ -60,6 +60,7 @@ class BMP580:
 
     CHIP_ID = 0x01
     REV_ID = 0x02
+    INT_SOURCE = 0x15
     INT_STATUS = 0x27
     STATUS = 0x28
     OSR_CONFIG = 0x36
@@ -71,6 +72,9 @@ class BMP580:
     CHIP_IDS = {0x50: "BMP580/BMP581", 0x51: "BMP585"}
 
     SOFT_RESET = 0xB6
+    # INT_SOURCE bits. INT_STATUS.drdy is only populated when this is set
+    # (BST-BMP581-DS004 4.7.1).
+    DRDY_DATA_REG_EN = 0x01
     # INT_STATUS bits.
     DRDY_DATA_REG = 0x01
     POR_COMPLETE = 0x10
@@ -78,9 +82,12 @@ class BMP580:
     NVM_READY = 0x02
     NVM_ERROR = 0x04
 
-    # ODR_CONFIG.pwr_mode (bits 1:0).
+    # ODR_CONFIG.pwr_mode (bits 1:0) and deep_dis (bit 7). After reset the
+    # part is in deep standby; forced conversions do not run until deep_dis
+    # is set (BST-BMP581-DS004 4.3.2).
     MODE_STANDBY = 0b00
     MODE_FORCED = 0b10
+    DEEP_DIS = 1 << 7
     # OSR_CONFIG: press_en (bit 6) | osr_p x16 (bits 5:3) | osr_t x2 (bits 2:0).
     OSR_CONFIG_VALUE = (1 << 6) | (0b100 << 3) | 0b001
 
@@ -89,6 +96,8 @@ class BMP580:
     CONVERSION_TIMEOUT_S = 0.5
     POLL_INTERVAL_S = 0.002
     RESET_SETTLE_S = 0.01
+    # Datasheet t_standby: wait after leaving deep standby before forced mode.
+    MODE_SETTLE_S = 0.003
 
     def __init__(
         self,
@@ -128,8 +137,10 @@ class BMP580:
                 f"BMP580 NVM not ready or reporting an error (STATUS=0x{status:02x})"
             )
 
+        self.bus.write_byte_data(self.address, self.INT_SOURCE, self.DRDY_DATA_REG_EN)
         self.bus.write_byte_data(self.address, self.OSR_CONFIG, self.OSR_CONFIG_VALUE)
-        self.bus.write_byte_data(self.address, self.ODR_CONFIG, self.MODE_STANDBY)
+        self._set_power_mode(self.MODE_STANDBY)
+        time.sleep(self.MODE_SETTLE_S)
 
     @staticmethod
     def _raw24(xlsb: int, lsb: int, msb: int) -> int:
@@ -149,6 +160,10 @@ class BMP580:
         """Decode the unsigned 24-bit pressure; datasheet scaling is 2^-6 Pa."""
         return cls._raw24(xlsb, lsb, msb) / 64.0
 
+    def _set_power_mode(self, mode: int) -> None:
+        """Write ODR_CONFIG with deep standby disabled so conversions can run."""
+        self.bus.write_byte_data(self.address, self.ODR_CONFIG, self.DEEP_DIS | mode)
+
     def _wait_for_data(self) -> None:
         """Poll INT_STATUS until the forced conversion reports data ready."""
         deadline = time.monotonic() + self.CONVERSION_TIMEOUT_S
@@ -164,7 +179,7 @@ class BMP580:
 
     def read(self, *, timestamp: float | None = None) -> PressureSample:
         """Trigger one forced conversion and return station pressure with temperature."""
-        self.bus.write_byte_data(self.address, self.ODR_CONFIG, self.MODE_FORCED)
+        self._set_power_mode(self.MODE_FORCED)
         self._wait_for_data()
 
         # Temperature and pressure are six contiguous registers from 0x1D, so
@@ -183,7 +198,7 @@ class BMP580:
         if self._closed:
             return
         try:
-            self.bus.write_byte_data(self.address, self.ODR_CONFIG, self.MODE_STANDBY)
+            self._set_power_mode(self.MODE_STANDBY)
         except OSError:
             # A sensor that has already gone away must not block shutdown.
             pass
