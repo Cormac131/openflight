@@ -10,6 +10,16 @@ PLAYWRIGHT_CONFIG = REPO_ROOT / "ui" / "playwright.config.ts"
 ISOLATE_HELPER = REPO_ROOT / "ui" / "tests" / "e2e" / "isolateProfilesPath.ts"
 
 
+def test_playwright_does_not_collect_vitest_files():
+    """Playwright defaults to *(test|spec).ts, which would execute Vitest describe()."""
+    config = PLAYWRIGHT_CONFIG.read_text(encoding="utf-8")
+    e2e_dir = REPO_ROOT / "ui" / "tests" / "e2e"
+
+    assert "testMatch:" in config
+    assert "**/*.spec.ts" in config
+    assert list(e2e_dir.glob("*.test.ts")) == []
+
+
 def test_playwright_config_points_the_backend_at_a_unique_temp_path():
     config = PLAYWRIGHT_CONFIG.read_text(encoding="utf-8")
     helper = ISOLATE_HELPER.read_text(encoding="utf-8")

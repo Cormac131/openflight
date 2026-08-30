@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import config from '../../playwright.config';
-import { PROFILES_PATH_ENV } from './isolateProfilesPath';
+import config from '../playwright.config';
+import { PROFILES_PATH_ENV } from './e2e/isolateProfilesPath';
 
 interface WebServerConfig {
   command: string;

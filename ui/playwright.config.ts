@@ -25,6 +25,7 @@ function backendEnv(): { [key: string]: string } {
 
 export default defineConfig({
   testDir: './tests/e2e',
+  testMatch: '**/*.spec.ts',
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 2 : 0,
