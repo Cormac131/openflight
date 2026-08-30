@@ -176,18 +176,16 @@ worth running — the DS3502's 10 kΩ behind a series resistor leaves the loop w
 almost no travel. Pass `--sound-sensitivity-device ds3502` if you already have
 the other part; both are fully supported.
 
-#### Which Breakout
+#### Which Part
 
-The convenient option is **[Soldered's Digipot 100k breakout](https://docs.soldered.com/digipot/overview/)**
-(MCP4018). It has **two Qwiic ports**, so it chains straight off the LIS3DH with
-one cable and no header wiring at all, and it runs from 3.3 V or 5 V. Soldered
-also sell 5 kΩ, 10 kΩ and 50 kΩ versions of the same board — tell the server
-which you have with `--sound-sensitivity-end-to-end-ohms`, or every resistance
-it reports will be wrong.
+The safe default is a bare **MCP4017T-104E/LT** (SC70-6) on a small protoboard.
+It is the 100 kΩ MCP401X variant with a true floating rheostat terminal pair,
+which is what R17 needs. It takes four I2C/power wires instead of a Qwiic cable.
 
-The alternative is a bare **MCP4017T-104E/LT** (SC70-6) on a scrap of
-protoboard. Identical address, protocol and driver; four wires instead of a
-cable.
+A breakout is fine only if Step 0 proves the two terminals you plan to solder
+across R17 are floating from ground. Some MCP401X breakouts use MCP4018 or
+MCP4019 silicon: they speak the same I2C protocol, but the grounded-terminal
+topology is wrong for this feedback node.
 
 > **⚠ Check the wiper-to-ground path before committing to a board.** The family
 > shares an address, a protocol and this codebase, but not its terminals. From
@@ -198,8 +196,7 @@ cable.
 >
 > R17 sits in the preamp's feedback path. If neither end of it is at ground, a
 > `B` tied internally to ground would pull that node down through the ladder.
-> Soldered's board breaks out `A` and `W` only, which is consistent with `B`
-> being internal. **Two minutes with a meter settles it** — see
+> **Two minutes with a meter settles it** — see
 > [Step 0](#step-0-check-the-wiper-to-ground-path) before soldering anything.
 
 ### Why It Works (and When a Series Resistor Is Needed)
@@ -256,8 +253,8 @@ startup instead — the difference is invisible in use.
 For an **MCP401X** (preferred):
 
 - One **[Soldered Digipot 100k](https://docs.soldered.com/digipot/overview/)**
-  breakout, or a bare **MCP4017T-104E/LT** on protoboard — see
-  [Which Breakout](#which-breakout).
+  breakout only if it passes Step 0, or a bare **MCP4017T-104E/LT** on
+  protoboard — see [Which Part](#which-part).
 - **No series resistor.**
 - Either one JST-SH Qwiic cable, **or** four Dupont jumpers — see Step 2.
 - Two short leads to the R17 pads.
@@ -411,9 +408,9 @@ wiper leg:
 └───────────┘                               └─────────────┘
 ```
 
-- **The MCP401X has only two terminals**, so there is nothing to leave
-  unconnected — Soldered's board silkscreens them `A` and `W`, a bare MCP4017
-  calls them `B` and `W`. Either way, a board that passed Step 0 has a floating
+- **The MCP4017 has only two terminals for the resistor path**, so there is
+  nothing to leave unconnected. A breakout may silkscreen the exposed pair
+  differently. Either way, a board that passed Step 0 has a floating
   pair that behaves as a rheostat, and its resistance *rises* with the step:
   ~100 Ω at step 0, ~100 kΩ at step 127. That matches the DS3502 and what the
   driver assumes, so left on the UI slider is least sensitive on both parts.

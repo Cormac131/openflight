@@ -45,7 +45,7 @@ export interface RadarConfig {
 }
 
 /**
- * State of the DS3502 digital potentiometer fitted to the SEN-14262 R17 pad.
+ * State of the digital potentiometer fitted to the SEN-14262 R17 pad.
  *
  * `position` is the wiper step (0 = least sensitive), read back from the chip
  * itself; it is null only when the device cannot be reached. Every derived
@@ -78,7 +78,7 @@ export interface SoundSensitivity {
   max_position: number;
   default_position: number;
   sensitivity_percent: number | null;
-  /** What R17 presents: the series resistor plus the DS3502 wiper. */
+  /** What R17 presents: the series resistor plus the digipot wiper. */
   resistance_ohms: number | null;
   /** R17 in parallel with the board's 100k R3, i.e. the actual preamp gain leg. */
   preamp_feedback_ohms: number | null;

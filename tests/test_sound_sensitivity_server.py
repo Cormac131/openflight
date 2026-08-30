@@ -159,6 +159,16 @@ class TestInit:
 
         assert server_module.sound_sensitivity_runtime_config["device"] == "mcp401x"
 
+    def test_default_device_can_start_with_auto_gain(self, monkeypatch):
+        monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
+
+        assert server_module.init_sound_sensitivity(simulated=True, auto=True) is True
+
+        state = server_module.sound_sensitivity_runtime_config["state"]
+        assert server_module.sound_sensitivity_runtime_config["device"] == "mcp401x"
+        assert state["auto_available"] is True
+        assert state["auto_enabled"] is True
+
     def test_an_explicit_position_is_applied(self, monkeypatch):
         monkeypatch.setattr(server_module, "sound_sensitivity_service", None)
 
@@ -348,7 +358,7 @@ class TestAutoGain:
 
 
 class TestResistanceVariants:
-    """The MCP4018 breakout ships in 5k/10k/50k/100k. Getting the value wrong
+    """The MCP401X family ships in 5k/10k/50k/100k. Getting the value wrong
     does not change behaviour, but it makes every resistance the UI reports
     wrong, which is how a working pot comes to look broken."""
 

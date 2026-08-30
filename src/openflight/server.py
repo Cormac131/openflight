@@ -1467,7 +1467,10 @@ def init_sound_sensitivity(
                 full_scale_volts=detector_volts,
             )
             controller = AutoGainController(
-                series_ohms=series_ohms, target_low=target_low, target_high=target_high
+                series_ohms=series_ohms,
+                target_low=target_low,
+                target_high=target_high,
+                model=pot,
             )
         service = SoundSensitivityService(
             pot,
@@ -4730,7 +4733,7 @@ def main():
         "--sound-sensitivity",
         action="store_true",
         help=(
-            "Enable DS3502 I2C digital-pot control of SEN-14262 preamp gain "
+            "Enable I2C digital-pot control of SEN-14262 preamp gain "
             "(fitted to the detector's R17 pad); tune it on the Debug page"
         ),
     )
@@ -4748,7 +4751,7 @@ def main():
         "--sound-sensitivity-i2c-bus",
         type=int,
         default=1,
-        help="I2C bus carrying the DS3502 (default: 1)",
+        help="I2C bus carrying the sound-sensitivity digipot (default: 1)",
     )
     parser.add_argument(
         "--sound-sensitivity-address",
@@ -4827,8 +4830,8 @@ def main():
         type=int,
         default=None,
         help=(
-            "Force the DS3502 wiper to this step (0-127) for this run, leaving "
-            "the chip's stored value alone. 0 is least sensitive, 127 most"
+            "Force the digipot wiper to this step (0-127) for this run. "
+            "0 is least sensitive, 127 most"
         ),
     )
     parser.add_argument(

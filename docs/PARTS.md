@@ -42,15 +42,18 @@ This is entirely optional. A build with a soldered R17 works exactly as before.
 
 | Part | Description | Link | ~Price |
 |------|-------------|------|--------|
-| **Soldered Digipot 100k** | **Preferred.** MCP4018 breakout with **two Qwiic ports**, so it chains off the LIS3DH with one cable and no header wiring. 3.3 V or 5 V | [Soldered](https://docs.soldered.com/digipot/overview/) | $6 |
-| **Wiring** | One JST-SH Qwiic cable, plus 2 short leads from `A` and `W` to the R17 pads | Any | $2 |
+| **Microchip MCP4017T-104E/LT** | **Preferred.** I2C 100 kΩ true rheostat, SC70-6. Its floating `B`/`W` terminals suit the R17 feedback pad | [Microchip](https://www.microchip.com/en-us/product/mcp4017) | $1 |
+| **Wiring** | 4 wires: `VDD`/`GND`/`SDA`/`SCL` to the Pi, plus 2 short leads from `B` and `W` to the R17 pads | Any | $1 |
 
-Or the bare chip, if you would rather solder than buy a breakout:
+Do not substitute an MCP4018/MCP4019 breakout unless the meter check below
+proves the two terminals you plan to use are floating from ground. Many
+breakouts expose the same I2C protocol but use a grounded-terminal variant,
+which is not safe in the R17 feedback position.
 
 | Part | Description | Link | ~Price |
 |------|-------------|------|--------|
-| **Microchip MCP4017T-104E/LT** | I2C 100 kΩ digital potentiometer, SC70-6. Same address, protocol and driver as the breakout | [Microchip](https://www.microchip.com/en-us/product/mcp4017) | $1 |
-| **Wiring** | 4 wires: `VDD`/`GND`/`SDA`/`SCL` to the Pi, plus 2 short leads from `B` and `W` to the R17 pads | Any | $1 |
+| **Verified floating 100 kΩ MCP401X breakout** | Optional convenience board only after Step 0 confirms no wiper-to-ground path. Two Qwiic ports are useful, but terminal topology matters more than the connector | Board-specific docs | Varies |
+| **Wiring** | One JST-SH Qwiic cable if present, plus 2 short leads from the verified floating terminals to the R17 pads | Any | $2 |
 
 Or, if you already have one:
 
@@ -65,7 +68,7 @@ Or, if you already have one:
 > Microchip, the -4018 and -4019 have terminal `B` connected internally to
 > ground, where the -4017 is a true rheostat with `B` and `W` on pins. R17 sits
 > in the preamp's feedback path, where neither end is at ground, so only a
-> floating pair works here. Soldered's board breaks out `A` and `W` only.
+> floating pair works here.
 > **Two minutes with a meter settles it** —
 > [Step 0](sound-trigger-wiring.md#step-0-check-the-wiper-to-ground-path) is the
 > check, and a bare MCP4017 or the DS3502 is the fallback if a board fails it.

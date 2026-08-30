@@ -383,7 +383,7 @@ interface SoundSensitivityControlProps {
 }
 
 /**
- * Wiper control for the DS3502 fitted to the sound detector's R17 pad.
+ * Wiper control for the digipot fitted to the sound detector's R17 pad.
  *
  * Every number shown here comes from the server, which reads the wiper back
  * from the chip. Re-deriving resistance in the browser would mean maintaining
@@ -422,7 +422,7 @@ export function SoundSensitivityControl({
 
       {!enabled && (
         <p className="debug-panel__hint">
-          No DS3502 digital pot detected. Start the server with{' '}
+          No sound-sensitivity digital pot detected. Start the server with{' '}
           <code>--sound-sensitivity</code> once one is fitted to the detector&apos;s R17 pad, or keep
           using a soldered resistor.
         </p>
