@@ -222,6 +222,28 @@ class TestPeakSelection:
         assert len(monitor._samples) < 5000  # pylint: disable=protected-access
 
 
+class TestLatestSample:
+    def test_it_reports_the_most_recent_sample(self):
+        monitor = EnvelopeMonitor(MockADS1115(), full_scale_volts=3.3)
+        monitor.add_sample(0.4, timestamp=1.0)
+        monitor.add_sample(2.31, timestamp=2.0)
+
+        latest = monitor.latest_sample()
+
+        assert latest.volts == pytest.approx(2.31)
+        assert latest.fraction_of_full_scale == pytest.approx(0.7, rel=1e-2)
+        assert latest.clipped is False
+
+    def test_an_empty_buffer_reports_nothing(self):
+        assert EnvelopeMonitor(MockADS1115(), full_scale_volts=3.3).latest_sample() is None
+
+    def test_a_railed_live_sample_is_flagged(self):
+        monitor = EnvelopeMonitor(MockADS1115(), full_scale_volts=3.3, clip_fraction=0.98)
+        monitor.add_sample(3.3, timestamp=1.0)
+
+        assert monitor.latest_sample().clipped is True
+
+
 class TestSamplingThread:
     def test_start_and_stop_drive_the_adc_lifecycle(self):
         adc = MockADS1115(volts=1.5)

@@ -1,7 +1,8 @@
-import { memo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import type { CameraStatus } from '../stores/useCameraStore';
-import type { DebugReading, RadarConfig, DebugShotLog, SoundSensitivity } from '../types/socket';
+import type { DebugReading, RadarConfig, DebugShotLog, EnvelopePeak, SoundSensitivity } from '../types/socket';
 import type { TriggerDiagnostic, TriggerStatus } from '../types/shot';
+import { startEnvelopePoll } from '../utils/envelopePoll';
 import './DebugPanel.css';
 
 interface DebugPanelProps {
@@ -19,6 +20,7 @@ interface DebugPanelProps {
   soundSensitivityError: string | null;
   onUpdateSoundSensitivity: (position: number) => void;
   onToggleSoundSensitivityAuto: (enabled: boolean) => void;
+  onRefreshSoundSensitivity?: () => void;
 }
 
 const REASON_DISPLAY: Record<string, string> = {
@@ -309,6 +311,70 @@ function formatOhms(ohms: number | null): string {
   return ohms >= 1000 ? `${(ohms / 1000).toFixed(1)} kΩ` : `${Math.round(ohms)} Ω`;
 }
 
+function envelopePercent(fraction: number | null | undefined): number {
+  if (fraction == null) return 0;
+  return Math.max(0, Math.min(100, Math.round(fraction * 100)));
+}
+
+function EnvelopeGauge({
+  live,
+  lastPeak,
+  targetLow,
+  targetHigh,
+}: {
+  live: EnvelopePeak | null;
+  lastPeak: EnvelopePeak | null;
+  targetLow: number | null;
+  targetHigh: number | null;
+}) {
+  const now = envelopePercent(live?.fraction_of_full_scale);
+  const hold = lastPeak ? envelopePercent(lastPeak.fraction_of_full_scale) : null;
+  const bandLeft = targetLow != null ? targetLow * 100 : null;
+  const bandWidth =
+    targetLow != null && targetHigh != null ? (targetHigh - targetLow) * 100 : null;
+  const clipped = Boolean(live?.clipped);
+
+  return (
+    <div className="envelope-gauge">
+      <div className="envelope-gauge__header">
+        <span className="envelope-gauge__label">Envelope</span>
+        <span className={`envelope-gauge__value ${clipped || lastPeak?.clipped ? 'envelope-gauge__value--clipped' : ''}`}>
+          {live ? `${now}%` : '--'}
+          {hold != null ? ` · hold ${hold}%` : ''}
+          {clipped || lastPeak?.clipped ? ' — CLIPPED' : ''}
+        </span>
+      </div>
+      <div
+        className="envelope-gauge__meter"
+        role="meter"
+        aria-label="Envelope"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={now}
+      >
+        {bandLeft != null && bandWidth != null ? (
+          <span
+            className="envelope-gauge__band"
+            style={{ left: `${bandLeft}%`, width: `${bandWidth}%` }}
+          />
+        ) : null}
+        <span
+          className={`envelope-gauge__fill ${clipped ? 'envelope-gauge__fill--clipped' : ''}`}
+          style={{ width: `${now}%` }}
+        />
+        {hold != null ? (
+          <span className="envelope-gauge__hold" style={{ left: `${hold}%` }} />
+        ) : null}
+      </div>
+      {live ? (
+        <p className="envelope-gauge__volts">{live.volts.toFixed(2)} V</p>
+      ) : (
+        <p className="envelope-gauge__volts">Waiting for samples</p>
+      )}
+    </div>
+  );
+}
+
 interface SoundSensitivityControlProps {
   sensitivity: SoundSensitivity;
   error: string | null;
@@ -345,6 +411,9 @@ export function SoundSensitivityControl({
     auto_enabled: autoEnabled,
     last_peak: lastPeak,
     last_decision: lastDecision,
+    live_envelope: liveEnvelope,
+    target_low: targetLow,
+    target_high: targetHigh,
   } = sensitivity;
 
   return (
@@ -377,33 +446,50 @@ export function SoundSensitivityControl({
             />
           </div>
 
-          <div className="sensitivity-readout">
-            <div className="sensitivity-readout__item">
-              <span className="sensitivity-readout__label">Applied</span>
-              <span className="sensitivity-readout__value">
-                {sensitivity.sensitivity_percent === null
-                  ? '--'
-                  : `${sensitivity.sensitivity_percent.toFixed(0)}%`}
-              </span>
-            </div>
-            <div className="sensitivity-readout__item">
-              <span className="sensitivity-readout__label">R17</span>
-              <span className="sensitivity-readout__value">
-                {formatOhms(sensitivity.resistance_ohms)}
-              </span>
-            </div>
-            <div className="sensitivity-readout__item">
-              <span className="sensitivity-readout__label">Preamp</span>
-              <span className="sensitivity-readout__value">
-                {formatOhms(sensitivity.preamp_feedback_ohms)}
-              </span>
+          <div className={`sound-metrics${autoAvailable ? '' : ' sound-metrics--resistance-only'}`}>
+            {autoAvailable && (
+              <EnvelopeGauge
+                live={liveEnvelope}
+                lastPeak={lastPeak}
+                targetLow={targetLow}
+                targetHigh={targetHigh}
+              />
+            )}
+
+            <div>
+              <h5 className="sensitivity-readout__heading">Audio resistance</h5>
+              <div className="sensitivity-readout">
+                <div className="sensitivity-readout__item">
+                  <span className="sensitivity-readout__label">Applied</span>
+                  <span className="sensitivity-readout__value">
+                    {sensitivity.sensitivity_percent === null
+                      ? '--'
+                      : `${sensitivity.sensitivity_percent.toFixed(0)}%`}
+                  </span>
+                </div>
+                <div className="sensitivity-readout__item">
+                  <span className="sensitivity-readout__label">R17</span>
+                  <span className="sensitivity-readout__value">
+                    {formatOhms(sensitivity.resistance_ohms)}
+                  </span>
+                </div>
+                <div className="sensitivity-readout__item">
+                  <span className="sensitivity-readout__label">Preamp</span>
+                  <span className="sensitivity-readout__value">
+                    {formatOhms(sensitivity.preamp_feedback_ohms)}
+                  </span>
+                </div>
+                <div className="sensitivity-readout__item">
+                  <span className="sensitivity-readout__label">Series</span>
+                  <span className="sensitivity-readout__value">{formatOhms(sensitivity.series_ohms)}</span>
+                </div>
+              </div>
             </div>
           </div>
 
           <p className="debug-panel__hint">
             Higher = more gain, so the detector fires on quieter impacts. Turn it down if the trigger
-            fires on ambient noise, up if it misses strikes. The setting is stored on the pot itself,
-            so it survives a power cycle.
+            fires on ambient noise, up if it misses strikes.
           </p>
 
           {autoAvailable && (
@@ -461,12 +547,20 @@ export function DebugPanel({
   soundSensitivityError,
   onUpdateSoundSensitivity,
   onToggleSoundSensitivityAuto,
+  onRefreshSoundSensitivity,
 }: DebugPanelProps) {
   const [activeTab, setActiveTab] = useState<DebugTab>('status');
   const isRollingBuffer = triggerStatus.mode === 'rolling-buffer';
   const isSwingSpeed = triggerStatus.mode === 'swing-speed';
   const tuningDisabled = mockMode && !isSwingSpeed;
   const lastDiag = triggerDiagnostics.length > 0 ? triggerDiagnostics[triggerDiagnostics.length - 1] : null;
+
+  useEffect(() => {
+    if (activeTab !== 'sound' || !soundSensitivity.auto_available || !onRefreshSoundSensitivity) {
+      return undefined;
+    }
+    return startEnvelopePoll(onRefreshSoundSensitivity);
+  }, [activeTab, soundSensitivity.auto_available, onRefreshSoundSensitivity]);
 
   // Show last 20 triggers, newest first
   const recentTriggers = [...triggerDiagnostics].reverse().slice(0, 20);

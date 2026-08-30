@@ -592,11 +592,32 @@
 }
 
 /* Sound trigger sensitivity (X9C104 digital pot on the SEN-14262 R17 pad) */
+.sound-metrics {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(12rem, 1fr);
+  gap: var(--space-md);
+  align-items: start;
+  margin-top: var(--space-sm);
+}
+
+.sound-metrics--resistance-only {
+  grid-template-columns: 1fr;
+}
+
 .sensitivity-readout {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: var(--space-sm);
-  margin-top: var(--space-md);
+  margin-top: var(--space-xs);
+}
+
+.sensitivity-readout__heading {
+  margin: 0;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: var(--color-text);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .sensitivity-readout__item {
@@ -626,9 +647,84 @@
 
 /* Closed-loop auto gain (ADS1115 envelope feedback) */
 .auto-gain {
-  margin-top: var(--space-md);
-  padding-top: var(--space-md);
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
   border-top: 1px solid var(--color-border);
+}
+
+.envelope-gauge {
+  margin: 0;
+}
+
+.envelope-gauge__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-sm);
+  margin-bottom: 0.375rem;
+}
+
+.envelope-gauge__label,
+.envelope-gauge__volts {
+  font-size: 0.5625rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.envelope-gauge__value {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.envelope-gauge__value--clipped {
+  color: var(--color-warning);
+}
+
+.envelope-gauge__meter {
+  position: relative;
+  height: 1.5rem;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--color-text) 8%, var(--color-surface));
+  border: 1px solid var(--color-border);
+}
+
+.envelope-gauge__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+
+.envelope-gauge__fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: var(--color-accent);
+  transition: width 80ms linear;
+}
+
+.envelope-gauge__fill--clipped {
+  background: var(--color-warning);
+}
+
+.envelope-gauge__hold {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0.1875rem;
+  margin-left: -0.09375rem;
+  background: var(--color-text);
+}
+
+.envelope-gauge__volts {
+  margin: 0.25rem 0 0;
+  text-transform: none;
+  letter-spacing: 0.02em;
 }
 
 .auto-gain__toggle {

@@ -132,6 +132,22 @@ export function registerHandlers(io: Server, session: MockSession): void {
       io.emit('radar_config', config);
     });
 
+    socket.on('get_sound_sensitivity', () => {
+      socket.emit('sound_sensitivity', session.soundSensitivity());
+    });
+
+    socket.on('set_sound_sensitivity', (data: { position?: number }) => {
+      if (data?.position == null) {
+        socket.emit('sound_sensitivity_error', { error: 'No position provided' });
+        return;
+      }
+      io.emit('sound_sensitivity', session.setSoundPosition(data.position));
+    });
+
+    socket.on('set_sound_sensitivity_auto', (data: { enabled?: boolean }) => {
+      io.emit('sound_sensitivity', session.setSoundAuto(Boolean(data?.enabled)));
+    });
+
     socket.on('toggle_camera', () => {
       io.emit('camera_status', session.toggleCamera());
     });

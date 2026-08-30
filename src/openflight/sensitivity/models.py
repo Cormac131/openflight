@@ -30,6 +30,9 @@ class SensitivityState:
     auto_enabled: bool = False
     last_peak: Optional[dict] = None
     last_decision: Optional[dict] = None
+    live_envelope: Optional[dict] = None
+    target_low: Optional[float] = None
+    target_high: Optional[float] = None
     error: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -54,5 +57,8 @@ class SensitivityState:
             "auto_enabled": self.auto_enabled,
             "last_peak": self.last_peak,
             "last_decision": self.last_decision,
+            "live_envelope": self.live_envelope,
+            "target_low": (round(self.target_low, 4) if self.target_low is not None else None),
+            "target_high": (round(self.target_high, 4) if self.target_high is not None else None),
             "error": self.error,
         }

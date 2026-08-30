@@ -281,6 +281,10 @@ class SocketService {
     this.socket?.emit('set_sound_sensitivity', { position });
   }
 
+  getSoundSensitivity() {
+    this.socket?.emit('get_sound_sensitivity');
+  }
+
   setSoundSensitivityAuto(enabled: boolean) {
     this.socket?.emit('set_sound_sensitivity_auto', { enabled });
   }

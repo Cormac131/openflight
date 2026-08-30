@@ -20,6 +20,9 @@ function sensitivity(overrides: Partial<SoundSensitivity> = {}): SoundSensitivit
     auto_enabled: false,
     last_peak: null,
     last_decision: null,
+    live_envelope: null,
+    target_low: null,
+    target_high: null,
     error: null,
     ...overrides,
   };
@@ -40,9 +43,11 @@ describe('SoundSensitivityControl', () => {
   it('shows the applied percentage and both resistances', () => {
     const html = render();
 
+    expect(html).toContain('Audio resistance');
     expect(html).toContain('50%');
     expect(html).toContain('38.0 kΩ');
     expect(html).toContain('27.6 kΩ');
+    expect(html).toContain('33.0 kΩ');
   });
 
   it('drives the slider from the reported position and bounds', () => {
@@ -119,6 +124,31 @@ describe('SoundSensitivityControl auto gain', () => {
     const html = render({ auto_available: true, last_peak: peak });
 
     expect(html).toContain('70%');
+  });
+
+  it('renders a live envelope gauge from the latest sample', () => {
+    const html = render({
+      auto_available: true,
+      live_envelope: { volts: 2.31, fraction_of_full_scale: 0.7, sample_count: 1, clipped: false },
+      target_low: 0.6,
+      target_high: 0.8,
+    });
+
+    expect(html).toContain('role="meter"');
+    expect(html).toContain('aria-valuenow="70"');
+    expect(html).toContain('aria-valuemin="0"');
+    expect(html).toContain('aria-valuemax="100"');
+    expect(html).toContain('Envelope');
+  });
+
+  it('marks the last-shot peak on the gauge', () => {
+    const html = render({
+      auto_available: true,
+      live_envelope: { volts: 1.0, fraction_of_full_scale: 0.3, sample_count: 1, clipped: false },
+      last_peak: peak,
+    });
+
+    expect(html).toContain('envelope-gauge__hold');
   });
 
   it('flags a clipped peak', () => {

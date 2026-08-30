@@ -125,6 +125,18 @@ class EnvelopeMonitor:
         with self._lock:
             self._samples.append((timestamp if timestamp is not None else time.time(), volts))
 
+    def latest_sample(self) -> Optional[EnvelopePeak]:
+        """Return the most recent sample, or None if the buffer is empty.
+
+        Used by the Debug Sound tab's live gauge. Distinct from
+        ``peak_for_impact``, which searches a window around a shot.
+        """
+        with self._lock:
+            if not self._samples:
+                return None
+            timestamp, volts = self._samples[-1]
+        return self._peak(volts, timestamp, sample_count=1)
+
     def peak_for_impact(self, impact_timestamp: float) -> Optional[EnvelopePeak]:
         """Return the largest sample around ``impact_timestamp``, or None.
 
@@ -140,11 +152,14 @@ class EnvelopeMonitor:
         if not window:
             return None
         timestamp, volts = max(window, key=lambda item: item[1])
+        return self._peak(volts, timestamp, sample_count=len(window))
+
+    def _peak(self, volts: float, timestamp: float, sample_count: int) -> EnvelopePeak:
         fraction = volts / self.full_scale_volts
         return EnvelopePeak(
             volts=volts,
             timestamp=timestamp,
-            sample_count=len(window),
+            sample_count=sample_count,
             fraction_of_full_scale=fraction,
             clipped=fraction >= self.clip_fraction,
         )

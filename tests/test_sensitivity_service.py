@@ -228,6 +228,48 @@ class TestLifecycle:
         assert service.start().to_dict()["simulated"] is True
 
 
+class TestLiveEnvelope:
+    def test_state_includes_the_latest_envelope_sample(self):
+        from openflight.sensitivity import EnvelopeMonitor, MockADS1115
+
+        monitor = EnvelopeMonitor(MockADS1115(), full_scale_volts=3.3)
+        monitor.add_sample(1.65, timestamp=1.0)
+        service = SoundSensitivityService(SpyPot(), envelope=monitor)
+        # Open the pot without starting the envelope thread, which would
+        # overwrite the scripted sample with the mock ADC's idle 0 V.
+        service.pot.open()
+
+        payload = service.state().to_dict()
+
+        assert payload["live_envelope"]["fraction_of_full_scale"] == pytest.approx(0.5)
+        assert payload["live_envelope"]["volts"] == pytest.approx(1.65)
+
+    def test_state_includes_the_auto_gain_target_band(self):
+        from openflight.sensitivity import AutoGainController, EnvelopeMonitor, MockADS1115
+
+        service = SoundSensitivityService(
+            SpyPot(),
+            envelope=EnvelopeMonitor(MockADS1115(), full_scale_volts=3.3),
+            controller=AutoGainController(target_low=0.55, target_high=0.75),
+        )
+        service.start()
+
+        payload = service.state().to_dict()
+
+        assert payload["target_low"] == pytest.approx(0.55)
+        assert payload["target_high"] == pytest.approx(0.75)
+
+    def test_a_pot_without_an_adc_has_no_live_envelope(self):
+        service, _ = build_service()
+        service.start()
+
+        payload = service.state().to_dict()
+
+        assert payload["live_envelope"] is None
+        assert payload["target_low"] is None
+        assert payload["target_high"] is None
+
+
 class TestDisabledState:
     def test_disabled_state_has_no_position_but_keeps_the_ui_bounds(self):
         payload = disabled_state().to_dict()
@@ -236,6 +278,7 @@ class TestDisabledState:
         assert payload["position"] is None
         assert payload["max_position"] == MAX_POSITION
         assert payload["error"] is None
+        assert payload["live_envelope"] is None
 
     def test_disabled_state_carries_a_failure_reason(self):
         assert disabled_state("no device at 0x28").to_dict()["error"] == "no device at 0x28"

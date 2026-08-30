@@ -3,7 +3,7 @@
  */
 
 import type { SessionStats, Shot, TriggerStatus } from '../src/types/shot.js';
-import type { RadarConfig } from '../src/types/socket.js';
+import type { RadarConfig, SoundSensitivity } from '../src/types/socket.js';
 import { generateShot } from './shotGenerator.js';
 
 function mean(values: number[]): number {
@@ -77,6 +77,8 @@ export class MockSession {
   cameraStreaming = false;
   ballDetected = false;
   ballConfidence = 0;
+  soundPosition = 64;
+  soundAutoEnabled = false;
 
   getStats(): SessionStats {
     return computeSessionStats(this.shots);
@@ -209,5 +211,60 @@ export class MockSession {
       this.ballConfidence = Math.random() * 0.25;
     }
     return { detected: this.ballDetected, confidence: this.ballConfidence };
+  }
+
+  soundSensitivity(): SoundSensitivity {
+    const maxPosition = 127;
+    const fraction = 0.45 + 0.2 * (0.5 + 0.5 * Math.sin(Date.now() / 400));
+    return {
+      enabled: true,
+      position: this.soundPosition,
+      max_position: maxPosition,
+      default_position: 127,
+      sensitivity_percent: (this.soundPosition / maxPosition) * 100,
+      resistance_ohms: 33000 + (this.soundPosition / maxPosition) * 10000,
+      preamp_feedback_ohms: 24800 + (this.soundPosition / maxPosition) * 4000,
+      series_ohms: 33000,
+      simulated: true,
+      auto_available: true,
+      auto_enabled: this.soundAutoEnabled,
+      last_peak: {
+        volts: 2.31,
+        fraction_of_full_scale: 0.7,
+        sample_count: 40,
+        clipped: false,
+      },
+      last_decision: this.soundAutoEnabled
+        ? {
+            action: 'hold',
+            position: this.soundPosition,
+            next_position: this.soundPosition,
+            reason: 'Median peak 70% is inside the 60%-80% band.',
+            committed: false,
+            median_fraction: 0.7,
+            shots_considered: 5,
+          }
+        : null,
+      live_envelope: {
+        volts: fraction * 3.3,
+        fraction_of_full_scale: fraction,
+        sample_count: 1,
+        clipped: false,
+      },
+      target_low: 0.6,
+      target_high: 0.8,
+      error: null,
+    };
+  }
+
+  setSoundPosition(position: number): SoundSensitivity {
+    this.soundPosition = Math.max(0, Math.min(127, Math.round(position)));
+    this.soundAutoEnabled = false;
+    return this.soundSensitivity();
+  }
+
+  setSoundAuto(enabled: boolean): SoundSensitivity {
+    this.soundAutoEnabled = enabled;
+    return this.soundSensitivity();
   }
 }

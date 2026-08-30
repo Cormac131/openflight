@@ -356,6 +356,7 @@ function AppContent() {
                 soundSensitivityError={soundSensitivityError}
                 onUpdateSoundSensitivity={(position) => socketService.setSoundSensitivity(position)}
                 onToggleSoundSensitivityAuto={(on) => socketService.setSoundSensitivityAuto(on)}
+                onRefreshSoundSensitivity={() => socketService.getSoundSensitivity()}
               />
             </div>
           </div>

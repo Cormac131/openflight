@@ -282,8 +282,17 @@ class SoundSensitivityService:
             last_decision=(
                 self._last_decision.to_dict() if self._last_decision is not None else None
             ),
+            live_envelope=self._live_envelope_dict(),
+            target_low=None if self.controller is None else self.controller.target_low,
+            target_high=None if self.controller is None else self.controller.target_high,
             error=self._last_error,
         )
+
+    def _live_envelope_dict(self) -> Optional[dict]:
+        if self.envelope is None:
+            return None
+        latest = self.envelope.latest_sample()
+        return None if latest is None else latest.to_dict()
 
 
 def disabled_state(error: Optional[str] = None) -> SensitivityState:
@@ -306,5 +315,8 @@ def disabled_state(error: Optional[str] = None) -> SensitivityState:
         auto_enabled=False,
         last_peak=None,
         last_decision=None,
+        live_envelope=None,
+        target_low=None,
+        target_high=None,
         error=error,
     )

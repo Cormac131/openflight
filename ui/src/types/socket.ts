@@ -90,6 +90,11 @@ export interface SoundSensitivity {
   auto_enabled: boolean;
   last_peak: EnvelopePeak | null;
   last_decision: AutoGainDecision | null;
+  /** Latest ADS1115 sample, for the live envelope gauge. Null until a sample arrives. */
+  live_envelope: EnvelopePeak | null;
+  /** Auto-gain target band as a fraction of detector supply. */
+  target_low: number | null;
+  target_high: number | null;
   error: string | null;
 }
 

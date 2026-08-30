@@ -20,6 +20,9 @@ const soundSensitivity: SoundSensitivity = {
   auto_enabled: false,
   last_peak: null,
   last_decision: null,
+  live_envelope: null,
+  target_low: null,
+  target_high: null,
   error: null,
 };
 
