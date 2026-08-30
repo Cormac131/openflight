@@ -165,7 +165,7 @@ export function OnboardingFlow({
               <img className="onboarding__mark-logo" src="/openflightlogo.svg" alt="" />
             </div>
             <p className="onboarding__eyebrow">{t('onboarding.welcomeEyebrow')}</p>
-            <h1 id="onboarding-title" className="onboarding__title">
+            <h1 id="onboarding-title" className="onboarding__title onboarding__title--visually-hidden">
               {t('onboarding.welcomeTitle')}
             </h1>
             <button type="button" className="onboarding__primary" onClick={goNext}>

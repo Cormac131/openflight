@@ -54,19 +54,15 @@
   color: var(--color-accent);
 }
 
-.onboarding__welcome--start .onboarding__title {
-  font-size: clamp(1.85rem, 4.6vw, 2.75rem);
-  font-weight: 700;
-  letter-spacing: 0.12em;
-}
-
-.onboarding__welcome--start .onboarding__title::after {
-  content: '';
-  display: block;
-  width: 2.75rem;
-  height: 0.12rem;
-  margin: var(--space-md) auto 0;
-  background: var(--color-accent-block);
+.onboarding__title--visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
 }
 
 .onboarding__welcome--start .onboarding__detail {
