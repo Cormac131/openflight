@@ -1,7 +1,17 @@
 export type SpinQuality = 'high' | 'medium' | 'low' | 'experimental' | 'withheld';
 
+export interface CameraReplay {
+  id: string;
+  frame_count: number;
+  trigger_frame: number;
+  playback_fps: number;
+  duration_seconds: number;
+  display_mirror_horizontal: boolean;
+}
+
 export interface Shot {
   mode?: 'rolling-buffer' | 'mock' | 'swing-speed';
+  shot_number?: number | null;
   ball_speed_mph: number;
   club_speed_mph: number | null;
   smash_factor: number | null;
@@ -10,6 +20,7 @@ export interface Shot {
   club: string;
   player_name?: string;
   timestamp: string;
+  impact_timestamp?: number | null;
   peak_magnitude: number | null;
   // Launch angle data (from K-LD7 radar (deprecated), camera, or estimation)
   launch_angle_vertical: number | null;
@@ -53,6 +64,7 @@ export interface Shot {
   swing_speed_trigger_mph?: number;
   training_implement?: string;
   training_implement_label?: string;
+  camera_replay?: CameraReplay | null;
 }
 
 export interface SessionStats {

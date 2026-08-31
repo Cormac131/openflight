@@ -64,9 +64,13 @@ export function registerHandlers(io: Server, session: MockSession): void {
     });
 
     socket.on('simulate_shot', () => {
-      const { shot, stats } = session.simulateShot();
-      io.emit('shot', { shot, stats });
-      io.emit('trigger_status', session.triggerStatus());
+      io.emit('shot_processing', { state: 'capturing' });
+      setTimeout(() => io.emit('shot_processing', { state: 'calculating' }), 350);
+      setTimeout(() => {
+        const { shot, stats } = session.simulateShot();
+        io.emit('shot', { shot, stats });
+        io.emit('trigger_status', session.triggerStatus());
+      }, 1400);
     });
 
     socket.on('set_club', (data: { club?: string }) => {

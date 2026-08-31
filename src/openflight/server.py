@@ -8,16 +8,19 @@ import json
 import logging
 import math
 import os
+import queue
 import random
 import statistics
 import sys
 import threading
 import time
+from collections import deque
+from dataclasses import dataclass, fields, replace
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from flask import Flask, Response, jsonify, send_from_directory
+from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
@@ -46,6 +49,7 @@ from .sim import (
 )
 from .speed_correction import correct_ball_speed
 from .spin_estimate import calculated_spin_rpm
+from .startup_status import StartupStatusReporter, configured_startup_components
 from .swing_speed import SwingSpeedEvent
 
 # Configure logging
@@ -130,6 +134,7 @@ iwr6843_runtime = None
 iwr6843_runtime_config: dict = {"enabled": False}
 camera_capture_runtime = None
 camera_capture_config: dict = {"enabled": False}
+camera_replay_manager = None
 camera_reference_ball_tracker = None
 camera_ball_flight_reference_tracker = None
 
@@ -186,6 +191,232 @@ latest_frame: Optional[bytes] = None
 frame_lock = threading.Lock()
 shutdown_lock = threading.Lock()
 shutdown_cleanup_started = False
+# One active hardware job plus two waiting shots is enough for normal golf
+# cadence without allowing a stuck peripheral to consume memory indefinitely.
+_SHOT_ENRICHMENT_QUEUE_CAPACITY = 2
+_SHOT_ENRICHMENT_DEADLINE_S = 20.0
+# Active hardware work, the two queued jobs, and one overflow result. If more
+# shots arrive, fail the oldest optional enrichment closed so OPS finalization
+# can keep advancing without retaining an unbounded number of full Shot objects.
+_SHOT_FINALIZATION_CAPACITY = _SHOT_ENRICHMENT_QUEUE_CAPACITY + 2
+shot_enrichment_queue: queue.Queue[tuple[Shot, str, float | None]] = queue.Queue(
+    maxsize=_SHOT_ENRICHMENT_QUEUE_CAPACITY
+)
+shot_enrichment_task = None
+shot_enrichment_task_lock = threading.Lock()
+_shot_sequence_number = 0
+_shot_sequence_lock = threading.Lock()
+_shot_callback_lock = threading.Lock()
+_shot_finalization_lock = threading.Lock()
+_shot_finalization_condition = threading.Condition(_shot_finalization_lock)
+_shot_finalization_order: deque[int] = deque()
+_shot_finalization_registered: dict[int, "_RegisteredShotFinalization"] = {}
+_shot_finalization_ready: dict[int, "_PendingShotFinalization"] = {}
+_shot_finalization_running = False
+_shot_finalization_worker: threading.Thread | None = None
+
+
+@dataclass(frozen=True)
+class _ShotEnrichmentResult:
+    """Optional hardware outputs needed by required shot finalization."""
+
+    iwr6843_ms: float | None = None
+    kld7_ms: float | None = None
+    camera_capture_ms: float | None = None
+    camera_data: dict | None = None
+
+
+@dataclass(frozen=True)
+class _PendingShotFinalization:
+    """A completed enrichment waiting for its detection-order publication turn."""
+
+    shot: Shot
+    emit_event: str
+    initial_ui_ms: float | None
+    enrichment: _ShotEnrichmentResult
+
+
+@dataclass(frozen=True)
+class _RegisteredShotFinalization:
+    """OPS-only fallback retained until optional enrichment reaches its deadline."""
+
+    shot: Shot
+    emit_event: str
+    initial_ui_ms: float | None
+    deadline_monotonic: float | None
+
+
+def _assign_shot_number(shot: Shot) -> None:
+    """Give a shot one stable session identity before any async work starts."""
+    global _shot_sequence_number  # pylint: disable=global-statement
+
+    with _shot_sequence_lock:
+        if shot.shot_number is None:
+            _shot_sequence_number += 1
+            shot.shot_number = _shot_sequence_number
+        else:
+            _shot_sequence_number = max(_shot_sequence_number, shot.shot_number)
+
+
+def _reset_shot_sequence() -> None:
+    """Start shot identities at one for a newly started logging session."""
+    global _shot_sequence_number  # pylint: disable=global-statement
+    global _shot_finalization_running  # pylint: disable=global-statement
+
+    with _shot_sequence_lock:
+        _shot_sequence_number = 0
+    with _shot_finalization_condition:
+        _shot_finalization_order.clear()
+        _shot_finalization_registered.clear()
+        _shot_finalization_ready.clear()
+        _shot_finalization_running = False
+        _shot_finalization_condition.notify_all()
+
+
+def _register_shot_for_finalization(
+    shot: Shot,
+    *,
+    emit_event: str = "shot_update",
+    initial_ui_ms: float | None = None,
+    needs_watchdog: bool = False,
+) -> None:
+    """Record callback order and the bounded OPS-only fallback for a shot."""
+    if shot.shot_number is None:
+        raise ValueError("shot must have a stable number before registration")
+    with _shot_finalization_condition:
+        if shot.shot_number in _shot_finalization_registered:
+            raise ValueError(f"shot #{shot.shot_number} is already registered")
+        _shot_finalization_order.append(shot.shot_number)
+        _shot_finalization_registered[shot.shot_number] = _RegisteredShotFinalization(
+            shot=shot,
+            emit_event=emit_event,
+            initial_ui_ms=initial_ui_ms,
+            deadline_monotonic=(
+                time.monotonic() + _SHOT_ENRICHMENT_DEADLINE_S if needs_watchdog else None
+            ),
+        )
+        _ensure_shot_finalization_worker_locked()
+        _shot_finalization_condition.notify_all()
+
+
+def _ensure_shot_finalization_worker_locked() -> None:
+    """Start the exclusive finalization worker; caller holds the condition lock."""
+    global _shot_finalization_worker  # pylint: disable=global-statement
+
+    if _shot_finalization_worker is not None and _shot_finalization_worker.is_alive():
+        return
+    _shot_finalization_worker = threading.Thread(
+        target=_shot_finalization_worker_loop,
+        name="shot-finalization",
+        daemon=True,
+    )
+    _shot_finalization_worker.start()
+
+
+def _shot_finalization_worker_loop() -> None:
+    """Exclusively finalize ready, overdue, or capacity-evicted shots in order."""
+    global _shot_finalization_running  # pylint: disable=global-statement
+    global _shot_finalization_worker  # pylint: disable=global-statement
+
+    current_thread = threading.current_thread()
+    try:
+        while True:
+            with _shot_finalization_condition:
+                while True:
+                    if not _shot_finalization_order:
+                        _shot_finalization_running = False
+                        if _shot_finalization_worker is current_thread:
+                            _shot_finalization_worker = None
+                        _shot_finalization_condition.notify_all()
+                        return
+
+                    next_shot_number = _shot_finalization_order[0]
+                    registered = _shot_finalization_registered[next_shot_number]
+                    pending = _shot_finalization_ready.get(next_shot_number)
+                    deadline_expired = (
+                        registered.deadline_monotonic is not None
+                        and time.monotonic() >= registered.deadline_monotonic
+                    )
+                    over_capacity = len(_shot_finalization_order) > _SHOT_FINALIZATION_CAPACITY
+                    if pending is not None or deadline_expired or over_capacity:
+                        _shot_finalization_order.popleft()
+                        del _shot_finalization_registered[next_shot_number]
+                        _shot_finalization_ready.pop(next_shot_number, None)
+                        _shot_finalization_running = True
+                        _shot_finalization_condition.notify_all()
+                        break
+
+                    _shot_finalization_running = False
+                    wait_timeout_s = None
+                    if registered.deadline_monotonic is not None:
+                        wait_timeout_s = max(
+                            0.0,
+                            registered.deadline_monotonic - time.monotonic(),
+                        )
+                    _shot_finalization_condition.wait(timeout=wait_timeout_s)
+
+            if pending is None:
+                reason = "deadline" if deadline_expired else "coordinator capacity"
+                logger.warning(
+                    "[SERVER] Shot #%d optional enrichment exceeded %s; finalizing OPS-only",
+                    next_shot_number,
+                    reason,
+                )
+                pending = _PendingShotFinalization(
+                    shot=registered.shot,
+                    emit_event=registered.emit_event,
+                    initial_ui_ms=registered.initial_ui_ms,
+                    enrichment=_ShotEnrichmentResult(),
+                )
+            elif pending.shot is not registered.shot:
+                for shot_field in fields(Shot):
+                    setattr(
+                        registered.shot,
+                        shot_field.name,
+                        getattr(pending.shot, shot_field.name),
+                    )
+                pending = replace(pending, shot=registered.shot)
+
+            try:
+                _finalize_shot_detected(
+                    pending.shot,
+                    emit_event=pending.emit_event,
+                    initial_ui_ms=pending.initial_ui_ms,
+                    enrichment=pending.enrichment,
+                )
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                logger.error(
+                    "[SERVER] Ordered shot finalization failed: %s",
+                    error,
+                    exc_info=True,
+                )
+                log_session_error(
+                    "Ordered shot finalization failed",
+                    component="server",
+                    context={
+                        "stage": "ordered_finalization",
+                        "shot_number": pending.shot.shot_number,
+                        "ball_speed_mph": pending.shot.ball_speed_mph,
+                    },
+                    exc=error,
+                )
+            finally:
+                with _shot_finalization_condition:
+                    _shot_finalization_running = False
+                    _shot_finalization_condition.notify_all()
+    finally:
+        with _shot_finalization_condition:
+            _shot_finalization_running = False
+            if _shot_finalization_worker is current_thread:
+                _shot_finalization_worker = None
+            _shot_finalization_condition.notify_all()
+
+
+def _shot_number_for_log(shot: Shot, session_log) -> int:
+    """Use detection identity, retaining compatibility for direct helper calls."""
+    if shot.shot_number is not None:
+        return shot.shot_number
+    return session_log.stats.get("shots_detected", 0) + 1
 
 
 def _run_shutdown_step(name: str, callback) -> None:
@@ -901,6 +1132,7 @@ calculated_spin_enabled = False
 def shot_to_dict(shot: Shot) -> dict:
     """Convert Shot to JSON-serializable dict."""
     return {
+        "shot_number": shot.shot_number,
         "ball_speed_mph": round(shot.ball_speed_mph, 1),
         "ball_speed_raw_mph": (
             round(shot.ball_speed_raw_mph, 1) if shot.ball_speed_raw_mph else None
@@ -915,6 +1147,7 @@ def shot_to_dict(shot: Shot) -> dict:
         "club": shot.club.value,
         "player_name": shot.player_name,
         "timestamp": shot.timestamp.isoformat(),
+        "impact_timestamp": shot.impact_timestamp,
         "peak_magnitude": shot.peak_magnitude,
         # Launch angle data
         "launch_angle_vertical": shot.launch_angle_vertical,
@@ -948,6 +1181,7 @@ def shot_to_dict(shot: Shot) -> dict:
         ),
         "experimental_camera_horizontal_status": shot.experimental_camera_horizontal_status,
         "experimental_camera_iwr_delta_deg": shot.experimental_camera_iwr_delta_deg,
+        "camera_replay": dict(shot.camera_replay) if shot.camera_replay else None,
         "spin_axis_deg": shot.spin_axis_deg,
         "inclinometer": shot.inclinometer,
         # Spin data from rolling buffer mode
@@ -1116,6 +1350,7 @@ def init_camera_capture(
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
+    global camera_replay_manager  # pylint: disable=global-statement
     global camera_reference_ball_tracker  # pylint: disable=global-statement
     global camera_ball_flight_reference_tracker  # pylint: disable=global-statement
     try:
@@ -1135,6 +1370,9 @@ def init_camera_capture(
             roll_correction_deg=roll_correction_deg,
             scaler_crop=scaler_crop,
             gpio_pin=gpio_pin,
+            auto_exposure_state_path=(
+                Path.home() / ".config" / "openflight" / "camera-exposure.json"
+            ),
         )
         camera_capture_runtime = CameraCaptureRuntime(
             output_dir=output_dir,
@@ -1142,6 +1380,10 @@ def init_camera_capture(
             use_gpio_trigger=use_gpio_trigger,
         )
         camera_capture_runtime.start()
+        settings = camera_capture_runtime.settings
+        from .camera.replay import CameraReplayManager
+
+        camera_replay_manager = CameraReplayManager(output_dir)
         from openflight.camera.club_delivery import (  # noqa: PLC0415
             ReferenceBallTracker,
         )
@@ -1162,6 +1404,7 @@ def init_camera_capture(
             "post_frames": settings.post_frames,
             "exposure_us": settings.exposure_us,
             "gain": settings.gain,
+            "auto_exposure_enabled": settings.auto_exposure,
             "stream": settings.stream,
             "rotate_180": settings.rotate_180,
             "mirror_horizontal": settings.mirror_horizontal,
@@ -1184,6 +1427,7 @@ def init_camera_capture(
             exc=error,
         )
         camera_capture_runtime = None
+        camera_replay_manager = None
         camera_reference_ball_tracker = None
         camera_ball_flight_reference_tracker = None
         camera_capture_config = {"enabled": False, "error": str(error)}
@@ -1298,6 +1542,14 @@ def init_iwr6843(
         iwr6843_runtime = None
         iwr6843_runtime_config = {"enabled": False, "error": str(error)}
         return False
+
+
+def _iwr6843_startup_recovery(error: object) -> str:
+    """Translate a known TI initialization failure into operator guidance."""
+    normalized_error = str(error or "").casefold()
+    if "press reset and retry" in normalized_error or "firmware may be wedged" in normalized_error:
+        return "Press RESET on the TI radar, then relaunch OpenFlight."
+    return "Check the TI radar USB and power connections, then relaunch OpenFlight."
 
 
 def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: int = 0x18) -> bool:
@@ -1706,10 +1958,94 @@ def camera_capture_preview():
 
 @app.route("/api/camera/exposure-quality")
 def camera_capture_exposure_quality():
-    """Exposure guidance derived from the latest raw impact-zone pixels."""
+    """Automatic exposure state derived from the latest impact-zone pixels."""
     if camera_capture_runtime is None:
         return jsonify({"sample_available": False, "status": "unavailable"}), 404
-    return jsonify(camera_capture_runtime.exposure_quality())
+    quality = camera_capture_runtime.exposure_quality()
+    quality["auto_exposure"] = camera_capture_runtime.auto_exposure_status()
+    return jsonify(quality)
+
+
+@app.route("/api/camera/replays/<replay_id>/prepare", methods=["GET", "POST"])
+def prepare_camera_replay(replay_id: str):
+    """Create a cached MP4 only after an explicit replay interaction."""
+    from .camera.replay import ReplayNotFoundError, ReplayPreparationError
+
+    if request.method != "POST":
+        return jsonify({"error": "Use POST to prepare a camera replay"}), 405
+    if camera_replay_manager is None:
+        return jsonify({"error": "Camera replay was not found"}), 404
+    try:
+        prepared = camera_replay_manager.prepare(replay_id)
+    except ReplayNotFoundError as error:
+        return jsonify({"error": str(error)}), 404
+    except ReplayPreparationError as error:
+        logger.warning("[CAMERA] Could not prepare replay %s: %s", replay_id, error)
+        log_session_error(
+            "Camera replay preparation failed",
+            component="camera_capture",
+            context={"replay_id": replay_id},
+            exc=error,
+        )
+        return jsonify({"error": str(error)}), 503
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.exception("[CAMERA] Unexpected replay preparation failure for %s", replay_id)
+        log_session_error(
+            "Camera replay preparation failed",
+            component="camera_capture",
+            context={"replay_id": replay_id},
+            exc=error,
+        )
+        return jsonify({"error": "Camera replay could not be prepared"}), 500
+
+    payload = dict(prepared.payload)
+    payload["video_url"] = f"/api/camera/replays/{replay_id}/video"
+    return jsonify(payload)
+
+
+@app.route("/api/camera/replays/<replay_id>/video")
+def camera_replay_video(replay_id: str):  # pylint: disable=too-many-return-statements
+    """Stream a previously prepared replay with HTTP range support."""
+    from .camera.replay import (
+        ReplayNotFoundError,
+        ReplayNotReadyError,
+        ReplayPreparationError,
+    )
+
+    if camera_replay_manager is None:
+        return jsonify({"error": "Camera replay was not found"}), 404
+    try:
+        video_path = camera_replay_manager.video_path(replay_id)
+    except ReplayNotFoundError as error:
+        return jsonify({"error": str(error)}), 404
+    except ReplayNotReadyError as error:
+        return jsonify({"error": str(error)}), 409
+    except ReplayPreparationError as error:
+        logger.warning("[CAMERA] Could not read replay %s: %s", replay_id, error)
+        return jsonify({"error": str(error)}), 503
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.exception("[CAMERA] Unexpected replay lookup failure for %s", replay_id)
+        log_session_error(
+            "Camera replay lookup failed",
+            component="camera_capture",
+            context={"replay_id": replay_id},
+            exc=error,
+        )
+        return jsonify({"error": "Camera replay video is unavailable"}), 500
+    try:
+        return send_file(video_path, mimetype="video/mp4", conditional=True, etag=True)
+    except OSError as error:
+        logger.warning("[CAMERA] Could not stream replay %s: %s", replay_id, error)
+        return jsonify({"error": "Camera replay video is unavailable"}), 503
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.exception("[CAMERA] Unexpected replay streaming failure for %s", replay_id)
+        log_session_error(
+            "Camera replay streaming failed",
+            component="camera_capture",
+            context={"replay_id": replay_id},
+            exc=error,
+        )
+        return jsonify({"error": "Camera replay video is unavailable"}), 500
 
 
 def _camera_capture_settings_payload() -> dict:
@@ -1721,6 +2057,16 @@ def _camera_capture_settings_payload() -> dict:
     if camera_capture_runtime is not None:
         payload.update(camera_capture_runtime.status())
         payload.update(camera_capture_runtime.vertical_crop_status())
+        payload["exposure_us"] = getattr(
+            camera_capture_runtime.settings,
+            "exposure_us",
+            payload.get("exposure_us"),
+        )
+        payload["gain"] = getattr(
+            camera_capture_runtime.settings,
+            "gain",
+            payload.get("gain"),
+        )
         frame_period_us = round(1_000_000 / camera_capture_runtime.settings.fps)
         payload["max_exposure_us"] = frame_period_us - 1
     return payload
@@ -1749,8 +2095,8 @@ def handle_set_camera_capture_settings(data):
         return
 
     try:
-        exposure_us = int(data.get("exposure_us", camera_capture_config["exposure_us"]))
-        gain = float(data.get("gain", camera_capture_config["gain"]))
+        if "exposure_us" in data or "gain" in data:
+            raise ValueError("Camera exposure and gain are managed automatically")
         alignment_x_pct = float(
             data.get("alignment_x_pct", camera_capture_config.get("alignment_x_pct", 50.0))
         )
@@ -1768,13 +2114,8 @@ def handle_set_camera_capture_settings(data):
                 int(data["vertical_offset_px"])
             )
 
-        applied = camera_capture_runtime.update_image_controls(
-            exposure_us=exposure_us,
-            gain=gain,
-        )
         camera_capture_config.update(
             {
-                **applied,
                 **crop_update,
                 "alignment_x_pct": alignment_x_pct,
                 "alignment_y_pct": alignment_y_pct,
@@ -2026,6 +2367,18 @@ def _session_shots() -> list[dict]:
     return [shot_to_dict(shot) for shot in monitor.get_shots()]
 
 
+def _unregister_camera_replay(shot: Shot) -> None:
+    """Revoke live replay access while preserving the session artifacts."""
+    replay = getattr(shot, "camera_replay", None)
+    replay_id = replay.get("id") if isinstance(replay, dict) else None
+    if not replay_id or camera_replay_manager is None:
+        return
+    try:
+        camera_replay_manager.unregister(replay_id)
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[CAMERA] Could not unregister replay %s: %s", replay_id, error)
+
+
 def _delete_session_row(timestamp: str) -> bool:
     """Delete one shot or swing-speed rep by UI timestamp."""
     from .swing_speed import SwingSpeedMonitor  # pylint: disable=import-outside-toplevel
@@ -2048,6 +2401,7 @@ def _delete_session_row(timestamp: str) -> bool:
         return False
     for index, shot in enumerate(shots):
         if shot.timestamp.isoformat() == timestamp:
+            _unregister_camera_replay(shot)
             del shots[index]
             return True
     return False
@@ -2193,11 +2547,18 @@ def _clear_player_rows(player_name: str) -> None:
 
     shots = getattr(monitor, "_shots", None)
     if shots is not None:
+        removed = [
+            shot
+            for shot in shots
+            if _player_matches(getattr(shot, "player_name", None), player_name)
+        ]
         shots[:] = [
             shot
             for shot in shots
             if not _player_matches(getattr(shot, "player_name", None), player_name)
         ]
+        for shot in removed:
+            _unregister_camera_replay(shot)
         return
 
     if hasattr(monitor, "clear_session"):
@@ -2780,7 +3141,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
         session_log = get_session_logger()
         if session_log:
             session_log.log_iwr6843_capture(
-                shot_number=session_log.stats.get("shots_detected", 0) + 1,
+                shot_number=_shot_number_for_log(shot, session_log),
                 shot_timestamp=shot.impact_timestamp,
                 trigger_timestamp=(capture.trigger_timestamp if capture is not None else None),
                 capture_path=(str(capture.path) if capture and capture.path else None),
@@ -3175,17 +3536,67 @@ def _fuse_camera_ball_flight(
 
 def _fuse_camera_measurements(shot: Shot, camera_capture) -> None:
     """Decode one camera clip and share it across all live estimators."""
+    captured_auto_exposure = (
+        camera_capture.metadata.get("auto_exposure")
+        if camera_capture is not None
+        and isinstance(getattr(camera_capture, "metadata", None), dict)
+        else None
+    )
+    analysis_eligible = (
+        bool(captured_auto_exposure.get("analysis_eligible"))
+        if isinstance(captured_auto_exposure, dict)
+        else (
+            camera_capture_runtime.camera_analysis_eligible
+            if camera_capture_runtime is not None
+            else True
+        )
+    )
+    if not analysis_eligible:
+        shot.experimental_camera_horizontal_status = "rejected_lighting_quality"
+        shot.experimental_camera_horizontal_deg = None
+        shot.experimental_camera_horizontal_confidence = None
+        shot.experimental_camera_iwr_delta_deg = None
+        shot.experimental_fused_attack_angle_deg = None
+        shot.experimental_fused_club_path_deg = None
+        shot.experimental_fused_status = "rejected_lighting_quality"
+        shot.experimental_fused_attack_angle_confidence = "withheld"
+        shot.experimental_fused_club_path_confidence = "withheld"
+        logger.warning(
+            "[SERVER] Camera analysis withheld for lighting quality; using radar fallback"
+        )
+        return
     camera_archive = _load_camera_capture_archive(camera_capture)
     _fuse_camera_ball_flight(shot, camera_capture, camera_archive)
     _fuse_camera_club_delivery(shot, camera_capture, camera_archive)
 
 
-def on_shot_detected(shot: Shot):
-    """Callback when a shot is detected - emit to all clients."""
-    global ball_detected, ball_detection_confidence  # pylint: disable=global-statement
+def _attach_camera_replay(shot: Shot, camera_capture) -> None:
+    """Expose a matched raw clip without doing any video conversion."""
+    if (
+        camera_replay_manager is None
+        or camera_capture is None
+        or not camera_capture.valid
+        or not camera_capture.path
+    ):
+        return
+    try:
+        shot.camera_replay = camera_replay_manager.register(
+            camera_capture.path,
+            camera_capture.metadata,
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[CAMERA] Replay registration failed: %s", error)
+        log_session_error(
+            "Camera replay registration failed",
+            component="camera_capture",
+            context={"stage": "replay_registration"},
+            exc=error,
+        )
 
-    shot.player_name = current_player_name
-    logger.info("[SERVER] Shot callback: %.1f mph", shot.ball_speed_mph)
+
+def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
+    """Mutate a shot with available radar/camera measurements and timings."""
+    global ball_detected, ball_detection_confidence  # pylint: disable=global-statement
 
     # Snapshot orientation before IWR capture can block, and select only data
     # timestamped before impact so impact vibration cannot bias the geometry.
@@ -3292,7 +3703,7 @@ def on_shot_detected(shot: Shot):
 
                 if session_log and raw_buffer:
                     session_log.log_kld7_buffer(
-                        shot_number=session_log.stats.get("shots_detected", 0) + 1,
+                        shot_number=_shot_number_for_log(shot, session_log),
                         shot_timestamp=shot_ts,
                         orientation="vertical",
                         buffer_frames=raw_buffer,
@@ -3389,7 +3800,7 @@ def on_shot_detected(shot: Shot):
 
                 if session_log and raw_buffer_h:
                     session_log.log_kld7_buffer(
-                        shot_number=session_log.stats.get("shots_detected", 0) + 1,
+                        shot_number=_shot_number_for_log(shot, session_log),
                         shot_timestamp=shot_ts,
                         orientation="horizontal",
                         buffer_frames=raw_buffer_h,
@@ -3505,7 +3916,7 @@ def on_shot_detected(shot: Shot):
             camera_capture_ms = (time.time() - camera_capture_start) * 1000.0
             session_log = get_session_logger()
             if session_log:
-                shot_number = session_log.stats.get("shots_detected", 0) + 1
+                shot_number = _shot_number_for_log(shot, session_log)
                 if camera_capture is not None:
                     session_log.log_camera_capture(
                         shot_number=shot_number,
@@ -3545,8 +3956,32 @@ def on_shot_detected(shot: Shot):
             exc=error,
         )
 
+    _attach_camera_replay(shot, camera_capture)
+
     if shot.mode != "mock":
         _fuse_camera_measurements(shot, camera_capture)
+
+    return _ShotEnrichmentResult(
+        iwr6843_ms=iwr6843_ms,
+        kld7_ms=kld7_ms,
+        camera_capture_ms=camera_capture_ms,
+        camera_data=camera_data,
+    )
+
+
+def _finalize_shot_detected(
+    shot: Shot,
+    *,
+    emit_event: str,
+    initial_ui_ms: float | None = None,
+    enrichment: _ShotEnrichmentResult | None = None,
+) -> None:
+    """Apply required fallbacks, persist once, and publish the final shot."""
+    enrichment = enrichment or _ShotEnrichmentResult()
+    iwr6843_ms = enrichment.iwr6843_ms
+    kld7_ms = enrichment.kld7_ms
+    camera_capture_ms = enrichment.camera_capture_ms
+    camera_data = enrichment.camera_data
 
     # Always emit user-facing launch angles. Radar/camera measurements win;
     # rejected or missing axes fall back to conservative estimates.
@@ -3631,6 +4066,7 @@ def on_shot_detected(shot: Shot):
         session_log = get_session_logger()
         if session_log:
             session_log.log_shot(
+                shot_number=shot.shot_number,
                 ball_speed_mph=shot.ball_speed_mph,
                 club_speed_mph=shot.club_speed_mph,
                 smash_factor=shot.smash_factor,
@@ -3697,6 +4133,7 @@ def on_shot_detected(shot: Shot):
                 player_name=shot.player_name,
                 inclinometer=shot.inclinometer,
                 pipeline_ms={
+                    "initial_ui": (round(initial_ui_ms, 1) if initial_ui_ms is not None else None),
                     "iwr6843": (round(iwr6843_ms, 1) if iwr6843_ms is not None else None),
                     "kld7": round(kld7_ms, 1) if kld7_ms is not None else None,
                     "camera_capture": (
@@ -3717,7 +4154,7 @@ def on_shot_detected(shot: Shot):
     try:
         shot_data = shot_to_dict(shot)
         stats = monitor.get_session_stats() if monitor else {}
-        socketio.emit("shot", {"shot": shot_data, "stats": stats})
+        socketio.emit(emit_event, {"shot": shot_data, "stats": stats})
 
         # Log shot info
         angle_str = ""
@@ -3734,7 +4171,7 @@ def on_shot_detected(shot: Shot):
         log_session_error(
             "WebSocket shot emit failed",
             component="server",
-            context={"stage": "emit_shot", "ball_speed_mph": shot.ball_speed_mph},
+            context={"stage": f"emit_{emit_event}", "ball_speed_mph": shot.ball_speed_mph},
             exc=e,
         )
         return
@@ -3765,6 +4202,283 @@ def on_shot_detected(shot: Shot):
             socketio.emit("debug_shot", debug_log_entry)
         except Exception as e:
             print(f"[WARN] Debug logging error: {e}")
+
+
+def _finish_shot_detected(
+    shot: Shot,
+    *,
+    emit_event: str,
+    initial_ui_ms: float | None = None,
+) -> None:
+    """Attempt optional enrichment, then always perform required finalization."""
+    # Optional hardware may return after the coordinator has timed out this
+    # shot. Mutate a shallow dataclass copy so a late result cannot change the
+    # already-finalized OPS object retained by the monitor.
+    enriched_shot = replace(shot) if _has_slow_shot_enrichment(shot) else shot
+    enrichment = _ShotEnrichmentResult()
+    try:
+        enrichment = _enrich_shot_from_optional_hardware(enriched_shot)
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.error("[SERVER] Deferred shot enrichment failed: %s", error, exc_info=True)
+        log_session_error(
+            "Deferred shot enrichment failed",
+            component="server",
+            context={"stage": "deferred_enrichment", "ball_speed_mph": shot.ball_speed_mph},
+            exc=error,
+        )
+
+    _queue_shot_finalization(
+        shot,
+        emit_event=emit_event,
+        initial_ui_ms=initial_ui_ms,
+        enrichment=enrichment,
+        final_shot=enriched_shot,
+    )
+
+
+def _queue_shot_finalization(
+    shot: Shot,
+    *,
+    emit_event: str,
+    initial_ui_ms: float | None,
+    enrichment: _ShotEnrichmentResult | None = None,
+    final_shot: Shot | None = None,
+) -> None:
+    """Record a ready shot for the exclusive finalization worker."""
+    _queue_ordered_shot_finalization(
+        _PendingShotFinalization(
+            shot=final_shot if final_shot is not None else shot,
+            emit_event=emit_event,
+            initial_ui_ms=initial_ui_ms,
+            enrichment=(enrichment if enrichment is not None else _ShotEnrichmentResult()),
+        ),
+        source_shot=shot,
+    )
+
+
+def _queue_ordered_shot_finalization(
+    pending: _PendingShotFinalization,
+    *,
+    source_shot: Shot,
+) -> None:
+    """Make a completed shot visible to the ordered finalization worker."""
+
+    shot_number = pending.shot.shot_number
+    if shot_number is None:
+        raise ValueError("shot must have a stable number before finalization")
+
+    with _shot_finalization_condition:
+        registered = _shot_finalization_registered.get(shot_number)
+        if registered is None or registered.shot is not source_shot:
+            logger.info(
+                "[SERVER] Ignoring late enrichment for finalized shot #%d",
+                shot_number,
+            )
+            return
+        if shot_number in _shot_finalization_ready:
+            logger.warning("[SERVER] Shot #%d is already waiting for finalization", shot_number)
+            return
+        _shot_finalization_ready[shot_number] = pending
+        _ensure_shot_finalization_worker_locked()
+        _shot_finalization_condition.notify_all()
+
+
+def _emit_initial_ops_shot(shot: Shot) -> bool:
+    """Publish immediately available OPS metrics before slow enrichments."""
+    try:
+        shot_data = shot_to_dict(shot)
+        stats = monitor.get_session_stats() if monitor else {}
+        pending = {}
+        if iwr6843_runtime is not None:
+            pending["iwr6843"] = True
+        if camera_capture_runtime is not None:
+            pending["camera"] = True
+        socketio.emit(
+            "shot",
+            {
+                "shot": shot_data,
+                "stats": stats,
+                "pending": pending,
+            },
+        )
+        return True
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.error("[SERVER] Failed to emit initial OPS shot: %s", error, exc_info=True)
+        log_session_error(
+            "Initial WebSocket shot emit failed",
+            component="server",
+            context={"stage": "emit_initial_shot", "ball_speed_mph": shot.ball_speed_mph},
+            exc=error,
+        )
+        return False
+
+
+def _emit_ops_enrichment_skipped(shot: Shot, *, reason: str) -> None:
+    """Immediately clear provisional hardware progress when admission fails."""
+    skipped_hardware = []
+    if iwr6843_runtime is not None:
+        skipped_hardware.append("iwr6843")
+    if camera_capture_runtime is not None:
+        skipped_hardware.append("camera")
+    try:
+        socketio.emit(
+            "shot_update",
+            {
+                "shot": shot_to_dict(shot),
+                "stats": monitor.get_session_stats() if monitor else {},
+                "pending": {},
+                "enrichment": {
+                    "status": "skipped",
+                    "reason": reason,
+                    "hardware": skipped_hardware,
+                },
+            },
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning(
+            "[SERVER] Failed to clear skipped shot enrichment status: %s",
+            error,
+            exc_info=True,
+        )
+
+
+def _has_slow_shot_enrichment(shot: Shot) -> bool:
+    """Whether optional hardware can add seconds to this shot callback."""
+    return shot.mode != "mock" and (
+        iwr6843_runtime is not None or camera_capture_runtime is not None
+    )
+
+
+def _drain_shot_enrichment_queue() -> None:
+    """Finish deferred shots in detection order, one hardware consumer at a time."""
+    global shot_enrichment_task  # pylint: disable=global-statement
+
+    while True:
+        try:
+            shot, emit_event, initial_ui_ms = shot_enrichment_queue.get_nowait()
+        except queue.Empty:
+            with shot_enrichment_task_lock:
+                if shot_enrichment_queue.empty():
+                    shot_enrichment_task = None
+                    return
+            continue
+
+        try:
+            _finish_shot_detected(
+                shot,
+                emit_event=emit_event,
+                initial_ui_ms=initial_ui_ms,
+            )
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.error("[SERVER] Deferred shot finalization failed: %s", error, exc_info=True)
+            log_session_error(
+                "Deferred shot finalization failed",
+                component="server",
+                context={"stage": "deferred_finalization", "ball_speed_mph": shot.ball_speed_mph},
+                exc=error,
+            )
+        finally:
+            shot_enrichment_queue.task_done()
+
+
+def _defer_shot_enrichment(
+    shot: Shot,
+    *,
+    emit_event: str,
+    initial_ui_ms: float | None,
+) -> None:
+    """Queue optional hardware work without blocking the OPS capture callback."""
+    global shot_enrichment_task  # pylint: disable=global-statement
+
+    with shot_enrichment_task_lock:
+        shot_enrichment_queue.put_nowait((shot, emit_event, initial_ui_ms))
+        if shot_enrichment_task is not None:
+            return
+        try:
+            # Reserve the slot while the task starts. The worker needs the same
+            # lock before clearing it, which closes the fast-finish race.
+            shot_enrichment_task = True
+            task = socketio.start_background_task(_drain_shot_enrichment_queue)
+            shot_enrichment_task = task
+        except Exception:
+            shot_enrichment_task = None
+            queued_shot, _event, _latency = shot_enrichment_queue.get_nowait()
+            shot_enrichment_queue.task_done()
+            if queued_shot is not shot:
+                raise RuntimeError("shot enrichment queue lost FIFO ordering") from None
+            raise
+
+
+def on_shot_detected(shot: Shot) -> None:
+    """Serialize detection order before publishing or queueing a shot."""
+    with _shot_callback_lock:
+        _handle_shot_detected(shot)
+
+
+def _handle_shot_detected(shot: Shot) -> None:
+    """Publish OPS metrics promptly, then enrich optional hardware data."""
+    _assign_shot_number(shot)
+    shot.player_name = current_player_name
+    logger.info("[SERVER] Shot callback: %.1f mph", shot.ball_speed_mph)
+
+    if not _has_slow_shot_enrichment(shot):
+        _register_shot_for_finalization(
+            shot,
+            emit_event="shot",
+            initial_ui_ms=None,
+        )
+        _finish_shot_detected(shot, emit_event="shot")
+        return
+
+    emitted = _emit_initial_ops_shot(shot)
+    initial_ui_ms = None
+    if emitted and shot.impact_timestamp is not None:
+        initial_ui_ms = max(0.0, (time.time() - shot.impact_timestamp) * 1000.0)
+        logger.info(
+            "[SERVER] Initial OPS metrics emitted %.0fms after impact; "
+            "hardware enrichment continues in background",
+            initial_ui_ms,
+        )
+    final_event = "shot_update" if emitted else "shot"
+    _register_shot_for_finalization(
+        shot,
+        emit_event=final_event,
+        initial_ui_ms=initial_ui_ms,
+        needs_watchdog=True,
+    )
+    try:
+        _defer_shot_enrichment(
+            shot,
+            emit_event=final_event,
+            initial_ui_ms=initial_ui_ms,
+        )
+    except queue.Full:
+        logger.warning(
+            "[SERVER] Shot enrichment queue is full (%d waiting); "
+            "skipping optional hardware for shot #%d",
+            _SHOT_ENRICHMENT_QUEUE_CAPACITY,
+            shot.shot_number,
+        )
+        if emitted:
+            _emit_ops_enrichment_skipped(shot, reason="queue_full")
+        _queue_shot_finalization(
+            shot,
+            emit_event=final_event,
+            initial_ui_ms=initial_ui_ms,
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning(
+            "[SERVER] Could not defer shot enrichment: %s",
+            error,
+            exc_info=True,
+        )
+        if emitted:
+            _emit_ops_enrichment_skipped(shot, reason="worker_unavailable")
+        _queue_shot_finalization(
+            shot,
+            emit_event=final_event,
+            initial_ui_ms=initial_ui_ms,
+        )
 
 
 def swing_speed_to_dict(event: SwingSpeedEvent) -> dict:
@@ -3914,6 +4628,7 @@ def start_monitor(
         )
 
     monitor.connect()
+    _reset_shot_sequence()
 
     if swing_speed_mode:
         swing_config = swing_speed_kwargs or {}
@@ -4498,6 +5213,11 @@ def main():
         "--web-port", type=int, default=8080, help="Web server port (default: 8080)"
     )
     parser.add_argument(
+        "--startup-status-file",
+        default=None,
+        help="Write structured initialization progress for the optional kiosk splash",
+    )
+    parser.add_argument(
         "--debug", "-d", action="store_true", help="Enable verbose FFT/CFAR debug output"
     )
     parser.add_argument(
@@ -4522,8 +5242,18 @@ def main():
     parser.add_argument("--camera-capture-fps", type=float, default=300.0)
     parser.add_argument("--camera-capture-pre-ms", type=float, default=150.0)
     parser.add_argument("--camera-capture-post-ms", type=float, default=50.0)
-    parser.add_argument("--camera-capture-exposure-us", type=int, default=1000)
-    parser.add_argument("--camera-capture-gain", type=float, default=4.0)
+    parser.add_argument(
+        "--camera-capture-exposure-us",
+        type=int,
+        default=1000,
+        help="Exposure seed used by the one-time startup calibration.",
+    )
+    parser.add_argument(
+        "--camera-capture-gain",
+        type=float,
+        default=4.0,
+        help="Analogue-gain seed used by the one-time startup calibration.",
+    )
     parser.add_argument(
         "--camera-capture-mount-height-m",
         type=float,
@@ -5213,6 +5943,20 @@ def main():
     battery_provider = args.battery
     kld7_radc_tuning_kwargs = _kld7_radc_tuning_kwargs(args)
     active_kld7_radc_tuning = dict(kld7_radc_tuning_kwargs)
+    startup_status = StartupStatusReporter(
+        args.startup_status_file,
+        configured_startup_components(
+            mock=args.mock,
+            camera=args.camera_capture or not args.no_camera,
+            iwr6843=args.iwr6843,
+            inclinometer=args.inclinometer,
+            kld7=args.kld7,
+            kld7_horizontal=args.kld7_horizontal,
+            battery=bool(args.battery),
+            simulators=args.sim,
+        ),
+    )
+    startup_status.start("server", "Preparing OpenFlight server")
 
     # Configure logging - always show INFO and above for openflight modules
     # This ensures trigger events and important messages are visible
@@ -5274,6 +6018,7 @@ def main():
     }
 
     if args.camera_capture:
+        startup_status.start("camera", "Connecting high-speed camera")
         camera_capture_base = (
             Path(args.log_dir).expanduser() if args.log_dir else Path.home() / "openflight_sessions"
         )
@@ -5299,13 +6044,17 @@ def main():
             use_gpio_trigger=not args.iwr6843,
         ):
             print("Camera capture unavailable - running without high-speed camera capture")
+            startup_status.skip("camera", "High-speed camera unavailable; continuing")
         else:
             print(f"Camera capture enabled: {camera_capture_output_dir}")
+            startup_status.ready("camera", "High-speed camera connected")
 
     # Initialize camera BEFORE starting monitor (so session log is accurate)
-    if args.camera_capture and not args.no_camera:
-        print("Legacy camera tracker disabled because --camera-capture is enabled")
+    if args.camera_capture:
+        if not args.no_camera:
+            print("Legacy camera tracker disabled because --camera-capture is enabled")
     elif not args.no_camera:
+        startup_status.start("camera", "Connecting camera")
         # Determine if we should use Hough (default) or YOLO
         use_hough = args.camera_model is None and args.roboflow_model is None
 
@@ -5322,8 +6071,10 @@ def main():
             hough_min_dist=args.hough_min_dist,
         ):
             start_camera_thread()
+            startup_status.ready("camera", "Camera connected")
         else:
             print("Camera not available - running without camera")
+            startup_status.skip("camera", "Camera unavailable; continuing")
     else:
         print("Camera disabled by --no-camera flag")
 
@@ -5333,6 +6084,7 @@ def main():
         print(f"Experimental K-LD7 RADC tuning enabled: {kld7_radc_tuning_kwargs}")
 
     if args.iwr6843:
+        startup_status.start("ti", "Connecting TI radar")
         iwr_output_dir = (
             Path(args.iwr6843_output_dir).expanduser()
             if args.iwr6843_output_dir
@@ -5371,13 +6123,24 @@ def main():
             )
             if args.debug:
                 print(f"IWR6843 raw dumps enabled: {iwr_output_dir}")
+            startup_status.ready("ti", "TI radar connected")
         else:
+            startup_status.error(
+                "ti",
+                "TI radar failed to initialize",
+                _iwr6843_startup_recovery(iwr6843_runtime_config.get("error")),
+            )
             print("ERROR: IWR6843 requested but failed to initialize. Exiting.")
+            _cleanup_hardware_for_shutdown()
             sys.exit(1)
 
     if args.inclinometer:
+        startup_status.start("inclinometer", "Connecting inclinometer")
         if not init_inclinometer(zero_offset_deg=args.inclinometer_zero_offset):
             print("WARNING: Inclinometer unavailable; continuing with configured IWR6843 tilt")
+            startup_status.skip("inclinometer", "Inclinometer unavailable; continuing")
+        else:
+            startup_status.ready("inclinometer", "Inclinometer connected")
 
     if args.sound_sensitivity:
         if not init_sound_sensitivity(
@@ -5402,6 +6165,7 @@ def main():
 
     # Initialize K-LD7 angle radars (if enabled)
     if args.kld7:
+        startup_status.start("kld7_vertical", "Connecting K-LD7 launch radar")
         if init_kld7(
             port=args.kld7_port,
             orientation="vertical",
@@ -5420,11 +6184,19 @@ def main():
                 f", offset: {args.kld7_angle_offset:+.1f}°" if args.kld7_angle_offset else ""
             )
             print(f"K-LD7 vertical radar enabled (launch angle{offset_str})")
+            startup_status.ready("kld7_vertical", "K-LD7 launch radar connected")
         else:
+            startup_status.error(
+                "kld7_vertical",
+                "K-LD7 launch radar failed to connect",
+                "Check the K-LD7 USB connection and power, then relaunch OpenFlight.",
+            )
             print("ERROR: K-LD7 vertical requested but failed to connect. Exiting.")
+            _cleanup_hardware_for_shutdown()
             sys.exit(1)
 
     if args.kld7_horizontal:
+        startup_status.start("kld7_horizontal", "Connecting K-LD7 path radar")
         if init_kld7(
             port=args.kld7_horizontal_port,
             orientation="horizontal",
@@ -5438,29 +6210,58 @@ def main():
                 else ""
             )
             print(f"K-LD7 horizontal radar enabled (club path{offset_str})")
+            startup_status.ready("kld7_horizontal", "K-LD7 path radar connected")
         else:
+            startup_status.error(
+                "kld7_horizontal",
+                "K-LD7 path radar failed to connect",
+                "Check the K-LD7 USB connection and power, then relaunch OpenFlight.",
+            )
             print("ERROR: K-LD7 horizontal requested but failed to connect. Exiting.")
+            _cleanup_hardware_for_shutdown()
             sys.exit(1)
 
-    start_monitor(
-        port=args.port,
-        mock=args.mock,
-        trigger_type=args.trigger,
-        debug=args.debug,
-        trigger_kwargs=trigger_kwargs,
-        sample_rate_ksps=args.sample_rate,
-        swing_speed_mode=args.swing_speed,
-        swing_speed_kwargs=swing_speed_kwargs,
-        ops_baud=args.ops_baud,
-    )
+    monitor_component = "monitor" if args.mock else "ops"
+    monitor_label = "shot simulator" if args.mock else "OPS radar"
+    startup_status.start(monitor_component, f"Starting {monitor_label}")
+    try:
+        start_monitor(
+            port=args.port,
+            mock=args.mock,
+            trigger_type=args.trigger,
+            debug=args.debug,
+            trigger_kwargs=trigger_kwargs,
+            sample_rate_ksps=args.sample_rate,
+            swing_speed_mode=args.swing_speed,
+            swing_speed_kwargs=swing_speed_kwargs,
+            ops_baud=args.ops_baud,
+        )
+    except Exception:
+        monitor_recovery = (
+            "Relaunch OpenFlight and check the terminal log."
+            if args.mock
+            else "Check the OPS radar USB and power connections, then relaunch OpenFlight."
+        )
+        startup_status.error(
+            monitor_component,
+            f"{'Shot simulator' if args.mock else 'OPS radar'} failed to initialize",
+            monitor_recovery,
+        )
+        _cleanup_hardware_for_shutdown()
+        raise
+    startup_status.ready(monitor_component, f"{monitor_label.capitalize()} ready")
 
     if battery_provider:
+        startup_status.start("battery", "Starting power monitor")
         start_power_monitor(battery_provider)
         print(f"Battery monitoring: ENABLED ({battery_provider})")
+        startup_status.ready("battery", "Power monitor ready")
 
     # Simulator connectors (off unless --sim). Started after the monitor exists
     # so inbound club updates can call monitor.set_club().
     global sim_connectors  # pylint: disable=global-statement
+    if args.sim:
+        startup_status.start("simulators", "Connecting golf simulators")
     sim_cfgs = load_sim_config() if args.sim else []
     sim_connectors = build_connectors(
         sim_cfgs, on_status=_sim_on_status, on_inbound=_sim_on_inbound
@@ -5470,6 +6271,9 @@ def main():
         print(f"Simulator connector enabled: {connector.name} -> {connector.host}:{connector.port}")
     if args.sim and not sim_connectors:
         print("Simulator connectors enabled (--sim) but none are enabled in config/sim.json")
+        startup_status.skip("simulators", "No simulator connections are configured")
+    elif args.sim:
+        startup_status.ready("simulators", "Simulator connections started")
 
     if args.mock:
         print("Running in MOCK mode - no radar required")
@@ -5479,6 +6283,7 @@ def main():
 
     print(f"Server starting at http://{args.host}:{args.web_port}")
     print()
+    startup_status.start("server", "Starting OpenFlight server")
 
     try:
         # Note: Flask debug mode (reloader) is disabled to prevent duplicate processes

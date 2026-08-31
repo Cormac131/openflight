@@ -1,5 +1,6 @@
 """Tests for the high-speed camera trigger ring."""
 
+import json
 import threading
 
 import numpy as np
@@ -34,6 +35,16 @@ def make_frame(index: int, interval_ns: int = 4_000_000) -> CameraFrame:
     )
 
 
+def make_good_exposure_image() -> np.ndarray:
+    """Create a frame with usable contrast in the impact-area ROI."""
+    image = np.full((200, 320), 110, dtype=np.uint8)
+    image[100:175, 90:230] = np.tile(
+        np.linspace(45, 185, 140, dtype=np.uint8),
+        (75, 1),
+    )
+    return image
+
+
 def test_ring_freezes_latest_pre_frames_and_post_tail():
     ring = TriggeredFrameBuffer(pre_trigger_frames=3, post_trigger_frames=2)
     for index in range(5):
@@ -58,12 +69,16 @@ def test_ring_exposes_latest_frame_during_capture():
 
     assert ring.latest_frame is not None
     assert ring.latest_frame.image[0, 0] == 2
+    assert ring.capture_busy is False
 
     assert ring.trigger()
+    assert ring.capture_busy is True
     ring.add_frame(make_frame(3))
 
     assert ring.latest_frame is not None
     assert ring.latest_frame.image[0, 0] == 3
+    ring.add_frame(make_frame(4))
+    assert ring.capture_busy is False
 
 
 def test_ring_rejects_overlapping_trigger():
@@ -230,6 +245,342 @@ def test_live_image_controls_update_camera_without_restarting(tmp_path):
     assert result == {"exposure_us": 750, "gain": 3.5}
     assert runtime.settings.exposure_us == 750
     assert runtime.settings.gain == 3.5
+
+
+def test_auto_exposure_startup_jumps_to_brighter_setting(tmp_path):
+    class FakeCamera:
+        def __init__(self):
+            self.controls = []
+
+        def set_controls(self, controls):
+            self.controls.append(controls)
+
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(fps=488.0, exposure_us=250, gain=4.0),
+    )
+    runtime._camera = FakeCamera()
+    runtime._running = True
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=np.full((200, 320), 18, dtype=np.uint8),
+            sensor_timestamp_ns=1,
+            host_timestamp_ns=2,
+            exposure_us=250,
+            analogue_gain=4.0,
+        )
+    )
+
+    decision = runtime._run_auto_exposure_cycle()
+
+    assert decision is not None
+    assert decision.status == "adjusting"
+    assert runtime._camera.controls
+    assert runtime.settings.exposure_us > 250
+    assert runtime.auto_exposure_status()["analysis_eligible"] is False
+
+
+def test_auto_exposure_defers_control_change_during_trigger_tail(tmp_path):
+    class FakeCamera:
+        def __init__(self):
+            self.controls = []
+
+        def set_controls(self, controls):
+            self.controls.append(controls)
+
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(
+            fps=488.0,
+            pre_ms=1.0,
+            post_ms=10.0,
+            exposure_us=250,
+            gain=4.0,
+        ),
+    )
+    runtime._camera = FakeCamera()
+    runtime._running = True
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=np.full((200, 320), 18, dtype=np.uint8),
+            sensor_timestamp_ns=1,
+            host_timestamp_ns=2,
+            exposure_us=250,
+            analogue_gain=4.0,
+        )
+    )
+    assert runtime._ring.trigger()
+
+    decision = runtime._run_auto_exposure_cycle()
+
+    assert decision is None
+    assert runtime._camera.controls == []
+    assert runtime.auto_exposure_status()["capture_deferred"] is True
+
+
+def test_trigger_waits_for_in_progress_auto_exposure_update(tmp_path):
+    controls_started = threading.Event()
+    allow_controls = threading.Event()
+    trigger_finished = threading.Event()
+
+    class BlockingCamera:
+        @staticmethod
+        def set_controls(_controls):
+            controls_started.set()
+            assert allow_controls.wait(timeout=1.0)
+
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(
+            fps=488.0,
+            pre_ms=1.0,
+            post_ms=10.0,
+            exposure_us=250,
+            gain=4.0,
+        ),
+    )
+    runtime._camera = BlockingCamera()
+    runtime._running = True
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=np.full((200, 320), 18, dtype=np.uint8),
+            sensor_timestamp_ns=1,
+            host_timestamp_ns=2,
+            exposure_us=250,
+            analogue_gain=4.0,
+        )
+    )
+    exposure_thread = threading.Thread(target=runtime._run_auto_exposure_cycle)
+    trigger_thread = threading.Thread(
+        target=lambda: (runtime.notify_trigger(), trigger_finished.set()),
+    )
+
+    exposure_thread.start()
+    assert controls_started.wait(timeout=1.0)
+    trigger_thread.start()
+    assert not trigger_finished.wait(timeout=0.05)
+    allow_controls.set()
+    exposure_thread.join(timeout=1.0)
+    trigger_thread.join(timeout=1.0)
+
+    assert trigger_finished.is_set()
+    trigger_state = runtime._trigger_auto_exposure.get_nowait()
+    assert trigger_state["exposure_us"] == runtime.settings.exposure_us
+
+
+def test_auto_exposure_acceptable_frame_enables_camera_analysis(tmp_path):
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(fps=488.0, exposure_us=500, gain=12.0),
+    )
+    runtime._camera = object()
+    runtime._running = True
+    image = make_good_exposure_image()
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=image,
+            sensor_timestamp_ns=1,
+            host_timestamp_ns=2,
+            exposure_us=500,
+            analogue_gain=12.0,
+        )
+    )
+
+    decision = runtime._run_auto_exposure_cycle()
+
+    assert decision is not None
+    assert decision.status == "ready"
+    assert runtime.camera_analysis_eligible is True
+    assert runtime.auto_exposure_status()["observation"]["status"] == "good"
+
+
+def test_auto_exposure_locks_first_acceptable_startup_setting(tmp_path):
+    class FakeCamera:
+        def __init__(self):
+            self.controls = []
+
+        def set_controls(self, controls):
+            self.controls.append(controls)
+
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(fps=488.0, exposure_us=500, gain=12.0),
+    )
+    runtime._camera = FakeCamera()
+    runtime._running = True
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=make_good_exposure_image(),
+            sensor_timestamp_ns=1,
+            host_timestamp_ns=2,
+            exposure_us=500,
+            analogue_gain=12.0,
+        )
+    )
+    startup_decision = runtime._run_auto_exposure_cycle()
+
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=np.full((200, 320), 18, dtype=np.uint8),
+            sensor_timestamp_ns=3,
+            host_timestamp_ns=4,
+            exposure_us=500,
+            analogue_gain=12.0,
+        )
+    )
+    later_decision = runtime._run_auto_exposure_cycle()
+
+    assert startup_decision is not None
+    assert startup_decision.status == "ready"
+    assert later_decision == startup_decision
+    assert runtime._camera.controls == []
+    assert (runtime.settings.exposure_us, runtime.settings.gain) == (500, 12.0)
+
+
+def test_auto_exposure_startup_calibration_is_synchronous(tmp_path, monkeypatch):
+    calibration_started = threading.Event()
+    allow_calibration_to_finish = threading.Event()
+    startup_returned = threading.Event()
+    runtime = CameraCaptureRuntime(output_dir=tmp_path)
+
+    def calibrate():
+        calibration_started.set()
+        assert allow_calibration_to_finish.wait(timeout=1.0)
+
+    monkeypatch.setattr(runtime, "_auto_exposure_loop", calibrate)
+
+    def start_auto_exposure():
+        runtime._start_auto_exposure()
+        startup_returned.set()
+
+    startup_thread = threading.Thread(target=start_auto_exposure)
+    startup_thread.start()
+    assert calibration_started.wait(timeout=1.0)
+    returned_before_calibration = startup_returned.wait(timeout=0.05)
+    allow_calibration_to_finish.set()
+    startup_thread.join(timeout=1.0)
+
+    assert returned_before_calibration is False
+    assert startup_returned.is_set()
+
+
+def test_auto_exposure_discards_calibration_frames_before_arming(tmp_path, monkeypatch):
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(fps=100.0, pre_ms=20.0, post_ms=10.0),
+    )
+    runtime._ring.add_frame(make_frame(1))
+    runtime._ring.add_frame(make_frame(2))
+    calibration_ring = runtime._ring
+    buffered_when_refill_started = []
+    monkeypatch.setattr(
+        runtime,
+        "_wait_for_prebuffer",
+        lambda: buffered_when_refill_started.append(runtime._ring.buffered_frames),
+    )
+
+    runtime._refill_locked_exposure_prebuffer()
+
+    assert runtime._ring is not calibration_ring
+    assert buffered_when_refill_started == [0]
+
+
+def test_auto_exposure_restores_last_good_controls_for_same_camera_mode(tmp_path):
+    state_path = tmp_path / "camera-exposure.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "width": 320,
+                "height": 200,
+                "fps": 488.0,
+                "exposure_us": 650,
+                "gain": 15.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(
+            width=320,
+            height=200,
+            fps=488.0,
+            exposure_us=250,
+            gain=4.0,
+            auto_exposure_state_path=state_path,
+        ),
+    )
+
+    assert runtime.settings.exposure_us == 650
+    assert runtime.settings.gain == 15.0
+
+
+def test_auto_exposure_ignores_saved_controls_from_different_mode(tmp_path):
+    state_path = tmp_path / "camera-exposure.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "width": 640,
+                "height": 400,
+                "fps": 300.0,
+                "exposure_us": 1000,
+                "gain": 20.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(
+            width=320,
+            height=200,
+            fps=488.0,
+            exposure_us=250,
+            gain=4.0,
+            auto_exposure_state_path=state_path,
+        ),
+    )
+
+    assert runtime.settings.exposure_us == 250
+    assert runtime.settings.gain == 4.0
+
+
+def test_auto_exposure_persists_good_controls(tmp_path):
+    state_path = tmp_path / "camera-exposure.json"
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(
+            width=320,
+            height=200,
+            fps=488.0,
+            exposure_us=500,
+            gain=12.0,
+            auto_exposure_state_path=state_path,
+        ),
+    )
+    runtime._camera = object()
+    runtime._running = True
+    image = make_good_exposure_image()
+    runtime._ring.add_frame(
+        CameraFrame(
+            image=image,
+            sensor_timestamp_ns=1,
+            host_timestamp_ns=2,
+            exposure_us=500,
+            analogue_gain=12.0,
+        )
+    )
+
+    runtime._run_auto_exposure_cycle()
+
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["exposure_us"] == 500
+    assert saved["gain"] == 12.0
+    assert saved["width"] == 320
 
 
 def test_preview_roll_correction_levels_sloped_line_without_modifying_raw_frame(tmp_path):
