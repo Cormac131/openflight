@@ -560,6 +560,13 @@ def test_nfc_flag_is_forwarded():
     assert "--nfc" in command_arguments
 
 
+def test_mock_and_nfc_are_both_forwarded():
+    command_arguments = _dry_run("--mock", "--nfc").stdout.strip().split()
+
+    assert "--mock" in command_arguments
+    assert "--nfc" in command_arguments
+
+
 def test_nfc_options_are_forwarded():
     command_arguments = (
         _dry_run(

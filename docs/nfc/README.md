@@ -388,8 +388,8 @@ For each tap, OpenFlight:
    not tappable and cannot swallow a tap while it fades.
 6. Records the tap in the session log.
 
-In mock mode (`--mock --nfc`) a mock reader replaces the hardware, so the whole
-learn-and-select flow can be exercised on a laptop with no PN532 attached.
+`--mock` only replaces the radar. `--nfc` always talks to the PN532; omit the
+flag when no reader is attached.
 
 ## Session Logging
 

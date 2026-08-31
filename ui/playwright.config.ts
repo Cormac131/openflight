@@ -8,8 +8,8 @@ const HOST = '127.0.0.1';
 const BASE_URL = `http://${HOST}:${PORT}`;
 const CONFIG_DIR = fileURLToPath(new URL('.', import.meta.url));
 // Learned club tags go to a scratch file, never the operator's real
-// ~/.openflight/club_tags.json. --mock makes --nfc use the mock reader, so the
-// tag flow is driven over the control socket with no PN532 attached.
+// ~/.openflight/club_tags.json. OPENFLIGHT_NFC_MOCK is a test-only in-memory
+// reader; --nfc on a real kiosk always opens the PN532, including with --mock.
 const CLUB_TAGS_FILE = join(tmpdir(), 'openflight-e2e-club-tags.json');
 const BACKEND_ARGS =
   `--mock --host ${HOST} --web-port 8080 --no-camera --no-logging ` +

@@ -1,4 +1,4 @@
-"""In-memory tag reader used by --mock and by tests."""
+"""In-memory tag reader used by automated tests."""
 
 from __future__ import annotations
 

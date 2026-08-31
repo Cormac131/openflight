@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Attack angle no longer inflated by 1/cos(club path).** The camera club
   delivery divided vertical speed by the forward component alone instead of the
   full horizontal speed, overstating attack angle on any shot with club path.
+- **`--nfc` opens the PN532 even when `--mock` is set.** `--mock` only replaces
+  the radar. Club tags need a real reader; omit `--nfc` when one is not attached.
 
 ### Added
 - **NFC club tags.** An optional PN532 reader selects the club when a tagged

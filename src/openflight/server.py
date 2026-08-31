@@ -1634,14 +1634,14 @@ def init_nfc(
     bus_number: int = 1,
     address: int = 0x24,
     tags_path: str | None = None,
-    use_mock_reader: bool = False,
 ) -> bool:
     """Start the optional PN532 club-tag reader without risking radar availability.
 
     The registry loads even when the reader itself fails to come up, so tags
     already learned stay listed in the UI and the failure is visible there
     instead of only in the log. SPI is the supported host link so a wedged
-    reader cannot take down the inclinometer on I2C.
+    reader cannot take down the inclinometer on I2C. ``--mock`` does not
+    replace this reader: NFC is optional, so omit ``--nfc`` when it is absent.
     """
     global nfc_service  # pylint: disable=global-statement
     global club_tag_registry  # pylint: disable=global-statement
@@ -1666,10 +1666,12 @@ def init_nfc(
     service = None
     try:
         club_tag_registry = ClubTagRegistry(tags_path)
-        reader = (
-            MockTagReader()
-            if use_mock_reader
-            else PN532I2C(
+        # Playwright sets this so club-tag UI tests can run without a PN532.
+        # `--mock` never takes this path: that flag only replaces the radar.
+        if os.environ.get("OPENFLIGHT_NFC_MOCK") == "1":
+            reader = MockTagReader()
+        else:
+            reader = PN532I2C(
                 interface=interface,
                 spi_bus=spi_bus,
                 spi_device=spi_device,
@@ -1677,7 +1679,6 @@ def init_nfc(
                 bus_number=bus_number,
                 address=address,
             )
-        )
         service = NfcService(reader, club_tag_registry, on_scan=_on_nfc_scan)
         service.start()
         nfc_service = service
@@ -1710,7 +1711,7 @@ def init_nfc(
         nfc_runtime_config = {
             "enabled": False,
             "requested": True,
-            "reader": "mock" if use_mock_reader else "pn532",
+            "reader": "pn532",
             **link,
             "tags_path": str(club_tag_registry.path) if club_tag_registry else None,
             "known_tags": len(club_tag_registry) if club_tag_registry else 0,
@@ -6109,7 +6110,6 @@ def main():
             bus_number=args.nfc_i2c_bus,
             address=args.nfc_i2c_address,
             tags_path=args.nfc_tags_file,
-            use_mock_reader=args.mock,
         ):
             print("WARNING: NFC reader unavailable; club selection stays manual")
 

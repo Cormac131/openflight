@@ -258,6 +258,54 @@ class TestMockScanEndpoint:
         assert len(wired.events("club_tag_error")) == 1
 
 
+class TestInitNfcReaderChoice:
+    def _install_fake_readers(self, monkeypatch):
+        class FakePn532:
+            name = "pn532"
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def open(self):
+                return None
+
+            def close(self):
+                return None
+
+            def read_tag(self, timeout_s=0.5):
+                return None
+
+            def write_text(self, uid, text, timeout_s=3.0):
+                return None
+
+        monkeypatch.setattr("openflight.nfc.PN532I2C", FakePn532)
+
+    def _cleanup(self):
+        if server_module.nfc_service is not None:
+            server_module.nfc_service.stop()
+        server_module.nfc_service = None
+        server_module.club_tag_registry = None
+        server_module.nfc_runtime_config = {"enabled": False}
+
+    def test_nfc_always_opens_the_pn532(self, tmp_path, monkeypatch):
+        self._install_fake_readers(monkeypatch)
+        monkeypatch.delenv("OPENFLIGHT_NFC_MOCK", raising=False)
+        try:
+            assert server_module.init_nfc(tags_path=str(tmp_path / "club_tags.json"))
+            assert server_module.nfc_service.reader.name == "pn532"
+        finally:
+            self._cleanup()
+
+    def test_playwright_env_is_the_only_in_memory_reader(self, tmp_path, monkeypatch):
+        self._install_fake_readers(monkeypatch)
+        monkeypatch.setenv("OPENFLIGHT_NFC_MOCK", "1")
+        try:
+            assert server_module.init_nfc(tags_path=str(tmp_path / "club_tags.json"))
+            assert server_module.nfc_service.reader.name == "mock"
+        finally:
+            self._cleanup()
+
+
 class TestRuntimeConfig:
     def test_the_session_log_records_the_nfc_configuration(self, wired, monkeypatch):
         monkeypatch.setattr(
