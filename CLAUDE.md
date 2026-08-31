@@ -149,6 +149,9 @@ uv run python scripts/hardware-test/test_digipot.py --sweep
 # Find the step where room noise starts firing the trigger (stop the server first)
 uv run python scripts/hardware-test/test_digipot.py --noise-floor
 
+# Prove closed-loop auto gain with a consistent noise source (stop the server first)
+uv run python scripts/hardware-test/test_autogain.py
+
 # Test persistent rolling buffer + hardware trigger (recommended)
 uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 

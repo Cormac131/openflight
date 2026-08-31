@@ -338,6 +338,9 @@ uv run python scripts/hardware-test/test_digipot.py --sweep
 
 # Sweep while counting GATE edges, to find where room noise starts triggering
 uv run python scripts/hardware-test/test_digipot.py --noise-floor
+
+# Prove closed-loop auto gain with a consistent noise source (ADS1115 + digipot)
+uv run python scripts/hardware-test/test_autogain.py
 ```
 
 ### K-LD7 Not Connecting

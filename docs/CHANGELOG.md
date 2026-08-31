@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full horizontal speed, overstating attack angle on any shot with club path.
 
 ### Added
+- **Hardware script to prove closed-loop auto gain.**
+  `scripts/hardware-test/test_autogain.py` drives the ADS1115 envelope path and
+  the same `AutoGainController` the server uses, using a consistent noise source
+  in place of shots. Stop the server first; pass `--device ds3502` if that pot
+  is fitted.
 - **MCP4017 100 kΩ digipot support, now the preferred part.**
   `--sound-sensitivity-device` picks between `mcp401x` (default) and `ds3502`.
   The MCP4017 spans R17's whole 33–47 kΩ range with nothing in series, where the

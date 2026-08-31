@@ -648,6 +648,19 @@ Auto adjustments are **volatile**. The settled value is committed to the pot's
 EEPROM once it has held for ten shots, so a session starts near the right place
 without spending a write per shot on a part with finite endurance.
 
+To prove the loop on the bench, stop the server, aim a **consistent** noise
+source at the microphone (phone white noise, a fan, a speaker), and run:
+
+```bash
+uv run python scripts/hardware-test/test_autogain.py
+```
+
+It parks the wiper at the quiet end, checks that envelope voltage tracks gain,
+then feeds peaks into the same controller the server uses. Pass means the wiper
+moved toward the band and the envelope followed. The script defaults to a
+68–76% band so a DS3502 behind 33 kΩ still has authority; pass `--device ds3502`
+if that is the part you fitted.
+
 ### Where the Setting Lives
 
 **It depends on the part, and OpenFlight handles both.**

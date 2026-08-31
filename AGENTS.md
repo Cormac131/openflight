@@ -259,6 +259,9 @@ scripts/start-kiosk.sh --kld7                          # With K-LD7 angle radars
 ### Sound Trigger Testing
 
 ```bash
+# Prove closed-loop auto gain with a consistent noise source (stop the server first)
+uv run python scripts/hardware-test/test_autogain.py
+
 # Test persistent rolling buffer + hardware trigger (recommended)
 uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 
