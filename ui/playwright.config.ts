@@ -37,6 +37,7 @@ export default defineConfig({
       url: `http://${HOST}:8080`,
       reuseExistingServer: !process.env.CI,
       cwd: fileURLToPath(new URL('..', import.meta.url)),
+      env: { ...process.env, OPENFLIGHT_NFC_MOCK: '1' },
     },
     {
       command: `npm run dev -- --host ${HOST} --port ${PORT} --mode test`,

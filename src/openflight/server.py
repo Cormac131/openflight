@@ -5523,7 +5523,10 @@ def main():
     parser.add_argument(
         "--nfc",
         action="store_true",
-        help="Enable the PN532 NFC reader so club tags select the club",
+        help=(
+            "Enable the PN532 NFC reader so club tags select the club. "
+            "Always uses the hardware reader; --mock does not replace it."
+        ),
     )
     parser.add_argument(
         "--nfc-interface",

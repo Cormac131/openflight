@@ -487,6 +487,7 @@ previous file could not be parsed.
 
 - Confirm the startup banner printed `NFC club tags enabled`.
 - Confirm `--nfc` was actually passed; without it the reader is never opened.
+- `--mock` only replaces the radar. `--nfc` still needs the PN532.
 - Run `read_pn532.py` to separate a reader problem from a kiosk problem.
 - Check the log for repeated `[NFC] Read failed` lines, which point at wiring.
 - A Shot Scope ICODE SLIX tag will never appear. Confirm with the kit card or

@@ -25,8 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writable tag instead runs a write flow — pick a club, confirm, and the club
   is written onto the tag as an NDEF text record, verified by reading it back,
   and mirrored into the rig's mapping. A written tag carries its club between
-  rigs and can be read or authored by any phone NFC app. Enable with `--nfc`;
-  `--mock --nfc` exercises the whole flow without hardware. The supported
+  rigs and can be read or authored by any phone NFC app. Enable with `--nfc`.
+  `--mock` does not replace the reader. The supported
   host link is SPI on `/dev/spidev0.0` (CE0, GPIO8) with IRQ on GPIO22
   (physical pin 15); I2C is a fallback only because it shares the
   inclinometer bus. See [PN532 NFC Club Tags](nfc/README.md).

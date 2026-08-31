@@ -14,7 +14,7 @@ class MockTagReader:
 
     Simulated tags keep their contents between presentations, so writing a club
     to one and tapping it again behaves like real hardware: the whole
-    blank-tag write flow can be exercised on a laptop with no PN532 attached.
+    blank-tag write flow can be exercised in tests with no PN532 attached.
     """
 
     name = "mock"
