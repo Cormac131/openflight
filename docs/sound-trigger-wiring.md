@@ -652,8 +652,13 @@ To prove the loop on the bench, stop the server, aim a **consistent** noise
 source at the microphone (phone white noise, a fan, a speaker), and run:
 
 ```bash
+uv run python scripts/hardware-test/test_autogain.py --watch
+uv run python scripts/hardware-test/test_autogain.py --hits
 uv run python scripts/hardware-test/test_autogain.py
 ```
+
+`--watch` prints live A0 volts so a clap should make the number jump. If it
+stays near 0.1 V the ADS1115 is alive but ENVELOPE is idle or not on A0.
 
 It parks the wiper at the quiet end, checks that envelope voltage tracks gain,
 then feeds peaks into the same controller the server uses. Pass means the wiper

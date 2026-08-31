@@ -12,6 +12,8 @@ the same I2C devices.
 
 Usage:
     uv run python scripts/hardware-test/test_autogain.py
+    uv run python scripts/hardware-test/test_autogain.py --watch
+    uv run python scripts/hardware-test/test_autogain.py --hits
     uv run python scripts/hardware-test/test_autogain.py --device ds3502
     uv run python scripts/hardware-test/test_autogain.py --start-position 0 --shots 24
 """
@@ -35,7 +37,51 @@ from openflight.sensitivity import (
 from openflight.sensitivity.ads1115 import validate_address as validate_envelope_address
 from openflight.sensitivity.autogain import AT_LIMIT
 
-NO_SAMPLE = "no_sample"
+DEFAULT_HIT_THRESHOLD_VOLTS = 0.05
+
+
+@dataclass(frozen=True)
+class HitPeak:
+    """The loudest envelope sample in one excursion above the hit threshold."""
+
+    volts: float
+    fraction: float
+    samples: int
+
+
+class HitTracker:
+    """Collect one peak per time the envelope stays above ``threshold_volts``."""
+
+    def __init__(self, threshold_volts: float = DEFAULT_HIT_THRESHOLD_VOLTS):
+        self.threshold_volts = threshold_volts
+        self._active = False
+        self._peak_volts = 0.0
+        self._peak_fraction = 0.0
+        self._samples = 0
+
+    def feed(self, volts: Optional[float], fraction: float = 0.0) -> Optional[HitPeak]:
+        """Fold in one sample. Returns a peak when the signal falls back through the threshold."""
+        if volts is None:
+            return None
+        if volts > self.threshold_volts:
+            if not self._active:
+                self._active = True
+                self._peak_volts = volts
+                self._peak_fraction = fraction
+                self._samples = 1
+            else:
+                self._samples += 1
+                if volts > self._peak_volts:
+                    self._peak_volts = volts
+                    self._peak_fraction = fraction
+            return None
+        if not self._active:
+            return None
+        self._active = False
+        peak = HitPeak(volts=self._peak_volts, fraction=self._peak_fraction, samples=self._samples)
+        self._samples = 0
+        return peak
+
 
 # Narrower than the server default so the DS3502 + 33 kOhm trim can still move.
 DEFAULT_TARGET_LOW = 0.68
@@ -47,6 +93,7 @@ DEFAULT_SETTLE_S = 0.3
 QUIET_FRACTION = 0.05
 MIN_SCALE_RATIO = 1.05
 FOLLOW_RATIO = 1.05
+NO_SAMPLE = "no_sample"
 
 
 @dataclass(frozen=True)
@@ -66,12 +113,19 @@ def envelope_responds_with_reason(
     *,
     quiet_fraction: float = QUIET_FRACTION,
     min_ratio: float = MIN_SCALE_RATIO,
+    detector_volts: float = DEFAULT_DETECTOR_VOLTS,
 ) -> Tuple[bool, str]:
     """Explain whether envelope amplitude tracks wiper direction."""
     if max(low_fraction, high_fraction) < quiet_fraction:
+        low_v = low_fraction * detector_volts
+        high_v = high_fraction * detector_volts
         return False, (
-            "Envelope stayed near zero at both ends of the pot. Point a "
-            "consistent noise source at the SEN-14262 microphone and keep it running."
+            f"Envelope stayed near zero at both ends of the pot "
+            f"({low_fraction:.0%} / {high_fraction:.0%}, {low_v:.2f} V / {high_v:.2f} V). "
+            "The ADS1115 is returning an idle reading, not a missing device. A quiet "
+            "SEN-14262 ENVELOPE and a floating A0 both sit near 0 V. Run with --watch "
+            "and clap at the microphone: if volts do not jump, check ENVELOPE is on A0 "
+            "and the detector is powered."
         )
     if high_fraction <= low_fraction * min_ratio:
         return False, (
@@ -106,8 +160,10 @@ def judge_run(
         )
     if max(fractions) < quiet_fraction:
         return False, (
-            "Envelope stayed near zero. Point a consistent noise source at the "
-            "SEN-14262 microphone and keep it running."
+            f"Envelope stayed near zero ({max(fractions):.0%}). The ADS1115 is "
+            "returning an idle reading, not a missing device. Run with --watch "
+            "and clap at the microphone: if volts do not jump, check ENVELOPE is "
+            "on A0 and the detector is powered."
         )
 
     moves = [item for item in records if item.next_position != item.position]
@@ -156,6 +212,28 @@ def judge_run(
         f"Auto gain moved the wiper from step {records[0].position} to {parked} "
         f"(envelope {fractions[0]:.0%} → {fractions[-1]:.0%})."
     )
+
+
+def observe_level(
+    *,
+    read: Callable[[], Optional[object]],
+    dwell_s: float,
+    sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], float] = time.time,
+    poll_s: float = 0.02,
+):
+    """Return the loudest envelope sample seen during ``dwell_s``."""
+    deadline = now() + dwell_s
+    best = None
+    while now() < deadline:
+        sample = read()
+        if sample is not None and (best is None or sample.volts > best.volts):
+            best = sample
+        remaining = deadline - now()
+        if remaining <= 0:
+            break
+        sleep(min(poll_s, remaining))
+    return best
 
 
 def collect_rounds(
@@ -229,6 +307,10 @@ def validate_args(parser: argparse.ArgumentParser, args, max_position: int = 127
         parser.error("--target-low/--target-high must satisfy 0 < low < high < 1")
     if args.detector_volts <= 0:
         parser.error("--detector-volts must be positive")
+    if args.watch_seconds <= 0:
+        parser.error("--watch-seconds must be positive")
+    if args.threshold_volts <= 0:
+        parser.error("--threshold-volts must be positive")
 
 
 def _describe(pot, position: int) -> str:
@@ -238,12 +320,9 @@ def _describe(pot, position: int) -> str:
     )
 
 
-def _read_fraction(envelope: EnvelopeMonitor, settle_s: float) -> Optional[float]:
-    time.sleep(settle_s)
-    peak = envelope.peak_for_impact(time.time())
-    if peak is None:
-        return None
-    return peak.fraction_of_full_scale
+def _read_peak(envelope: EnvelopeMonitor, dwell_s: float):
+    """Watch the live envelope for ``dwell_s`` and keep the loudest sample."""
+    return observe_level(read=envelope.latest_sample, dwell_s=dwell_s)
 
 
 def _probe_scale(pot, envelope: EnvelopeMonitor, settle_s: float) -> Tuple[bool, str]:
@@ -251,15 +330,20 @@ def _probe_scale(pot, envelope: EnvelopeMonitor, settle_s: float) -> Tuple[bool,
     low_step = 0
     high_step = pot.max_position
     pot.set_position(low_step, store=False)
-    low = _read_fraction(envelope, settle_s)
+    low_peak = _read_peak(envelope, settle_s)
     pot.set_position(high_step, store=False)
-    high = _read_fraction(envelope, settle_s)
-    if low is None or high is None:
+    high_peak = _read_peak(envelope, settle_s)
+    if low_peak is None or high_peak is None:
         return False, (
             "The ADS1115 never returned envelope samples. Stop the server, "
             "check ENVELOPE is on A0, and i2cdetect for 0x48."
         )
-    print(f"  scale probe: step {low_step} → {low:.0%}, step {high_step} → {high:.0%}")
+    low = low_peak.fraction_of_full_scale
+    high = high_peak.fraction_of_full_scale
+    print(
+        f"  scale probe: step {low_step} → {low:.0%} ({low_peak.volts:.2f} V), "
+        f"step {high_step} → {high:.0%} ({high_peak.volts:.2f} V)"
+    )
     return envelope_responds_with_reason(low, high)
 
 
@@ -347,6 +431,28 @@ def main() -> int:
         default=DEFAULT_TARGET_HIGH,
         help=f"Upper edge of the target band (default: {DEFAULT_TARGET_HIGH})",
     )
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Print live A0 volts so you can clap-test the ENVELOPE wire",
+    )
+    parser.add_argument(
+        "--watch-seconds",
+        type=float,
+        default=20.0,
+        help="How long --watch runs (default: 20)",
+    )
+    parser.add_argument(
+        "--hits",
+        action="store_true",
+        help="Print ENVELOPE samples above --threshold-volts while you hit balls (Ctrl+C to stop)",
+    )
+    parser.add_argument(
+        "--threshold-volts",
+        type=float,
+        default=DEFAULT_HIT_THRESHOLD_VOLTS,
+        help=f"Hit-recording floor in volts (default: {DEFAULT_HIT_THRESHOLD_VOLTS})",
+    )
     args = parser.parse_args()
     spec = DEVICES[args.device]
     validate_args(parser, args)
@@ -362,7 +468,11 @@ def main() -> int:
         address=args.envelope_address,
         channel=args.envelope_channel,
     )
-    envelope = EnvelopeMonitor(adc, full_scale_volts=args.detector_volts)
+    envelope = EnvelopeMonitor(
+        adc,
+        full_scale_volts=args.detector_volts,
+        sample_interval_s=1.0 / getattr(adc, "data_rate", 860),
+    )
     controller = AutoGainController(
         series_ohms=series_ohms,
         target_low=args.target_low,
@@ -391,7 +501,54 @@ def main() -> int:
             f"band {args.target_low:.0%}-{args.target_high:.0%}\n"
         )
 
-        ok, explanation = _probe_scale(pot, envelope, args.settle)
+        if args.watch:
+            print(
+                "Watching A0. Clap next to the SEN-14262 microphone. "
+                "Volts should jump; a line stuck near 0.1 V is idle or floating.\n"
+            )
+            deadline = time.time() + args.watch_seconds
+            while time.time() < deadline:
+                sample = envelope.latest_sample()
+                if sample is None:
+                    print("  waiting for ADS1115...")
+                else:
+                    print(f"  {sample.volts:6.3f} V  ({sample.fraction_of_full_scale:6.1%})")
+                time.sleep(0.1)
+            return 0
+
+        if args.hits:
+            print(
+                f"Recording hits. ENVELOPE samples above {args.threshold_volts:.2f} V "
+                "print here; a peak line fires when the signal falls back. "
+                "Hit a few balls. Ctrl+C to stop.\n"
+            )
+            tracker = HitTracker(args.threshold_volts)
+            hit_count = 0
+            try:
+                while True:
+                    sample = envelope.latest_sample()
+                    if sample is None:
+                        time.sleep(0.02)
+                        continue
+                    if sample.volts > args.threshold_volts:
+                        print(
+                            f"  {sample.volts:6.3f} V  ({sample.fraction_of_full_scale:6.1%})",
+                            flush=True,
+                        )
+                    peak = tracker.feed(sample.volts, sample.fraction_of_full_scale)
+                    if peak is not None:
+                        hit_count += 1
+                        print(
+                            f"hit {hit_count:3d}  {peak.volts:6.3f} V  "
+                            f"({peak.fraction * 100:5.1f}%)  {peak.samples} samples",
+                            flush=True,
+                        )
+                    time.sleep(0.02)
+            except KeyboardInterrupt:
+                print(f"\nStopped after {hit_count} hit(s).")
+            return 0
+
+        ok, explanation = _probe_scale(pot, envelope, max(args.settle, 1.0))
         if not ok:
             print(f"\nFAIL: {explanation}")
             return 1

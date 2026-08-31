@@ -155,10 +155,18 @@ class TestEnvelopeResponds:
         assert "does not track" in explanation
 
     def test_two_quiet_ends_are_rejected(self):
-        ok, explanation = script.envelope_responds_with_reason(0.01, 0.02)
+        ok, explanation = script.envelope_responds_with_reason(0.04, 0.03)
 
         assert ok is False
         assert "near zero" in explanation
+        assert "ADS1115" in explanation
+        assert "0.13 V" in explanation or "0.13V" in explanation.replace(" ", "")
+
+    def test_an_idle_reading_is_not_described_as_a_missing_adc(self):
+        ok, explanation = script.envelope_responds_with_reason(0.04, 0.03)
+
+        assert ok is False
+        assert "not a missing" in explanation.lower()
 
 
 class TestCollectRounds:
@@ -201,6 +209,83 @@ class TestCollectRounds:
         assert pot.position == 12
 
 
+class TestObserveLevel:
+    def test_it_keeps_the_loudest_sample_during_the_dwell(self):
+        samples = [peak(0.10), peak(0.40), peak(0.20)]
+        clock = {"t": 0.0}
+
+        def now():
+            return clock["t"]
+
+        def sleep(seconds):
+            clock["t"] += seconds
+
+        def read():
+            if samples:
+                return samples.pop(0)
+            return peak(0.20)
+
+        result = script.observe_level(read=read, dwell_s=0.05, sleep=sleep, now=now, poll_s=0.02)
+
+        assert result is not None
+        assert result.fraction_of_full_scale == pytest.approx(0.40)
+
+    def test_no_samples_returns_none(self):
+        clock = {"t": 0.0}
+
+        result = script.observe_level(
+            read=lambda: None,
+            dwell_s=0.04,
+            sleep=lambda s: clock.__setitem__("t", clock["t"] + s),
+            now=lambda: clock["t"],
+            poll_s=0.02,
+        )
+
+        assert result is None
+
+
+class TestHitTracker:
+    def test_samples_at_or_below_the_threshold_are_ignored(self):
+        tracker = script.HitTracker(threshold_volts=0.05)
+
+        assert tracker.feed(0.02) is None
+        assert tracker.feed(0.05) is None
+
+    def test_a_rise_and_fall_reports_the_peak(self):
+        tracker = script.HitTracker(threshold_volts=0.05)
+
+        assert tracker.feed(0.02) is None
+        assert tracker.feed(0.40, fraction=0.12) is None
+        assert tracker.feed(1.80, fraction=0.55) is None
+        peak = tracker.feed(0.04, fraction=0.01)
+
+        assert peak is not None
+        assert peak.volts == pytest.approx(1.80)
+        assert peak.fraction == pytest.approx(0.55)
+        assert peak.samples == 2
+
+    def test_two_hits_are_reported_separately(self):
+        tracker = script.HitTracker(threshold_volts=0.05)
+
+        tracker.feed(0.8)
+        first = tracker.feed(0.01)
+        tracker.feed(1.2)
+        second = tracker.feed(0.01)
+
+        assert first.volts == pytest.approx(0.8)
+        assert second.volts == pytest.approx(1.2)
+
+    def test_a_missing_sample_does_not_end_the_hit(self):
+        tracker = script.HitTracker(threshold_volts=0.05)
+
+        tracker.feed(0.9)
+        assert tracker.feed(None) is None
+        peak = tracker.feed(0.01)
+
+        assert peak is not None
+        assert peak.volts == pytest.approx(0.9)
+
+
 class TestValidateArgs:
     def _parser_and_args(self, **overrides):
         defaults = {
@@ -217,6 +302,8 @@ class TestValidateArgs:
             "target_low": 0.68,
             "target_high": 0.76,
             "detector_volts": 3.3,
+            "watch_seconds": 20.0,
+            "threshold_volts": 0.05,
         }
         return argparse.ArgumentParser(), SimpleNamespace(**{**defaults, **overrides})
 
@@ -241,3 +328,6 @@ class TestValidateArgs:
 
     def test_an_envelope_address_the_ads1115_cannot_use_is_refused(self):
         self._expect_error(envelope_address=0x2F)
+
+    def test_a_non_positive_hit_threshold_is_refused(self):
+        self._expect_error(threshold_volts=0)

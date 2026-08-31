@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scripts/hardware-test/test_autogain.py` drives the ADS1115 envelope path and
   the same `AutoGainController` the server uses, using a consistent noise source
   in place of shots. Stop the server first; pass `--device ds3502` if that pot
-  is fitted.
+  is fitted. `--hits` prints live ENVELOPE samples above 0.05 V while you hit
+  balls, then a peak line when the signal falls back.
 - **MCP4017 100 kΩ digipot support, now the preferred part.**
   `--sound-sensitivity-device` picks between `mcp401x` (default) and `ds3502`.
   The MCP4017 spans R17's whole 33–47 kΩ range with nothing in series, where the
