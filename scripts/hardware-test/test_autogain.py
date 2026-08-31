@@ -82,6 +82,17 @@ class HitTracker:
         self._samples = 0
         return peak
 
+    def flush(self) -> Optional[HitPeak]:
+        """Return the in-progress peak, if any, so Ctrl+C does not drop the last hit."""
+        if not self._active:
+            return None
+        self._active = False
+        peak = HitPeak(
+            volts=self._peak_volts, fraction=self._peak_fraction, samples=self._samples
+        )
+        self._samples = 0
+        return peak
+
 
 # Narrower than the server default so the DS3502 + 33 kOhm trim can still move.
 DEFAULT_TARGET_LOW = 0.68
@@ -518,33 +529,34 @@ def main() -> int:
 
         if args.hits:
             print(
-                f"Recording hits. ENVELOPE samples above {args.threshold_volts:.2f} V "
-                "print here; a peak line fires when the signal falls back. "
+                f"Recording hits. Each strike's peak from the ADS1115 buffer "
+                f"(above {args.threshold_volts:.2f} V) prints when the pulse ends. "
                 "Hit a few balls. Ctrl+C to stop.\n"
             )
             tracker = HitTracker(args.threshold_volts)
             hit_count = 0
+
+            def _emit(peak):
+                nonlocal hit_count
+                if peak is None:
+                    return
+                hit_count += 1
+                print(
+                    f"hit {hit_count:3d}  {peak.volts:6.3f} V  "
+                    f"({peak.fraction * 100:5.1f}%)  {peak.samples} samples",
+                    flush=True,
+                )
+
             try:
                 while True:
-                    sample = envelope.latest_sample()
+                    sample = envelope.peak_for_impact(time.time())
                     if sample is None:
                         time.sleep(0.02)
                         continue
-                    if sample.volts > args.threshold_volts:
-                        print(
-                            f"  {sample.volts:6.3f} V  ({sample.fraction_of_full_scale:6.1%})",
-                            flush=True,
-                        )
-                    peak = tracker.feed(sample.volts, sample.fraction_of_full_scale)
-                    if peak is not None:
-                        hit_count += 1
-                        print(
-                            f"hit {hit_count:3d}  {peak.volts:6.3f} V  "
-                            f"({peak.fraction * 100:5.1f}%)  {peak.samples} samples",
-                            flush=True,
-                        )
+                    _emit(tracker.feed(sample.volts, sample.fraction_of_full_scale))
                     time.sleep(0.02)
             except KeyboardInterrupt:
+                _emit(tracker.flush())
                 print(f"\nStopped after {hit_count} hit(s).")
             return 0
 

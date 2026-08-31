@@ -285,6 +285,16 @@ class TestHitTracker:
         assert peak is not None
         assert peak.volts == pytest.approx(0.9)
 
+    def test_flush_reports_an_open_hit(self):
+        tracker = script.HitTracker(threshold_volts=0.05)
+        tracker.feed(0.7)
+
+        peak = tracker.flush()
+
+        assert peak is not None
+        assert peak.volts == pytest.approx(0.7)
+        assert tracker.flush() is None
+
 
 class TestValidateArgs:
     def _parser_and_args(self, **overrides):
