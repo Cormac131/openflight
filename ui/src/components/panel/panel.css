@@ -698,12 +698,14 @@
 
 .live-panel__grid .metric-card__label,
 .live-panel__grid .metric-card__meta,
-.live-panel__grid .metric-card__subtext {
+.live-panel__grid .metric-card__subtext,
+.live-panel__grid .metric-card__confidence-label {
   min-width: 0;
   max-width: 100%;
 }
 
-.live-panel__grid .metric-card__subtext {
+.live-panel__grid .metric-card__subtext,
+.live-panel__grid .metric-card__confidence-label {
   display: block;
   font-size: clamp(0.6875rem, 1.2vw, 0.75rem);
   line-height: 1.15;
@@ -714,8 +716,13 @@
 }
 
 .live-panel__grid .metric-card__confidence {
+  flex-wrap: wrap;
   min-width: 0;
   max-width: 100%;
+}
+
+.live-panel__grid .metric-card__confidence-label {
+  flex: 1 1 0;
 }
 
 .live-panel__grid .metric-card__value-row {

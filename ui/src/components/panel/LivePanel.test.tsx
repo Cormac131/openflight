@@ -84,6 +84,19 @@ describe('LivePanel', () => {
     expect(css).not.toMatch(/\.live-panel__grid \.metric-card__value \{[^}]*font-size: clamp\(\d+px/);
   });
 
+  it('wraps live confidence labels the same way as long subtitles', () => {
+    const css = readFileSync(fileURLToPath(new URL('./panel.css', import.meta.url)), 'utf8');
+
+    expect(css).toMatch(
+      /\.live-panel__grid \.metric-card__subtext,\s*\.live-panel__grid \.metric-card__confidence-label \{[^}]*white-space: normal/
+    );
+    expect(css).toMatch(
+      /\.live-panel__grid \.metric-card__subtext,\s*\.live-panel__grid \.metric-card__confidence-label \{[^}]*overflow-wrap: anywhere/
+    );
+    expect(css).toMatch(/\.live-panel__grid \.metric-card__confidence \{[^}]*flex-wrap: wrap/);
+    expect(css).toMatch(/\.live-panel__grid \.metric-card__confidence-label \{[^}]*min-width: 0/);
+  });
+
   it('shares one live number size across tiles instead of shrinking per card', () => {
     const liveSrc = readFileSync(fileURLToPath(new URL('./LivePanel.tsx', import.meta.url)), 'utf8');
     const cardSrc = readFileSync(fileURLToPath(new URL('../ui/MetricCard.tsx', import.meta.url)), 'utf8');
