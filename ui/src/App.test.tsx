@@ -15,6 +15,9 @@ describe('App shell', () => {
       tags: [],
       lastScan: null,
       pendingTag: null,
+      pendingAssign: null,
+      pendingForgetUid: null,
+      assignError: null,
       clubScanVersion: 0,
     });
   });

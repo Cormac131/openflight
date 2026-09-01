@@ -90,17 +90,19 @@ function AppContent() {
   const serverPlayerName = useSystemStore((state) => state.serverPlayerName);
   const {
     pendingTag,
+    pendingAssign,
+    assignError,
     clubScanVersion,
     announcedClub,
     clearPendingTag,
-    setPendingTag,
   } = useNfcStore(
     useShallow((state) => ({
       pendingTag: state.pendingTag,
+      pendingAssign: state.pendingAssign,
+      assignError: state.assignError,
       clubScanVersion: state.clubScanVersion,
       announcedClub: state.announcedClub,
       clearPendingTag: state.clearPendingTag,
-      setPendingTag: state.setPendingTag,
     }))
   );
   const { heroMetricId, setHeroMetricId } = useHeroMetricStore(
@@ -253,17 +255,14 @@ function AppContent() {
 
   const handleLearnTag = (clubId: string) => {
     if (!pendingTag) return;
+    useNfcStore.getState().requestAssign(pendingTag.uid, clubId);
     socketService.assignClubTag(pendingTag.uid, clubId);
-    // The server echoes club_changed, but update locally too so the tile
-    // switches even if the assignment is rejected downstream and retried.
-    setSelectedClub(clubId);
-    clearPendingTag();
   };
 
   const handleForgetTag = () => {
     if (!pendingTag) return;
+    useNfcStore.getState().requestForget(pendingTag.uid);
     socketService.forgetClubTag(pendingTag.uid);
-    setPendingTag({ ...pendingTag, known: false, club: null, source: null });
   };
 
   const handleShutdown = async () => {
@@ -485,6 +484,8 @@ function AppContent() {
       {pendingTag ? (
         <ClubTagPrompt
           scan={pendingTag}
+          error={assignError}
+          assigningClub={pendingAssign?.club}
           onAssign={handleLearnTag}
           onDismiss={clearPendingTag}
           onForget={handleForgetTag}

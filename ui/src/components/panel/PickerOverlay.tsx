@@ -18,6 +18,8 @@ interface PickerOverlayProps {
   onAction?: () => void;
   /** Word-length labels (training implements) use a slightly smaller type size. */
   wide?: boolean;
+  /** Persist/assign failure shown on the club-tag prompt. */
+  error?: string | null;
 }
 
 /**
@@ -36,6 +38,7 @@ export function PickerOverlay({
   actionAriaLabel,
   onAction,
   wide = false,
+  error,
 }: PickerOverlayProps) {
   const { t } = useI18n();
   const [sectionName, setSectionName] = useState(() => initialPickerSection(sections, selectedId));
@@ -76,6 +79,11 @@ export function PickerOverlay({
           </button>
         </span>
       </div>
+      {error ? (
+        <p className="picker-overlay__error" role="alert">
+          {error}
+        </p>
+      ) : null}
       {sections.length > 1 ? (
         <div className="picker-overlay__tabs" role="group" aria-label={t('picker.groups')}>
           {sections.map((section) => {

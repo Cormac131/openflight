@@ -443,9 +443,10 @@ If the tag carries nothing, it was learned as that club: tap it, press
 ### The Learn Prompt Reappears For A Tag Already Learned
 
 The mapping did not persist. Check that `~/.openflight` is writable by the
-OpenFlight user and that the disk is not full; a failed write is reported in the
-UI and logged. Check for a `club_tags.json.corrupt` file, which means the
-previous file could not be parsed.
+OpenFlight user and that the disk is not full. A failed write stays on the
+learn prompt so you can retry, and is logged. Check for a
+`club_tags.json.corrupt` file, which means the previous file could not be
+parsed.
 
 ### Nothing Happens When A Tag Is Tapped
 

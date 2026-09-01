@@ -180,6 +180,7 @@ export const en = {
   'nfc.readerFailed': 'Not connected',
   'nfc.forget': 'Forget',
   'nfc.forgetTag': 'Forget the tag for {club}',
+  'nfc.assignFailed': 'Could not save this tag',
 
   'picker.groups': 'Groups',
   'picker.close': 'Close {title}',

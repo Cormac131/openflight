@@ -33,6 +33,9 @@ describe('useNfcStore', () => {
       tags: [],
       lastScan: null,
       pendingTag: null,
+      pendingAssign: null,
+      pendingForgetUid: null,
+      assignError: null,
       clubScanVersion: 0,
       announcedClub: null,
     });
@@ -130,5 +133,72 @@ describe('useNfcStore', () => {
     useNfcStore.getState().recordScan(scan({ club: 'pw', known: true }));
 
     expect(useNfcStore.getState().clubScanVersion).toBe(2);
+  });
+
+  it('keeps the learn prompt until the server persists the mapping', () => {
+    useNfcStore.getState().setPendingTag(scan());
+    useNfcStore.getState().requestAssign('04A2B1C3', '7-iron');
+
+    useNfcStore.getState().setClubTags({ tags: [], enabled: true, requested: true });
+
+    expect(useNfcStore.getState().pendingTag?.uid).toBe('04A2B1C3');
+    expect(useNfcStore.getState().pendingAssign).toEqual({ uid: '04A2B1C3', club: '7-iron' });
+  });
+
+  it('closes the learn prompt only after the mapping appears in club_tags', () => {
+    useNfcStore.getState().setPendingTag(scan());
+    useNfcStore.getState().requestAssign('04A2B1C3', '7-iron');
+
+    useNfcStore.getState().setClubTags({ tags: [tag], enabled: true, requested: true });
+
+    expect(useNfcStore.getState().pendingTag).toBeNull();
+    expect(useNfcStore.getState().pendingAssign).toBeNull();
+    expect(useNfcStore.getState().assignError).toBeNull();
+  });
+
+  it('surfaces a rejected assignment on the same prompt', () => {
+    useNfcStore.getState().setPendingTag(scan());
+    useNfcStore.getState().requestAssign('04A2B1C3', '7-iron');
+
+    useNfcStore.getState().setClubTagError('Could not save club tags: read-only filesystem', '04A2B1C3');
+
+    expect(useNfcStore.getState().pendingTag?.uid).toBe('04A2B1C3');
+    expect(useNfcStore.getState().pendingAssign).toBeNull();
+    expect(useNfcStore.getState().assignError).toBe('Could not save club tags: read-only filesystem');
+  });
+
+  it('does not mark a tag forgotten until club_tags drops it', () => {
+    useNfcStore.getState().setPendingTag(scan({ known: true, club: '7-iron' }));
+    useNfcStore.getState().requestForget('04A2B1C3');
+
+    useNfcStore.getState().setClubTags({ tags: [tag], enabled: true, requested: true });
+
+    expect(useNfcStore.getState().pendingTag).toEqual(
+      expect.objectContaining({ uid: '04A2B1C3', known: true, club: '7-iron' })
+    );
+  });
+
+  it('turns a forgotten tag back into a learn prompt after the registry drops it', () => {
+    useNfcStore.getState().setPendingTag(scan({ known: true, club: '7-iron' }));
+    useNfcStore.getState().requestForget('04A2B1C3');
+
+    useNfcStore.getState().setClubTags({ tags: [], enabled: true, requested: true });
+
+    expect(useNfcStore.getState().pendingTag).toEqual(
+      expect.objectContaining({ uid: '04A2B1C3', known: false, club: null })
+    );
+    expect(useNfcStore.getState().pendingForgetUid).toBeNull();
+  });
+
+  it('keeps a known tag on screen when forget fails to persist', () => {
+    useNfcStore.getState().setPendingTag(scan({ known: true, club: '7-iron' }));
+    useNfcStore.getState().requestForget('04A2B1C3');
+
+    useNfcStore.getState().setClubTagError('Could not save club tags: disk full', '04A2B1C3');
+
+    expect(useNfcStore.getState().pendingTag).toEqual(
+      expect.objectContaining({ known: true, club: '7-iron' })
+    );
+    expect(useNfcStore.getState().assignError).toBe('Could not save club tags: disk full');
   });
 });

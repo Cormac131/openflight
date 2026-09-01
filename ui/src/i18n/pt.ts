@@ -182,6 +182,7 @@ export const pt: Messages = {
   'nfc.readerFailed': 'Sem conexão',
   'nfc.forget': 'Esquecer',
   'nfc.forgetTag': 'Esquecer a etiqueta de {club}',
+  'nfc.assignFailed': 'Não foi possível salvar esta etiqueta',
 
   'picker.groups': 'Grupos',
   'picker.close': 'Fechar {title}',

@@ -14,9 +14,15 @@ const scan: NfcScan = {
   writable: false,
 };
 
-function render(overrides: Partial<NfcScan> = {}) {
+function render(overrides: Partial<NfcScan> = {}, error?: string) {
   return renderToString(
-    <ClubTagPrompt scan={{ ...scan, ...overrides }} onAssign={() => {}} onDismiss={() => {}} onForget={() => {}} />
+    <ClubTagPrompt
+      scan={{ ...scan, ...overrides }}
+      error={error}
+      onAssign={() => {}}
+      onDismiss={() => {}}
+      onForget={() => {}}
+    />
   );
 }
 
@@ -55,5 +61,13 @@ describe('ClubTagPrompt', () => {
     expect(html).toContain('aria-label="Club tag"');
     expect(html).toContain('aria-label="Forget the tag for 7 Iron"');
     expect(html).toContain('picker-overlay__option--selected');
+  });
+
+  it('shows a failed assignment so the operator can retry', () => {
+    const html = render({}, 'Could not save club tags: read-only filesystem');
+
+    expect(html).toContain('Could not save this tag');
+    expect(html).toContain('Could not save club tags: read-only filesystem');
+    expect(html).toContain('role="alert"');
   });
 });

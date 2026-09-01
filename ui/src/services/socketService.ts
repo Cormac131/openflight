@@ -131,6 +131,7 @@ class SocketService {
 
     this.socket.on('club_tag_error', (data: { error: string; uid?: string }) => {
       console.warn(`Club tag error: ${data.error}`);
+      useNfcStore.getState().setClubTagError(data.error, data.uid);
     });
 
     this.socket.on('player_changed', (data: { player_name: string }) => {
