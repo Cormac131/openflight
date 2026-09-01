@@ -46,7 +46,12 @@ export async function simulateShot(socket: Socket) {
   return waitForEvent(socket, 'shot');
 }
 
-export async function waitForEvent<T>(socket: Socket, event: string, timeoutMs = 5000): Promise<T> {
+export async function waitForEvent<T>(
+  socket: Socket,
+  event: string,
+  timeoutMs = 5000,
+  matches?: (payload: T) => boolean
+): Promise<T> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       socket.off(event, onEvent);
@@ -54,6 +59,7 @@ export async function waitForEvent<T>(socket: Socket, event: string, timeoutMs =
     }, timeoutMs);
 
     const onEvent = (payload: T) => {
+      if (matches && !matches(payload)) return;
       clearTimeout(timeout);
       socket.off(event, onEvent);
       resolve(payload);
@@ -85,14 +91,18 @@ export async function clubTags(socket: Socket): Promise<ClubTag[]> {
 
 /** Forget every learned tag and drop NFC repeat suppression. */
 export async function resetClubTags(socket: Socket) {
-  for (const tag of await clubTags(socket)) {
-    const updated = waitForEvent(socket, 'club_tags');
-    socket.emit('forget_club_tag', { uid: tag.uid });
-    await updated;
+  let tags = await clubTags(socket);
+  while (tags.length > 0) {
+    const updated = waitForEvent<ClubTagsPayload>(
+      socket,
+      'club_tags',
+      5000,
+      (payload) => !payload.tags.some((tag) => tag.uid === tags[0].uid)
+    );
+    socket.emit('forget_club_tag', { uid: tags[0].uid });
+    tags = (await updated).tags;
   }
-  const flushed = waitForEvent(socket, 'club_tags');
   socket.emit('forget_club_tag', {});
-  await flushed;
 }
 
 /**
@@ -105,7 +115,12 @@ export async function presentTag(
   uid: string,
   options: { text?: string; writable?: boolean; blank?: boolean } = {}
 ) {
-  const scan = waitForEvent<{ uid: string; club: string | null }>(socket, 'nfc_scan');
+  const scan = waitForEvent<{ uid: string; club: string | null }>(
+    socket,
+    'nfc_scan',
+    5000,
+    (payload) => payload.uid === uid
+  );
   socket.emit('simulate_nfc_scan', { uid, writable: true, ...options });
   return scan;
 }

@@ -50,6 +50,11 @@ class MockTagReader:
                 blank=text is None if blank is None else blank,
                 writable=writable,
             )
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
         self._queue.put(canonical)
         return canonical
 

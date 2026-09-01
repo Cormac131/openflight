@@ -221,6 +221,14 @@ class TestLifecycleAndStatus:
         assert scans[0].club_id == "5-iron"
         assert reader.closed is True
 
+    def test_a_new_presentation_replaces_an_unread_tap(self):
+        reader = MockTagReader()
+        reader.present_tag("04A2B1C3")
+        reader.present_tag("04A2B1C4")
+
+        assert reader.read_tag(0.01).uid == "04A2B1C4"
+        assert reader.read_tag(0.01) is None
+
     def test_status_reports_reader_and_counts(self, registry):
         registry.assign("04A2B1C3", "driver")
         service = _service(MockTagReader(), registry, [])

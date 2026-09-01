@@ -42,6 +42,17 @@ class TestTextRecords:
     def test_an_empty_message_is_declined(self):
         assert ndef.decode_text_record(b"") is None
 
+    def test_bytes_after_a_complete_record_are_declined(self):
+        extra = bytes([0x51, 0x01, 0x05, 0x55, 0x00]) + b"a.com"
+        message = ndef.encode_text_record("driver") + extra
+
+        assert ndef.decode_text_record(message) is None
+
+    def test_a_second_text_record_is_declined(self):
+        message = ndef.encode_text_record("driver") + ndef.encode_text_record("pw")
+
+        assert ndef.decode_text_record(message) is None
+
     def test_an_oversized_payload_is_refused(self):
         with pytest.raises(NdefError):
             ndef.encode_text_record("x" * 300)
@@ -121,6 +132,15 @@ class TestClassifyingTagMemory:
 
         assert content.blank is False
         assert content.text is None
+        assert content.foreign is True
+
+    def test_a_club_record_followed_by_another_record_is_foreign(self):
+        extra = bytes([0x51, 0x01, 0x05, 0x55, 0x00]) + b"a.com"
+        memory = ndef.wrap_tlv(ndef.encode_text_record("driver") + extra)
+        content = ndef.read_tag_content(memory)
+
+        assert content.text is None
+        assert content.blank is False
         assert content.foreign is True
 
     def test_written_but_unformatted_memory_is_foreign(self):
