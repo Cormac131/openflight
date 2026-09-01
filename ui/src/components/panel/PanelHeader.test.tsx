@@ -62,6 +62,23 @@ describe('PanelHeader', () => {
     expect(html).toContain('>Ball detection<');
     expect(html).toContain('>Connected<');
     expect(html).toContain('>Ball 91%<');
+    expect(html).not.toContain('GSPro');
+  });
+
+  it('shows simulator statuses in the open status menu', () => {
+    const html = renderToString(
+      <PanelHeader
+        title="Live"
+        connected
+        statusMenuOpen
+        simStatuses={{ gspro: { target: 'gspro', state: 'connecting' } }}
+      />
+    );
+
+    expect(html).toContain('>Simulators<');
+    expect(html).toContain('GSPro');
+    expect(html).toContain('connecting');
+    expect(html).toContain('sim-status__pill--warn');
   });
 
   it('renders right-hand actions', () => {

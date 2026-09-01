@@ -152,6 +152,13 @@
   color: var(--color-text);
 }
 
+.panel-header__status-sims {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
 .panel-header__title {
   font-weight: 700;
   font-size: 0.6875rem;
