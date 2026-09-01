@@ -107,22 +107,46 @@ export async function resetClubTags(socket: Socket) {
 
 /**
  * Present a tag to the mock reader, as if it had been tapped on the antenna.
- * Resolves once the reader thread has reported it, so callers do not race the
- * poll interval.
+ * Resolves when the server reports that tap (scan or unknown), or rejects if
+ * the mock reader is not running.
  */
 export async function presentTag(
   socket: Socket,
   uid: string,
   options: { text?: string; writable?: boolean; blank?: boolean } = {}
 ) {
-  const scan = waitForEvent<{ uid: string; club: string | null }>(
-    socket,
-    'nfc_scan',
-    5000,
-    (payload) => payload.uid === uid
-  );
-  socket.emit('simulate_nfc_scan', { uid, writable: true, ...options });
-  return scan;
+  return new Promise<{ uid: string; club: string | null }>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for nfc_scan (${uid})`));
+    }, 5000);
+
+    const matchesUid = (payload: { uid?: string }) => payload.uid === uid;
+
+    const onScan = (payload: { uid: string; club: string | null }) => {
+      if (!matchesUid(payload)) return;
+      cleanup();
+      resolve(payload);
+    };
+
+    const onError = (payload: { error?: string; uid?: string }) => {
+      if (payload.uid && payload.uid !== uid) return;
+      cleanup();
+      reject(new Error(payload.error ?? 'club_tag_error'));
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      socket.off('nfc_scan', onScan);
+      socket.off('nfc_tag_unknown', onScan);
+      socket.off('club_tag_error', onError);
+    };
+
+    socket.on('nfc_scan', onScan);
+    socket.on('nfc_tag_unknown', onScan);
+    socket.on('club_tag_error', onError);
+    socket.emit('simulate_nfc_scan', { uid, writable: true, ...options });
+  });
 }
 
 /** Present a tag without an NDEF club record, so it takes the learn-by-UID path. */

@@ -2595,14 +2595,17 @@ def handle_simulate_nfc_scan(data):
     if uid:
         nfc_service.forget_recent(str(uid))
     try:
-        reader.present_tag(
+        tag = reader.present_tag(
             uid or "04A1B2C3",
             text=payload.get("text"),
             writable=bool(payload.get("writable", True)),
             blank=payload.get("blank"),
+            enqueue=False,
         )
     except ValueError as error:
         socketio.emit("club_tag_error", {"error": str(error), "uid": uid})
+        return
+    nfc_service.handle_tag(tag)
 
 
 @socketio.on("set_player")

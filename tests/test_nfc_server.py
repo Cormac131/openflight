@@ -1,6 +1,5 @@
 """Tests for the server wiring that turns tag taps into club selections."""
 
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -227,31 +226,19 @@ class TestManualSelectionStillWorks:
 
 
 class TestMockScanEndpoint:
-    def test_simulating_a_scan_drives_the_reader(self, wired):
-        wired.service.start()
-        try:
-            server_module.handle_simulate_nfc_scan({"uid": "04A2B1C3"})
-            deadline = time.monotonic() + 3.0
-            while not wired.events("nfc_tag_unknown") and time.monotonic() < deadline:
-                time.sleep(0.01)
-        finally:
-            wired.service.stop()
+    def test_simulating_a_scan_does_not_wait_for_the_poll_thread(self, wired):
+        server_module.handle_simulate_nfc_scan({"uid": "04A2B1C3"})
 
+        assert [event["uid"] for event in wired.events("nfc_scan")] == ["04A2B1C3"]
         assert len(wired.events("nfc_tag_unknown")) == 1
 
     def test_a_simulated_tag_can_carry_a_club_and_be_unwritable(self, wired):
-        wired.service.start()
-        try:
-            server_module.handle_simulate_nfc_scan(
-                {"uid": "04A2B1C3", "text": "7-iron", "writable": False}
-            )
-            deadline = time.monotonic() + 3.0
-            while not wired.events("club_changed") and time.monotonic() < deadline:
-                time.sleep(0.01)
-        finally:
-            wired.service.stop()
+        server_module.handle_simulate_nfc_scan(
+            {"uid": "04A2B1C3", "text": "7-iron", "writable": False}
+        )
 
         assert wired.events("club_changed") == [{"club": "7-iron", "source": "nfc"}]
+        assert wired.events("nfc_scan")[0]["writable"] is False
 
     def test_a_bad_uid_in_a_simulated_scan_is_reported(self, wired):
         server_module.handle_simulate_nfc_scan({"uid": "nope"})

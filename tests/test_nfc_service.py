@@ -229,6 +229,13 @@ class TestLifecycleAndStatus:
         assert reader.read_tag(0.01).uid == "04A2B1C4"
         assert reader.read_tag(0.01) is None
 
+    def test_a_direct_presentation_does_not_queue_for_the_poll_thread(self):
+        reader = MockTagReader()
+        tag = reader.present_tag("04A2B1C3", enqueue=False)
+
+        assert tag.uid == "04A2B1C3"
+        assert reader.read_tag(0.01) is None
+
     def test_status_reports_reader_and_counts(self, registry):
         registry.assign("04A2B1C3", "driver")
         service = _service(MockTagReader(), registry, [])

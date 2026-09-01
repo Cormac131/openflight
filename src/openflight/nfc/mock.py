@@ -35,11 +35,15 @@ class MockTagReader:
         text: Optional[str] = None,
         writable: bool = True,
         blank: Optional[bool] = None,
-    ) -> str:
+        enqueue: bool = True,
+    ) -> TagRead:
         """Queue a tag as if it had been tapped on the antenna.
 
         Contents given here replace whatever the simulated tag held. Omit them
         to re-present a tag exactly as it was last presented.
+
+        ``enqueue=False`` updates the tag and returns it without involving the
+        poll thread, so a simulated tap can be handled on the request path.
         """
         canonical = normalize_uid(uid)
         known = self._tags.get(canonical)
@@ -50,13 +54,14 @@ class MockTagReader:
                 blank=text is None if blank is None else blank,
                 writable=writable,
             )
-        while True:
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:
-                break
-        self._queue.put(canonical)
-        return canonical
+        if enqueue:
+            while True:
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    break
+            self._queue.put(canonical)
+        return self._tags[canonical]
 
     def read_tag(self, timeout_s: float = 0.5) -> Optional[TagRead]:
         """Return the next queued tag, or None once the timeout expires."""

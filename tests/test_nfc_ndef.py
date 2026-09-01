@@ -48,10 +48,20 @@ class TestTextRecords:
 
         assert ndef.decode_text_record(message) is None
 
+    def test_trailing_padding_after_a_complete_record_is_declined(self):
+        assert ndef.decode_text_record(ndef.encode_text_record("driver") + bytes(8)) is None
+
     def test_a_second_text_record_is_declined(self):
         message = ndef.encode_text_record("driver") + ndef.encode_text_record("pw")
 
         assert ndef.decode_text_record(message) is None
+
+    def test_a_well_formed_multi_record_message_is_declined(self):
+        record = bytearray(ndef.encode_text_record("driver"))
+        record[0] &= ~0x40
+        extra = bytes([0x51, 0x01, 0x05, 0x55, 0x00]) + b"a.com"
+
+        assert ndef.decode_text_record(bytes(record) + extra) is None
 
     def test_an_oversized_payload_is_refused(self):
         with pytest.raises(NdefError):

@@ -83,10 +83,14 @@ def decode_text_record(  # pylint: disable=too-many-return-statements
         message[2],
         message[3],
     )
-    if header != TEXT_RECORD_HEADER or type_length != 1 or record_type != RECORD_TYPE_TEXT:
+    if (
+        (header & ~_MESSAGE_END) != (_MESSAGE_BEGIN | _SHORT_RECORD | _TNF_WELL_KNOWN)
+        or type_length != 1
+        or record_type != RECORD_TYPE_TEXT
+    ):
         return None
     record_length = 4 + payload_length
-    if len(message) != record_length:
+    if not (header & _MESSAGE_END) or len(message) != record_length:
         return None
     payload = message[4:record_length]
     if not payload:
