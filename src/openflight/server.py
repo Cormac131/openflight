@@ -2578,6 +2578,8 @@ def handle_forget_club_tag(data):
             session_log.log_club_tag_change("forgotten", str(uid), None)
         if nfc_service is not None:
             nfc_service.forget_recent(str(uid))
+    elif nfc_service is not None:
+        nfc_service.clear_recent()
     _emit_club_tags()
 
 
@@ -2590,6 +2592,8 @@ def handle_simulate_nfc_scan(data):
         return
     payload = data if isinstance(data, dict) else {}
     uid = payload.get("uid")
+    if uid:
+        nfc_service.forget_recent(str(uid))
     try:
         reader.present_tag(
             uid or "04A1B2C3",

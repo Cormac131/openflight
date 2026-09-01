@@ -212,6 +212,16 @@ class NfcService:
                 self._last_uid = None
                 self._last_uid_at = 0.0
 
+    def clear_recent(self) -> None:
+        """Drop repeat suppression for every UID.
+
+        Needed when the registry is emptied without forgetting a specific tag,
+        for example an E2E reset after an unlearned tap.
+        """
+        with self._lock:
+            self._last_uid = None
+            self._last_uid_at = 0.0
+
     # ----------------------------------------------------------------- status
 
     def _record_error(self, error: BaseException) -> None:

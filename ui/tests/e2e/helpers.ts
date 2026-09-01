@@ -83,13 +83,16 @@ export async function clubTags(socket: Socket): Promise<ClubTag[]> {
   return tags;
 }
 
-/** Forget every learned tag, so each test starts from an empty registry. */
+/** Forget every learned tag and drop NFC repeat suppression. */
 export async function resetClubTags(socket: Socket) {
   for (const tag of await clubTags(socket)) {
     const updated = waitForEvent(socket, 'club_tags');
     socket.emit('forget_club_tag', { uid: tag.uid });
     await updated;
   }
+  const flushed = waitForEvent(socket, 'club_tags');
+  socket.emit('forget_club_tag', {});
+  await flushed;
 }
 
 /**

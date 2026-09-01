@@ -138,6 +138,17 @@ class TestRepeatSuppression:
 
         assert len(scans) == 1
 
+    def test_clear_recent_lets_an_unlearned_tag_fire_again(self, registry):
+        scans = []
+        service = _service(MockTagReader(), registry, scans, repeat_suppression_s=60.0)
+        tap(service, "04A2B1C3")
+        tap(service, "04A2B1C3")
+
+        service.clear_recent()
+        tap(service, "04A2B1C3")
+
+        assert len(scans) == 2
+
 
 class TestFailureHandling:
     def test_a_handler_exception_does_not_propagate(self, registry):

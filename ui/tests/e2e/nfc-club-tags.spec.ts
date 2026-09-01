@@ -20,10 +20,13 @@ import {
 
 // Distinct per test: the service suppresses a repeat of the same UID for three
 // seconds, so sharing one UID would make tests wait on each other.
-const IRON_TAG = '04A2B1C3';
+const ASK_TAG = '04A2B1C3';
+const LEARN_TAG = '04A2B1C4';
 const DRIVER_TAG = '04A2B1D4';
 const WEDGE_TAG = '04A2B1E5';
 const SECOND_TAG = '04A2B1F6';
+const FORGET_TAG = '04A2B1A7';
+const RELEARN_TAG = '04A2B1A8';
 
 async function dismissPicker(page: Page) {
   await page.getByRole('button', { name: 'Close Select club' }).click();
@@ -54,7 +57,7 @@ test('asks which club an unrecognized tag belongs to, showing its UID', async ({
   await gotoApp(page);
   await dismissPicker(page);
 
-  await withControlSocket((socket) => presentUnwritableTag(socket, IRON_TAG));
+  await withControlSocket((socket) => presentUnwritableTag(socket, ASK_TAG));
 
   const prompt = page.getByRole('dialog', { name: 'New club tag' });
   await expect(prompt).toBeVisible();
@@ -67,11 +70,11 @@ test('learning a tag selects that club and persists it', async ({ page }) => {
   await gotoApp(page);
   await dismissPicker(page);
 
-  await learnTag(page, IRON_TAG, 'Irons', '7i');
+  await learnTag(page, LEARN_TAG, 'Irons', '7i');
 
   await expect(page.locator('.panel-header__club', { hasText: '7 Iron' })).toBeVisible();
   const tags = await withControlSocket(clubTags);
-  expect(tags).toEqual([expect.objectContaining({ uid: IRON_TAG, club: '7-iron' })]);
+  expect(tags).toEqual([expect.objectContaining({ uid: LEARN_TAG, club: '7-iron' })]);
 });
 
 test('a learned tag survives a reload and still selects its club', async ({ page }) => {
@@ -127,7 +130,7 @@ test('a tag tap closes the club picker it just answered', async ({ page }) => {
 test('forgets a learned tag from the scan dialog, not the menu', async ({ page }) => {
   await gotoApp(page);
   await dismissPicker(page);
-  await learnTag(page, IRON_TAG, 'Irons', '7i');
+  await learnTag(page, FORGET_TAG, 'Irons', '7i');
 
   await page.getByRole('button', { name: 'Open menu' }).click();
   const menu = page.getByRole('dialog', { name: 'Menu' });
@@ -135,7 +138,7 @@ test('forgets a learned tag from the scan dialog, not the menu', async ({ page }
   await expect(menu.getByRole('button', { name: /Forget/ })).toHaveCount(0);
   await page.getByRole('button', { name: 'Close menu' }).click();
 
-  await withControlSocket((socket) => presentUnwritableTag(socket, IRON_TAG));
+  await withControlSocket((socket) => presentUnwritableTag(socket, FORGET_TAG));
   const prompt = page.getByRole('dialog', { name: 'Club tag' });
   await expect(prompt).toBeVisible();
   await prompt.getByRole('button', { name: 'Forget the tag for 7 Iron' }).click();
@@ -148,10 +151,10 @@ test('forgets a learned tag from the scan dialog, not the menu', async ({ page }
 test('a forgotten tag prompts to be learned again', async ({ page }) => {
   await gotoApp(page);
   await dismissPicker(page);
-  await learnTag(page, IRON_TAG, 'Irons', '7i');
+  await learnTag(page, RELEARN_TAG, 'Irons', '7i');
 
   await withControlSocket(resetClubTags);
-  await withControlSocket((socket) => presentUnwritableTag(socket, IRON_TAG));
+  await withControlSocket((socket) => presentUnwritableTag(socket, RELEARN_TAG));
 
   await expect(page.getByRole('dialog', { name: 'New club tag' })).toBeVisible();
 });

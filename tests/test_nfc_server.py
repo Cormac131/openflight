@@ -197,6 +197,15 @@ class TestForgetting:
 
         assert len(wired.events("nfc_tag_unknown")) == 1
 
+    def test_resetting_tags_clears_suppression_for_an_unlearned_uid(self, wired):
+        wired.tap("04A2B1C3")
+        assert len(wired.events("nfc_tag_unknown")) == 1
+
+        server_module.handle_forget_club_tag({})
+        wired.tap("04A2B1C3")
+
+        assert len(wired.events("nfc_tag_unknown")) == 2
+
 
 class TestManualSelectionStillWorks:
     def test_the_picker_path_shares_the_club_pipeline(self, wired):
