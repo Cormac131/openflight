@@ -242,6 +242,41 @@ class TestTagContentsWinOverTheRegistry:
         assert scans[0].club_id == "7-iron"
         assert scans[0].source == "tag"
 
+    def test_a_club_on_the_tag_still_selects_when_the_registry_cannot_save(
+        self, registry, monkeypatch
+    ):
+        scans = []
+        service = _service(MockTagReader(), registry, scans)
+
+        def fail(*_args, **_kwargs):
+            raise OSError("read-only filesystem")
+
+        monkeypatch.setattr(registry, "assign", fail)
+
+        scan = tap(service, "04A2B1C3", text="7-iron")
+
+        assert scan is not None
+        assert scans[0].club_id == "7-iron"
+        assert scans[0].source == "tag"
+
+    def test_a_disagreeing_tag_still_wins_when_correction_cannot_persist(
+        self, registry, monkeypatch
+    ):
+        registry.assign("04A2B1C3", "8-iron")
+        scans = []
+        service = _service(MockTagReader(), registry, scans)
+
+        def fail(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(registry, "assign", fail)
+
+        tap(service, "04A2B1C3", text="7-iron")
+
+        assert scans[0].club_id == "7-iron"
+        assert scans[0].source == "tag"
+        assert registry.club_for("04A2B1C3") == "8-iron"
+
     def test_the_registry_learns_a_club_it_had_never_seen(self, registry):
         service = _service(MockTagReader(), registry, [])
 

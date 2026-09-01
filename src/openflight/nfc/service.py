@@ -178,7 +178,15 @@ class NfcService:
                 logger.info("[NFC] Tag %s holds unrecognized text %r", uid, tag.text)
             else:
                 if self.registry.club_for(uid) != club_id:
-                    self.registry.assign(uid, club_id)
+                    try:
+                        self.registry.assign(uid, club_id)
+                    except OSError as error:
+                        logger.warning(
+                            "[NFC] Could not persist tag %s -> %s from the tag record: %s",
+                            uid,
+                            club_id,
+                            error,
+                        )
                 else:
                     self.registry.touch(uid)
                 return club_id, "tag"
