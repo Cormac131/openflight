@@ -25,6 +25,7 @@ const LEARN_TAG = '04A2B1C4';
 const DRIVER_TAG = '04A2B1D4';
 const WEDGE_TAG = '04A2B1E5';
 const SECOND_TAG = '04A2B1F6';
+const CHANGE_TAG = '04A2B1B9';
 const FORGET_TAG = '04A2B1A7';
 const RELEARN_TAG = '04A2B1A8';
 
@@ -89,9 +90,10 @@ test('a learned tag survives a reload and still selects its club', async ({ page
 
   await withControlSocket((socket) => presentUnwritableTag(socket, DRIVER_TAG));
 
-  const prompt = page.getByRole('dialog', { name: 'Club tag' });
-  await expect(prompt).toBeVisible();
-  await expect(prompt.getByRole('button', { name: 'Forget the tag for 9 Iron' })).toBeVisible();
+  const toast = page.getByRole('status');
+  await expect(toast).toBeVisible();
+  await expect(toast).toContainText('9 Iron');
+  await expect(page.getByRole('dialog', { name: 'Club tag' })).toHaveCount(0);
   await expect(page.locator('.panel-header__club', { hasText: '9 Iron' })).toBeVisible();
 });
 
@@ -107,9 +109,29 @@ test('shows a large confirmation naming the club, then clears it', async ({ page
   await expect(toast).toBeVisible();
   await expect(toast).toContainText('Club selected');
   await expect(toast).toContainText('Pitching Wedge');
-  // Informational only: it must never intercept a tap while it fades.
+  await expect(toast.getByRole('button', { name: 'Change the tag for Pitching Wedge' })).toBeVisible();
+  // Backdrop stays click-through; only the card/button intercept taps.
   await expect(toast).toHaveCSS('pointer-events', 'none');
   await expect(toast).toBeHidden({ timeout: 5000 });
+});
+
+test('Change tag on the confirmation opens the update dialog', async ({ page }) => {
+  await gotoApp(page);
+  await dismissPicker(page);
+  await learnTag(page, CHANGE_TAG, 'Woods', '3W');
+  await withControlSocket((socket) => setClub(socket, 'driver'));
+
+  await withControlSocket((socket) => presentUnwritableTag(socket, CHANGE_TAG));
+
+  const toast = page.getByRole('status');
+  await expect(toast).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Club tag' })).toHaveCount(0);
+  await toast.getByRole('button', { name: 'Change the tag for 3 Wood' }).click();
+
+  const prompt = page.getByRole('dialog', { name: 'Club tag' });
+  await expect(prompt).toBeVisible();
+  await expect(toast).toHaveCount(0);
+  await expect(prompt.getByRole('button', { name: 'Forget the tag for 3 Wood' })).toBeVisible();
 });
 
 test('a tag tap closes the club picker it just answered', async ({ page }) => {
@@ -139,6 +161,10 @@ test('forgets a learned tag from the scan dialog, not the menu', async ({ page }
   await page.getByRole('button', { name: 'Close menu' }).click();
 
   await withControlSocket((socket) => presentUnwritableTag(socket, FORGET_TAG));
+  const toast = page.getByRole('status');
+  await expect(toast).toBeVisible();
+  await toast.getByRole('button', { name: 'Change the tag for 7 Iron' }).click();
+
   const prompt = page.getByRole('dialog', { name: 'Club tag' });
   await expect(prompt).toBeVisible();
   await prompt.getByRole('button', { name: 'Forget the tag for 7 Iron' }).click();

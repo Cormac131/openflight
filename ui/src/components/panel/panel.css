@@ -1443,7 +1443,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  /* Never intercept a tap: this is a confirmation, not a dialog. */
+  /* Backdrop stays click-through; the card below re-enables events for Change tag. */
   pointer-events: none;
   /* Dim the panel behind so the club reads at a glance from the mat. */
   background: color-mix(in srgb, var(--color-bg) 62%, transparent);
@@ -1451,6 +1451,7 @@
 }
 
 .club-toast__card {
+  pointer-events: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1484,6 +1485,22 @@
   font-size: clamp(2.5rem, 12vh, 5.5rem);
   line-height: 1;
   color: var(--color-accent-fg);
+}
+
+.club-toast__change {
+  margin-top: 0.75rem;
+  min-height: 44px;
+  padding: 0 1.25rem;
+  border: 2px solid color-mix(in srgb, var(--color-accent-fg) 72%, transparent);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-accent-fg);
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
 }
 
 @keyframes club-toast-in {

@@ -175,6 +175,8 @@ export const fr: Messages = {
   'app.simulateShot': 'Simuler un coup',
   'menu.clubTags': 'Étiquettes de clubs',
   'nfc.clubSelected': 'Club sélectionné',
+  'nfc.changeTag': 'Changer l’étiquette',
+  'nfc.changeTagFor': 'Changer l’étiquette de {club}',
   'nfc.newTagTitle': 'Nouvelle étiquette de club',
   'nfc.tagTitle': 'Étiquette de club',
   'nfc.newTagSubtitle': 'Étiquette {uid} : choisissez son club',

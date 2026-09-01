@@ -175,6 +175,8 @@ export const es: Messages = {
   'app.simulateShot': 'Simular golpe',
   'menu.clubTags': 'Etiquetas de palos',
   'nfc.clubSelected': 'Palo seleccionado',
+  'nfc.changeTag': 'Cambiar etiqueta',
+  'nfc.changeTagFor': 'Cambiar la etiqueta de {club}',
   'nfc.newTagTitle': 'Nueva etiqueta de palo',
   'nfc.tagTitle': 'Etiqueta de palo',
   'nfc.newTagSubtitle': 'Etiqueta {uid}: elige su palo',

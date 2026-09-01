@@ -265,6 +265,13 @@ function AppContent() {
     socketService.forgetClubTag(pendingTag.uid);
   };
 
+  const handleChangeTag = () => {
+    const scan = useNfcStore.getState().lastScan;
+    if (!scan?.known) return;
+    setClubToastVisible(false);
+    useNfcStore.getState().setPendingTag(scan);
+  };
+
   const handleShutdown = async () => {
     setShutdownState('pending');
     try {
@@ -479,7 +486,9 @@ function AppContent() {
         />
       ) : null}
 
-      {clubToastVisible && announcedClub ? <ClubChangeToast clubId={announcedClub} /> : null}
+      {clubToastVisible && announcedClub && !pendingTag ? (
+        <ClubChangeToast clubId={announcedClub} onChangeTag={handleChangeTag} />
+      ) : null}
 
       {pendingTag ? (
         <ClubTagPrompt

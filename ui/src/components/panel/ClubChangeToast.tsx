@@ -3,23 +3,32 @@ import { getClubName } from '../../data/clubs';
 
 interface ClubChangeToastProps {
   clubId: string;
+  onChangeTag: () => void;
 }
 
 /**
- * Big glanceable confirmation that a tapped club tag changed the selection.
+ * Glanceable confirmation that a tapped club tag changed the selection.
  *
- * Deliberately non-interactive: the player is standing at the mat holding a
- * club, and an overlay that could swallow a tap for two seconds is worse than
- * no overlay. It carries `pointer-events: none` and fades out on its own.
+ * The dimmed backdrop does not intercept taps. The card does, so Change tag
+ * can open the editor without blocking the rest of the kiosk while it fades.
  */
-export function ClubChangeToast({ clubId }: ClubChangeToastProps) {
+export function ClubChangeToast({ clubId, onChangeTag }: ClubChangeToastProps) {
   const { t } = useI18n();
+  const clubName = getClubName(clubId);
 
   return (
     <div className="club-toast" role="status" aria-live="polite">
       <div className="club-toast__card">
         <span className="club-toast__label">{t('nfc.clubSelected')}</span>
-        <span className="club-toast__club">{getClubName(clubId)}</span>
+        <span className="club-toast__club">{clubName}</span>
+        <button
+          type="button"
+          className="club-toast__change"
+          aria-label={t('nfc.changeTagFor', { club: clubName })}
+          onClick={onChangeTag}
+        >
+          {t('nfc.changeTag')}
+        </button>
       </div>
     </div>
   );

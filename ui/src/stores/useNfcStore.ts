@@ -20,9 +20,10 @@ interface NfcState {
   assignError: string | null;
   /**
    * Bumped every time a *known* tag selects a club. App watches this to close
-   * the club picker and to raise the confirmation toast. A plain club change
-   * must do neither -- the picker opens deliberately on startup and would
-   * otherwise vanish on the connect snapshot.
+   * the club picker and to raise the confirmation toast. The tag-edit overlay
+   * stays closed until the player asks for it from that toast. A plain club
+   * change must do neither -- the picker opens deliberately on startup and
+   * would otherwise vanish on the connect snapshot.
    */
   clubScanVersion: number;
   /** Club the last tag tap selected, shown by the confirmation toast. */
@@ -83,7 +84,7 @@ export const useNfcStore = create<NfcState>((set) => ({
       assignError: null,
       clubScanVersion: scan.known ? state.clubScanVersion + 1 : state.clubScanVersion,
       announcedClub: scan.known ? scan.club : state.announcedClub,
-      pendingTag: scan.known ? scan : state.pendingTag,
+      pendingTag: scan.known ? null : state.pendingTag,
     })),
   setPendingTag: (scan) =>
     set({

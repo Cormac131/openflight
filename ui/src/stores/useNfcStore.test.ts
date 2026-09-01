@@ -80,12 +80,13 @@ describe('useNfcStore', () => {
     expect(useNfcStore.getState().clubScanVersion).toBe(1);
   });
 
-  it('opens the scanned known tag on the prompt so it can be forgotten', () => {
+  it('does not open the tag prompt for a known tag', () => {
     useNfcStore.getState().setPendingTag(scan());
 
     useNfcStore.getState().recordScan(scan({ uid: '04A2B1C4', club: 'driver', known: true }));
 
-    expect(useNfcStore.getState().pendingTag).toEqual(
+    expect(useNfcStore.getState().pendingTag).toBeNull();
+    expect(useNfcStore.getState().lastScan).toEqual(
       expect.objectContaining({ uid: '04A2B1C4', club: 'driver', known: true })
     );
   });

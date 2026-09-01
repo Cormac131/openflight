@@ -173,6 +173,8 @@ export const en = {
   'app.simulateShot': 'Simulate shot',
   'menu.clubTags': 'Club tags',
   'nfc.clubSelected': 'Club selected',
+  'nfc.changeTag': 'Change tag',
+  'nfc.changeTagFor': 'Change the tag for {club}',
   'nfc.newTagTitle': 'New club tag',
   'nfc.tagTitle': 'Club tag',
   'nfc.newTagSubtitle': 'Tag {uid} — pick its club',
