@@ -10,10 +10,6 @@ class NfcReaderError(RuntimeError):
     """Raised when the reader cannot be reached or answers incorrectly."""
 
 
-class TagWriteError(NfcReaderError):
-    """Raised when a tag could not be written, with a reason fit for the UI."""
-
-
 @dataclass(frozen=True)
 class TagRead:
     """One tag as found on the antenna: who it is, and what it carries."""
@@ -27,7 +23,7 @@ class TagRead:
     """True when the tag's user memory has never been written."""
 
     writable: bool = False
-    """True for a tag this reader knows how to write (NFC Forum Type 2)."""
+    """True for an NFC Forum Type 2 tag whose NDEF memory could be read."""
 
     @property
     def foreign(self) -> bool:
@@ -52,15 +48,6 @@ class TagReader(Protocol):  # pylint: disable=unnecessary-ellipsis
 
     def read_tag(self, timeout_s: float) -> Optional[TagRead]:
         """Return the tag in the field, or None if none appeared."""
-        ...  # pylint: disable=unnecessary-ellipsis
-
-    def write_text(self, uid: str, text: str, timeout_s: float) -> None:
-        """Write text to the tag with this UID, raising TagWriteError if not.
-
-        Takes the UID rather than writing to whatever is on the antenna: the
-        player confirms the club seconds after the tag was read, and by then a
-        different club may be resting on the reader.
-        """
         ...  # pylint: disable=unnecessary-ellipsis
 
     def close(self) -> None:

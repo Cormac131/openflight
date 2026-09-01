@@ -66,17 +66,12 @@ class TagScan:
     """True when the tag's user memory has never been written."""
 
     writable: bool = False
-    """True when this reader can write the club onto the tag."""
+    """True when the tag's NDEF memory could be read (NFC Forum Type 2)."""
 
     @property
     def known(self) -> bool:
         """True when the tag already maps to a club."""
         return self.club_id is not None
-
-    @property
-    def needs_write(self) -> bool:
-        """True when this is an unclaimed tag the rig could write a club onto."""
-        return not self.known and self.blank and self.writable
 
     def to_dict(self) -> dict:
         """Serialize for WebSocket emission and session logging."""

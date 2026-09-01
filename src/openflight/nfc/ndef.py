@@ -1,8 +1,8 @@
 """NDEF encoding for club tags, scoped to a single UTF-8 text record.
 
-OpenFlight stores the club id on the tag as a plain NDEF text record, so any
-phone NFC app can read *and* write a club tag: a bag can be tagged from the
-sofa, and a tag that misbehaves on the rig can be inspected without it.
+OpenFlight reads the club id from a plain NDEF text record when one is present,
+so a bag tagged from a phone NFC app still selects the right club. The rig
+never writes tags; learning is always a UID mapping stored on disk.
 
 Only what that needs is implemented. Short records, one record per message, no
 chunking, no ID field -- a club id is a dozen bytes and will never approach the

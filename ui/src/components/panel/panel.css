@@ -1263,6 +1263,16 @@
   color: var(--color-text);
 }
 
+.menu-sheet__status-value--warn {
+  color: var(--color-danger);
+}
+
+.menu-sheet__nfc-error {
+  font-size: 0.625rem;
+  color: var(--color-text-muted);
+  word-break: break-word;
+}
+
 .menu-sheet__shutdown {
   min-height: 44px;
   border: 1px solid var(--color-danger-border);

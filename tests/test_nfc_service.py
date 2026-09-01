@@ -6,7 +6,7 @@ import time
 import pytest
 
 from openflight.nfc import ClubTagRegistry, MockTagReader, NfcService, TagRead
-from openflight.nfc.reader import NfcReaderError, TagWriteError
+from openflight.nfc.reader import NfcReaderError
 
 
 class ScriptedReader:
@@ -31,9 +31,6 @@ class ScriptedReader:
         if isinstance(result, Exception):
             raise result
         return TagRead(uid=result) if isinstance(result, str) else result
-
-    def write_text(self, uid, text, timeout_s=3.0):
-        raise TagWriteError("scripted reader cannot write")
 
     def close(self):
         self.closes += 1
@@ -280,121 +277,3 @@ class TestTagContentsWinOverTheRegistry:
         tap(service, "04A2B1C3")
 
         assert scans[0].source == "registry"
-
-
-class TestBlankTags:
-    def test_a_blank_writable_tag_asks_to_be_written(self, registry):
-        scans = []
-        service = _service(MockTagReader(), registry, scans)
-
-        tap(service, "04A2B1C3", blank=True, writable=True)
-
-        assert scans[0].needs_write is True
-        assert scans[0].known is False
-
-    def test_a_blank_tag_this_reader_cannot_write_does_not(self, registry):
-        scans = []
-        service = _service(MockTagReader(), registry, scans)
-
-        tap(service, "04A2B1C3", blank=True, writable=False)
-
-        assert scans[0].needs_write is False
-
-    def test_a_tag_holding_someone_elses_data_is_not_offered_for_writing(self, registry):
-        scans = []
-        service = _service(MockTagReader(), registry, scans)
-
-        # Not blank and not ours: overwriting it is not this flow's decision.
-        tap(service, "04A2B1C3", text="https://example.com", writable=True)
-
-        assert scans[0].needs_write is False
-        assert scans[0].known is False
-
-    def test_a_learned_tag_is_never_offered_for_writing(self, registry):
-        registry.assign("04A2B1C3", "driver")
-        scans = []
-        service = _service(MockTagReader(), registry, scans)
-
-        tap(service, "04A2B1C3", blank=True, writable=True)
-
-        assert scans[0].needs_write is False
-
-
-class TestWritingAClubToATag:
-    def test_writing_puts_the_club_on_the_tag_and_in_the_registry(self, registry):
-        reader = MockTagReader()
-        service = _service(reader, registry, [])
-        reader.present_tag("04A2B1C3")
-        reader.read_tag(0.1)
-
-        service.write_club_tag("04:a2:b1:c3", "7-iron")
-
-        assert registry.club_for("04A2B1C3") == "7-iron"
-        reader.present_tag("04A2B1C3")
-        assert reader.read_tag(0.1).text == "7-iron"
-
-    def test_the_written_tag_then_resolves_from_the_tag_itself(self, registry):
-        reader = MockTagReader()
-        scans = []
-        service = _service(reader, registry, scans)
-        reader.present_tag("04A2B1C3")
-        reader.read_tag(0.1)
-        service.write_club_tag("04A2B1C3", "5-iron")
-
-        reader.present_tag("04A2B1C3")
-        service.handle_tag(reader.read_tag(0.1))
-
-        assert scans[-1].source == "tag"
-        assert scans[-1].club_id == "5-iron"
-
-    def test_a_failed_write_leaves_the_registry_untouched(self, registry):
-        reader = MockTagReader()
-        service = _service(reader, registry, [])
-        reader.present_tag("04A2B1C3")
-        reader.read_tag(0.1)
-        reader.set_write_failure("Tag not on the reader")
-
-        with pytest.raises(TagWriteError):
-            service.write_club_tag("04A2B1C3", "7-iron")
-
-        assert len(registry) == 0
-
-    def test_an_unknown_club_is_refused_before_touching_the_tag(self, registry):
-        reader = MockTagReader()
-        service = _service(reader, registry, [])
-        reader.present_tag("04A2B1C3")
-        reader.read_tag(0.1)
-
-        with pytest.raises(ValueError):
-            service.write_club_tag("04A2B1C3", "spoon")
-
-        reader.present_tag("04A2B1C3")
-        assert reader.read_tag(0.1).text is None
-
-    def test_writing_clears_suppression_so_a_confirming_tap_registers(self, registry):
-        reader = MockTagReader()
-        scans = []
-        service = _service(reader, registry, scans, repeat_suppression_s=60.0)
-        reader.present_tag("04A2B1C3")
-        service.handle_tag(reader.read_tag(0.1))
-
-        service.write_club_tag("04A2B1C3", "9-iron")
-        reader.present_tag("04A2B1C3")
-        service.handle_tag(reader.read_tag(0.1))
-
-        assert [scan.club_id for scan in scans] == [None, "9-iron"]
-
-    def test_a_write_does_not_run_while_the_poll_thread_holds_the_reader(self, registry):
-        """The reader is one I2C device; interleaved frames corrupt each other."""
-        reader = MockTagReader()
-        service = _service(reader, registry, [], poll_interval_s=0.0, read_timeout_s=0.05)
-        reader.present_tag("04A2B1C3")
-
-        service.start()
-        try:
-            # Completes without raising: the write waits for the poll to release.
-            service.write_club_tag("04A2B1C3", "3-wood")
-        finally:
-            service.stop()
-
-        assert registry.club_for("04A2B1C3") == "3-wood"

@@ -24,7 +24,6 @@ import {
   ClearSessionDialog,
   ClubChangeToast,
   ClubTagPrompt,
-  ClubTagWriteFlow,
   SimulateBubble,
   MenuSheet,
   PanelFooter,
@@ -94,26 +93,12 @@ function AppContent() {
     clubScanVersion,
     announcedClub,
     clearPendingTag,
-    blankTag,
-    writeStage,
-    writeClub,
-    writeError,
-    chooseWriteClub,
-    beginWrite,
-    cancelWrite,
   } = useNfcStore(
     useShallow((state) => ({
       pendingTag: state.pendingTag,
       clubScanVersion: state.clubScanVersion,
       announcedClub: state.announcedClub,
       clearPendingTag: state.clearPendingTag,
-      blankTag: state.blankTag,
-      writeStage: state.writeStage,
-      writeClub: state.writeClub,
-      writeError: state.writeError,
-      chooseWriteClub: state.chooseWriteClub,
-      beginWrite: state.beginWrite,
-      cancelWrite: state.cancelWrite,
     }))
   );
   const { heroMetricId, setHeroMetricId } = useHeroMetricStore(
@@ -271,12 +256,6 @@ function AppContent() {
     // switches even if the assignment is rejected downstream and retried.
     setSelectedClub(clubId);
     clearPendingTag();
-  };
-
-  const handleConfirmWrite = () => {
-    if (!blankTag || !writeClub) return;
-    beginWrite();
-    socketService.writeClubTag(blankTag.uid, writeClub);
   };
 
   const handleShutdown = async () => {
@@ -495,23 +474,11 @@ function AppContent() {
 
       {clubToastVisible && announcedClub ? <ClubChangeToast clubId={announcedClub} /> : null}
 
-      {blankTag ? (
-        <ClubTagWriteFlow
-          scan={blankTag}
-          stage={writeStage}
-          club={writeClub}
-          error={writeError}
-          onChoose={chooseWriteClub}
-          onConfirm={handleConfirmWrite}
-          onCancel={cancelWrite}
-        />
-      ) : null}
-
-      {pendingTag && !blankTag ? (
+      {pendingTag ? (
         <ClubTagPrompt scan={pendingTag} onAssign={handleLearnTag} onDismiss={clearPendingTag} />
       ) : null}
 
-      {pickerOpen && !pendingTag && !blankTag ? (
+      {pickerOpen && !pendingTag ? (
         <PickerOverlay
           title={isSwingSpeedMode ? t('app.selectImplement') : t('app.selectClub')}
           selectedId={isSwingSpeedMode ? selectedTrainingImplement : selectedClub}

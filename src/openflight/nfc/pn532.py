@@ -19,7 +19,7 @@ from typing import Optional, Protocol
 
 from . import ndef
 from .models import normalize_uid
-from .reader import NfcReaderError, TagRead, TagWriteError
+from .reader import NfcReaderError, TagRead
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,6 @@ COMMAND_IN_DATA_EXCHANGE = 0x40
 
 # NFC Forum Type 2 (MIFARE Ultralight / NTAG) commands and layout.
 TYPE2_READ = 0x30
-TYPE2_WRITE = 0xA2
 TYPE2_SAK = 0x00
 TYPE2_PAGE_BYTES = 4
 TYPE2_READ_BYTES = 16
@@ -364,7 +363,7 @@ def parse_passive_target(payload: bytes) -> Optional[tuple[str, int]]:
 
     ``payload`` starts at the target count. A count of zero is the normal
     "nothing on the antenna" answer, not an error. The SAK (SEL_RES) is what
-    separates a writable Type 2 tag from a MIFARE Classic card.
+    separates an NFC Forum Type 2 tag from a MIFARE Classic card.
     """
     if not payload:
         raise PN532FrameError("InListPassiveTarget response is empty")
@@ -429,9 +428,7 @@ class PN532I2C:
                     irq_gpio=self.irq_gpio,
                 )
             else:
-                self._transport = SMBusTransport(
-                    bus_number=self.bus_number, address=self.address
-                )
+                self._transport = SMBusTransport(bus_number=self.bus_number, address=self.address)
             wakeup = getattr(self._transport, "wakeup", None)
             if wakeup is not None:
                 wakeup()
@@ -502,38 +499,6 @@ class PN532I2C:
             return TagRead(uid=uid, writable=False)
         content = ndef.read_tag_content(memory)
         return TagRead(uid=uid, text=content.text, blank=content.blank, writable=True)
-
-    def write_text(self, uid: str, text: str, timeout_s: float = 3.0) -> None:
-        """Write one NDEF text record to the tag with this UID.
-
-        Polls until that exact tag is on the antenna, writes, then reads back to
-        confirm. A write that cannot be verified is reported as a failure: a
-        half-written tag that silently "succeeds" would send the wrong club.
-        """
-        expected = normalize_uid(uid)
-        payload = ndef.wrap_tlv(ndef.encode_text_record(text))
-        deadline = time.monotonic() + timeout_s
-        while True:
-            target = self._poll(min(0.5, max(timeout_s, 0.1)))
-            if target is not None and target[0] == expected:
-                if target[1] != TYPE2_SAK:
-                    raise TagWriteError("This tag type cannot be written")
-                break
-            if time.monotonic() >= deadline:
-                raise TagWriteError("Tag not on the reader")
-
-        pages = [
-            payload[index : index + TYPE2_PAGE_BYTES].ljust(TYPE2_PAGE_BYTES, b"\x00")
-            for index in range(0, len(payload), TYPE2_PAGE_BYTES)
-        ]
-        for offset, page in enumerate(pages):
-            try:
-                self._exchange(bytes([TYPE2_WRITE, FIRST_DATA_PAGE + offset]) + page)
-            except NfcReaderError as error:
-                raise TagWriteError(f"Write failed at page {FIRST_DATA_PAGE + offset}") from error
-
-        if ndef.read_tag_content(self._read_user_memory()).text != text:
-            raise TagWriteError("Tag did not read back what was written")
 
     # --------------------------------------------------------------- private
 
@@ -626,11 +591,7 @@ class PN532I2C:
             if time.monotonic() >= deadline:
                 if self.interface == "spi":
                     status = getattr(self._transport, "_last_spi_status", None)
-                    status_note = (
-                        f" SPI status last 0x{status:02x}."
-                        if status is not None
-                        else ""
-                    )
+                    status_note = f" SPI status last 0x{status:02x}." if status is not None else ""
                     raise NfcReaderError(
                         "PN532 did not acknowledge the command."
                         f"{status_note} "

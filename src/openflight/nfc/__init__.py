@@ -12,7 +12,7 @@ from .pn532 import (
     DEFAULT_SPI_DEVICE,
     PN532I2C,
 )
-from .reader import NfcReaderError, TagRead, TagReader, TagWriteError
+from .reader import NfcReaderError, TagRead, TagReader
 from .registry import DEFAULT_REGISTRY_PATH, ClubTagRegistry, UnknownClubError, validate_club_id
 from .service import NfcService
 
@@ -35,7 +35,6 @@ __all__ = [
     "TagReader",
     "TagRead",
     "TagScan",
-    "TagWriteError",
     "UnknownClubError",
     "format_uid",
     "normalize_uid",

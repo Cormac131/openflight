@@ -54,3 +54,44 @@ describe('MenuSheet battery', () => {
     useSystemStore.setState({ powerStatus: null });
   });
 });
+
+describe('MenuSheet club tags', () => {
+  it('hides club tags unless NFC was requested', () => {
+    const html = renderToString(
+      <MenuSheet
+        onClose={() => {}}
+        onShutdown={() => {}}
+        nfc={{ requested: false, error: null, tags: [] }}
+      />
+    );
+
+    expect(html).not.toContain('Club tags');
+  });
+
+  it('lists learned tags and the reader error when the PN532 failed to start', () => {
+    const html = renderToString(
+      <MenuSheet
+        onClose={() => {}}
+        onShutdown={() => {}}
+        nfc={{
+          requested: true,
+          error: 'PN532 not found',
+          tags: [
+            {
+              uid: '04A2B1C3',
+              uid_display: '04:A2:B1:C3',
+              club: '7-iron',
+              learned_at: '2026-01-01T00:00:00+00:00',
+              last_seen_at: null,
+            },
+          ],
+        }}
+      />
+    );
+
+    expect(html).toContain('Club tags');
+    expect(html).toContain('Not connected');
+    expect(html).toContain('PN532 not found');
+    expect(html).toContain('04:A2:B1:C3');
+  });
+});

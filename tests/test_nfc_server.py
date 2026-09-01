@@ -221,15 +221,14 @@ class TestMockScanEndpoint:
     def test_simulating_a_scan_drives_the_reader(self, wired):
         wired.service.start()
         try:
-            # A simulated tag is blank and writable unless told otherwise.
             server_module.handle_simulate_nfc_scan({"uid": "04A2B1C3"})
             deadline = time.monotonic() + 3.0
-            while not wired.events("nfc_tag_blank") and time.monotonic() < deadline:
+            while not wired.events("nfc_tag_unknown") and time.monotonic() < deadline:
                 time.sleep(0.01)
         finally:
             wired.service.stop()
 
-        assert len(wired.events("nfc_tag_blank")) == 1
+        assert len(wired.events("nfc_tag_unknown")) == 1
 
     def test_a_simulated_tag_can_carry_a_club_and_be_unwritable(self, wired):
         wired.service.start()
@@ -275,9 +274,6 @@ class TestInitNfcReaderChoice:
             def read_tag(self, timeout_s=0.5):
                 return None
 
-            def write_text(self, uid, text, timeout_s=3.0):
-                return None
-
         monkeypatch.setattr("openflight.nfc.PN532I2C", FakePn532)
 
     def _cleanup(self):
@@ -302,6 +298,61 @@ class TestInitNfcReaderChoice:
         try:
             assert server_module.init_nfc(tags_path=str(tmp_path / "club_tags.json"))
             assert server_module.nfc_service.reader.name == "mock"
+        finally:
+            self._cleanup()
+
+    def test_a_reader_failure_still_loads_learned_tags(self, tmp_path, monkeypatch):
+        tags_path = tmp_path / "club_tags.json"
+        ClubTagRegistry(tags_path).assign("04A2B1C3", "7-iron")
+
+        class BrokenPn532:
+            name = "pn532"
+
+            def __init__(self, **_kwargs):
+                raise OSError("PN532 not found")
+
+        monkeypatch.setattr("openflight.nfc.PN532I2C", BrokenPn532)
+        monkeypatch.delenv("OPENFLIGHT_NFC_MOCK", raising=False)
+        monkeypatch.setattr(server_module, "log_session_error", lambda *_args, **_kwargs: None)
+        try:
+            assert server_module.init_nfc(tags_path=str(tags_path)) is False
+            assert server_module.nfc_service is None
+            assert server_module.club_tag_registry.club_for("04A2B1C3") == "7-iron"
+            assert server_module.nfc_runtime_config["requested"] is True
+            assert server_module.nfc_runtime_config["enabled"] is False
+            assert server_module.nfc_runtime_config["error"] == "PN532 not found"
+        finally:
+            self._cleanup()
+
+    def test_club_tags_broadcast_keeps_requested_separate_from_the_reader(
+        self, tmp_path, monkeypatch
+    ):
+        tags_path = tmp_path / "club_tags.json"
+        ClubTagRegistry(tags_path).assign("04A2B1C3", "7-iron")
+
+        class BrokenPn532:
+            name = "pn532"
+
+            def __init__(self, **_kwargs):
+                raise OSError("PN532 not found")
+
+        emitted = []
+        monkeypatch.setattr("openflight.nfc.PN532I2C", BrokenPn532)
+        monkeypatch.delenv("OPENFLIGHT_NFC_MOCK", raising=False)
+        monkeypatch.setattr(server_module, "log_session_error", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload=None: emitted.append((event, payload)),
+        )
+        try:
+            server_module.init_nfc(tags_path=str(tags_path))
+            server_module._emit_club_tags()
+            payload = [body for event, body in emitted if event == "club_tags"][-1]
+            assert payload["requested"] is True
+            assert payload["enabled"] is False
+            assert payload["error"] == "PN532 not found"
+            assert payload["tags"][0]["club"] == "7-iron"
         finally:
             self._cleanup()
 
@@ -331,102 +382,20 @@ class TestRuntimeConfig:
         }
 
 
-class TestBlankTagRouting:
-    def test_a_blank_writable_tag_offers_the_write_flow(self, wired):
+class TestUnknownTagRouting:
+    def test_a_blank_tag_uses_the_learn_prompt(self, wired):
         wired.tap("04A2B1C3", blank=True, writable=True)
 
-        blanks = wired.events("nfc_tag_blank")
-        assert len(blanks) == 1
-        assert blanks[0]["writable"] is True
-        assert wired.events("nfc_tag_unknown") == []
-
-    def test_a_blank_tag_the_reader_cannot_write_uses_the_learn_prompt(self, wired):
-        wired.tap("04A2B1C3", blank=True, writable=False)
-
-        assert wired.events("nfc_tag_blank") == []
         assert len(wired.events("nfc_tag_unknown")) == 1
+        assert wired.events("nfc_tag_unknown")[0]["uid"] == "04A2B1C3"
 
     def test_a_tag_holding_other_data_uses_the_learn_prompt(self, wired):
-        # Overwriting somebody else's tag is not this flow's call to make.
         wired.tap("04A2B1C3", text="https://example.com", writable=True)
 
-        assert wired.events("nfc_tag_blank") == []
         assert len(wired.events("nfc_tag_unknown")) == 1
 
     def test_a_tag_that_already_carries_a_club_selects_it(self, wired):
         wired.tap("04A2B1C3", text="7-iron", writable=True)
 
         assert wired.monitor.clubs == [ClubType.IRON_7]
-        assert wired.events("nfc_tag_blank") == []
-
-
-class TestWritingAClubToATag:
-    def _present(self, wired, uid="04A2B1C3"):
-        wired.reader.present_tag(uid)
-        wired.service.handle_tag(wired.reader.read_tag(0.1))
-
-    def test_writing_puts_the_club_on_the_tag_and_selects_it(self, wired):
-        self._present(wired)
-
-        server_module.handle_write_club_tag({"uid": "04A2B1C3", "club": "7-iron"})
-
-        assert wired.events("club_tag_write") == [
-            {"state": "written", "uid": "04A2B1C3", "club": "7-iron"}
-        ]
-        assert wired.monitor.clubs == [ClubType.IRON_7]
-
-    def test_the_written_club_is_mirrored_into_the_registry(self, wired):
-        self._present(wired)
-
-        server_module.handle_write_club_tag({"uid": "04A2B1C3", "club": "gw"})
-
-        assert ClubTagRegistry(wired.registry.path).club_for("04A2B1C3") == "gw"
-        assert wired.events("club_tags")[-1]["tags"][0]["club"] == "gw"
-
-    def test_the_next_tap_reads_the_club_off_the_tag_itself(self, wired):
-        self._present(wired)
-        server_module.handle_write_club_tag({"uid": "04A2B1C3", "club": "5-iron"})
-
-        wired.reader.present_tag("04A2B1C3")
-        wired.service.handle_tag(wired.reader.read_tag(0.1))
-
-        assert wired.events("nfc_scan")[-1]["source"] == "tag"
-
-    def test_a_tag_lifted_off_the_reader_reports_a_useful_failure(self, wired):
-        self._present(wired)
-        wired.reader.set_write_failure("Tag not on the reader")
-
-        server_module.handle_write_club_tag({"uid": "04A2B1C3", "club": "7-iron"})
-
-        assert wired.events("club_tag_write") == [
-            {"state": "failed", "uid": "04A2B1C3", "error": "Tag not on the reader"}
-        ]
-
-    def test_a_failed_write_changes_nothing(self, wired):
-        self._present(wired)
-        wired.reader.set_write_failure("Write failed at page 4")
-
-        server_module.handle_write_club_tag({"uid": "04A2B1C3", "club": "7-iron"})
-
-        assert len(wired.registry) == 0
-        assert wired.monitor.clubs == []
-
-    def test_an_unknown_club_is_refused(self, wired):
-        self._present(wired)
-
-        server_module.handle_write_club_tag({"uid": "04A2B1C3", "club": "spoon"})
-
-        assert wired.events("club_tag_write")[0]["state"] == "failed"
-        assert len(wired.registry) == 0
-
-    def test_an_unusable_uid_is_refused(self, wired):
-        server_module.handle_write_club_tag({"uid": "nope", "club": "driver"})
-
-        assert wired.events("club_tag_write")[0]["state"] == "failed"
-
-    def test_writing_without_a_reader_is_reported(self, wired, monkeypatch):
-        monkeypatch.setattr(server_module, "nfc_service", None)
-
-        server_module.handle_write_club_tag({"uid": "04A2B1C3", "club": "driver"})
-
-        assert wired.events("club_tag_write")[0]["state"] == "failed"
+        assert wired.events("nfc_tag_unknown") == []

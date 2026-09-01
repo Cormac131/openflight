@@ -28,23 +28,37 @@ describe('useNfcStore', () => {
   beforeEach(() => {
     useNfcStore.setState({
       enabled: false,
+      requested: false,
+      error: null,
       tags: [],
       lastScan: null,
       pendingTag: null,
-      blankTag: null,
-      writeStage: 'select',
-      writeClub: null,
-      writeError: null,
       clubScanVersion: 0,
       announcedClub: null,
     });
   });
 
-  it('stores the learned tag list and whether a reader is configured', () => {
-    useNfcStore.getState().setClubTags([tag], true);
+  it('stores the learned tag list and whether a reader is running', () => {
+    useNfcStore.getState().setClubTags({ tags: [tag], enabled: true, requested: true });
 
     expect(useNfcStore.getState().tags).toEqual([tag]);
     expect(useNfcStore.getState().enabled).toBe(true);
+    expect(useNfcStore.getState().requested).toBe(true);
+    expect(useNfcStore.getState().error).toBeNull();
+  });
+
+  it('keeps requested tags when the reader failed to start', () => {
+    useNfcStore.getState().setClubTags({
+      tags: [tag],
+      enabled: false,
+      requested: true,
+      error: 'PN532 not found',
+    });
+
+    expect(useNfcStore.getState().tags).toEqual([tag]);
+    expect(useNfcStore.getState().enabled).toBe(false);
+    expect(useNfcStore.getState().requested).toBe(true);
+    expect(useNfcStore.getState().error).toBe('PN532 not found');
   });
 
   it('queues an unknown tag for the learn prompt', () => {
@@ -114,97 +128,5 @@ describe('useNfcStore', () => {
     useNfcStore.getState().recordScan(scan({ club: 'pw', known: true }));
 
     expect(useNfcStore.getState().clubScanVersion).toBe(2);
-  });
-
-  describe('the blank-tag write flow', () => {
-    const blank = scan({ blank: true, writable: true });
-
-    it('starts on club selection with nothing chosen', () => {
-      useNfcStore.getState().setBlankTag(blank);
-
-      expect(useNfcStore.getState().blankTag?.uid).toBe('04A2B1C3');
-      expect(useNfcStore.getState().writeStage).toBe('select');
-      expect(useNfcStore.getState().writeClub).toBeNull();
-    });
-
-    it('moves to confirmation once a club is chosen', () => {
-      useNfcStore.getState().setBlankTag(blank);
-
-      useNfcStore.getState().chooseWriteClub('7-iron');
-
-      expect(useNfcStore.getState().writeStage).toBe('confirm');
-      expect(useNfcStore.getState().writeClub).toBe('7-iron');
-    });
-
-    it('clears the flow once the tag is written', () => {
-      useNfcStore.getState().setBlankTag(blank);
-      useNfcStore.getState().chooseWriteClub('7-iron');
-      useNfcStore.getState().beginWrite();
-
-      useNfcStore.getState().finishWrite({ state: 'written', uid: '04A2B1C3', club: '7-iron' });
-
-      expect(useNfcStore.getState().blankTag).toBeNull();
-      expect(useNfcStore.getState().writeStage).toBe('select');
-    });
-
-    it('keeps the tag and the chosen club after a failure, so it can be retried', () => {
-      useNfcStore.getState().setBlankTag(blank);
-      useNfcStore.getState().chooseWriteClub('7-iron');
-      useNfcStore.getState().beginWrite();
-
-      useNfcStore.getState().finishWrite({ state: 'failed', error: 'Tag not on the reader' });
-
-      expect(useNfcStore.getState().blankTag?.uid).toBe('04A2B1C3');
-      expect(useNfcStore.getState().writeClub).toBe('7-iron');
-      expect(useNfcStore.getState().writeStage).toBe('failed');
-      expect(useNfcStore.getState().writeError).toBe('Tag not on the reader');
-    });
-
-    it('reports a failure even when the server sent no reason', () => {
-      useNfcStore.getState().setBlankTag(blank);
-
-      useNfcStore.getState().finishWrite({ state: 'failed' });
-
-      expect(useNfcStore.getState().writeError).toBe('Write failed');
-    });
-
-    it('clears a stale error when a retry starts', () => {
-      useNfcStore.getState().setBlankTag(blank);
-      useNfcStore.getState().finishWrite({ state: 'failed', error: 'Tag not on the reader' });
-
-      useNfcStore.getState().beginWrite();
-
-      expect(useNfcStore.getState().writeStage).toBe('writing');
-      expect(useNfcStore.getState().writeError).toBeNull();
-    });
-
-    it('abandons the flow on cancel', () => {
-      useNfcStore.getState().setBlankTag(blank);
-      useNfcStore.getState().chooseWriteClub('7-iron');
-
-      useNfcStore.getState().cancelWrite();
-
-      expect(useNfcStore.getState().blankTag).toBeNull();
-      expect(useNfcStore.getState().writeClub).toBeNull();
-    });
-
-    it('drops the flow when a known club tag is tapped instead', () => {
-      useNfcStore.getState().setBlankTag(blank);
-
-      useNfcStore.getState().recordScan(scan({ uid: '04A2B1C4', club: 'driver', known: true }));
-
-      expect(useNfcStore.getState().blankTag).toBeNull();
-    });
-
-    it('does not drop a write already in flight', () => {
-      // The write reports its own result; discarding it here would strand the UI.
-      useNfcStore.getState().setBlankTag(blank);
-      useNfcStore.getState().chooseWriteClub('7-iron');
-      useNfcStore.getState().beginWrite();
-
-      useNfcStore.getState().recordScan(scan({ uid: '04A2B1C4', club: 'driver', known: true }));
-
-      expect(useNfcStore.getState().blankTag?.uid).toBe('04A2B1C3');
-    });
   });
 });

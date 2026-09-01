@@ -9,7 +9,7 @@ from typing import Callable, Optional
 
 from .models import InvalidTagUidError, TagScan, normalize_uid
 from .reader import NfcReaderError, TagRead, TagReader
-from .registry import ClubTag, ClubTagRegistry, UnknownClubError, validate_club_id
+from .registry import ClubTagRegistry, UnknownClubError, validate_club_id
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +22,6 @@ DEFAULT_READ_TIMEOUT_S = 0.5
 # STEMMA cable produces a burst of errors that a reopen usually clears.
 _ERRORS_BEFORE_REOPEN = 5
 _MAX_ERROR_BACKOFF_S = 5.0
-# How long a write waits for the named tag to be back on the antenna. The
-# player confirms the club on screen first, then holds the club to the reader.
-DEFAULT_WRITE_TIMEOUT_S = 6.0
 
 
 class NfcService:
@@ -39,7 +36,6 @@ class NfcService:
         poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
         read_timeout_s: float = DEFAULT_READ_TIMEOUT_S,
         repeat_suppression_s: float = DEFAULT_REPEAT_SUPPRESSION_S,
-        write_timeout_s: float = DEFAULT_WRITE_TIMEOUT_S,
     ):
         if poll_interval_s < 0 or read_timeout_s <= 0:
             raise ValueError("poll_interval_s must be >= 0 and read_timeout_s must be > 0")
@@ -49,12 +45,8 @@ class NfcService:
         self.poll_interval_s = poll_interval_s
         self.read_timeout_s = read_timeout_s
         self.repeat_suppression_s = repeat_suppression_s
-        self.write_timeout_s = write_timeout_s
 
         self._lock = threading.Lock()
-        # The poll thread and a write from a socket handler share one I2C bus.
-        # Without this they interleave frames on it and corrupt each other.
-        self._reader_lock = threading.RLock()
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._last_uid: Optional[str] = None
@@ -69,8 +61,7 @@ class NfcService:
 
     def start(self) -> None:
         """Open the reader and begin polling. Raises if the reader is absent."""
-        with self._reader_lock:
-            self.reader.open()
+        self.reader.open()
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._poll_loop,
@@ -89,8 +80,7 @@ class NfcService:
             thread.join(timeout=self.read_timeout_s + 2.0)
         self._thread = None
         try:
-            with self._reader_lock:
-                self.reader.close()
+            self.reader.close()
         except Exception as error:  # pylint: disable=broad-exception-caught
             logger.debug("[NFC] Reader close failed: %s", error)
 
@@ -100,8 +90,7 @@ class NfcService:
         consecutive_errors = 0
         while not self._stop_event.is_set():
             try:
-                with self._reader_lock:
-                    tag = self.reader.read_tag(self.read_timeout_s)
+                tag = self.reader.read_tag(self.read_timeout_s)
                 consecutive_errors = 0
                 self._clear_error()
                 if tag:
@@ -123,9 +112,8 @@ class NfcService:
         """Bounce the reader after a run of failures."""
         logger.warning("[NFC] Reopening reader after repeated read failures")
         try:
-            with self._reader_lock:
-                self.reader.close()
-                self.reader.open()
+            self.reader.close()
+            self.reader.open()
         except Exception as error:  # pylint: disable=broad-exception-caught
             self._record_error(error)
 
@@ -200,23 +188,6 @@ class NfcService:
             return None, None
         self.registry.touch(uid)
         return club_id, "registry"
-
-    def write_club_tag(self, uid: str, club_id: str) -> ClubTag:
-        """Write a club onto a tag, then mirror it into the registry.
-
-        The registry entry is only made once the tag reports the write back, so
-        a failed write never leaves the rig claiming a club the tag does not
-        carry.
-        """
-        club = validate_club_id(club_id)
-        key = normalize_uid(uid)
-        with self._reader_lock:
-            self.reader.write_text(key, club, self.write_timeout_s)
-        tag = self.registry.assign(key, club)
-        # The player will lift the club away and tap it again to check.
-        self.forget_recent(key)
-        logger.info("[NFC] Wrote %s to tag %s", club, key)
-        return tag
 
     def forget_recent(self, uid: str) -> None:
         """Clear repeat suppression for a UID so the next tap reports again.

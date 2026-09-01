@@ -19,22 +19,16 @@ export interface NfcScan {
   source: 'tag' | 'registry' | null;
   /** True when the tag's memory has never been written. */
   blank: boolean;
-  /** True when the reader can write a club onto this tag. */
+  /** True when the tag's NDEF memory could be read. */
   writable: boolean;
 }
 
-/** Result of writing a club onto a tag. */
-export interface ClubTagWrite {
-  state: 'written' | 'failed';
-  uid?: string;
-  club?: string;
-  error?: string;
-}
-
-/** Where the blank-tag write flow has got to. */
-export type WriteStage = 'select' | 'confirm' | 'writing' | 'failed';
-
 export interface ClubTagsPayload {
   tags: ClubTag[];
+  /** True when the PN532 opened and the reader thread is running. */
   enabled: boolean;
+  /** True when `--nfc` was requested, even if the reader failed to start. */
+  requested?: boolean;
+  /** Reader init failure, when `--nfc` was requested but the PN532 is down. */
+  error?: string | null;
 }

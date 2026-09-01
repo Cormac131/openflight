@@ -107,10 +107,7 @@ export async function presentTag(
   return scan;
 }
 
-/**
- * Present a tag the reader cannot write, so it takes the learn-by-UID path
- * rather than the blank-tag write flow.
- */
+/** Present a tag without an NDEF club record, so it takes the learn-by-UID path. */
 export async function presentUnwritableTag(socket: Socket, uid: string) {
   return presentTag(socket, uid, { writable: false, blank: false });
 }

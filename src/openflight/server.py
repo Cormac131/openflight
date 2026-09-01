@@ -1684,6 +1684,7 @@ def init_nfc(
         nfc_service = service
         nfc_runtime_config = {
             "enabled": True,
+            "requested": True,
             "reader": reader.name,
             **link,
             "tags_path": str(club_tag_registry.path),
@@ -1745,6 +1746,8 @@ def _emit_club_tags() -> None:
         {
             "tags": club_tag_registry.to_payload() if club_tag_registry else [],
             "enabled": bool(nfc_runtime_config.get("enabled")),
+            "requested": bool(nfc_runtime_config.get("requested")),
+            "error": nfc_runtime_config.get("error"),
         },
     )
 
@@ -1768,12 +1771,6 @@ def _on_nfc_scan(scan) -> None:
             # The stored club is no longer a valid ClubType (renamed or removed
             # between releases); treat the tag as unlearned so it can be re-taught.
             socketio.emit("nfc_tag_unknown", payload)
-        return
-    if scan.needs_write:
-        # A tag with nothing on it: offer to write the club onto the tag itself,
-        # rather than only recording it here against the UID.
-        logger.info("[NFC] Blank tag %s awaiting a club", scan.uid)
-        socketio.emit("nfc_tag_blank", payload)
         return
     logger.info("[NFC] Unknown tag %s awaiting assignment", scan.uid)
     socketio.emit("nfc_tag_unknown", payload)
@@ -2485,7 +2482,7 @@ def handle_connect():
     _emit_sim_snapshot()
     if power_monitor and power_monitor.status:
         socketio.emit("power_status", power_monitor.status.to_dict())
-    if club_tag_registry is not None:
+    if club_tag_registry is not None or nfc_runtime_config.get("requested"):
         _emit_club_tags()
     if monitor:
         socketio.emit("session_state", _session_state_payload(include_runtime_meta=True))
@@ -2582,53 +2579,6 @@ def handle_forget_club_tag(data):
         if nfc_service is not None:
             nfc_service.forget_recent(str(uid))
     _emit_club_tags()
-
-
-@socketio.on("write_club_tag")
-def handle_write_club_tag(data):
-    """Write a club onto a blank tag, then mirror it into the registry.
-
-    Synchronous on purpose: the reader is a single I2C device, and the service
-    serializes this against its own polling, so returning early would only move
-    the wait somewhere the UI cannot see it.
-    """
-    from .nfc import (  # pylint: disable=import-outside-toplevel
-        InvalidTagUidError,
-        NfcReaderError,
-        UnknownClubError,
-    )
-
-    if nfc_service is None:
-        socketio.emit("club_tag_write", {"state": "failed", "error": "NFC reader is not running"})
-        return
-
-    uid = data.get("uid") if isinstance(data, dict) else None
-    club_id = data.get("club") if isinstance(data, dict) else None
-    try:
-        tag = nfc_service.write_club_tag(uid, club_id)
-    except (InvalidTagUidError, UnknownClubError) as error:
-        logger.warning("[NFC] Rejected tag write %r -> %r: %s", uid, club_id, error)
-        socketio.emit("club_tag_write", {"state": "failed", "uid": uid, "error": str(error)})
-        return
-    except NfcReaderError as error:
-        logger.warning("[NFC] Tag write failed for %r: %s", uid, error)
-        socketio.emit("club_tag_write", {"state": "failed", "uid": uid, "error": str(error)})
-        return
-    except OSError as error:
-        # The tag carries the club now, but the mirror could not be saved.
-        logger.error("[NFC] Wrote tag %r but could not persist it: %s", uid, error)
-        socketio.emit(
-            "club_tag_write",
-            {"state": "failed", "uid": uid, "error": f"Could not save club tags: {error}"},
-        )
-        return
-
-    session_log = get_session_logger()
-    if session_log:
-        session_log.log_club_tag_change("written", tag.uid, tag.club_id)
-    socketio.emit("club_tag_write", {"state": "written", "uid": tag.uid, "club": tag.club_id})
-    _emit_club_tags()
-    _apply_club(tag.club_id, source="nfc-write")
 
 
 @socketio.on("simulate_nfc_scan")

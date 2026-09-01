@@ -8,7 +8,15 @@ import { useNfcStore } from './stores/useNfcStore';
 describe('App shell', () => {
   beforeEach(() => {
     useSystemStore.setState({ serverClub: null });
-    useNfcStore.setState({ enabled: false, tags: [], lastScan: null, pendingTag: null, clubScanVersion: 0 });
+    useNfcStore.setState({
+      enabled: false,
+      requested: false,
+      error: null,
+      tags: [],
+      lastScan: null,
+      pendingTag: null,
+      clubScanVersion: 0,
+    });
   });
 
   it('renders the bottom bar instead of the old top header', () => {

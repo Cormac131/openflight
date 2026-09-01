@@ -7,25 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **NFC tag writing.** The kiosk no longer writes a club onto a blank tag.
+  Unknown tags always use the learn-by-UID prompt; mappings stay in
+  `~/.openflight/club_tags.json`. A tag that already carries an NDEF club
+  record (for example from a phone NFC app) still selects that club.
+
 ### Fixed
 - **Attack angle no longer inflated by 1/cos(club path).** The camera club
   delivery divided vertical speed by the forward component alone instead of the
   full horizontal speed, overstating attack angle on any shot with club path.
 - **`--nfc` opens the PN532 even when `--mock` is set.** `--mock` only replaces
   the radar. Club tags need a real reader; omit `--nfc` when one is not attached.
+- **Club tags stay listed when the PN532 fails to start.** `--nfc` still loads
+  the learned registry. The menu shows those tags and the reader error instead
+  of hiding the section.
 
 ### Added
 - **NFC club tags.** An optional PN532 reader selects the club when a tagged
-  club is tapped against it. Tags carry nothing but their factory UID: the first
-  tap of an unknown tag asks the kiosk which club it is, and the mapping is
-  written to `~/.openflight/club_tags.json` immediately, so it survives restarts
-  and can be backed up or copied between rigs. Learned tags are listed in the
-  menu sheet with a Forget action for re-teaching. A tap raises a large
-  on-screen confirmation naming the club it selected. Presenting a blank
-  writable tag instead runs a write flow — pick a club, confirm, and the club
-  is written onto the tag as an NDEF text record, verified by reading it back,
-  and mirrored into the rig's mapping. A written tag carries its club between
-  rigs and can be read or authored by any phone NFC app. Enable with `--nfc`.
+  club is tapped against it. Tags may carry an NDEF club record; otherwise the
+  first tap of an unknown tag asks the kiosk which club it is, and the mapping
+  is written to
+  `~/.openflight/club_tags.json` immediately, so it survives restarts and can
+  be backed up or copied between rigs. Learned tags are listed in the menu
+  sheet with a Forget action for re-teaching. A tap raises a large
+  on-screen confirmation naming the club it selected. A tag that already
+  carries an NDEF club record (for example from a phone NFC app) selects that
+  club and updates the rig's mapping. Enable with `--nfc`.
   `--mock` does not replace the reader. The supported
   host link is SPI on `/dev/spidev0.0` (CE0, GPIO8) with IRQ on GPIO22
   (physical pin 15); I2C is a fallback only because it shares the

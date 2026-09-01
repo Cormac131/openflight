@@ -186,7 +186,7 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
 - `club_data.py` - Canonical club physics parameters, lofts, typical speeds, and optimal spin
 - `iwr6843/` - TI IWR6843 mmWave radar driver, L3 raw dump parser, LCMF-v1 launch angle & club path
 - `inclinometer.py` - LIS3DH accelerometer tilt compensation service
-- `nfc/` - PN532 NFC reader/writer (SPI + IRQ by default), NDEF codec, learned club-tag registry, and tap-to-select service
+- `nfc/` - PN532 NFC reader (SPI + IRQ by default), NDEF codec, learned club-tag registry, and tap-to-select service
 - `sim/` - Simulator connectors (OpenGolfSim, GSPro, E6 Connect, Garmin) and network transports
 - `cloud/` - Telemetry, cloud configuration, session upload, and push error handling
 - `rolling_buffer/` - Trigger strategies, I/Q processor, spin detection
@@ -219,7 +219,7 @@ Logs written to `~/openflight_sessions/session_*.jsonl` with entry types:
 - `trigger_event` - Trigger accept/reject with latency (for rolling buffer mode)
 - `rolling_buffer_capture` - Raw I/Q samples (4096 each) for offline analysis
 - `nfc_scan` - Club tag taps with the resolved club
-- `club_tag_change` - Club tags learned, written, or forgotten
+- `club_tag_change` - Club tags learned or forgotten
 
 ## Sound Trigger Hardware
 

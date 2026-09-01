@@ -13,7 +13,7 @@ import {
 } from '../types/shot';
 import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
 import type { PowerStatus } from '../types/power';
-import type { ClubTagWrite, ClubTagsPayload, NfcScan } from '../types/nfc';
+import type { ClubTagsPayload, NfcScan } from '../types/nfc';
 import { getServerOrigin } from '../utils/serverOrigin';
 import { handleShotMessage, handleShotUpdate, type ShotMessage, type ShotUpdateMessage } from './handleShotMessage';
 import { ingestSocketPlayerName } from './playerSocketSync';
@@ -110,7 +110,12 @@ class SocketService {
     });
 
     this.socket.on('club_tags', (data: ClubTagsPayload) => {
-      useNfcStore.getState().setClubTags(data.tags ?? [], Boolean(data.enabled));
+      useNfcStore.getState().setClubTags({
+        tags: data.tags ?? [],
+        enabled: Boolean(data.enabled),
+        requested: data.requested,
+        error: data.error,
+      });
     });
 
     // A recognized tag also arrives as `club_changed`, which is what actually
@@ -122,14 +127,6 @@ class SocketService {
 
     this.socket.on('nfc_tag_unknown', (data: NfcScan) => {
       useNfcStore.getState().setPendingTag(data);
-    });
-
-    this.socket.on('nfc_tag_blank', (data: NfcScan) => {
-      useNfcStore.getState().setBlankTag(data);
-    });
-
-    this.socket.on('club_tag_write', (data: ClubTagWrite) => {
-      useNfcStore.getState().finishWrite(data);
     });
 
     this.socket.on('club_tag_error', (data: { error: string; uid?: string }) => {
@@ -276,10 +273,6 @@ class SocketService {
 
   forgetClubTag(uid: string) {
     this.socket?.emit('forget_club_tag', { uid });
-  }
-
-  writeClubTag(uid: string, club: string) {
-    this.socket?.emit('write_club_tag', { uid, club });
   }
 
   /** Mock-mode helper: present a tag without a reader attached. */

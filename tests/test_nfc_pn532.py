@@ -10,20 +10,19 @@ from openflight.nfc.pn532 import (
     HOST_TO_PN532,
     PN532_TO_HOST,
     PN532I2C,
-    PN532FrameError,
     SPI_DATAREAD,
     SPI_DATAWRITE,
     SPI_STATREAD,
+    PN532FrameError,
     SpiTransport,
     build_frame,
     disable_kernel_chip_select,
-    parse_frame,
     parse_frame,
     parse_passive_target,
     parse_passive_target_uid,
     reverse_byte,
 )
-from openflight.nfc.reader import NfcReaderError, TagWriteError
+from openflight.nfc.reader import NfcReaderError
 
 
 def _response(command_echo: int, payload: bytes) -> bytes:
@@ -45,9 +44,6 @@ TYPE2_TAG_RESPONSE = _response(
     0x4B, bytes([0x01, 0x01, 0x00, 0x44, 0x00, 0x04, 0x04, 0xA2, 0xB1, 0xC3])
 )
 CLASSIC_TAG_RESPONSE = TAG_RESPONSE
-OTHER_TYPE2_TAG_RESPONSE = _response(
-    0x4B, bytes([0x01, 0x01, 0x00, 0x44, 0x00, 0x04, 0x04, 0xA2, 0xB1, 0xFF])
-)
 CAPABILITY_CONTAINER = bytes([0xE1, 0x10, 0x12, 0x00])
 
 
@@ -373,77 +369,6 @@ class TestReadTag:
         assert reader.read_tag() is None
 
 
-class TestWriteText:
-    def _write_script(self, memory_after):
-        """Poll, four page writes, then the read-back."""
-        page_writes = [_exchange_response(b"")] * len(
-            range(0, len(ndef.wrap_tlv(ndef.encode_text_record("7-iron"))), 4)
-        )
-        return [
-            ACK_READ,
-            TYPE2_TAG_RESPONSE,
-            *_interleave_acks(page_writes),
-            *_interleave_acks(_memory_reads(memory_after)),
-        ]
-
-    def test_writing_a_club_verifies_it_by_reading_back(self):
-        reader, transport = _open_reader(*self._write_script(CLUB_MEMORY))
-
-        reader.write_text("04A2B1C3", "7-iron")
-
-        # Page writes start at page 4, the first user-memory page.
-        writes = [write for write in transport.writes if write[6] == 0x40 and write[8] == 0xA2]
-        assert [write[9] for write in writes] == [4, 5, 6, 7]
-
-    def test_a_write_that_does_not_read_back_is_a_failure(self):
-        reader, _ = _open_reader(*self._write_script(bytes(64)))
-
-        with pytest.raises(TagWriteError, match="did not read back"):
-            reader.write_text("04A2B1C3", "7-iron")
-
-    def test_writing_refuses_when_a_different_tag_is_on_the_reader(self):
-        # A club was swapped onto the reader between confirming and writing.
-        reader, _ = _open_reader(ACK_READ, OTHER_TYPE2_TAG_RESPONSE)
-
-        with pytest.raises(TagWriteError, match="not on the reader"):
-            reader.write_text("04A2B1C3", "7-iron", timeout_s=0.0)
-
-    def test_writing_refuses_when_no_tag_is_on_the_reader(self):
-        reader, _ = _open_reader(ACK_READ, NO_TAG_RESPONSE)
-
-        with pytest.raises(TagWriteError, match="not on the reader"):
-            reader.write_text("04A2B1C3", "7-iron", timeout_s=0.0)
-
-    def test_writing_waits_for_the_tag_to_come_back_to_the_reader(self):
-        reader, _ = _open_reader(
-            ACK_READ,
-            NO_TAG_RESPONSE,
-            ACK_READ,
-            TYPE2_TAG_RESPONSE,
-            *_interleave_acks([_exchange_response(b"")] * 4),
-            *_interleave_acks(_memory_reads(CLUB_MEMORY)),
-        )
-
-        reader.write_text("04A2B1C3", "7-iron", timeout_s=2.0)
-
-    def test_writing_refuses_a_tag_type_it_cannot_write(self):
-        reader, _ = _open_reader(ACK_READ, CLASSIC_TAG_RESPONSE)
-
-        with pytest.raises(TagWriteError, match="cannot be written"):
-            reader.write_text("04A2B1C3", "7-iron", timeout_s=0.01)
-
-    def test_a_refused_page_write_is_reported_with_its_page(self):
-        reader, _ = _open_reader(
-            ACK_READ,
-            TYPE2_TAG_RESPONSE,
-            ACK_READ,
-            _response(0x41, bytes([0x13])),
-        )
-
-        with pytest.raises(TagWriteError, match="page 4"):
-            reader.write_text("04A2B1C3", "7-iron")
-
-
 class TestTagTypeDetection:
     def test_the_sak_is_reported_alongside_the_uid(self):
         payload = bytes([0x01, 0x01, 0x00, 0x44, 0x00, 0x04, 0x04, 0xA2, 0xB1, 0xC3])
@@ -524,6 +449,7 @@ class TestSpiTransport:
         with pytest.raises(OSError) as raised:
             disable_kernel_chip_select(_Spi())
         assert raised.value.errno == errno.EIO
+
     def test_reverse_byte_swaps_lsb_and_msb(self):
         assert reverse_byte(0x01) == 0x80
         assert reverse_byte(0x80) == 0x01
@@ -615,4 +541,3 @@ class TestSpiTransport:
     def test_an_unknown_interface_is_rejected(self):
         with pytest.raises(ValueError, match="spi"):
             PN532I2C(interface="uart")
-
