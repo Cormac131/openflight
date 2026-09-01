@@ -1,4 +1,5 @@
 import { useI18n } from '../../i18n/useI18n';
+import { getClubName } from '../../data/clubs';
 import { PickerOverlay } from './PickerOverlay';
 import { clubSections } from './pickerSections';
 import type { NfcScan } from '../../types/nfc';
@@ -7,26 +8,29 @@ interface ClubTagPromptProps {
   scan: NfcScan;
   onAssign: (clubId: string) => void;
   onDismiss: () => void;
+  onForget?: () => void;
 }
 
 /**
- * Asks which club an unrecognized NFC tag belongs to.
- *
- * Reuses the club picker so learning a tag looks exactly like choosing a club,
- * with no club preselected: the tag has no meaning yet, and a highlighted tile
- * would invite a mis-tap that then persists to disk.
+ * Club picker for a scanned tag. An unknown tag has no club preselected.
+ * A known tag highlights its club and offers Forget for that tag only.
  */
-export function ClubTagPrompt({ scan, onAssign, onDismiss }: ClubTagPromptProps) {
+export function ClubTagPrompt({ scan, onAssign, onDismiss, onForget }: ClubTagPromptProps) {
   const { t } = useI18n();
+  const title = scan.known ? t('nfc.tagTitle') : t('nfc.newTagTitle');
+  const forgetClub = scan.club ? getClubName(scan.club) : scan.uid_display;
 
   return (
     <PickerOverlay
-      title={t('nfc.newTagTitle')}
+      title={title}
       subtitle={t('nfc.newTagSubtitle', { uid: scan.uid_display })}
-      selectedId=""
+      selectedId={scan.club ?? ''}
       sections={clubSections()}
       onSelect={onAssign}
       onClose={onDismiss}
+      actionLabel={scan.known ? t('nfc.forget') : undefined}
+      actionAriaLabel={scan.known ? t('nfc.forgetTag', { club: forgetClub }) : undefined}
+      onAction={scan.known ? onForget : undefined}
     />
   );
 }

@@ -77,12 +77,14 @@ describe('useNfcStore', () => {
     expect(useNfcStore.getState().clubScanVersion).toBe(1);
   });
 
-  it('dismisses a learn prompt when a known club tag is tapped instead', () => {
+  it('opens the scanned known tag on the prompt so it can be forgotten', () => {
     useNfcStore.getState().setPendingTag(scan());
 
     useNfcStore.getState().recordScan(scan({ uid: '04A2B1C4', club: 'driver', known: true }));
 
-    expect(useNfcStore.getState().pendingTag).toBeNull();
+    expect(useNfcStore.getState().pendingTag).toEqual(
+      expect.objectContaining({ uid: '04A2B1C4', club: 'driver', known: true })
+    );
   });
 
   it('keeps the learn prompt when another unknown tag is tapped', () => {

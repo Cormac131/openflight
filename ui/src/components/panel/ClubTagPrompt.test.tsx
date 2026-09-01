@@ -9,10 +9,15 @@ const scan: NfcScan = {
   timestamp: 1,
   club: null,
   known: false,
+  source: null,
+  blank: true,
+  writable: false,
 };
 
-function render() {
-  return renderToString(<ClubTagPrompt scan={scan} onAssign={() => {}} onDismiss={() => {}} />);
+function render(overrides: Partial<NfcScan> = {}) {
+  return renderToString(
+    <ClubTagPrompt scan={{ ...scan, ...overrides }} onAssign={() => {}} onDismiss={() => {}} onForget={() => {}} />
+  );
 }
 
 describe('ClubTagPrompt', () => {
@@ -38,5 +43,17 @@ describe('ClubTagPrompt', () => {
 
   it('can be dismissed without learning the tag', () => {
     expect(render()).toContain('aria-label="Close New club tag"');
+  });
+
+  it('does not offer Forget on an unlearned tag', () => {
+    expect(render()).not.toContain('Forget');
+  });
+
+  it('offers Forget only for the scanned known tag', () => {
+    const html = render({ known: true, club: '7-iron', blank: false });
+
+    expect(html).toContain('aria-label="Club tag"');
+    expect(html).toContain('aria-label="Forget the tag for 7 Iron"');
+    expect(html).toContain('picker-overlay__option--selected');
   });
 });

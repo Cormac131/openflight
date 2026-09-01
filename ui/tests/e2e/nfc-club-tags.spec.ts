@@ -84,10 +84,11 @@ test('a learned tag survives a reload and still selects its club', async ({ page
   await withControlSocket((socket) => setClub(socket, 'driver'));
   await expect(page.locator('.panel-header__club', { hasText: 'Driver' })).toBeVisible();
 
-  // Second tap of a known tag: no prompt, straight to the club.
   await withControlSocket((socket) => presentUnwritableTag(socket, DRIVER_TAG));
 
-  await expect(page.getByRole('dialog', { name: 'New club tag' })).toBeHidden();
+  const prompt = page.getByRole('dialog', { name: 'Club tag' });
+  await expect(prompt).toBeVisible();
+  await expect(prompt.getByRole('button', { name: 'Forget the tag for 9 Iron' })).toBeVisible();
   await expect(page.locator('.panel-header__club', { hasText: '9 Iron' })).toBeVisible();
 });
 
@@ -123,20 +124,24 @@ test('a tag tap closes the club picker it just answered', async ({ page }) => {
   await expect(page.locator('.panel-header__club', { hasText: '3 Wood' })).toBeVisible();
 });
 
-test('lists learned tags in the menu and forgets one on request', async ({ page }) => {
+test('forgets a learned tag from the scan dialog, not the menu', async ({ page }) => {
   await gotoApp(page);
   await dismissPicker(page);
   await learnTag(page, IRON_TAG, 'Irons', '7i');
 
   await page.getByRole('button', { name: 'Open menu' }).click();
   const menu = page.getByRole('dialog', { name: 'Menu' });
-  await expect(menu.getByText('Club tags')).toBeVisible();
-  await expect(menu.getByText('7 Iron')).toBeVisible();
-  await expect(menu.getByText('04:A2:B1:C3')).toBeVisible();
+  await expect(menu.getByText('Club tags')).toHaveCount(0);
+  await expect(menu.getByRole('button', { name: /Forget/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Close menu' }).click();
 
-  await menu.getByRole('button', { name: 'Forget the tag for 7 Iron' }).click();
+  await withControlSocket((socket) => presentUnwritableTag(socket, IRON_TAG));
+  const prompt = page.getByRole('dialog', { name: 'Club tag' });
+  await expect(prompt).toBeVisible();
+  await prompt.getByRole('button', { name: 'Forget the tag for 7 Iron' }).click();
 
-  await expect(menu.getByText('No tags learned yet')).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'New club tag' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Forget/ })).toHaveCount(0);
   expect(await withControlSocket(clubTags)).toEqual([]);
 });
 

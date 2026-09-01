@@ -10,9 +10,6 @@ import { socketService } from '../../services/socketService';
 import { ballDetectionStatusLabel } from '../../utils/ballDetectionStatus';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { SimStatus } from '../SimStatus';
-import { ClubTagList } from './ClubTagList';
-import type { ClubTag } from '../../types/nfc';
-
 interface MenuSheetProps {
   onClose: () => void;
   onShutdown: () => void;
@@ -23,7 +20,6 @@ interface MenuSheetProps {
   nfc?: {
     requested: boolean;
     error: string | null;
-    tags: ClubTag[];
   };
 }
 
@@ -40,10 +36,8 @@ export function MenuSheet({ onClose, onShutdown, nfc }: MenuSheetProps) {
   const cameraStatus = useCameraStore((state) => state.cameraStatus);
   const storeRequested = useNfcStore((state) => state.requested);
   const storeError = useNfcStore((state) => state.error);
-  const storeTags = useNfcStore((state) => state.tags);
   const nfcRequested = nfc?.requested ?? storeRequested;
   const nfcError = nfc?.error ?? storeError;
-  const clubTags = nfc?.tags ?? storeTags;
   const { t } = useI18n();
   const { unitSystem, setUnitSystem } = useUnitPreference();
   const { theme, setTheme } = useThemeStore();
@@ -116,19 +110,16 @@ export function MenuSheet({ onClose, onShutdown, nfc }: MenuSheetProps) {
           ) : null}
         </section>
 
-        {nfcRequested ? (
+        {nfcRequested && nfcError ? (
           <section className="menu-sheet__section">
             <span className="menu-sheet__section-title">{t('menu.clubTags')}</span>
-            {nfcError ? (
-              <div className="menu-sheet__status-row">
-                <span className="menu-sheet__status-label">{t('nfc.reader')}</span>
-                <span className="menu-sheet__status-value menu-sheet__status-value--warn">
-                  {t('nfc.readerFailed')}
-                </span>
-              </div>
-            ) : null}
-            {nfcError ? <span className="menu-sheet__nfc-error">{nfcError}</span> : null}
-            <ClubTagList tags={clubTags} onForget={(uid) => socketService.forgetClubTag(uid)} />
+            <div className="menu-sheet__status-row">
+              <span className="menu-sheet__status-label">{t('nfc.reader')}</span>
+              <span className="menu-sheet__status-value menu-sheet__status-value--warn">
+                {t('nfc.readerFailed')}
+              </span>
+            </div>
+            <span className="menu-sheet__nfc-error">{nfcError}</span>
           </section>
         ) : null}
 

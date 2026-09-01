@@ -79,9 +79,10 @@ Tapping a tag reads both its UID and its contents, then:
   example from a phone) is what travels with the club between rigs.
 - **The tag has no club record but its UID is known** → the mapped club is
   selected.
-- **The tag is blank and writable** → the kiosk offers to write a club onto it.
-- **The tag is unknown and cannot be written** → the kiosk asks which club it
-  is and records the mapping against its UID.
+- **The tag is unknown** → the kiosk asks which club it is and records the
+  mapping against its UID. Blank tags, read-only cards, and tags with
+  unrecognized contents all take this path. The kiosk does not write onto the
+  tag.
 
 A tag holding somebody else's data — a URL, a business card — is treated as
 unknown unless that UID is already learned. The NDEF text is ignored when it
@@ -262,12 +263,12 @@ mode to remember:
 Dismissing the prompt with the ✕ leaves the tag unlearned; the next tap asks
 again.
 
-The learned tags are listed under **Club tags** in the kiosk menu sheet, each
-with a **Forget** button. Forget a tag to re-teach it — useful when a tag was
-taught the wrong club, or when a club is regripped and re-tagged. Tapping an
-already-known tag while it is mapped simply selects its club; to move it to a
-different club, forget it first and tap it again. If `--nfc` is set but the
-PN532 fails to start, that list still appears, with a reader error above it.
+Tapping a known tag selects its club and opens the club-tag dialog for that
+tag only. **Forget** lives there, not in the menu — useful when a tag was
+taught the wrong club, or when a club is regripped and re-tagged. After
+Forget, pick the club again on the same dialog, or dismiss and tap later.
+If `--nfc` is set but the PN532 fails to start, the menu shows a reader
+error and no tag list.
 
 Two tags may point at the same club. That is deliberate: some builds tag both
 the grip and the shaft.
@@ -288,7 +289,8 @@ The text is the club id exactly as OpenFlight names it: `driver`, `3-wood`,
 ClubType])"` prints the full list.
 
 Because it is ordinary NDEF, any phone with NFC Tools (or similar) can read
-and write club tags. The kiosk can also write a club onto a blank Type 2 tag:
+and write club tags. The kiosk only reads tags; it never writes a club onto
+one. Use a phone to:
 
 - **Tag the whole bag from the sofa** — write each club id as a text record and
   the rig will read them without learning by UID first.
@@ -431,12 +433,12 @@ Geekworm address can still print `UU`.
 ### A Tag Selects The Wrong Club
 
 If the club is written on the tag, the tag wins over anything the rig learned,
-so forgetting it in the menu will not help. Erase the tag with a phone NFC app
+so forgetting it on the kiosk will not help. Erase the tag with a phone NFC app
 and tap it again to learn it, or write the right club id onto it from the
 phone.
 
-If the tag carries nothing, it was learned as that club: open the kiosk menu,
-find it under **Club tags**, press **Forget**, then tap it again.
+If the tag carries nothing, it was learned as that club: tap it, press
+**Forget** on the club-tag dialog, then pick the club again.
 
 ### The Learn Prompt Reappears For A Tag Already Learned
 
@@ -448,8 +450,9 @@ previous file could not be parsed.
 ### Nothing Happens When A Tag Is Tapped
 
 - Confirm the startup banner printed `NFC club tags enabled`. If the menu
-  shows **Club tags** with **Reader — Not connected**, `--nfc` was passed but
-  the PN532 did not start; the error text under that row is the init failure.
+  shows **Club tags** with **Reader — Not connected** and no tag list,
+  `--nfc` was passed but the PN532 did not start; the error text under that
+  row is the init failure.
 - Confirm `--nfc` was actually passed; without it the reader is never opened.
 - `--mock` only replaces the radar. `--nfc` still needs the PN532.
 - Run `read_pn532.py` to separate a reader problem from a kiosk problem.
@@ -459,9 +462,10 @@ previous file could not be parsed.
 
 ## Current Limitations
 
-- Only NFC Forum Type 2 tags (NTAG213/215/216, MIFARE Ultralight) can be
-  written. MIFARE Classic cards — including the card and keyfob in most PN532
-  kits — are read-only here, and work through the learn-by-UID flow.
+- The kiosk never writes tags. A phone NFC app can write an NDEF club record
+  onto NFC Forum Type 2 tags (NTAG213/215/216, MIFARE Ultralight). MIFARE
+  Classic cards — including the card and keyfob in most PN532 kits — still
+  work through the learn-by-UID flow.
 - Only ISO14443A tags are read. ISO15693 / NFC Type 5 — including NXP ICODE
   SLIX, SLIX2, ST25DV, and Shot Scope watch RFID tags — is a hardware limit of
   the PN532, not a missing poll in this driver. A later reader (PN5180 class)

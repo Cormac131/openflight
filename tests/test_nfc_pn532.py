@@ -162,6 +162,10 @@ class TestFrameCodec:
         with pytest.raises(PN532FrameError):
             parse_frame(build_frame(bytes([HOST_TO_PN532, 0x02]))[:6])
 
+    def test_a_truncated_frame_missing_checksum_is_an_error(self):
+        with pytest.raises(PN532FrameError, match="shorter than its declared length"):
+            parse_frame(bytes([0x00, 0xFF, 0x01, 0xFF, 0xD5]))
+
     def test_an_oversized_payload_is_refused(self):
         with pytest.raises(PN532FrameError):
             build_frame(bytes(255))

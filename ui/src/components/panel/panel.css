@@ -1143,21 +1143,6 @@
   z-index: 21;
 }
 
-.club-tag-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  /* About four rows; the rest is reachable by dragging the list itself. */
-  max-height: 160px;
-  overflow-y: auto;
-  touch-action: none;
-}
-
-.club-tag-list .menu-sheet__status-row,
-.club-tag-list .menu-sheet__chip {
-  touch-action: none;
-}
-
 .menu-sheet__section {
   display: flex;
   flex-direction: column;
@@ -1328,6 +1313,28 @@
   letter-spacing: 0.08em;
   color: var(--color-text-muted, var(--color-text));
   opacity: 0.7;
+}
+
+.picker-overlay__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.picker-overlay__action {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
 }
 
 .picker-overlay__close {

@@ -349,9 +349,9 @@ def parse_frame(buffer: bytes) -> bytes:
     if length == 0:
         raise PN532FrameError(f"Empty frame payload in {buffer.hex()}")
 
-    payload = body[2 : 2 + length]
-    if len(payload) < length:
+    if len(body) < 3 + length:
         raise PN532FrameError(f"Frame shorter than its declared length: {buffer.hex()}")
+    payload = body[2 : 2 + length]
     data_checksum = body[2 + length]
     if (sum(payload) + data_checksum) & 0xFF:
         raise PN532FrameError(f"Bad data checksum in {buffer.hex()}")

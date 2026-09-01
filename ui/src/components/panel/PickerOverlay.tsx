@@ -12,6 +12,10 @@ interface PickerOverlayProps {
   sections: ReadonlyArray<PickerSection>;
   onSelect: (id: string) => void;
   onClose: () => void;
+  /** Optional header control, e.g. Forget on a scanned club tag. */
+  actionLabel?: string;
+  actionAriaLabel?: string;
+  onAction?: () => void;
   /** Word-length labels (training implements) use a slightly smaller type size. */
   wide?: boolean;
 }
@@ -28,6 +32,9 @@ export function PickerOverlay({
   sections,
   onSelect,
   onClose,
+  actionLabel,
+  actionAriaLabel,
+  onAction,
   wide = false,
 }: PickerOverlayProps) {
   const { t } = useI18n();
@@ -48,14 +55,26 @@ export function PickerOverlay({
           <span className="picker-overlay__title">{title}</span>
           {subtitle ? <span className="picker-overlay__subtitle">{subtitle}</span> : null}
         </span>
-        <button
-          type="button"
-          className="picker-overlay__close"
-          onClick={onClose}
-          aria-label={t('picker.close', { title })}
-        >
-          ✕
-        </button>
+        <span className="picker-overlay__actions">
+          {onAction && actionLabel ? (
+            <button
+              type="button"
+              className="picker-overlay__action"
+              onClick={onAction}
+              aria-label={actionAriaLabel ?? actionLabel}
+            >
+              {actionLabel}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="picker-overlay__close"
+            onClick={onClose}
+            aria-label={t('picker.close', { title })}
+          >
+            ✕
+          </button>
+        </span>
       </div>
       {sections.length > 1 ? (
         <div className="picker-overlay__tabs" role="group" aria-label={t('picker.groups')}>

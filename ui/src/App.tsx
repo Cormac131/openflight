@@ -93,12 +93,14 @@ function AppContent() {
     clubScanVersion,
     announcedClub,
     clearPendingTag,
+    setPendingTag,
   } = useNfcStore(
     useShallow((state) => ({
       pendingTag: state.pendingTag,
       clubScanVersion: state.clubScanVersion,
       announcedClub: state.announcedClub,
       clearPendingTag: state.clearPendingTag,
+      setPendingTag: state.setPendingTag,
     }))
   );
   const { heroMetricId, setHeroMetricId } = useHeroMetricStore(
@@ -256,6 +258,12 @@ function AppContent() {
     // switches even if the assignment is rejected downstream and retried.
     setSelectedClub(clubId);
     clearPendingTag();
+  };
+
+  const handleForgetTag = () => {
+    if (!pendingTag) return;
+    socketService.forgetClubTag(pendingTag.uid);
+    setPendingTag({ ...pendingTag, known: false, club: null, source: null });
   };
 
   const handleShutdown = async () => {
@@ -475,7 +483,12 @@ function AppContent() {
       {clubToastVisible && announcedClub ? <ClubChangeToast clubId={announcedClub} /> : null}
 
       {pendingTag ? (
-        <ClubTagPrompt scan={pendingTag} onAssign={handleLearnTag} onDismiss={clearPendingTag} />
+        <ClubTagPrompt
+          scan={pendingTag}
+          onAssign={handleLearnTag}
+          onDismiss={clearPendingTag}
+          onForget={handleForgetTag}
+        />
       ) : null}
 
       {pickerOpen && !pendingTag ? (

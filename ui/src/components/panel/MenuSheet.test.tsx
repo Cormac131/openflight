@@ -61,14 +61,14 @@ describe('MenuSheet club tags', () => {
       <MenuSheet
         onClose={() => {}}
         onShutdown={() => {}}
-        nfc={{ requested: false, error: null, tags: [] }}
+        nfc={{ requested: false, error: null }}
       />
     );
 
     expect(html).not.toContain('Club tags');
   });
 
-  it('lists learned tags and the reader error when the PN532 failed to start', () => {
+  it('shows the reader error when the PN532 failed to start, without a tag list', () => {
     const html = renderToString(
       <MenuSheet
         onClose={() => {}}
@@ -76,15 +76,6 @@ describe('MenuSheet club tags', () => {
         nfc={{
           requested: true,
           error: 'PN532 not found',
-          tags: [
-            {
-              uid: '04A2B1C3',
-              uid_display: '04:A2:B1:C3',
-              club: '7-iron',
-              learned_at: '2026-01-01T00:00:00+00:00',
-              last_seen_at: null,
-            },
-          ],
         }}
       />
     );
@@ -92,6 +83,16 @@ describe('MenuSheet club tags', () => {
     expect(html).toContain('Club tags');
     expect(html).toContain('Not connected');
     expect(html).toContain('PN532 not found');
-    expect(html).toContain('04:A2:B1:C3');
+    expect(html).not.toContain('Forget');
+    expect(html).not.toContain('04:A2:B1:C3');
+  });
+
+  it('hides the club tags section when NFC is up', () => {
+    const html = renderToString(
+      <MenuSheet onClose={() => {}} onShutdown={() => {}} nfc={{ requested: true, error: null }} />
+    );
+
+    expect(html).not.toContain('Club tags');
+    expect(html).not.toContain('Forget');
   });
 });

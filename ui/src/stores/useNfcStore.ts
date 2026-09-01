@@ -10,7 +10,7 @@ interface NfcState {
   error: string | null;
   tags: ClubTag[];
   lastScan: NfcScan | null;
-  /** Tag the reader saw that has no club yet; drives the learn overlay. */
+  /** Latest scanned tag driving the learn or re-teach overlay. */
   pendingTag: NfcScan | null;
   /**
    * Bumped every time a *known* tag selects a club. App watches this to close
@@ -50,7 +50,7 @@ export const useNfcStore = create<NfcState>((set) => ({
       requested: true,
       clubScanVersion: scan.known ? state.clubScanVersion + 1 : state.clubScanVersion,
       announcedClub: scan.known ? scan.club : state.announcedClub,
-      pendingTag: scan.known ? null : state.pendingTag,
+      pendingTag: scan.known ? scan : state.pendingTag,
     })),
   setPendingTag: (scan) => set({ pendingTag: scan, enabled: true, requested: true }),
   clearPendingTag: () => set({ pendingTag: null }),

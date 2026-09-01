@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Club-tag Forget is on the scan dialog only.** The menu no longer lists
+  learned tags. Tap a known tag to forget or re-teach that tag.
+
 ### Removed
 - **NFC tag writing.** The kiosk no longer writes a club onto a blank tag.
   Unknown tags always use the learn-by-UID prompt; mappings stay in
@@ -14,14 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record (for example from a phone NFC app) still selects that club.
 
 ### Fixed
+- **PN532 frames missing a checksum no longer raise `IndexError`.** A truncated
+  information frame with payload bytes but no data checksum is rejected as a
+  frame error instead of crashing the reader.
 - **Attack angle no longer inflated by 1/cos(club path).** The camera club
   delivery divided vertical speed by the forward component alone instead of the
   full horizontal speed, overstating attack angle on any shot with club path.
 - **`--nfc` opens the PN532 even when `--mock` is set.** `--mock` only replaces
   the radar. Club tags need a real reader; omit `--nfc` when one is not attached.
-- **Club tags stay listed when the PN532 fails to start.** `--nfc` still loads
-  the learned registry. The menu shows those tags and the reader error instead
-  of hiding the section.
+- **Club tags stay available when the PN532 fails to start.** `--nfc` still
+  loads the learned registry. The menu shows the reader error instead of
+  hiding that NFC was requested.
 
 ### Added
 - **NFC club tags.** An optional PN532 reader selects the club when a tagged
@@ -29,8 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first tap of an unknown tag asks the kiosk which club it is, and the mapping
   is written to
   `~/.openflight/club_tags.json` immediately, so it survives restarts and can
-  be backed up or copied between rigs. Learned tags are listed in the menu
-  sheet with a Forget action for re-teaching. A tap raises a large
+  be backed up or copied between rigs. Tapping a known tag opens the club-tag
+  dialog with a Forget action for that tag only. A tap raises a large
   on-screen confirmation naming the club it selected. A tag that already
   carries an NDEF club record (for example from a phone NFC app) selects that
   club and updates the rig's mapping. Enable with `--nfc`.
