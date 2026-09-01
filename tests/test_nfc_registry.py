@@ -124,6 +124,49 @@ class TestValidation:
         assert len(registry) == 0
         assert not registry_path.exists()
 
+    def test_a_failed_save_does_not_learn_the_tag_in_memory(self, registry_path, monkeypatch):
+        registry = ClubTagRegistry(registry_path)
+
+        def fail(*_args, **_kwargs):
+            raise OSError("read-only filesystem")
+
+        monkeypatch.setattr(registry, "_save_locked", fail)
+
+        with pytest.raises(OSError, match="read-only filesystem"):
+            registry.assign("04A2B1C3", "7-iron")
+
+        assert registry.club_for("04A2B1C3") is None
+        assert len(registry) == 0
+
+    def test_a_failed_save_keeps_the_previous_club_in_memory(self, registry_path, monkeypatch):
+        registry = ClubTagRegistry(registry_path)
+        registry.assign("04A2B1C3", "7-iron")
+
+        def fail(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(registry, "_save_locked", fail)
+
+        with pytest.raises(OSError, match="disk full"):
+            registry.assign("04A2B1C3", "driver")
+
+        assert registry.club_for("04A2B1C3") == "7-iron"
+
+    def test_a_failed_save_does_not_forget_the_tag_in_memory(self, registry_path, monkeypatch):
+        registry = ClubTagRegistry(registry_path)
+        registry.assign("04A2B1C3", "sw")
+
+        def fail(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(registry, "_save_locked", fail)
+
+        with pytest.raises(OSError, match="disk full"):
+            registry.forget("04A2B1C3")
+
+        assert registry.club_for("04A2B1C3") == "sw"
+        assert ClubTagRegistry(registry_path).club_for("04A2B1C3") == "sw"
+
     def test_club_lookup_of_an_unusable_uid_returns_none(self, registry_path):
         assert ClubTagRegistry(registry_path).club_for("") is None
 

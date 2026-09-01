@@ -106,11 +106,12 @@ class ClubTagRegistry:
 
     # ------------------------------------------------------------------ save
 
-    def _save_locked(self) -> None:
+    def _save_locked(self, tags: dict[str, ClubTag] | None = None) -> None:
         """Atomically rewrite the file; callers must hold the lock."""
+        payload_tags = self._tags if tags is None else tags
         payload = {
             "version": SCHEMA_VERSION,
-            "tags": {tag.uid: tag.to_dict() for tag in self._tags.values()},
+            "tags": {tag.uid: tag.to_dict() for tag in payload_tags.values()},
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # Write to a sibling temp file and rename, so a power cut during the
@@ -181,8 +182,10 @@ class ClubTagRegistry:
                 learned_at=existing.learned_at if existing else utc_now_iso(),
                 last_seen_at=existing.last_seen_at if existing else None,
             )
-            self._tags[key] = tag
-            self._save_locked()
+            next_tags = dict(self._tags)
+            next_tags[key] = tag
+            self._save_locked(next_tags)
+            self._tags = next_tags
         logger.info("[NFC] Learned tag %s -> %s", key, club)
         return tag
 
@@ -195,8 +198,10 @@ class ClubTagRegistry:
         with self._lock:
             if key not in self._tags:
                 return False
-            del self._tags[key]
-            self._save_locked()
+            next_tags = dict(self._tags)
+            del next_tags[key]
+            self._save_locked(next_tags)
+            self._tags = next_tags
         logger.info("[NFC] Forgot tag %s", key)
         return True
 
