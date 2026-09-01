@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # OpenFlight Kiosk Startup Script
-# Starts the radar server and launches Chromium in kiosk mode
+# Starts the radar server and launches the Electron kiosk shell
 #
 
 set -e
@@ -507,20 +507,19 @@ error() {
 
 launch_kiosk_browser() {
     local url="$1"
-    local chrome_flags="--kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --password-store=basic"
+    local electron_bin="$PROJECT_DIR/ui/node_modules/.bin/electron"
 
-    log "Launching kiosk browser..."
-    if command -v chromium-browser &> /dev/null; then
-        DISPLAY=:0 chromium-browser $chrome_flags "$url" &
+    log "Launching kiosk shell (Electron)..."
+    if [ -x "$electron_bin" ]; then
+        DISPLAY=:0 OPENFLIGHT_URL="$url" "$electron_bin" "$PROJECT_DIR/ui" &
+    elif command -v chromium-browser &> /dev/null; then
+        warn "Electron kiosk shell not installed (run 'npm install' in ui/); falling back to chromium-browser"
+        DISPLAY=:0 chromium-browser --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --password-store=basic "$url" &
     elif command -v chromium &> /dev/null; then
-        DISPLAY=:0 chromium $chrome_flags "$url" &
-    elif command -v google-chrome &> /dev/null; then
-        DISPLAY=:0 google-chrome $chrome_flags "$url" &
-    elif command -v firefox &> /dev/null; then
-        DISPLAY=:0 firefox --kiosk "$url" &
+        warn "Electron kiosk shell not installed (run 'npm install' in ui/); falling back to chromium"
+        DISPLAY=:0 chromium --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --password-store=basic "$url" &
     else
-        warn "No supported browser found. Open $url manually."
-        warn "Supported browsers: chromium-browser, chromium, google-chrome, firefox"
+        warn "No Electron kiosk shell and no fallback browser found. Open $url manually."
         return 1
     fi
 
@@ -703,7 +702,8 @@ cleanup() {
     if [ -n "$BROWSER_PID" ]; then
         kill "$BROWSER_PID" 2>/dev/null || true
     fi
-    # Chromium forks child processes that survive kill — clean them all
+    # Electron/Chromium fork child processes that survive kill — clean them all
+    pkill -f "ui/node_modules/electron/dist/electron" 2>/dev/null || true
     pkill -f "chromium.*--kiosk" 2>/dev/null || true
     pkill -f "chrome.*--kiosk" 2>/dev/null || true
     exit "$exit_code"
@@ -1020,9 +1020,9 @@ fi
 
 configure_kld7_latency
 
-# Check if UI is built
-if [ ! -d "ui/dist" ]; then
-    warn "UI not built. Building now..."
+# Check if UI is built and the Electron kiosk shell is installed
+if [ ! -d "ui/dist" ] || [ ! -x "ui/node_modules/.bin/electron" ]; then
+    warn "UI not built or Electron shell missing. Building now..."
     cd ui
     if ! npm install || ! npm run build; then
         cd ..
