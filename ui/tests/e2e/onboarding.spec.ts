@@ -64,6 +64,49 @@ test('menu has live view and no shutdown; header still shuts down', async ({ pag
   await expect(page.getByRole('dialog', { name: 'Shut down OpenFlight?' })).toBeVisible();
 });
 
+test.describe('menu live view at 800×400', () => {
+  test.use({ viewport: { width: 800, height: 400 } });
+
+  test('scrolls the menu by dragging so duration chips can be selected', async ({ page }) => {
+    await gotoApp(page);
+    await page.getByRole('button', { name: 'Close Select club' }).click();
+    await page.getByRole('button', { name: 'Open menu' }).click();
+    const menu = page.getByRole('dialog', { name: 'Menu' });
+    await menu.getByRole('button', { name: 'Timed', exact: true }).click();
+
+    await expect.poll(async () => menu.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+
+    const before = await menu.evaluate((node) => node.scrollTop);
+    const box = await menu.boundingBox();
+    expect(box).toBeTruthy();
+
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height - 24);
+    await page.mouse.down();
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + 24, { steps: 12 });
+    await page.mouse.up();
+
+    await expect.poll(async () => menu.evaluate((node) => node.scrollTop)).toBeGreaterThan(before);
+    await expect(menu.getByRole('button', { name: 'Timed', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await menu.getByRole('button', { name: '5s', exact: true }).click();
+    await expect(menu.getByRole('button', { name: '5s', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+test.describe('menu on a touchscreen at 800×400', () => {
+  test.use({ hasTouch: true, viewport: { width: 800, height: 400 } });
+
+  test('taps Timed without a drag', async ({ page }) => {
+    await gotoApp(page);
+    await page.getByRole('button', { name: 'Close Select club' }).click();
+    await page.getByRole('button', { name: 'Open menu' }).click();
+    const menu = page.getByRole('dialog', { name: 'Menu' });
+
+    await menu.getByRole('button', { name: 'Timed', exact: true }).tap();
+    await expect(menu.getByRole('button', { name: 'Timed', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(menu.getByRole('button', { name: '5s', exact: true })).toHaveCount(1);
+  });
+});
+
 test('timed overlay hides after the chosen duration; hold stays until tap', async ({ page }) => {
   await page.clock.install();
   await gotoApp(page);

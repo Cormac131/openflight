@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { MenuSheet } from './MenuSheet';
@@ -83,6 +85,15 @@ describe('MenuSheet live view', () => {
     expect(html).toContain('>5s<');
     expect(html).toContain('>10s<');
     expect(html).toContain('>15s<');
+  });
+
+  it('owns vertical drag scrolling so Timed duration chips can be reached', () => {
+    const src = readFileSync(fileURLToPath(new URL('./MenuSheet.tsx', import.meta.url)), 'utf8');
+    const css = readFileSync(fileURLToPath(new URL('./panel.css', import.meta.url)), 'utf8');
+
+    expect(src).toContain('useDragScroll');
+    expect(css).toMatch(/\.menu-sheet \{[^}]*touch-action:\s*none/);
+    expect(css).toMatch(/\.menu-sheet \.segmented-control__button \{[^}]*touch-action:\s*none/);
   });
 });
 

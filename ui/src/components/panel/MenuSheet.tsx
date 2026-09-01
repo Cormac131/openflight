@@ -1,5 +1,7 @@
+import { useRef } from 'react';
 import { LOCALES, type LocaleId } from '../../i18n';
 import { useI18n } from '../../i18n/useI18n';
+import { useDragScroll } from '../../hooks/useDragScroll';
 import { useThemeStore } from '../../stores/useThemeStore';
 import { useLocaleStore } from '../../stores/useLocaleStore';
 import { isLiveViewDurationMs, useLiveViewStore } from '../../stores/useLiveViewStore';
@@ -26,11 +28,24 @@ export function MenuSheet({ onClose }: MenuSheetProps) {
   useLiveViewStore((state) => state.mode);
   useLiveViewStore((state) => state.durationMs);
   const { mode, durationMs, setMode, setDurationMs } = useLiveViewStore.getState();
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const dragScroll = useDragScroll(sheetRef);
 
   return (
     <>
       <button type="button" className="panel-scrim" onClick={onClose} aria-label={t('menu.close')} />
-      <div className="menu-sheet" role="dialog" aria-modal="true" aria-label={t('menu.title')}>
+      <div
+        ref={sheetRef}
+        className="menu-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('menu.title')}
+        onPointerDown={dragScroll.onPointerDown}
+        onPointerMove={dragScroll.onPointerMove}
+        onPointerUp={dragScroll.onPointerUp}
+        onPointerCancel={dragScroll.onPointerCancel}
+        onClickCapture={dragScroll.onClickCapture}
+      >
         <section className="menu-sheet__section">
           <span className="menu-sheet__section-title">{t('menu.units')}</span>
           <SegmentedControl

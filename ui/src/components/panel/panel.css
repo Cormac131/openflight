@@ -577,6 +577,11 @@
   height: 1.125rem;
 }
 
+.live-panel__spotlight .metric-card__experimental svg {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
 .live-panel__spotlight-value-row {
   display: flex;
   align-items: baseline;
@@ -1214,6 +1219,7 @@
   width: 320px;
   max-height: calc(100% - 86px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--color-surface);
   border: 0px;
   border-radius: var(--radius);
@@ -1222,6 +1228,18 @@
   flex-direction: column;
   gap: 16px;
   z-index: 21;
+  /* Own the gesture so Pi mouse-drags scroll instead of tapping segments. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.menu-sheet .segmented-control__button {
+  touch-action: none;
+}
+
+.menu-sheet__select {
+  touch-action: none;
 }
 
 .menu-sheet__section {

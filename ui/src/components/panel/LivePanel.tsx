@@ -5,7 +5,7 @@ import { useUnitPreference } from '../../state/useUnitPreference';
 import { useI18n } from '../../i18n/useI18n';
 import { useSharedFitFontSize } from '../../hooks/useFitFontSize';
 import { useLiveViewStore } from '../../stores/useLiveViewStore';
-import { EstimatedMark, MetricCard } from '../ui/MetricCard';
+import { EstimatedMark, ExperimentalMark, MetricCard } from '../ui/MetricCard';
 import { PanelHeader } from './PanelHeader';
 import { buildLiveMetrics, pinSelectedMetric } from './liveMetrics';
 import { useShotSpotlight } from './useShotSpotlight';
@@ -108,6 +108,7 @@ export function LivePanel({
             <span className="live-panel__spotlight-label">
               {selected.label} · {clubLabel}
               {selected.estimated ? <EstimatedMark /> : null}
+              {selected.experimental ? <ExperimentalMark /> : null}
             </span>
             <div className="live-panel__spotlight-value-row">
               <span className="live-panel__spotlight-value">{selected.value}</span>
@@ -125,6 +126,7 @@ export function LivePanel({
               unit={metric.unit}
               subtext={metric.subtext}
               estimated={metric.estimated}
+              experimental={metric.experimental}
               confidence={metric.confidence}
               confidenceLabel={metric.confidenceLabel}
               labelPosition="above"

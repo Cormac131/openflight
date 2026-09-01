@@ -202,6 +202,42 @@ describe('LivePanel', () => {
     expect(html).not.toContain('>radar<');
   });
 
+  it('marks experimental tiles with the flask icon from live metrics', () => {
+    const html = render(
+      makeShot({
+        club_angle_deg: null,
+        club_path_deg: null,
+        experimental_fused_attack_angle_deg: -4.2,
+        experimental_fused_club_path_deg: 3.1,
+        experimental_fused_status: 'approach_mixed',
+        launch_angle_horizontal_source: 'camera_assisted_experimental',
+      })
+    );
+
+    expect(html).toContain('metric-card__experimental');
+    expect(html).toContain('metric-card__experimental-label">Experimental<');
+  });
+
+  it('shows the experimental mark on the timed spotlight, not only on tiles', () => {
+    const html = render(
+      makeShot({
+        club_path_deg: null,
+        experimental_fused_club_path_deg: 3.1,
+        experimental_fused_club_path_confidence: 'high',
+        experimental_fused_status: 'approach_mixed',
+      }),
+      undefined,
+      'club_path',
+      true,
+      'timed'
+    );
+    const spotlight = html.match(/class="live-panel__spotlight"[\s\S]*?<\/button>/)?.[0] ?? '';
+
+    expect(spotlight).toContain('live-panel__spotlight');
+    expect(spotlight).toContain('metric-card__experimental');
+    expect(spotlight).toContain('metric-card__experimental-label">Experimental<');
+  });
+
   it('makes every tile a pressable button so it can be selected', () => {
     const html = render(makeShot());
 
