@@ -1,7 +1,7 @@
 # Electron Kiosk Shell
 
 `scripts/start-kiosk.sh` launches the React UI inside Electron
-(`ui/electron/main.cjs`) rather than shelling out to whatever browser
+(`ui/electron/main.js`) rather than shelling out to whatever browser
 happens to be installed on the Pi. This document explains why that's an
 improvement, and sketches how it could support self-updating later. It does
 not describe anything implemented yet beyond the shell itself — see
@@ -29,7 +29,7 @@ entirely — it just loses the guarantees above until Electron is installed.
 
 ## What Didn't Change
 
-Electron here is a shell, not a rewrite: `ui/electron/main.cjs` opens a
+Electron here is a shell, not a rewrite: `ui/electron/main.js` opens a
 `BrowserWindow` and points it at the same URL the browser used to load
 (`http://localhost:8080`, served by Flask from `ui/dist`). The React app,
 the WebSocket connection (`socketService.ts`), and the Flask server are
@@ -68,7 +68,7 @@ through `git pull` + reinstall rather than an out-of-band download.
 ### 3. The interesting case: OpenFlight self-updating without an SSH session
 
 The capability an Electron main process adds that a browser tab never had
-is **the kiosk can update itself**, because `main.cjs` runs as a full
+is **the kiosk can update itself**, because `main.js` runs as a full
 Node.js process on the Pi rather than inside a sandboxed tab. Two designs,
 in increasing order of complexity:
 
@@ -84,11 +84,11 @@ operator does by hand today:
    - Content-only change (`ui/` touched, `ui/electron/` and
      `ui/package.json`'s `electron` version untouched) → `win.loadURL()`
      again, or just wait for the operator's next launch.
-   - Shell change (Electron itself bumped, or `main.cjs` changed) →
+   - Shell change (Electron itself bumped, or `main.js` changed) →
      `app.relaunch(); app.exit(0)`, or restart the systemd unit
      (`systemctl --user restart openflight` / `sudo systemctl restart
      openflight`, per `scripts/setup/openflight.service`) so the new
-     `main.cjs` is picked up.
+     `main.js` is picked up.
 
 This reuses the exact update path already documented for manual updates —
 it just runs it from inside the app instead of over SSH. It also keeps

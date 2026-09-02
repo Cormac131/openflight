@@ -552,3 +552,54 @@ def test_iwr6843_horizontal_phase_reference_is_forwarded():
 def test_iwr6843_horizontal_phase_reference_is_omitted_by_default():
     command = _dry_run("--iwr6843").stdout.strip()
     assert "--iwr6843-horizontal-phase-reference-rad" not in command
+
+
+def _read_script() -> str:
+    return (Path(__file__).resolve().parents[1] / "scripts/start-kiosk.sh").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_launch_kiosk_browser_prefers_the_electron_shell():
+    """The pinned Electron runtime must be tried before any system browser."""
+    script = _read_script()
+    launcher = script[
+        script.index("launch_kiosk_browser() {") : script.index("stop_startup_splash_server() {")
+    ]
+
+    electron_idx = launcher.index('if [ -x "$electron_bin" ]; then')
+    chromium_browser_idx = launcher.index("command -v chromium-browser")
+    chromium_idx = launcher.index("command -v chromium &> /dev/null")
+
+    assert electron_idx < chromium_browser_idx < chromium_idx
+    assert 'local electron_bin="$PROJECT_DIR/ui/node_modules/.bin/electron"' in launcher
+    assert '"$electron_bin" "$PROJECT_DIR/ui"' in launcher
+
+
+def test_launch_kiosk_browser_still_falls_back_without_electron():
+    """A Pi that hasn't run `npm install` yet must not lose its kiosk entirely."""
+    script = _read_script()
+    launcher = script[
+        script.index("launch_kiosk_browser() {") : script.index("stop_startup_splash_server() {")
+    ]
+
+    assert "chromium-browser --kiosk" in launcher
+    assert "chromium --kiosk" in launcher
+    assert "No Electron kiosk shell and no fallback browser found" in launcher
+
+
+def test_cleanup_kills_the_electron_process_tree():
+    """Electron, like Chromium, forks children that survive a signal to the launcher PID."""
+    script = _read_script()
+    cleanup_fn = script[script.index("cleanup() {") : script.index("configure_kld7_latency() {")]
+
+    assert 'pkill -f "ui/node_modules/electron/dist/electron"' in cleanup_fn
+
+
+def test_ui_build_check_also_requires_the_electron_shell():
+    """Rebuilding the UI must also install Electron if a checkout predates it."""
+    script = _read_script()
+
+    assert (
+        'if [ ! -d "ui/dist" ] || [ ! -x "ui/node_modules/.bin/electron" ]; then' in script
+    )
