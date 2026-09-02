@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full horizontal speed, overstating attack angle on any shot with club path.
 
 ### Added
+- **Electron kiosk shell.** `scripts/start-kiosk.sh` now opens the UI in a pinned
+  Electron window (`electron@44`) instead of whichever system browser happens to
+  be installed. Chromium remains a fallback if Electron is not installed. This
+  needs **Node.js 22.12 or newer** (`npm WARN EBADENGINE` on Node 20). See
+  [Electron Kiosk Shell](electron-kiosk-shell.md).
 - **Profiles replace players.** Shots are now attributed to a server-owned profile
   (a person *or* a place) with a stable id, persisted to
   `~/.config/openflight/profiles.json` (override with `OPENFLIGHT_PROFILES_PATH`
