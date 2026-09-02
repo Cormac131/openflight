@@ -1,15 +1,13 @@
-'use strict';
-
 // Kiosk shell for the OpenFlight React UI. Loads whatever URL the launcher
 // script gives it (the startup splash, then the app itself once it
 // navigates there) in a chromeless, fullscreen window — this replaces
 // scripts/start-kiosk.sh's old system-browser detection (chromium-browser /
 // chromium / google-chrome / firefox) with one pinned Chromium version.
 
-const { app, BrowserWindow, Menu } = require('electron');
+import { app, BrowserWindow, Menu } from 'electron';
+import { resolveTargetUrl } from './resolveTargetUrl.js';
 
-const DEFAULT_URL = 'http://localhost:8080';
-const targetUrl = process.env.OPENFLIGHT_URL || process.argv[2] || DEFAULT_URL;
+const targetUrl = resolveTargetUrl(process.env, process.argv);
 
 Menu.setApplicationMenu(null);
 
