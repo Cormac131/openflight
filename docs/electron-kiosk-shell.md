@@ -65,6 +65,11 @@ commit the updated lockfile, `git pull` on each Pi. No runtime auto-update
 machinery is needed for this either, as long as updates continue to arrive
 through `git pull` + reinstall rather than an out-of-band download.
 
+Installing that package (not running the Electron binary) needs **Node.js
+22.12+** on the Pi. Node 20 prints `npm WARN EBADENGINE` for `electron@44`
+and its `@electron/get` helper. See the Node install step in
+[raspberry-pi-setup.md](raspberry-pi-setup.md).
+
 ### 3. The interesting case: OpenFlight self-updating without an SSH session
 
 The capability an Electron main process adds that a browser tab never had

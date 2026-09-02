@@ -9,7 +9,7 @@ and how the whole system fits together, see the [root README](../README.md).
 
 ## Quick start
 
-You need Node 20+.
+You need Node 22.12 or newer (`electron@44` will not install cleanly on Node 20).
 
 ### Frontend-only (recommended for UI work)
 

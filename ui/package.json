@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "main": "electron/main.cjs",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "electron": "electron .",
     "dev": "vite",
