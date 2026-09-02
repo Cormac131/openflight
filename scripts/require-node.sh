@@ -11,11 +11,21 @@ openflight_node_version() {
 }
 
 openflight_node_meets_min() {
-    local current lowest
+    local current cmaj cmin cpat mmaj mmin mpat
     current="$(openflight_node_version)" || return 1
     [ -n "$current" ] || return 1
-    lowest="$(printf '%s\n%s\n' "$OPENFLIGHT_MIN_NODE" "$current" | sort -V | head -n1)"
-    [ "$lowest" = "$OPENFLIGHT_MIN_NODE" ]
+
+    IFS=. read -r cmaj cmin cpat <<<"$current"
+    IFS=. read -r mmaj mmin mpat <<<"$OPENFLIGHT_MIN_NODE"
+
+    cmaj=${cmaj:-0}; cmin=${cmin:-0}; cpat=${cpat:-0}
+    mmaj=${mmaj:-0}; mmin=${mmin:-0}; mpat=${mpat:-0}
+
+    if (( cmaj > mmaj )); then return 0; fi
+    if (( cmaj < mmaj )); then return 1; fi
+    if (( cmin > mmin )); then return 0; fi
+    if (( cmin < mmin )); then return 1; fi
+    (( cpat >= mpat ))
 }
 
 openflight_node_install_hint() {
