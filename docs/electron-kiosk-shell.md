@@ -36,16 +36,14 @@ the WebSocket connection (`socketService.ts`), and the Flask server are
 untouched — `getServerOrigin()` still resolves to `window.location.origin`,
 which is the Electron window's origin now instead of a browser tab's.
 
-## Auto-Updates (Future Work)
+## Auto-Updates
 
-Nothing below is implemented. It's worth writing down now because "Electron
-shell" and "auto-update" are usually mentioned in the same breath, and
-because OpenFlight's deployment shape (a small fleet of Pis you personally
-maintain, not a public app store release) points toward a different design
-than the default Electron answer.
+OpenFlight can update itself from GitHub without an SSH session. The updater
+runs entirely inside the Electron **main process** — no Flask endpoint, no
+socket event, nothing reachable from the network can trigger it.
 
-There are two separate things that could be "updated," and they call for
-different mechanisms.
+There are two separate things that can be "updated," and they use different
+mechanisms.
 
 ### 1. UI content (the React build) — already effectively live
 
@@ -77,71 +75,98 @@ is **the kiosk can update itself**, because `main.js` runs as a full
 Node.js process on the Pi rather than inside a sandboxed tab. Two designs,
 in increasing order of complexity:
 
-**A. Main-process-driven `git pull` (recommended starting point)**
+### 3. Self-updating without an SSH session
 
-The main process periodically (or on a UI-triggered "Check for Updates"
-action, via a `contextBridge` preload script) does the same thing an
-operator does by hand today:
+The updater polls a GitHub Releases feed, downloads a pre-built release bundle,
+verifies its integrity, and swaps it in while the kiosk is running.
 
-1. `git fetch` and compare `HEAD` against `origin/<branch>`.
-2. If behind: `git pull`, `uv sync`, `npm run build` (in `ui/`).
-3. Decide how to apply it:
-   - Content-only change (`ui/` touched, `ui/electron/` and
-     `ui/package.json`'s `electron` version untouched) → `win.loadURL()`
-     again, or just wait for the operator's next launch.
-   - Shell change (Electron itself bumped, or `main.js` changed) →
-     `app.relaunch(); app.exit(0)`, or restart the systemd unit
-     (`systemctl --user restart openflight` / `sudo systemctl restart
-     openflight`, per `scripts/setup/openflight.service`) so the new
-     `main.js` is picked up.
+**How it works:**
 
-This reuses the exact update path already documented for manual updates —
-it just runs it from inside the app instead of over SSH. It also keeps
-using GitHub as the source of truth, so no new release infrastructure,
-signing, or hosting is required.
+1. Every 30 minutes (and 30 seconds after startup), `main.js` calls
+   `updater.checkForUpdate()` — fetches `latest.json` from GitHub Releases and
+   compares its `version` field against the local `version.json`. The renderer
+   can also trigger a check manually via the Settings menu.
+2. When a new version is detected, the menu shows **Update available** and an
+   **Apply update** button.
+3. The button is disabled while a shot is being processed
+   (`shotProcessingPhase !== null`) so updates never interrupt a round.
+4. The user taps **Apply update**. The main process runs the bundle pipeline:
+   - **Downloading** — streams the release `.tar.gz` to a temp directory.
+   - **Verifying** — SHA-256 check against `latest.json`; aborts on mismatch.
+   - **Extracting** — `tar -xzf` into temp; top-level entry moved to
+     `~/openflight.next/`.
+   - **Installing** — `uv sync --find-links=wheels/` (uses pre-downloaded aarch64
+     wheels from the bundle; falls back to PyPI if a wheel is missing)
+     + `npm ci --prefer-offline` (uses the global `~/.npm` cache).
+   - **Swapping** — `~/openflight` → `~/openflight.prev`,
+     `~/openflight.next` → `~/openflight`. `openflight.prev` is kept for
+     one-step manual recovery.
+5. Restart: tries `sudo systemctl restart openflight`, then
+   `systemctl --user restart openflight`, then `app.relaunch()` as a last resort.
+6. If any step fails, the UI shows **Update failed** and the previous version
+   continues running unchanged.
 
-Things to get right if this is built:
-- **Trust boundary:** whatever triggers the pull (a timer or a UI button)
-  must not be reachable by anything the Flask server exposes over the
-  network — this must stay a main-process-only action, not a socket event
-  or HTTP endpoint, so a device on the same LAN can't trigger arbitrary
-  `git pull`/`uv sync` execution on the Pi.
-- **Partial-failure safety:** a `git pull` that succeeds but an `npm run
-  build` that fails should not leave the Pi worse off than before — keep
-  the previous `ui/dist` until the new build succeeds (e.g. build to a
-  temp directory and swap), and skip the restart on build failure.
-- **Mid-round updates:** don't apply an update (especially the
-  shell-restart kind) while a shot/session is in progress; gate it on
-  session/idle state the same way the splash screen gates on startup state.
-- **Network dependence:** the Pi may be on a golf-sim LAN with no general
-  internet access even when it can reach GitHub, or vice versa — the check
-  should fail closed (skip silently) rather than block startup.
+> **Note for git-checkout installs (no `version.json`):** the updater treats the
+> version as unknown and always shows the update as available, prompting a
+> migration to the bundle install path.
 
-**B. `electron-updater` + a packaged build**
+**CI release workflow** (`.github/workflows/release.yml`):
 
-The conventional Electron answer — `electron-builder` packages the app,
-`electron-updater`'s `autoUpdater.checkForUpdatesAndNotify()` polls a feed
-(GitHub Releases, S3, or a self-hosted static server) and swaps the
-installed build. This is the right model for shipping to users you don't
-operate the hardware for.
+Triggered by any `v*` tag push (e.g. `v0.3.0`) on `ubuntu-latest`:
 
-It's a bigger lift than option A here, for two reasons specific to this
-project:
-- It requires the packaging step this shell deliberately skipped (see the
-  original Electron-shell decision: "just run from source, no installers").
-  `ui/dist` would need to be bundled into the package rather than loaded
-  live from Flask, which reintroduces the "which layer updates independently"
-  question this doc just resolved for the source-checkout model.
-- `electron-updater`'s Linux auto-update support is limited to the AppImage
-  format. That's buildable for `arm64` (Raspberry Pi OS 64-bit, which this
-  fleet already requires), but it's a new build target, a new artifact to
-  test on real hardware, and a release/signing pipeline to stand up — none
-  of which exists for this project today.
+1. `npm ci && npm run build` → pre-built `ui/dist/`.
+2. `pip download --platform linux_aarch64` → pre-fetches binary Python wheels.
+3. Assembles bundle: Python source, `ui/dist/`, Electron files, `wheels/`,
+   `version.json` manifest.
+4. Uploads `openflight-v*-linux-arm64.tar.gz` and `latest.json` as GitHub
+   Release assets. Stable feed URL:
+   `https://github.com/Cormac131/openflight/releases/latest/download/latest.json`
 
-**Recommendation:** start with (A) if/when self-updating is prioritized. It
-matches the fleet's actual shape (Pis you `git pull` on, not an app store
-audience), reuses infrastructure that already exists (`uv sync`, `npm run
-build`, the systemd unit), and doesn't require adopting a packaging and
-release pipeline before there's a concrete need for one. Revisit (B) only if
-OpenFlight starts distributing prebuilt images to people who don't run `git
-pull` themselves.
+**Experimental channel** (`.github/workflows/experimental.yml`):
+
+Triggered by pre-release version tags (`v*-*`, e.g. `v0.3.0-beta.1`):
+
+1. Same build steps as the stable workflow.
+2. Bundle is named `openflight-experimental-linux-arm64.tar.gz` (fixed name so
+   it overwrites the previous experimental build in-place).
+3. Uploads the bundle and `latest-experimental.json` to a mutable GitHub Release
+   with tag `experimental` (marked pre-release). Stable feed URL:
+   `https://github.com/Cormac131/openflight/releases/download/experimental/latest-experimental.json`
+
+**Switching channels on the Pi:**
+
+Open the menu (logo button) → **Updates** → **Channel** → choose
+**Stable** or **Experimental**. The preference is saved to
+`{userData}/channel.json` and survives restarts. The next periodic check (or a
+manual **Check for updates** tap) fetches from the new channel's feed.
+
+**Override the feed URL** for staging: set
+`OPENFLIGHT_FEED_URL=https://...` in the Electron process environment (overrides
+the channel setting).
+
+**Key modules:**
+
+| File | Purpose |
+|---|---|
+| `ui/electron/updater.js` | Download/verify/swap pipeline (injectable for tests) |
+| `ui/electron/preload.cjs` | `contextBridge` IPC bridge to the renderer |
+| `ui/electron/main.js` | IPC handlers + periodic check timer |
+| `ui/src/stores/useUpdateStore.ts` | Zustand store for update status in the React UI |
+| `ui/src/components/UpdateDialog.tsx` | Full-screen overlay during apply / on failure |
+| `ui/src/components/panel/MenuSheet.tsx` | Updates section (check + apply buttons) |
+
+**Pi setup for passwordless systemd restart:**
+
+```bash
+sudo visudo -f /etc/sudoers.d/openflight-update
+# Add:
+coleman ALL=(ALL) NOPASSWD: /bin/systemctl restart openflight
+```
+
+Alternatively, install the service as a user service (`systemctl --user`) — no
+sudo entry needed.
+
+**Trust boundary:** the IPC channel is exposed only to the local renderer via
+`contextBridge`. Nothing in the Flask server or the WebSocket API can trigger
+downloads, `uv sync`, or filesystem swaps. The Pi's network clients have no path
+to these operations.

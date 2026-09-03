@@ -228,6 +228,30 @@ export const en = {
   'display.clubPath': 'Club Path',
 
   'sim.connectors': 'Simulator connectors',
+
+  'menu.updates': 'Updates',
+  'menu.checkForUpdates': 'Check for updates',
+  'menu.applyUpdate': 'Apply update',
+  'menu.updateAvailable': 'Update available',
+  'menu.upToDate': 'Up to date',
+  'menu.updateChecking': 'Checking…',
+  'menu.updateError': 'Update check failed',
+  'menu.updateApplying': 'Updating…',
+  'menu.updateChannel': 'Channel',
+  'menu.channelStable': 'Stable',
+  'menu.channelExperimental': 'Experimental',
+
+  'update.applyingTitle': 'Applying update\u2026',
+  'update.stageSwapping': 'Installing update',
+  'update.stageDownloading': 'Downloading update',
+  'update.stageVerifying': 'Verifying download',
+  'update.stageExtracting': 'Extracting files',
+  'update.stageInstalling': 'Installing dependencies',
+  'update.buildFailedTitle': 'Update failed',
+  'update.buildFailedDetail': 'The previous version is still running. Check logs and try again.',
+  'update.restartingTitle': 'Restarting OpenFlight…',
+  'update.dismiss': 'Dismiss',
+  'update.applyAria': 'Applying software update',
 } as const;
 
 export type MessageKey = keyof typeof en;

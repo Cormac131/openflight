@@ -230,4 +230,28 @@ export const fr: Messages = {
   'display.clubPath': 'Trajectoire club',
 
   'sim.connectors': 'Connecteurs simulateur',
+
+  'menu.updates': 'Mises à jour',
+  'menu.checkForUpdates': 'Vérifier les mises à jour',
+  'menu.applyUpdate': 'Appliquer la mise à jour',
+  'menu.updateAvailable': 'Mise à jour disponible',
+  'menu.upToDate': 'À jour',
+  'menu.updateChecking': 'Vérification…',
+  'menu.updateError': 'Échec de la vérification',
+  'menu.updateApplying': 'Mise à jour…',
+  'menu.updateChannel': 'Canal',
+  'menu.channelStable': 'Stable',
+  'menu.channelExperimental': 'Expérimental',
+
+  'update.applyingTitle': 'Application de la mise \u00e0 jour\u2026',
+  'update.stageSwapping': 'Installation de la mise \u00e0 jour',
+  'update.stageDownloading': 'T\u00e9l\u00e9chargement de la mise \u00e0 jour',
+  'update.stageVerifying': 'V\u00e9rification du t\u00e9l\u00e9chargement',
+  'update.stageExtracting': 'Extraction des fichiers',
+  'update.stageInstalling': 'Installation des d\u00e9pendances',
+  'update.buildFailedTitle': 'Mise à jour échouée',
+  'update.buildFailedDetail': 'La version précédente est toujours en cours d\u2019exécution. Vérifiez les journaux et réessayez.',
+  'update.restartingTitle': 'Redémarrage d\u2019OpenFlight…',
+  'update.dismiss': 'Fermer',
+  'update.applyAria': 'Application de la mise à jour logicielle',
 };

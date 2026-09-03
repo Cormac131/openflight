@@ -230,4 +230,28 @@ export const es: Messages = {
   'display.clubPath': 'Path del palo',
 
   'sim.connectors': 'Conectores de simulador',
+
+  'menu.updates': 'Actualizaciones',
+  'menu.checkForUpdates': 'Buscar actualizaciones',
+  'menu.applyUpdate': 'Aplicar actualización',
+  'menu.updateAvailable': 'Actualización disponible',
+  'menu.upToDate': 'Al día',
+  'menu.updateChecking': 'Comprobando…',
+  'menu.updateError': 'Error al comprobar',
+  'menu.updateApplying': 'Actualizando…',
+  'menu.updateChannel': 'Canal',
+  'menu.channelStable': 'Estable',
+  'menu.channelExperimental': 'Experimental',
+
+  'update.applyingTitle': 'Aplicando actualizaci\u00f3n\u2026',
+  'update.stageSwapping': 'Instalando actualizaci\u00f3n',
+  'update.stageDownloading': 'Descargando actualizaci\u00f3n',
+  'update.stageVerifying': 'Verificando descarga',
+  'update.stageExtracting': 'Extrayendo archivos',
+  'update.stageInstalling': 'Instalando dependencias',
+  'update.buildFailedTitle': 'Actualización fallida',
+  'update.buildFailedDetail': 'La versión anterior sigue en ejecución. Revise los registros e inténtelo de nuevo.',
+  'update.restartingTitle': 'Reiniciando OpenFlight…',
+  'update.dismiss': 'Cerrar',
+  'update.applyAria': 'Aplicando actualización de software',
 };

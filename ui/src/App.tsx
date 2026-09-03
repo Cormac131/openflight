@@ -8,12 +8,14 @@ import { useDebugStore } from './stores/useDebugStore';
 import { useProfileStore } from './stores/useProfileStore';
 import { useHeroMetricStore } from './stores/useHeroMetricStore';
 import { useCameraReplayController } from './hooks/useCameraReplayController';
+import { useUpdateStore, subscribeToElectronUpdates } from './stores/useUpdateStore';
 import { socketService } from './services/socketService';
 import { DebugPanel } from './components/DebugPanel';
 import { DisplayMode } from './components/DisplayMode';
 import { SimShotBadges } from './components/SimShotBadges';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
+import { UpdateDialog } from './components/UpdateDialog';
 import { CameraReplayDialog } from './components/CameraReplayDialog';
 import {
   CameraPanel,
@@ -110,6 +112,8 @@ function AppContent() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [showShutdown, setShowShutdown] = useState(false);
   const [shutdownState, setShutdownState] = useState<ShutdownState>('confirm');
+  const [showUpdateDialog, setShowUpdateDialog] = useState(false);
+  const { status: updateStatus, setStatus: setUpdateStatus, applyUpdate } = useUpdateStore();
   // Open on every app load so the user confirms their club before the first
   // shot; dismissing keeps the default. The /display route returns early below,
   // so this never appears in the passive TV view.
@@ -159,6 +163,13 @@ function AppContent() {
       window.removeEventListener('pointerdown', unlock);
       window.removeEventListener('keydown', unlock);
     };
+  }, []);
+
+  // Subscribe to update status pushes from the Electron main process.
+  // This is a no-op in browser / dev mode (window.electronUpdate is absent).
+  useEffect(() => {
+    const unsubscribe = subscribeToElectronUpdates();
+    return () => unsubscribe?.();
   }, []);
 
   const handleSelectProfile = (profileId: string) => {
@@ -223,6 +234,18 @@ function AppContent() {
     setShutdownState('confirm');
   };
 
+  const handleApplyUpdate = () => {
+    // Gate: do not apply while a shot is being processed.
+    if (shotProcessingPhase !== null) return;
+    setShowUpdateDialog(true);
+    applyUpdate();
+  };
+
+  const handleDismissUpdate = () => {
+    setShowUpdateDialog(false);
+    setUpdateStatus({ type: 'idle' });
+  };
+
   const profileShots = filterShotsByProfile(shots, activeProfileId);
   const profileLatestShot = profileShots[profileShots.length - 1] ?? null;
   const profileIsNewShot = Boolean(
@@ -283,6 +306,14 @@ function AppContent() {
 
       {showShutdown ? (
         <ShutdownDialog state={shutdownState} onConfirm={handleShutdown} onCancel={closeShutdown} />
+      ) : null}
+
+      {showUpdateDialog &&
+        (updateStatus.type === 'applying' ||
+          updateStatus.type === 'ready' ||
+          updateStatus.type === 'restarting' ||
+          updateStatus.type === 'buildFailed') ? (
+        <UpdateDialog status={updateStatus} onDismiss={handleDismissUpdate} />
       ) : null}
 
       {activeReplay ? (
@@ -400,6 +431,7 @@ function AppContent() {
       {menuOpen ? (
         <MenuSheet
           onClose={() => setMenuOpen(false)}
+          onApplyUpdate={handleApplyUpdate}
           onShutdown={() => {
             setMenuOpen(false);
             setShutdownState('confirm');

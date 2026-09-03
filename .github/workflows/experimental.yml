@@ -1,0 +1,126 @@
+name: Experimental Release
+
+# Publishes an experimental build to a mutable `experimental` GitHub Release
+# tag whenever a pre-release version tag (e.g. v0.3.0-beta.1) is pushed, or
+# via manual dispatch.  The stable feed URL for this channel is:
+#   https://github.com/Cormac131/openflight/releases/download/experimental/latest-experimental.json
+#
+# The release tag `experimental` is force-updated on each run, so its assets
+# (bundle + feed file) are always the most recent experimental build.
+
+on:
+  push:
+    tags:
+      - 'v*-*'    # pre-release tags: v0.3.0-beta.1, v0.3.0-rc.1, etc.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-experimental:
+    name: Build and publish experimental bundle
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # ---- Node / UI build ------------------------------------------------
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.node-version'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install Node dependencies
+        run: npm ci
+        working-directory: ui
+
+      - name: Build React UI
+        run: npm run build
+        working-directory: ui
+
+      # ---- Python wheel pre-fetch -----------------------------------------
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Export requirements list
+        run: uv export --no-hashes --output-file /tmp/requirements.txt
+
+      - name: Download aarch64 Python wheels
+        run: |
+          pip download \
+            --python-version 3.12 \
+            --platform linux_aarch64 \
+            --only-binary :all: \
+            --requirement /tmp/requirements.txt \
+            --dest bundle-wheels/
+
+      # ---- Assemble bundle -------------------------------------------------
+
+      - name: Assemble experimental bundle
+        id: bundle
+        env:
+          VERSION: ${{ github.ref_name || 'experimental' }}
+          SHA: ${{ github.sha }}
+        run: |
+          # Use a fixed bundle name so the release asset is overwritten each run.
+          BUNDLE_NAME="openflight-experimental-linux-arm64"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          mkdir -p "${BUNDLE_NAME}/ui"
+
+          cp -r src/ scripts/ pyproject.toml uv.lock "${BUNDLE_NAME}/"
+          if [ -d config ]; then cp -r config/ "${BUNDLE_NAME}/"; fi
+
+          cp -r ui/dist/ ui/electron/ "${BUNDLE_NAME}/ui/"
+          cp ui/package.json ui/package-lock.json "${BUNDLE_NAME}/ui/"
+
+          cp -r bundle-wheels/ "${BUNDLE_NAME}/wheels/"
+
+          printf '{\n  "version": "%s",\n  "sha": "%s",\n  "date": "%s"\n}\n' \
+            "${VERSION}" "${SHA}" "${DATE}" \
+            > "${BUNDLE_NAME}/version.json"
+
+          tar czf "${BUNDLE_NAME}.tar.gz" "${BUNDLE_NAME}/"
+
+          SHA256=$(sha256sum "${BUNDLE_NAME}.tar.gz" | awk '{print $1}')
+
+          printf '{\n  "version": "%s",\n  "sha": "%s",\n  "date": "%s",\n  "asset": "%s.tar.gz",\n  "url": "https://github.com/Cormac131/openflight/releases/download/experimental/%s.tar.gz",\n  "checksum": "%s"\n}\n' \
+            "${VERSION}" "${SHA}" "${DATE}" \
+            "${BUNDLE_NAME}" \
+            "${BUNDLE_NAME}" \
+            "${SHA256}" \
+            > latest-experimental.json
+
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # ---- Publish ---------------------------------------------------------
+      # The `experimental` tag is force-updated; its release assets (bundle +
+      # feed file) are overwritten so the channel URL stays stable.
+
+      - name: Publish to experimental release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: experimental
+          name: 'Experimental (${{ steps.bundle.outputs.version }})'
+          prerelease: true
+          make_latest: false
+          files: |
+            openflight-experimental-linux-arm64.tar.gz
+            latest-experimental.json
+          body: |
+            **Experimental build** — not for production use.
+
+            Version: `${{ steps.bundle.outputs.version }}`
+            Commit: `${{ github.sha }}`
+
+            **SHA-256** (`openflight-experimental-linux-arm64.tar.gz`):
+            `${{ steps.bundle.outputs.sha256 }}`
+
+            To opt in on a running kiosk, open the menu → Updates → channel
+            toggle → **Experimental**, then tap **Check for updates**.

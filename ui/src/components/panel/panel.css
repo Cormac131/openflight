@@ -1208,6 +1208,15 @@
   font-weight: 700;
 }
 
+/* Used for the "Apply update" chip — visually identical to --active but
+   semantically distinct so the intent is clear in the markup. */
+.menu-sheet__chip--accent {
+  background: var(--color-accent-block);
+  border-color: var(--color-accent-block);
+  color: var(--color-accent-fg);
+  font-weight: 700;
+}
+
 .menu-sheet__chip-remove {
   width: 28px;
   border: 1px solid var(--color-border);

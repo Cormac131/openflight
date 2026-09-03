@@ -1,0 +1,123 @@
+name: Release
+
+# Triggered by a v* tag push (e.g. v0.3.0).  Run workflow_dispatch to build
+# an ad-hoc bundle without creating a public release.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # Required to create/upload GitHub Release assets.
+
+jobs:
+  build-bundle:
+    name: Build and publish release bundle
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # ---- Node / UI build ------------------------------------------------
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.node-version'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install Node dependencies
+        run: npm ci
+        working-directory: ui
+
+      - name: Build React UI
+        run: npm run build
+        working-directory: ui
+
+      # ---- Python wheel pre-fetch -----------------------------------------
+      # Download binary wheels for linux/aarch64 so the Pi can install Python
+      # dependencies without a compiler.  Pure-Python packages (py3-none-any)
+      # are also captured here.  Any package that has no pre-built wheel for
+      # aarch64 will be built from source by uv sync on the Pi.
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Export requirements list
+        run: uv export --no-hashes --output-file /tmp/requirements.txt
+
+      - name: Download aarch64 Python wheels
+        run: |
+          pip download \
+            --python-version 3.12 \
+            --platform linux_aarch64 \
+            --only-binary :all: \
+            --requirement /tmp/requirements.txt \
+            --dest bundle-wheels/
+
+      # ---- Assemble bundle -------------------------------------------------
+
+      - name: Assemble release bundle
+        id: bundle
+        env:
+          VERSION: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          BUNDLE_NAME="openflight-${VERSION}-linux-arm64"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          mkdir -p "${BUNDLE_NAME}/ui"
+
+          # Python source and project metadata
+          cp -r src/ scripts/ pyproject.toml uv.lock "${BUNDLE_NAME}/"
+          if [ -d config ]; then cp -r config/ "${BUNDLE_NAME}/"; fi
+
+          # Pre-built React UI and Electron runtime
+          cp -r ui/dist/ ui/electron/ "${BUNDLE_NAME}/ui/"
+          cp ui/package.json ui/package-lock.json "${BUNDLE_NAME}/ui/"
+
+          # Pre-downloaded aarch64 Python wheels
+          cp -r bundle-wheels/ "${BUNDLE_NAME}/wheels/"
+
+          # Version manifest (read by the updater on the Pi)
+          printf '{\n  "version": "%s",\n  "sha": "%s",\n  "date": "%s"\n}\n' \
+            "${VERSION}" "${SHA}" "${DATE}" \
+            > "${BUNDLE_NAME}/version.json"
+
+          # Archive
+          tar czf "${BUNDLE_NAME}.tar.gz" "${BUNDLE_NAME}/"
+
+          # SHA-256 checksum used by the updater for integrity verification
+          SHA256=$(sha256sum "${BUNDLE_NAME}.tar.gz" | awk '{print $1}')
+
+          # Feed file: stable URL is
+          #   https://github.com/Cormac131/openflight/releases/latest/download/latest.json
+          printf '{\n  "version": "%s",\n  "sha": "%s",\n  "date": "%s",\n  "asset": "%s.tar.gz",\n  "url": "https://github.com/Cormac131/openflight/releases/download/%s/%s.tar.gz",\n  "checksum": "%s"\n}\n' \
+            "${VERSION}" "${SHA}" "${DATE}" \
+            "${BUNDLE_NAME}" \
+            "${VERSION}" "${BUNDLE_NAME}" \
+            "${SHA256}" \
+            > latest.json
+
+          echo "bundle_name=${BUNDLE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+
+      # ---- Publish ---------------------------------------------------------
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.bundle.outputs.bundle_name }}.tar.gz
+            latest.json
+          generate_release_notes: true
+          make_latest: true
+          body: |
+            **SHA-256** (`${{ steps.bundle.outputs.bundle_name }}.tar.gz`):
+            `${{ steps.bundle.outputs.sha256 }}`
+
+            The `latest.json` asset is consumed automatically by the OpenFlight
+            on-device updater.  To trigger an update on a running kiosk, open
+            the menu and tap **Check for updates**.

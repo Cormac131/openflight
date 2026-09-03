@@ -230,4 +230,28 @@ export const pt: Messages = {
   'display.clubPath': 'Path do taco',
 
   'sim.connectors': 'Conectores de simulador',
+
+  'menu.updates': 'Atualizações',
+  'menu.checkForUpdates': 'Verificar atualizações',
+  'menu.applyUpdate': 'Aplicar atualização',
+  'menu.updateAvailable': 'Atualização disponível',
+  'menu.upToDate': 'Atualizado',
+  'menu.updateChecking': 'Verificando…',
+  'menu.updateError': 'Falha na verificação',
+  'menu.updateApplying': 'Atualizando…',
+  'menu.updateChannel': 'Canal',
+  'menu.channelStable': 'Estável',
+  'menu.channelExperimental': 'Experimental',
+
+  'update.applyingTitle': 'Aplicando atualiza\u00e7\u00e3o\u2026',
+  'update.stageSwapping': 'Instalando atualiza\u00e7\u00e3o',
+  'update.stageDownloading': 'Baixando atualiza\u00e7\u00e3o',
+  'update.stageVerifying': 'Verificando download',
+  'update.stageExtracting': 'Extraindo arquivos',
+  'update.stageInstalling': 'Instalando depend\u00eancias',
+  'update.buildFailedTitle': 'Falha na atualização',
+  'update.buildFailedDetail': 'A versão anterior ainda está em execução. Verifique os registros e tente novamente.',
+  'update.restartingTitle': 'Reiniciando OpenFlight…',
+  'update.dismiss': 'Fechar',
+  'update.applyAria': 'Aplicando atualização de software',
 };
