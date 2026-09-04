@@ -18,6 +18,7 @@ from openflight.kld7.types import KLD7Angle
 from openflight.launch_monitor import ClubType, Shot
 from openflight.ops243 import UART_BAUD_COMMANDS
 from openflight.power import PowerState
+from openflight.release import ReleaseInfo
 from openflight.server import (
     MockLaunchMonitor,
     MockSwingSpeedMonitor,
@@ -1795,6 +1796,45 @@ class TestSessionStateClub:
         payload = self._connect_session_state(monkeypatch, MockLaunchMonitor())
 
         assert payload["club"] == "driver"
+
+
+class TestReleaseIdentity:
+    """Every client learns which build it talks to, in every server mode."""
+
+    @staticmethod
+    def _info():
+        return ReleaseInfo(
+            version="0.3.0-dev.7",
+            base_version="0.3.0",
+            channel="experimental",
+            tag="v0.3.0-dev.7",
+        )
+
+    def test_connect_emits_release_info_even_without_a_monitor(self, monkeypatch):
+        emitted = []
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "power_monitor", None)
+        monkeypatch.setattr(server_module, "_emit_sim_snapshot", lambda: None)
+        monkeypatch.setattr(server_module, "_emit_profiles", lambda: None)
+        monkeypatch.setattr(server_module, "get_release_info", self._info)
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+
+        server_module.handle_connect()
+
+        assert ("release_info", self._info().to_dict()) in emitted
+        assert not any(name == "session_state" for name, _ in emitted)
+
+    def test_version_flag_prints_build_label_and_exits_cleanly(self, monkeypatch, capsys):
+        monkeypatch.setattr(server_module, "get_release_info", self._info)
+        monkeypatch.setattr(sys, "argv", ["openflight-server", "--version"])
+
+        with pytest.raises(SystemExit) as exc_info:
+            server_module.main()
+
+        assert exc_info.value.code == 0
+        assert capsys.readouterr().out.strip() == "openflight-server 0.3.0-dev.7 (experimental)"
 
 
 class TestSwingSpeedMode:

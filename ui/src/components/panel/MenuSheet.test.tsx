@@ -54,3 +54,16 @@ describe('MenuSheet battery', () => {
     useSystemStore.setState({ powerStatus: null });
   });
 });
+
+describe('MenuSheet version', () => {
+  // renderToString renders zustand's initial state, so the populated cases
+  // live in releaseLabel.test.ts and the socket-fed row in the E2E suite.
+  it('lists the build version under System, Unavailable before release_info arrives', () => {
+    const html = renderMenu();
+
+    expect(html).toContain('menu-sheet__section-title">System');
+    expect(html).toContain(
+      'menu-sheet__status-label">Version</span><span class="menu-sheet__status-value">Unavailable'
+    );
+  });
+});

@@ -51,6 +51,21 @@ test('stays usable when websocket upgrade fails and socket.io falls back to poll
   await expect(page.getByRole('dialog', { name: 'System status' })).toBeVisible();
 });
 
+test('shows the build version and release channel reported by the server', async ({ page }) => {
+  await gotoApp(page);
+  await dismissPicker(page);
+
+  await openMenu(page);
+  const versionRow = page
+    .getByRole('dialog', { name: 'Menu' })
+    .locator('.menu-sheet__status-row', { hasText: 'Version' });
+  // The E2E backend is the real server started from a git checkout, so it
+  // reports the source channel with the base version and short commit.
+  await expect(versionRow.locator('.menu-sheet__status-value')).toHaveText(
+    /^\d+\.\d+\.\d+(\+[0-9a-f]{12})? · Source checkout$/
+  );
+});
+
 test('supports club selection choose and dismiss flows against mock backend', async ({ page }) => {
   await gotoApp(page);
 

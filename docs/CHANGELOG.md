@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Build identity and release channels (stage 1).** The server now knows
+  which build it is running: `src/openflight/release.py` reads a `release.json`
+  shipped in release artifacts (channels `stable` and `experimental`) and
+  falls back to `source` with the short git commit for plain checkouts. The
+  version and channel appear in the kiosk menu under System, in
+  `openflight-server --version`, in `openflight-cloud status`, in the cloud
+  upload manifest, and in each session log's `session_start` record
+  (`app_version`, new `app_channel`). `pyproject.toml` now takes its version
+  from `openflight.__version__` (hatch dynamic version). The release
+  workflows that produce the artifacts are planned in
+  [docs/plans/2026-09-04-release-channels-plan.md](plans/2026-09-04-release-channels-plan.md).
+
 ### Fixed
 - **On-screen keyboard for profile names.** Adding or renaming a profile on the
   Pi kiosk now shows a full-screen keyboard. Chromium in `--kiosk` mode does not

@@ -5,6 +5,7 @@
 import type { SessionStats, Shot, TriggerStatus } from '../src/types/shot.js';
 import type { RadarConfig } from '../src/types/socket.js';
 import type { Profile } from '../src/types/profile.js';
+import type { ReleaseInfo } from '../src/types/release.js';
 import { generateShot } from './shotGenerator.js';
 
 function mean(values: number[]): number {
@@ -131,6 +132,19 @@ export class MockSession {
 
   clearProfile(profileId: string): void {
     this.shots = this.shots.filter((shot) => shot.profile_id !== profileId);
+  }
+
+  releaseInfo(): ReleaseInfo {
+    return {
+      format_version: 1,
+      version: '0.3.0-dev.42',
+      base_version: '0.3.0',
+      channel: 'experimental',
+      tag: 'v0.3.0-dev.42',
+      commit: '0123456789ab',
+      built_at: '2026-09-04T12:00:00+00:00',
+      repository: 'open-flight/openflight',
+    };
   }
 
   sessionStatePayload(includeMeta = true) {

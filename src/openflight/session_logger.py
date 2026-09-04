@@ -14,9 +14,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import __version__
 from .kld7.radc import RADC_PAYLOAD_BYTES
 from .ops243 import SpeedReading
+from .release import get_release_info
 
 # Version of the session JSONL format itself. Bump on breaking changes to
 # entry structure; additive changes (new fields, new entry types) do not
@@ -44,6 +44,7 @@ class SessionMetadata:
     session_uuid: str = ""
     format_version: int = 1
     app_version: str = ""
+    app_channel: str = ""
 
 
 class SessionLogger:
@@ -158,6 +159,7 @@ class SessionLogger:
         self._stats = {k: 0 for k in self._stats}
 
         # Write session start entry
+        release = get_release_info()
         metadata = SessionMetadata(
             session_id=self._session_id,
             start_time=timestamp.isoformat(),
@@ -170,7 +172,8 @@ class SessionLogger:
             trigger_type=trigger_type,
             session_uuid=str(uuid.uuid4()),
             format_version=SESSION_FORMAT_VERSION,
-            app_version=__version__,
+            app_version=release.version,
+            app_channel=release.channel,
         )
 
         self._write_entry("session_start", asdict(metadata))
