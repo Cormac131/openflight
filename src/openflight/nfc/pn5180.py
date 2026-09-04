@@ -342,6 +342,8 @@ class Pn5180Spi:
         self._rf_config: Optional[tuple[int, int]] = None
         self._crc_enabled: Optional[bool] = None
         self._last_technology: Optional[str] = None
+        self.rf_on_confirmed: Optional[bool] = None
+        """Whether the chip reported its RF field switching on. None until tried."""
         self.firmware_version: Optional[str] = None
         self.product_version: Optional[str] = None
 
@@ -432,6 +434,17 @@ class Pn5180Spi:
         """Poll once for any tag, returning its UID or None."""
         tag = self.read_tag(timeout_s)
         return tag.uid if tag else None
+
+    def rf_status(self) -> int:
+        """Raw RF_STATUS register, for comparing the field off against on.
+
+        The analog side is not otherwise observable from software: the digital
+        transmit completes (and sets TX_IRQ) whether or not the field is
+        actually being driven, so a reader whose transmitter supply is missing
+        looks identical to one with no tag in range. This register moving when
+        the field is switched on is the evidence that separates them.
+        """
+        return self._read_register(REG_RF_STATUS)
 
     def identify(self) -> dict:
         """Chip identity and RF state, for the bring-up probe tool.
@@ -617,10 +630,12 @@ class Pn5180Spi:
         self._write_register(REG_IRQ_CLEAR, IRQ_CLEAR_ALL)
         transport.command(bytes([CMD_RF_ON, 0x00]))
         deadline = time.monotonic() + RF_ON_TIMEOUT_S
+        self.rf_on_confirmed = True
         while not self._read_register(REG_IRQ_STATUS) & TX_RFON_IRQ_STAT:
             if time.monotonic() >= deadline:
                 # Not fatal: the field may well be up and only the IRQ bit
                 # read wrong. Say so once and let the poll prove it either way.
+                self.rf_on_confirmed = False
                 logger.warning("[NFC] PN5180 did not report its RF field switching on")
                 break
             time.sleep(0.002)

@@ -332,7 +332,8 @@ class FakeTransport:
         if address == REG_RX_STATUS:
             return len(self._pending_response or b"").to_bytes(4, "little")
         if address == REG_RF_STATUS:
-            return (TRANSCEIVE_WAIT_TRANSMIT << TRANSCEIVE_STATE_SHIFT).to_bytes(4, "little")
+            default = TRANSCEIVE_WAIT_TRANSMIT << TRANSCEIVE_STATE_SHIFT
+            return self.registers.get(REG_RF_STATUS, default).to_bytes(4, "little")
         return self.registers.get(address, 0).to_bytes(4, "little")
 
     def _read_eeprom(self, address: int, response_len: int) -> bytes:
@@ -517,6 +518,42 @@ class TestTransceiveSequencing:
             if kind == "wait" and seconds >= 0.005
         ]
         assert guarded, "no guard wait between RF on and the first frame"
+
+    def test_the_field_on_confirmation_is_recorded(self):
+        transport = FakeTransport(tag=Iso14443aTag("04A2B1C3", sak=0x08))
+        reader = _reader(transport)
+
+        reader.read_tag()
+
+        assert reader.rf_on_confirmed is True
+
+    def test_a_field_that_never_confirms_is_recorded_but_not_fatal(self):
+        # The field may be up with only the IRQ bit read wrong, so this must
+        # not stop a reader that otherwise works -- it is a probe signal.
+        class NoFieldIrq(FakeTransport):
+            def command(self, data, response_len=0):
+                if data[0] == CMD_RF_ON:
+                    self.writes.append(bytes(data))
+                    return b""  # never sets TX_RFON_IRQ_STAT
+                return super().command(data, response_len)
+
+        transport = NoFieldIrq(tag=Iso14443aTag("04A2B1C3", sak=0x08))
+        reader = _reader(transport)
+
+        result = reader.read_tag()
+
+        assert reader.rf_on_confirmed is False
+        assert result.uid == "04A2B1C3"
+
+    def test_rf_status_is_reported_raw_for_the_probe(self):
+        # The analog side is invisible otherwise: a transmitter with no power
+        # still completes the digital transmit and sets TX_IRQ, so comparing
+        # this register with the field off and on is the only tell.
+        transport = FakeTransport()
+        reader = _reader(transport)
+        transport.registers[REG_RF_STATUS] = 0x00740150
+
+        assert reader.rf_status() == 0x00740150
 
     def test_an_unarmed_transceiver_reads_nothing(self):
         # The failure this whole sequence exists to prevent: the chip answers

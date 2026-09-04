@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that guard time is now waited out. Whichever technology answered last is
   also polled first, so a club held against the reader stops being power-
   cycled twice per poll.
+- **PN5180 wiring docs said to power the board from 3.3 V.** That was copied
+  from the PN532 and is wrong for this chip: its transmitter has a separate
+  supply (TVDD) and most breakouts want 5 V on VIN, regulating 3.3 V for the
+  logic. Powering only 3.3 V gives a reader that answers SPI perfectly,
+  reports a real firmware version, and emits no RF field, so no tag ever
+  replies. `--probe` now prints RF_STATUS with the field off and on, which is
+  the only software-visible tell.
 - **One-shot GPIO scripts no longer exit through a scary traceback.**
   `close_pin_factory()` shuts gpiozero's background thread down, instead of
   the interpreter dying with "could not acquire lock for &lt;stderr&gt; at

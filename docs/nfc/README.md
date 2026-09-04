@@ -412,10 +412,29 @@ its wiring differ.
 
 | Part | Product |
 |------|---------|
-| NFC reader breakout | A PN5180 breakout board (e.g. the "PN5180 NFC Module" sold by several sellers on AliExpress/Amazon) exposing MOSI, MISO, SCK, NSS, BUSY, RST, 3.3V, GND |
+| NFC reader breakout | A PN5180 breakout board (e.g. the "PN5180 NFC Module" sold by several sellers on AliExpress/Amazon) exposing MOSI, MISO, SCK, NSS, BUSY, RST, 5V, 3.3V, GND |
 | Tags | NTAG213/215 for ISO14443A (same as the PN532 section above), or ICODE SLIX/SLIX2 stickers for ISO15693 |
 
-The PN5180 is 3.3V logic. Do not power it from 5V.
+### Power: Two Supplies, Not One
+
+> [!IMPORTANT]
+> **The PN5180 does not power like the PN532.** Its logic runs at 3.3 V, but
+> its transmitter has a *separate* supply (TVDD), and most breakout boards
+> expect **5 V on VIN** to drive it, regulating 3.3 V for the logic on board.
+>
+> Powering only 3.3 V produces a reader that looks completely healthy and
+> reads nothing: SPI works, the EEPROM returns a real firmware version,
+> registers read back, and every frame sets TX_IRQ — because the *digital*
+> transmit completes whether or not the antenna is being driven. There is
+> simply no RF field for a tag to answer from.
+>
+> Read your board's silkscreen and power it the way that board asks. If it
+> has both a `5V` and a `3.3V` pin, feed `5V` (Pi physical pin 2 or 4) and
+> leave `3.3V` unconnected. `read_pn5180.py --probe` reports RF_STATUS with
+> the field off and on; if that value does not move, this is why.
+
+Logic levels stay 3.3 V either way: SCK, MOSI, NSS, BUSY and RST connect
+straight to the Pi. Only the board's supply pin changes.
 
 ### Wiring
 
@@ -432,7 +451,7 @@ MISO        ---------------------------->  physical pin 21 (GPIO9 / MISO)
 SCK         ---------------------------->  physical pin 23 (GPIO11 / SCLK)
 BUSY        ---------------------------->  physical pin 16 (GPIO23)
 RST         ---------------------------->  physical pin 18 (GPIO24)
-VCC / 3.3V  ---------------------------->  physical pin 17 (3.3V)
+VIN / 5V    ---------------------------->  physical pin 2 (5V)   <-- see above
 GND         ---------------------------->  physical pin 20 (GND)
 ```
 
@@ -444,11 +463,10 @@ GND         ---------------------------->  physical pin 20 (GND)
 | `SCK` | **23** | GPIO11 |
 | `BUSY` | **16** | GPIO23 (default; override with `--nfc-busy-gpio`) |
 | `RST` | **18** | GPIO24 (default; override with `--nfc-reset-gpio`) |
-| `VCC` / `3.3V` | **17** | 3.3 V power |
+| `VIN` / `5V` | **2** | 5 V — the transmitter supply, see the warning above |
 | `GND` | **20** | Ground |
 
-The same warnings from the PN532 [Wiring](#wiring) section apply: power from
-3.3 V, and stay off GPIO6/16/17/14/15, which other OpenFlight peripherals use.
+Stay off GPIO6/16/17/14/15, which other OpenFlight peripherals use.
 
 Enable SPI the same way as for the PN532 -- see
 [Enable SPI On The Pi](#enable-spi-on-the-pi) -- and add the OpenFlight user
@@ -492,10 +510,14 @@ for a few seconds — **hold a tag against the antenna while it does.** The
 IRQ bits are decoded by name, which is where the diagnosis lives:
 
 - **Die ID all `0`s or all `f`s** — MISO is not returning data. Check pin 21.
-- **`IRQ_STATUS ... (TX+IDLE)`, no `RX`** — the chip transmitted and nothing
-  answered. With no tag present that is the correct result. With a tag on the
-  antenna it points at the RF field or the antenna: confirm the board is on
-  3.3 V, and that the tag is flat on the coil rather than edge-on.
+- **`RF_STATUS field off ... -> field on ...` shows the same value both
+  times** — the transmitter is not driving the antenna. Almost always the
+  power problem above: the board needs 5 V on VIN for TVDD. This is the one
+  fault that looks perfect from software.
+- **`IRQ_STATUS ... (TX+IDLE)`, no `RX`, but RF_STATUS did move** — the field
+  is up and nothing answered. With no tag present that is the correct result.
+  With a tag on the antenna, look at antenna tuning, range, and tag type: tap
+  flat on the coil rather than edge-on.
 - **`RX` or `RX_SOF` set, with an `ANSWER` line** — the RF layer works end to
   end.
 - **Transceive state never reaches WaitTransmit (1)** — the chip is not being

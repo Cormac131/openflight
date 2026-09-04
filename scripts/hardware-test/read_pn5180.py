@@ -2,7 +2,10 @@
 """Print club-tag UIDs from a PN5180, with the club each one is mapped to."""
 
 import argparse
+import os
+import sys
 import time
+import traceback
 
 from openflight.gpio_factory import close_pin_factory
 from openflight.nfc import (
@@ -42,11 +45,24 @@ def _describe_irq(value: int) -> str:
     return "+".join(names) if names else "none"
 
 
-def _probe_technology(reader: Pn5180Spi, label: str, profile, seconds: float) -> None:
+def _probe_technology(
+    reader: Pn5180Spi, label: str, profile, seconds: float, rf_off_status: int
+) -> None:
     """Send one technology's opening frame repeatedly for a few seconds."""
     print(f"--- {label} ---")
     # pylint: disable=protected-access
     reader._select_rf_config(profile)
+
+    # The digital transmit completes and sets TX_IRQ whether or not the field
+    # is actually being driven, so check the analog side separately: a board
+    # whose transmitter supply is missing looks exactly like an empty antenna.
+    rf_on_status = reader.rf_status()
+    print(f"  RF_STATUS field off 0x{rf_off_status:08x} -> field on 0x{rf_on_status:08x}")
+    print(f"  chip confirmed field on: {reader.rf_on_confirmed}")
+    if rf_on_status == rf_off_status:
+        print("  ^ RF_STATUS did not move when the field was switched on.")
+        print("    The transmitter is probably not powered -- see TVDD / VIN below.")
+
     if profile == RF_CONFIG_ISO15693_26:
         reader._set_crc(True)
         frame = bytes([ISO15693_FLAGS_INVENTORY, ISO15693_CMD_INVENTORY, 0x00])
@@ -105,21 +121,38 @@ def _probe(reader: Pn5180Spi, seconds: float = 5.0) -> None:
     expected = "WaitTransmit" if state == TRANSCEIVE_WAIT_TRANSMIT else "idle/unexpected"
     print(f"  transceive state {state} ({expected}, before arming)")
 
+    # Captured with the field off (open() leaves it off) as the baseline the
+    # field-on reading is compared against.
+    rf_off_status = identity["rf_status"]
+
     print()
     print(">>> HOLD A TAG FLAT AGAINST THE ANTENNA NOW <<<")
     print("    Each technology below is polled for a few seconds.")
     print()
-    _probe_technology(reader, "ISO14443A 106k (NTAG, MIFARE)", RF_CONFIG_ISO14443A_106, seconds)
     _probe_technology(
-        reader, "ISO15693 26k (ICODE SLIX, Shot Scope)", RF_CONFIG_ISO15693_26, seconds
+        reader, "ISO14443A 106k (NTAG, MIFARE)", RF_CONFIG_ISO14443A_106, seconds, rf_off_status
+    )
+    _probe_technology(
+        reader,
+        "ISO15693 26k (ICODE SLIX, Shot Scope)",
+        RF_CONFIG_ISO15693_26,
+        seconds,
+        rf_off_status,
     )
 
     print()
     print("Reading the result:")
-    print("  ANSWER on either line          -> the RF layer works end to end.")
-    print("  TX set, RX clear, tag present  -> field or antenna: check 3.3V, and that")
-    print("                                    the tag is flat on the coil, not edge-on.")
-    print("  transceive state never 1       -> host link, not RF.")
+    print("  ANSWER on either line             -> the RF layer works end to end.")
+    print("  RF_STATUS unchanged field off/on  -> the transmitter is not driving the")
+    print("                                       antenna. Most PN5180 breakouts need")
+    print("                                       5V on VIN for TVDD (the transmitter")
+    print("                                       supply) with 3.3V logic -- powering")
+    print("                                       only 3.3V gives a chip that answers")
+    print("                                       SPI perfectly and emits no field.")
+    print("                                       Check your board's silkscreen.")
+    print("  RF_STATUS moves, TX set, RX clear -> field is up but nothing replied:")
+    print("                                       antenna tuning, range, or tag type.")
+    print("  transceive state never 1          -> host link, not RF.")
 
 
 def main() -> None:
@@ -226,10 +259,21 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    status = 0
     try:
         main()
+    except KeyboardInterrupt:
+        pass
+    except Exception:  # pylint: disable=broad-except
+        traceback.print_exc()
+        status = 1
     finally:
-        # Without this a one-shot run exits through gpiozero's still-running
-        # background thread, which prints an alarming "could not acquire lock
-        # for <stderr> at interpreter shutdown" for what is a clean exit.
         close_pin_factory()
+        sys.stdout.flush()
+        sys.stderr.flush()
+    # Exit without running interpreter finalization. Closing the pin factory
+    # is not enough on its own: lgpio keeps a background thread that races
+    # the teardown of stderr and turns a clean exit into a page of "could not
+    # acquire lock for <stderr> at interpreter shutdown". All the real work,
+    # and all the output, is already done by this point.
+    os._exit(status)  # pylint: disable=protected-access
