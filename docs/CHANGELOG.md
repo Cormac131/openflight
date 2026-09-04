@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [Electron Kiosk Shell](electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
 
 ### Fixed
+- **Kiosk startup no longer rebuilds the UI after Electron has already launched.**
+  `ensure_kiosk_ui` now runs before the splash browser. The helper is also
+  stored with Unix line endings so a Windows checkout cannot make `ui/dist`
+  look missing (a CR in the path) and run `npm install` over a live Electron
+  GPU process.
 - **On-screen keyboard for profile names.** Adding or renaming a profile on the
   Pi kiosk now shows a full-screen keyboard. Chromium in `--kiosk` mode does not
   surface a system keyboard, so the native text field was unusable on the

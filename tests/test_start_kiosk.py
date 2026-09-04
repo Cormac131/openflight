@@ -566,6 +566,24 @@ def test_iwr6843_horizontal_phase_reference_is_omitted_by_default():
     assert "--iwr6843-horizontal-phase-reference-rad" not in command
 
 
+def test_kiosk_shell_scripts_use_unix_newlines():
+    repo_root = Path(__file__).resolve().parents[1]
+    for relative in (
+        "scripts/start-kiosk.sh",
+        "scripts/ensure-kiosk-ui.sh",
+        "scripts/require-node.sh",
+    ):
+        data = (repo_root / relative).read_bytes()
+        assert b"\r" not in data, f"{relative} must use LF newlines so sourced path checks match on the Pi"
+
+
+def test_ui_is_ensured_before_the_kiosk_browser_launches():
+    script = _read_script()
+    ensure_call = script.index("\nensure_kiosk_ui\n")
+    splash_call = script.index("\nstart_startup_splash\n")
+    assert ensure_call < splash_call
+
+
 def _read_script() -> str:
     return (Path(__file__).resolve().parents[1] / "scripts/start-kiosk.sh").read_text(
         encoding="utf-8"

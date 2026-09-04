@@ -37,6 +37,8 @@ _try_install_electron_shell() {
 }
 
 ensure_kiosk_ui() {
+    PROJECT_DIR="${PROJECT_DIR//$'\r'/}"
+    SCRIPT_DIR="${SCRIPT_DIR//$'\r'/}"
     local dist_dir="$PROJECT_DIR/ui/dist"
     local electron_bin="$PROJECT_DIR/ui/node_modules/.bin/electron"
 

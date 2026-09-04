@@ -982,6 +982,10 @@ if [ "$DRY_RUN" = true ]; then
     exit 0
 fi
 
+# shellcheck source=ensure-kiosk-ui.sh
+source "$SCRIPT_DIR/ensure-kiosk-ui.sh"
+ensure_kiosk_ui
+
 start_startup_splash
 
 # Ensure the environment is in sync (uv recreates/repairs .venv as needed,
@@ -1019,10 +1023,6 @@ if ! uv sync "${UV_SYNC_ARGS[@]}"; then
 fi
 
 configure_kld7_latency
-
-# shellcheck source=ensure-kiosk-ui.sh
-source "$SCRIPT_DIR/ensure-kiosk-ui.sh"
-ensure_kiosk_ui
 
 # Start Grafana Alloy for log shipping (if installed and credentials configured)
 if command -v alloy &> /dev/null || systemctl is-enabled alloy &> /dev/null 2>&1; then
