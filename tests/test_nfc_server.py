@@ -270,7 +270,23 @@ class TestInitNfcReaderChoice:
             def read_tag(self, timeout_s=0.5):
                 return None
 
+        class FakePn5180:
+            name = "pn5180"
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def open(self):
+                return None
+
+            def close(self):
+                return None
+
+            def read_tag(self, timeout_s=0.5):
+                return None
+
         monkeypatch.setattr("openflight.nfc.PN532I2C", FakePn532)
+        monkeypatch.setattr("openflight.nfc.Pn5180Spi", FakePn5180)
 
     def _cleanup(self):
         if server_module.nfc_service is not None:
@@ -294,6 +310,76 @@ class TestInitNfcReaderChoice:
         try:
             assert server_module.init_nfc(tags_path=str(tmp_path / "club_tags.json"))
             assert server_module.nfc_service.reader.name == "mock"
+        finally:
+            self._cleanup()
+
+    def test_nfc_reader_pn5180_opens_the_pn5180_instead(self, tmp_path, monkeypatch):
+        self._install_fake_readers(monkeypatch)
+        monkeypatch.delenv("OPENFLIGHT_NFC_MOCK", raising=False)
+        try:
+            assert server_module.init_nfc(
+                reader_chip="pn5180", tags_path=str(tmp_path / "club_tags.json")
+            )
+            assert server_module.nfc_service.reader.name == "pn5180"
+            assert server_module.nfc_runtime_config["reader"] == "pn5180"
+        finally:
+            self._cleanup()
+
+    def test_nfc_reader_pn5180_forwards_its_own_gpio_settings(self, tmp_path, monkeypatch):
+        self._install_fake_readers(monkeypatch)
+        monkeypatch.delenv("OPENFLIGHT_NFC_MOCK", raising=False)
+        try:
+            server_module.init_nfc(
+                reader_chip="pn5180",
+                spi_bus=1,
+                spi_device=2,
+                busy_gpio=27,
+                reset_gpio=17,
+                tags_path=str(tmp_path / "club_tags.json"),
+            )
+            kwargs = server_module.nfc_service.reader.kwargs
+            assert kwargs == {
+                "spi_bus": 1,
+                "spi_device": 2,
+                "busy_gpio": 27,
+                "reset_gpio": 17,
+            }
+            assert server_module.nfc_runtime_config["busy_gpio"] == 27
+            assert server_module.nfc_runtime_config["reset_gpio"] == 17
+            assert "i2c_address" not in server_module.nfc_runtime_config
+        finally:
+            self._cleanup()
+
+    def test_playwright_env_overrides_pn5180_too(self, tmp_path, monkeypatch):
+        self._install_fake_readers(monkeypatch)
+        monkeypatch.setenv("OPENFLIGHT_NFC_MOCK", "1")
+        try:
+            assert server_module.init_nfc(
+                reader_chip="pn5180", tags_path=str(tmp_path / "club_tags.json")
+            )
+            assert server_module.nfc_service.reader.name == "mock"
+        finally:
+            self._cleanup()
+
+    def test_a_pn5180_failure_is_reported_under_its_own_name(self, tmp_path, monkeypatch):
+        class BrokenPn5180:
+            name = "pn5180"
+
+            def __init__(self, **_kwargs):
+                raise OSError("PN5180 BUSY line stuck high")
+
+        monkeypatch.setattr("openflight.nfc.Pn5180Spi", BrokenPn5180)
+        monkeypatch.delenv("OPENFLIGHT_NFC_MOCK", raising=False)
+        monkeypatch.setattr(server_module, "log_session_error", lambda *_args, **_kwargs: None)
+        try:
+            assert (
+                server_module.init_nfc(
+                    reader_chip="pn5180", tags_path=str(tmp_path / "club_tags.json")
+                )
+                is False
+            )
+            assert server_module.nfc_runtime_config["reader"] == "pn5180"
+            assert server_module.nfc_runtime_config["error"] == "PN5180 BUSY line stuck high"
         finally:
             self._cleanup()
 

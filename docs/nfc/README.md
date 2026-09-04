@@ -1,7 +1,18 @@
-# PN532 NFC Club Tag Setup
+# NFC Club Tag Setup
 
 OpenFlight can read an NFC tag stuck to the end of each club and switch the UI's
 club selection automatically when that club is tapped against the reader.
+
+Two reader chips are supported, selected with `--nfc-reader`:
+
+| `--nfc-reader` | Chip | Tags it can read | Host link |
+|----------------|------|-------------------|-----------|
+| `pn532` (default) | NXP PN532 | ISO14443A only (NTAG213/215, MIFARE Classic) | SPI, or I2C as a fallback |
+| `pn5180` | NXP PN5180 | ISO14443A **and** ISO15693 (adds ICODE SLIX/SLIX2 — including Shot Scope's watch tags) | SPI only |
+
+Most of this document covers the PN532, which is the simpler and cheaper build.
+See [PN5180 Setup](#pn5180-setup) below if you specifically want to read
+ISO15693 tags — the PN532 cannot see those at all, regardless of software.
 
 A writable tag (NTAG213/215) can carry the club as an NDEF text record, so the
 club travels with the sticker between rigs. A blank sticker still works: the
@@ -33,12 +44,14 @@ Any ISO14443A tag works. The reader takes the factory UID and, on NFC Forum
 Type 2 tags, the NDEF contents. Buy tags with an adhesive back sized to fit a
 grip cap or the butt end of the shaft.
 
-The PN532 is the supported reader. Firmware open and ISO14443A UIDs are
-working on SPI; keep using that. Stick an NTAG on the grip even if the club
-already has a Shot Scope tag. Shot Scope black RFID tags are NXP ICODE SLIX
-(ISO15693 / NFC Type 5). The PN532 cannot inventory those, so a tap of a Shot
-Scope tag will do nothing. Leave the Shot Scope tag for the watch; OpenFlight
-uses the NTAG.
+The PN532 is the reader this section is about. Firmware open and ISO14443A
+UIDs are working on SPI; keep using that. Stick an NTAG on the grip even if
+the club already has a Shot Scope tag. Shot Scope black RFID tags are NXP
+ICODE SLIX (ISO15693 / NFC Type 5). The PN532 cannot inventory those, so a
+tap of a Shot Scope tag will do nothing on this reader. Leave the Shot Scope
+tag for the watch; OpenFlight uses the NTAG -- or build with a PN5180
+instead, which can read the Shot Scope tag directly (see
+[PN5180 Setup](#pn5180-setup)).
 
 Do not buy a bare PN532 chip. Use a breakout with the regulator and antenna
 already installed.
@@ -366,15 +379,128 @@ For each tap, OpenFlight:
    not tappable and cannot swallow a tap while it fades.
 6. Records the tap in the session log.
 
-`--mock` only replaces the radar. `--nfc` always talks to the PN532; omit the
+`--mock` only replaces the radar. `--nfc` always talks to the reader; omit the
 flag when no reader is attached.
+
+## PN5180 Setup
+
+The PN5180 is a newer NXP reader chip. Build with it instead of the PN532
+if you specifically want to read ISO15693 tags directly -- most notably Shot
+Scope's black watch tags (NXP ICODE SLIX), which the PN532 cannot see at all.
+Everything else in this document (club selection logic, the tag file, NDEF
+text records, session logging) works identically; only the reader chip and
+its wiring differ.
+
+> [!NOTE]
+> This driver has not been validated against physical PN5180 silicon in this
+> repository. The command framing and register map follow the NXP PN5180
+> datasheet; if bring-up behaves differently than described here, that is
+> more likely to be a wrong assumption in the driver than in this doc --
+> please file an issue with what you saw.
+
+### What To Buy
+
+| Part | Product |
+|------|---------|
+| NFC reader breakout | A PN5180 breakout board (e.g. the "PN5180 NFC Module" sold by several sellers on AliExpress/Amazon) exposing MOSI, MISO, SCK, NSS, BUSY, RST, 3.3V, GND |
+| Tags | NTAG213/215 for ISO14443A (same as the PN532 section above), or ICODE SLIX/SLIX2 stickers for ISO15693 |
+
+The PN5180 is 3.3V logic. Do not power it from 5V.
+
+### Wiring
+
+Unlike the PN532, the PN5180 has no IRQ pin to wire; it has BUSY (an output,
+required) and RST/NRESET (an input, recommended but some boards leave it
+tied high internally if unconnected).
+
+```text
+PN5180 breakout                          Raspberry Pi GPIO header
+
+NSS         ---------------------------->  physical pin 24 (GPIO8 / SPI0 CE0)
+MOSI        ---------------------------->  physical pin 19 (GPIO10 / MOSI)
+MISO        ---------------------------->  physical pin 21 (GPIO9 / MISO)
+SCK         ---------------------------->  physical pin 23 (GPIO11 / SCLK)
+BUSY        ---------------------------->  physical pin 16 (GPIO23)
+RST         ---------------------------->  physical pin 18 (GPIO24)
+VCC / 3.3V  ---------------------------->  physical pin 17 (3.3V)
+GND         ---------------------------->  physical pin 20 (GND)
+```
+
+| PN5180 | Raspberry Pi physical pin | Pi signal |
+|--------|---------------------------|-----------|
+| `NSS` | **24** | GPIO8 / SPI0 CE0 |
+| `MOSI` | **19** | GPIO10 |
+| `MISO` | **21** | GPIO9 |
+| `SCK` | **23** | GPIO11 |
+| `BUSY` | **16** | GPIO23 (default; override with `--nfc-busy-gpio`) |
+| `RST` | **18** | GPIO24 (default; override with `--nfc-reset-gpio`) |
+| `VCC` / `3.3V` | **17** | 3.3 V power |
+| `GND` | **20** | Ground |
+
+The same warnings from the PN532 [Wiring](#wiring) section apply: power from
+3.3 V, and stay off GPIO6/16/17/14/15, which other OpenFlight peripherals use.
+
+Enable SPI the same way as for the PN532 -- see
+[Enable SPI On The Pi](#enable-spi-on-the-pi) -- and add the OpenFlight user
+to the `spi` and `gpio` groups if needed.
+
+### Verify Raw Reads
+
+```bash
+uv run python scripts/hardware-test/read_pn5180.py
+```
+
+Example output:
+
+```text
+PN5180 detected on SPI-0.0 BUSY GPIO23 RESET GPIO24 (firmware 4.0, product 3.0)
+Club tags: 3 learned in /home/pi/.openflight/club_tags.json
+Present a tag to the antenna -- ISO14443A or ISO15693 (Ctrl-C to stop)...
+04:A2:B1:C3  7-iron
+E0:04:01:50:12:34:56:78  (not learned)
+```
+
+The second line above is an ISO15693 UID (8 bytes, starting with NXP's `E0`
+manufacturer code) -- a Shot Scope tag would read exactly like this. Useful
+options mirror `read_pn532.py`: `--count`, `--assign CLUB`, `--tags-file`,
+plus `--spi-bus`, `--spi-device`, `--busy-gpio`, and `--reset-gpio` for
+non-default wiring.
+
+### Start OpenFlight With The PN5180
+
+```bash
+scripts/start-kiosk.sh --nfc --nfc-reader pn5180
+```
+
+With non-default SPI or GPIO settings:
+
+```bash
+scripts/start-kiosk.sh \
+  --nfc \
+  --nfc-reader pn5180 \
+  --nfc-spi-bus 0 \
+  --nfc-spi-device 0 \
+  --nfc-busy-gpio 23 \
+  --nfc-reset-gpio 24 \
+  --nfc-tags-file /home/pi/bags/sunday.json
+```
+
+`--nfc-interface`, `--nfc-irq-gpio`, `--nfc-i2c-bus`, and `--nfc-i2c-address`
+are PN532-only and are ignored for `--nfc-reader pn5180`.
+
+A tap of an ISO15693 tag flows through the exact same pipeline as an
+ISO14443A one: [How Club Selection Works](#how-club-selection-works) applies
+unchanged, including NDEF text records on ISO15693 tags formatted as an NFC
+Forum Type 5 tag. A raw factory tag with no NDEF content -- which is what a
+Shot Scope watch tag is -- falls back to the learn-by-UID flow just like a
+blank NTAG or a MIFARE Classic card does on the PN532.
 
 ## Session Logging
 
 The `session_start` entry records:
 
 - Whether the reader initialized.
-- Reader type, host interface (SPI by default), SPI bus/CE, and IRQ GPIO.
+- Reader type, host interface (SPI by default), and its bus/CE/GPIO settings.
 - Tag file path and how many tags were loaded.
 - Initialization error, when there was one.
 
@@ -464,13 +590,16 @@ parsed.
 ## Current Limitations
 
 - The kiosk never writes tags. A phone NFC app can write an NDEF club record
-  onto NFC Forum Type 2 tags (NTAG213/215/216, MIFARE Ultralight). MIFARE
-  Classic cards — including the card and keyfob in most PN532 kits — still
-  work through the learn-by-UID flow.
-- Only ISO14443A tags are read. ISO15693 / NFC Type 5 — including NXP ICODE
-  SLIX, SLIX2, ST25DV, and Shot Scope watch RFID tags — is a hardware limit of
-  the PN532, not a missing poll in this driver. A later reader (PN5180 class)
-  would be required to use those tags instead of NTAG stickers.
-- SPI bus, CE, IRQ GPIO, and tag file are command-line settings rather than a
-  persisted rig configuration file.
+  onto NFC Forum Type 2 tags (NTAG213/215/216, MIFARE Ultralight) or, on a
+  PN5180 build, an NFC Forum Type 5 (ISO15693) tag. MIFARE Classic cards —
+  including the card and keyfob in most PN532 kits — still work through the
+  learn-by-UID flow, as do raw (non-NDEF) ISO15693 tags such as Shot Scope's.
+- The PN532 only reads ISO14443A tags. ISO15693 / NFC Type 5 — including NXP
+  ICODE SLIX, SLIX2, ST25DV, and Shot Scope watch RFID tags — is a hardware
+  limit of that chip, not a missing poll in this driver; use `--nfc-reader
+  pn5180` (see [PN5180 Setup](#pn5180-setup)) to read those tags instead.
+- The PN5180 driver has not been run against physical silicon in this
+  repository; see the note at the top of [PN5180 Setup](#pn5180-setup).
+- SPI bus, CE, IRQ/BUSY/RESET GPIO, and tag file are command-line settings
+  rather than a persisted rig configuration file.
 - The reader selects clubs only; it does not switch players or start sessions.

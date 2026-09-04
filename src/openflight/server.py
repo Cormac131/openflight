@@ -1625,23 +1625,30 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
         return False
 
 
-def init_nfc(
+def init_nfc(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     *,
+    reader_chip: str = "pn532",
     interface: str = "spi",
     spi_bus: int = 0,
     spi_device: int = 0,
     irq_gpio: int = 22,
     bus_number: int = 1,
     address: int = 0x24,
+    busy_gpio: int = 23,
+    reset_gpio: int = 24,
     tags_path: str | None = None,
 ) -> bool:
-    """Start the optional PN532 club-tag reader without risking radar availability.
+    """Start the optional NFC club-tag reader without risking radar availability.
 
     The registry loads even when the reader itself fails to come up, so tags
     already learned stay listed in the UI and the failure is visible there
-    instead of only in the log. SPI is the supported host link so a wedged
-    reader cannot take down the inclinometer on I2C. ``--mock`` does not
-    replace this reader: NFC is optional, so omit ``--nfc`` when it is absent.
+    instead of only in the log. SPI is the supported host link for both
+    readers so a wedged reader cannot take down the inclinometer on I2C.
+    ``--mock`` does not replace this reader: NFC is optional, so omit
+    ``--nfc`` when it is absent.
+
+    ``reader_chip`` picks the driver: ``"pn532"`` (default, SPI or I2C) or
+    ``"pn5180"`` (SPI + BUSY + RESET, no I2C fallback -- see ``docs/nfc``).
     """
     global nfc_service  # pylint: disable=global-statement
     global club_tag_registry  # pylint: disable=global-statement
@@ -1652,24 +1659,41 @@ def init_nfc(
         ClubTagRegistry,
         MockTagReader,
         NfcService,
+        Pn5180Spi,
     )
 
-    link = {
-        "interface": interface,
-        "spi_bus": spi_bus,
-        "spi_device": spi_device,
-        "irq_gpio": irq_gpio,
-        "i2c_bus": bus_number,
-        "i2c_address": f"0x{address:02x}",
-    }
+    if reader_chip == "pn5180":
+        link = {
+            "interface": "spi",
+            "spi_bus": spi_bus,
+            "spi_device": spi_device,
+            "busy_gpio": busy_gpio,
+            "reset_gpio": reset_gpio,
+        }
+    else:
+        link = {
+            "interface": interface,
+            "spi_bus": spi_bus,
+            "spi_device": spi_device,
+            "irq_gpio": irq_gpio,
+            "i2c_bus": bus_number,
+            "i2c_address": f"0x{address:02x}",
+        }
 
     service = None
     try:
         club_tag_registry = ClubTagRegistry(tags_path)
-        # Playwright sets this so club-tag UI tests can run without a PN532.
+        # Playwright sets this so club-tag UI tests can run without a reader.
         # `--mock` never takes this path: that flag only replaces the radar.
         if os.environ.get("OPENFLIGHT_NFC_MOCK") == "1":
             reader = MockTagReader()
+        elif reader_chip == "pn5180":
+            reader = Pn5180Spi(
+                spi_bus=spi_bus,
+                spi_device=spi_device,
+                busy_gpio=busy_gpio,
+                reset_gpio=reset_gpio,
+            )
         else:
             reader = PN532I2C(
                 interface=interface,
@@ -1712,7 +1736,7 @@ def init_nfc(
         nfc_runtime_config = {
             "enabled": False,
             "requested": True,
-            "reader": "pn532",
+            "reader": reader_chip,
             **link,
             "tags_path": str(club_tag_registry.path) if club_tag_registry else None,
             "known_tags": len(club_tag_registry) if club_tag_registry else 0,
@@ -5481,27 +5505,36 @@ def main():
         "--nfc",
         action="store_true",
         help=(
-            "Enable the PN532 NFC reader so club tags select the club. "
+            "Enable the NFC reader so club tags select the club. "
             "Always uses the hardware reader; --mock does not replace it."
+        ),
+    )
+    parser.add_argument(
+        "--nfc-reader",
+        choices=("pn532", "pn5180"),
+        default="pn532",
+        help=(
+            "Reader chip (default: pn532). pn5180 also reads ISO15693 tags "
+            "(e.g. Shot Scope) that the PN532 cannot see, and is SPI-only."
         ),
     )
     parser.add_argument(
         "--nfc-interface",
         choices=("spi", "i2c"),
         default="spi",
-        help="PN532 host link (default: spi). I2C is a fallback only.",
+        help="PN532 host link (default: spi). I2C is a fallback only. Not used for pn5180.",
     )
     parser.add_argument(
         "--nfc-spi-bus",
         type=int,
         default=0,
-        help="SPI bus the PN532 is on (default: 0, /dev/spidev0.0)",
+        help="SPI bus the reader is on (default: 0, /dev/spidev0.0)",
     )
     parser.add_argument(
         "--nfc-spi-device",
         type=int,
         default=0,
-        help="SPI chip-select / CE the PN532 is on (default: 0, GPIO8 CE0)",
+        help="SPI chip-select / CE the reader is on (default: 0, GPIO8 CE0)",
     )
     parser.add_argument(
         "--nfc-irq-gpio",
@@ -5520,6 +5553,18 @@ def main():
         type=lambda value: int(value, 0),
         default=0x24,
         help="PN532 I2C address if --nfc-interface i2c (default: 0x24)",
+    )
+    parser.add_argument(
+        "--nfc-busy-gpio",
+        type=int,
+        default=23,
+        help="BCM GPIO for the PN5180 BUSY pin (default: 23)",
+    )
+    parser.add_argument(
+        "--nfc-reset-gpio",
+        type=int,
+        default=24,
+        help="BCM GPIO for the PN5180 NRESET pin (default: 24)",
     )
     parser.add_argument(
         "--nfc-tags-file",
@@ -6063,12 +6108,15 @@ def main():
 
     if args.nfc:
         if not init_nfc(
+            reader_chip=args.nfc_reader,
             interface=args.nfc_interface,
             spi_bus=args.nfc_spi_bus,
             spi_device=args.nfc_spi_device,
             irq_gpio=args.nfc_irq_gpio,
             bus_number=args.nfc_i2c_bus,
             address=args.nfc_i2c_address,
+            busy_gpio=args.nfc_busy_gpio,
+            reset_gpio=args.nfc_reset_gpio,
             tags_path=args.nfc_tags_file,
         ):
             print("WARNING: NFC reader unavailable; club selection stays manual")

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **PN5180 NFC reader support.** `--nfc-reader pn5180` selects a PN5180 in
+  place of the PN532, over SPI plus its BUSY and RESET pins (no I2C
+  fallback). It reads the same ISO14443A club tags as the PN532, and also
+  ISO15693 (NFC Forum Type 5, e.g. NXP ICODE SLIX/SLIX2 including Shot
+  Scope's watch tags), which the PN532 cannot see at all. See
+  `docs/nfc/README.md#pn5180-setup`.
+
 ### Changed
 - **Club-tag Forget is on the scan dialog only.** The menu no longer lists
   learned tags. Tap a known tag to forget or re-teach that tag.

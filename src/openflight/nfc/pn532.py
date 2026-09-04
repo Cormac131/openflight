@@ -20,6 +20,16 @@ from typing import Optional, Protocol
 from . import ndef
 from .models import normalize_uid
 from .reader import NfcReaderError, TagRead
+from .type2 import (
+    CAPABILITY_CONTAINER_MAGIC,
+    CAPABILITY_CONTAINER_PAGE,
+    FIRST_DATA_PAGE,
+    NDEF_SCAN_BYTES,
+    TYPE2_PAGE_BYTES,
+    TYPE2_READ,
+    TYPE2_READ_BYTES,
+    TYPE2_SAK,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,18 +63,6 @@ COMMAND_SAM_CONFIGURATION = 0x14
 COMMAND_RF_CONFIGURATION = 0x32
 COMMAND_IN_LIST_PASSIVE_TARGET = 0x4A
 COMMAND_IN_DATA_EXCHANGE = 0x40
-
-# NFC Forum Type 2 (MIFARE Ultralight / NTAG) commands and layout.
-TYPE2_READ = 0x30
-TYPE2_SAK = 0x00
-TYPE2_PAGE_BYTES = 4
-TYPE2_READ_BYTES = 16
-CAPABILITY_CONTAINER_PAGE = 3
-CAPABILITY_CONTAINER_MAGIC = 0xE1
-FIRST_DATA_PAGE = 4
-# A club record is around twenty bytes. Reading the first four pages-worth of
-# user memory finds its TLV without waiting on a full 144-byte NTAG213 dump.
-NDEF_SCAN_BYTES = 64
 
 BAUD_TYPE_A_106KBPS = 0x00
 # Longest InListPassiveTarget answer for one ISO14443A target with a 10-byte
