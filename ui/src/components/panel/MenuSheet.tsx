@@ -9,6 +9,7 @@ import { socketService } from '../../services/socketService';
 import { ballDetectionStatusLabel } from '../../utils/ballDetectionStatus';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { SimStatus } from '../SimStatus';
+import { releaseVersionLabel } from '../../utils/releaseLabel';
 
 interface MenuSheetProps {
   onClose: () => void;
@@ -25,6 +26,7 @@ interface MenuSheetProps {
  */
 export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
   const simStatuses = useSystemStore((state) => state.simStatuses);
+  const releaseInfo = useSystemStore((state) => state.releaseInfo);
   const cameraStatus = useCameraStore((state) => state.cameraStatus);
   const { t } = useI18n();
   const { unitSystem, setUnitSystem } = useUnitPreference();
@@ -32,6 +34,7 @@ export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
   const { locale, setLocale } = useLocaleStore();
 
   const ballDetectionValue = ballDetectionStatusLabel(cameraStatus);
+  const versionValue = releaseVersionLabel(releaseInfo, t);
 
   return (
     <>
@@ -96,6 +99,10 @@ export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
               <SimStatus statuses={simStatuses} />
             </div>
           ) : null}
+          <div className="menu-sheet__status-row">
+            <span className="menu-sheet__status-label">{t('menu.version')}</span>
+            <span className="menu-sheet__status-value">{versionValue}</span>
+          </div>
         </section>
 
         <button type="button" className="menu-sheet__shutdown" onClick={onShutdown}>

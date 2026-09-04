@@ -16,9 +16,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from .. import __version__
+from ..release import get_release_info
 
-CLIENT_VERSION = __version__
+CLIENT_VERSION = get_release_info().version
 
 # Allowlisted entry types — only these are uploaded. ``error`` and
 # ``session_error`` are both kept: the session logger currently emits ``error``
