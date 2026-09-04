@@ -14,7 +14,7 @@ Type=simple
 User=coleman
 WorkingDirectory=/home/coleman/openflight
 Environment=DISPLAY=:0
-ExecStart=/home/coleman/openflight/scripts/start-kiosk.sh
+ExecStart=/home/coleman/openflight/scripts/start-kiosk.sh --startup-splash --ballistics
 Restart=on-failure
 RestartSec=5
 # Exit 3 means another OpenFlight instance already owns the kiosk (see
