@@ -21,6 +21,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# shellcheck source=launcher_args.sh
+source "$SCRIPT_DIR/launcher_args.sh"
 
 # Colors for output
 RED='\033[0;31m'
@@ -225,6 +227,10 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
     info "Dependencies are installed. The next steps configure your hardware."
     info "You can skip any step and re-run this script later."
 
+    ENABLE_MOCK=false
+    KLD7_MOUNT_TILT=""
+    ENABLE_GEEKWORM=false
+
     # --- OPS243-A rolling buffer flash config ---
     echo ""
     if confirm "Configure the OPS243-A radar now? (it must be plugged in)" "Y"; then
@@ -246,6 +252,8 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
             warn "You can re-run this script, or see docs/raspberry-pi-setup.md."
         fi
     else
+        ENABLE_MOCK=true
+        info "No OPS243-A — the local launcher will start with --mock."
         info "Skipped. Run later with:"
         info "    uv run python scripts/hardware-test/test_rolling_buffer_persist.py --setup"
     fi
@@ -254,6 +262,13 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
     echo ""
     if confirm "Do you have K-LD7 angle radars to set up?" "N"; then
         "$SCRIPT_DIR/setup_kld7_devices.sh"
+        while true; do
+            read -r -p "$(echo -e "${BLUE}[OpenFlight]${NC} K-LD7 mount tilt in degrees (phone inclinometer on the radar face): ")" KLD7_MOUNT_TILT
+            if [[ "$KLD7_MOUNT_TILT" =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
+                break
+            fi
+            warn "Enter a number, for example 10"
+        done
     else
         info "Skipped. Run later with: ./scripts/setup/setup_kld7_devices.sh"
     fi
@@ -262,6 +277,7 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
     echo ""
     if confirm "Do you have a Geekworm X1202 or X1206 UPS to set up?" "N"; then
         "$PROJECT_DIR/scripts/battery/geekworm/setup.sh"
+        ENABLE_GEEKWORM=true
         info "Reboot before verifying Geekworm telemetry with:"
         info "    ./scripts/battery/geekworm/setup.sh --verify"
     else
@@ -282,7 +298,7 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
         sudo systemctl daemon-reload
         sudo systemctl enable openflight
         log "Service installed and enabled ✓ (starts on next boot)"
-        info "Edit flags in $launcher_path (boot and desktop share that list)."
+        info "Boot and desktop share flags in $launcher_path."
         info "Manage it with: sudo systemctl {start|stop|status} openflight"
     else
         info "Skipped. See docs/raspberry-pi-setup.md → Auto-Start on Boot."
@@ -294,6 +310,12 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
         "$SCRIPT_DIR/install_desktop_launcher.sh"
         log "Desktop shortcut setup complete ✓"
     fi
+
+    OPENFLIGHT_SKIP_DESKTOP_ENTRY=true OPENFLIGHT_SKIP_DESKTOP_TRUST=true \
+        "$SCRIPT_DIR/install_desktop_launcher.sh"
+    launcher_path="$("$SCRIPT_DIR/install_desktop_launcher.sh" --print-launcher-path)"
+    apply_hardware_launcher_flags "$launcher_path" "$KLD7_MOUNT_TILT" "$ENABLE_GEEKWORM" "$ENABLE_MOCK"
+    info "Wrote hardware flags to $launcher_path"
 
     # --- Cloud sync (opt-in) ---
     echo ""

@@ -330,7 +330,7 @@ def test_startup_splash_launches_before_environment_sync():
     script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
 
     splash_idx = script.index("\nstart_startup_splash\n")
-    sync_idx = script.index('\nif ! uv sync "${UV_SYNC_ARGS[@]}"; then\n')
+    sync_idx = script.index("\nsync_uv_environment\n")
 
     assert splash_idx < sync_idx
     assert 'if [ "$STARTUP_SPLASH" != true ]; then' in script
@@ -434,6 +434,7 @@ def test_launcher_reports_distinct_failures_and_waits_for_dismissal():
     assert '"OpenFlight preparation failed"' in script
     assert '"server"' in script
     assert 'while [ ! -f "$STARTUP_DISMISS_FILE" ]' in script
+    assert "uv sync --offline" in script
     assert 'uv sync "${UV_SYNC_ARGS[@]}"' in script
     assert "ensure_kiosk_ui" in script
     assert "npm run build" in ensure_ui
@@ -474,7 +475,7 @@ def test_camera_capture_uses_system_python_for_sync_and_server_start():
     sync_setup_idx = script.index("UV_SYNC_ARGS=(--quiet)")
     camera_branch_idx = script.index('if [ "$CAMERA_CAPTURE" = true ]; then', sync_setup_idx)
     export_idx = script.index("export UV_PYTHON=/usr/bin/python3", camera_branch_idx)
-    camera_sync_idx = script.index('if ! uv sync "${UV_SYNC_ARGS[@]}"; then', export_idx)
+    camera_sync_idx = script.index("\nsync_uv_environment\n", export_idx)
     server_start_idx = script.index("uv run ${OPENFLIGHT_UV_RUN_ARGS:-} $SERVER_CMD &")
 
     assert "uv venv --clear --system-site-packages --python /usr/bin/python3" in script
@@ -1058,13 +1059,27 @@ def test_kiosk_browser_imports_the_graphical_session_for_systemd():
     helper = _read_kiosk_browser_helper()
     launcher = _launcher_function()
 
-    assert "_export_graphical_session_env" in launcher
+    assert "_graphical_session_env_args" in launcher
     assert "XAUTHORITY" in helper
     assert "XDG_RUNTIME_DIR" in helper
     assert "WAYLAND_DISPLAY" in helper
     assert "DBUS_SESSION_BUS_ADDRESS" in helper
     assert "ELECTRON_OZONE_PLATFORM_HINT" in helper
     assert "env -i" not in helper
+    # Session sockets belong on the browser only. Exporting them into
+    # start-kiosk.sh made the following `uv sync` fail and the splash showed
+    # that uv error after a systemctl start.
+    assert "export XDG_RUNTIME_DIR" not in helper
+    assert "export DISPLAY" not in helper
+
+
+def test_uv_sync_prefers_the_existing_venv_before_failing_the_splash():
+    """systemd often has no index access; a desktop-built .venv must still start."""
+    script = _read_script()
+
+    assert "uv sync --offline" in script
+    assert 'OPENFLIGHT_UV_RUN_ARGS' in script
+    assert "--no-sync" in script[script.index("sync_uv_environment() {") : script.index("configure_kld7_latency() {")]
 
 
 def test_startup_failure_prints_the_recovery_hint_to_the_terminal():

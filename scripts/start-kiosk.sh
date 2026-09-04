@@ -727,6 +727,27 @@ ensure_uv_on_path() {
     done
 }
 
+sync_uv_environment() {
+    local output=""
+    case " ${OPENFLIGHT_UV_RUN_ARGS:-} " in
+        *" --no-sync "*)
+            log "Skipping uv sync (OPENFLIGHT_UV_RUN_ARGS includes --no-sync)"
+            return 0
+            ;;
+    esac
+    if [ -x .venv/bin/python ] && output=$(uv sync --offline "${UV_SYNC_ARGS[@]}" 2>&1); then
+        return 0
+    fi
+    if output=$(uv sync "${UV_SYNC_ARGS[@]}" 2>&1); then
+        return 0
+    fi
+    error "$output"
+    show_startup_failure \
+        "server" \
+        "OpenFlight preparation failed" \
+        "${output:-Dependency preparation failed. Check the terminal log, then relaunch OpenFlight.}"
+}
+
 configure_kld7_latency() {
     local setup_script="$PROJECT_DIR/scripts/setup/setup_kld7_latency.sh"
 
@@ -1036,12 +1057,7 @@ if [ "$CAMERA_CAPTURE" = true ]; then
     UV_SYNC_ARGS+=(--extra camera)
 fi
 
-if ! uv sync "${UV_SYNC_ARGS[@]}"; then
-    show_startup_failure \
-        "server" \
-        "OpenFlight preparation failed" \
-        "Dependency preparation failed. Check the terminal log, then relaunch OpenFlight."
-fi
+sync_uv_environment
 
 configure_kld7_latency
 
