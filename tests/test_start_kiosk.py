@@ -1043,6 +1043,28 @@ def test_uv_is_found_in_user_install_dirs_before_the_preparation_check():
     resolver = script[script.index("ensure_uv_on_path() {") : resolve_idx]
     assert '"$HOME/.local/bin"' in resolver
     assert '"$HOME/.cargo/bin"' in resolver
+    # A desktop session already has *a* uv via login PATH, often not the
+    # user-local one. systemd may have a different uv earlier on PATH; still
+    # prepend ~/.local/bin so boot matches a desktop tap.
+    assert "if command -v uv >/dev/null 2>&1; then" not in resolver
+    assert 'export PATH="$candidate:$PATH"' in resolver
+
+
+def test_kiosk_browser_imports_the_graphical_session_for_systemd():
+    """A system unit only sets DISPLAY=:0. Desktop taps inherit Wayland, the
+    session bus, and Xauthority, so Electron works there and dies under
+    systemctl with 'Missing X server or $DISPLAY'.
+    """
+    helper = _read_kiosk_browser_helper()
+    launcher = _launcher_function()
+
+    assert "_export_graphical_session_env" in launcher
+    assert "XAUTHORITY" in helper
+    assert "XDG_RUNTIME_DIR" in helper
+    assert "WAYLAND_DISPLAY" in helper
+    assert "DBUS_SESSION_BUS_ADDRESS" in helper
+    assert "ELECTRON_OZONE_PLATFORM_HINT" in helper
+    assert "env -i" not in helper
 
 
 def test_startup_failure_prints_the_recovery_hint_to_the_terminal():

@@ -714,16 +714,15 @@ acquire_instance_lock() {
 }
 
 ensure_uv_on_path() {
-    # systemd starts the service with a minimal PATH that omits the user-local
-    # install dirs astral's installer uses, so `uv` looked missing at boot.
-    if command -v uv >/dev/null 2>&1; then
-        return 0
-    fi
+    # systemd's PATH omits user-local install dirs. Prepend them even when
+    # another uv is already on PATH so a boot start matches a desktop tap.
     local candidate
     for candidate in "$HOME/.local/bin" "$HOME/.cargo/bin"; do
         if [ -x "$candidate/uv" ]; then
-            export PATH="$candidate:$PATH"
-            return 0
+            case ":$PATH:" in
+                *":$candidate:"*) ;;
+                *) export PATH="$candidate:$PATH" ;;
+            esac
         fi
     done
 }

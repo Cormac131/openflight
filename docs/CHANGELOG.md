@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [Electron Kiosk Shell](electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
 
 ### Fixed
+- **systemd kiosk start matches a desktop tap.** A system unit only passed
+  `DISPLAY=:0`, so Electron died with "Missing X server or $DISPLAY" while the
+  same wrapper launched from the desktop worked. The kiosk helper now imports
+  the user's Wayland/X11 sockets, Xauthority, and session bus, and always
+  prepends `~/.local/bin` so boot uses the same `uv` as a login shell.
 - **A crash-looping boot service no longer kills the desktop kiosk.** Every
   launcher exit ran a `pkill` that matched the Electron binary path, so an
   `openflight.service` that failed at startup (for example because systemd's

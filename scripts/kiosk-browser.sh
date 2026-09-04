@@ -13,19 +13,47 @@
 # Expects from the caller: PROJECT_DIR, log(), warn().
 # Sets: BROWSER_PID, BROWSER_PGID, BROWSER_LAUNCHED.
 
+_export_graphical_session_env() {
+    local uid runtime
+    uid="$(id -u)"
+    runtime="${XDG_RUNTIME_DIR:-/run/user/$uid}"
+    if [ -d "$runtime" ]; then
+        export XDG_RUNTIME_DIR="$runtime"
+    fi
+    export DISPLAY="${DISPLAY:-:0}"
+    if [ -z "${XAUTHORITY:-}" ] && [ -f "${HOME}/.Xauthority" ]; then
+        export XAUTHORITY="${HOME}/.Xauthority"
+    fi
+    if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/wayland-0" ]; then
+        export WAYLAND_DISPLAY=wayland-0
+    fi
+    case "${DBUS_SESSION_BUS_ADDRESS:-}" in
+        unix:*|tcp:*) ;;
+        *)
+            if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/bus" ]; then
+                export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+            else
+                unset DBUS_SESSION_BUS_ADDRESS
+            fi
+            ;;
+    esac
+    export ELECTRON_OZONE_PLATFORM_HINT="${ELECTRON_OZONE_PLATFORM_HINT:-auto}"
+}
+
 launch_kiosk_browser() {
     local url="$1"
     local electron_bin="$PROJECT_DIR/ui/node_modules/.bin/electron"
 
+    _export_graphical_session_env
     log "Launching kiosk shell (Electron)..."
     if [ -x "$electron_bin" ]; then
-        _launch_kiosk_process env DISPLAY=:0 OPENFLIGHT_URL="$url" "$electron_bin" "$PROJECT_DIR/ui"
+        _launch_kiosk_process env DISPLAY="${DISPLAY:-:0}" OPENFLIGHT_URL="$url" "$electron_bin" "$PROJECT_DIR/ui"
     elif command -v chromium-browser &> /dev/null; then
         warn "Electron kiosk shell not installed (run 'npm install' in ui/); falling back to chromium-browser"
-        _launch_kiosk_process env DISPLAY=:0 chromium-browser --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --password-store=basic "$url"
+        _launch_kiosk_process env DISPLAY="${DISPLAY:-:0}" chromium-browser --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --password-store=basic "$url"
     elif command -v chromium &> /dev/null; then
         warn "Electron kiosk shell not installed (run 'npm install' in ui/); falling back to chromium"
-        _launch_kiosk_process env DISPLAY=:0 chromium --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --password-store=basic "$url"
+        _launch_kiosk_process env DISPLAY="${DISPLAY:-:0}" chromium --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --password-store=basic "$url"
     else
         warn "No Electron kiosk shell and no fallback browser found. Open $url manually."
         return 1
