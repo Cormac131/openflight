@@ -285,8 +285,8 @@ class TestInitNfcReaderChoice:
             def read_tag(self, timeout_s=0.5):
                 return None
 
-        monkeypatch.setattr("openflight.nfc.PN532I2C", FakePn532)
-        monkeypatch.setattr("openflight.nfc.Pn5180Spi", FakePn5180)
+        monkeypatch.setattr("openflight.nfc.pn532.PN532I2C", FakePn532)
+        monkeypatch.setattr("openflight.nfc.pn5180.Pn5180Spi", FakePn5180)
 
     def _cleanup(self):
         if server_module.nfc_service is not None:
@@ -350,6 +350,99 @@ class TestInitNfcReaderChoice:
         finally:
             self._cleanup()
 
+    def test_nfc_reader_auto_uses_whichever_chip_answers(self, tmp_path, monkeypatch):
+        self._install_fake_readers(monkeypatch)
+        monkeypatch.delenv("OPENFLIGHT_NFC_MOCK", raising=False)
+        # The PN5180 is probed first and answers, so that is what runs.
+        try:
+            assert server_module.init_nfc(
+                reader_chip="auto", tags_path=str(tmp_path / "club_tags.json")
+            )
+            assert server_module.nfc_service.reader.name == "pn5180"
+            assert server_module.nfc_runtime_config["reader"] == "pn5180"
+        finally:
+            self._cleanup()
+
+    def test_nfc_reader_auto_falls_back_to_the_other_chip(self, tmp_path, monkeypatch):
+        class SilentPn5180:
+            name = "pn5180"
+
+            def __init__(self, **_kwargs):
+                pass
+
+            def open(self):
+                raise OSError("BUSY line stuck high")
+
+            def close(self):
+                return None
+
+            def read_tag(self, timeout_s=0.5):
+                return None
+
+        self._install_fake_readers(monkeypatch)
+        monkeypatch.setattr("openflight.nfc.pn5180.Pn5180Spi", SilentPn5180)
+        monkeypatch.delenv("OPENFLIGHT_NFC_MOCK", raising=False)
+        try:
+            assert server_module.init_nfc(
+                reader_chip="auto", tags_path=str(tmp_path / "club_tags.json")
+            )
+            assert server_module.nfc_service.reader.name == "pn532"
+        finally:
+            self._cleanup()
+
+    def test_nfc_reader_auto_does_not_reopen_the_detected_reader(self, tmp_path, monkeypatch):
+        # Detection identifies a chip by opening it; a second open would reset
+        # the reader that just proved itself.
+        opens = []
+
+        class CountingPn5180:
+            name = "pn5180"
+
+            def __init__(self, **_kwargs):
+                pass
+
+            def open(self):
+                opens.append(1)
+
+            def close(self):
+                return None
+
+            def read_tag(self, timeout_s=0.5):
+                return None
+
+        monkeypatch.setattr("openflight.nfc.pn5180.Pn5180Spi", CountingPn5180)
+        monkeypatch.delenv("OPENFLIGHT_NFC_MOCK", raising=False)
+        try:
+            server_module.init_nfc(reader_chip="auto", tags_path=str(tmp_path / "club_tags.json"))
+            assert opens == [1]
+        finally:
+            self._cleanup()
+
+    def test_nfc_reader_auto_with_nothing_attached_reports_both_failures(
+        self, tmp_path, monkeypatch
+    ):
+        class Absent:
+            name = "absent"
+
+            def __init__(self, **_kwargs):
+                raise OSError("no such device")
+
+        monkeypatch.setattr("openflight.nfc.pn5180.Pn5180Spi", Absent)
+        monkeypatch.setattr("openflight.nfc.pn532.PN532I2C", Absent)
+        monkeypatch.delenv("OPENFLIGHT_NFC_MOCK", raising=False)
+        monkeypatch.setattr(server_module, "log_session_error", lambda *_args, **_kwargs: None)
+        try:
+            assert (
+                server_module.init_nfc(
+                    reader_chip="auto", tags_path=str(tmp_path / "club_tags.json")
+                )
+                is False
+            )
+            error = server_module.nfc_runtime_config["error"]
+            assert "pn5180" in error and "pn532" in error
+        finally:
+            self._cleanup()
+
     def test_playwright_env_overrides_pn5180_too(self, tmp_path, monkeypatch):
         self._install_fake_readers(monkeypatch)
         monkeypatch.setenv("OPENFLIGHT_NFC_MOCK", "1")
@@ -368,7 +461,7 @@ class TestInitNfcReaderChoice:
             def __init__(self, **_kwargs):
                 raise OSError("PN5180 BUSY line stuck high")
 
-        monkeypatch.setattr("openflight.nfc.Pn5180Spi", BrokenPn5180)
+        monkeypatch.setattr("openflight.nfc.pn5180.Pn5180Spi", BrokenPn5180)
         monkeypatch.delenv("OPENFLIGHT_NFC_MOCK", raising=False)
         monkeypatch.setattr(server_module, "log_session_error", lambda *_args, **_kwargs: None)
         try:
@@ -393,7 +486,7 @@ class TestInitNfcReaderChoice:
             def __init__(self, **_kwargs):
                 raise OSError("PN532 not found")
 
-        monkeypatch.setattr("openflight.nfc.PN532I2C", BrokenPn532)
+        monkeypatch.setattr("openflight.nfc.pn532.PN532I2C", BrokenPn532)
         monkeypatch.delenv("OPENFLIGHT_NFC_MOCK", raising=False)
         monkeypatch.setattr(server_module, "log_session_error", lambda *_args, **_kwargs: None)
         try:
@@ -419,7 +512,7 @@ class TestInitNfcReaderChoice:
                 raise OSError("PN532 not found")
 
         emitted = []
-        monkeypatch.setattr("openflight.nfc.PN532I2C", BrokenPn532)
+        monkeypatch.setattr("openflight.nfc.pn532.PN532I2C", BrokenPn532)
         monkeypatch.delenv("OPENFLIGHT_NFC_MOCK", raising=False)
         monkeypatch.setattr(server_module, "log_session_error", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(

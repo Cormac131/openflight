@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ISO15693 (NFC Forum Type 5, e.g. NXP ICODE SLIX/SLIX2 including Shot
   Scope's watch tags), which the PN532 cannot see at all. See
   `docs/nfc/README.md#pn5180-setup`.
+- **`--nfc-reader auto` detects which reader is attached.** It asks the
+  PN5180 for its EEPROM version, then the PN532 for its firmware version,
+  and runs whichever answers. When neither does, the error quotes both
+  chips' own failures rather than a generic "no reader".
+- **`read_pn5180.py --probe`.** Dumps chip identity, the RF and transceive
+  registers, and one raw poll per technology, so a reader that opens but
+  never sees a tag reports which layer broke.
 
 ### Changed
 - **Club-tag Forget is on the scan dialog only.** The menu no longer lists

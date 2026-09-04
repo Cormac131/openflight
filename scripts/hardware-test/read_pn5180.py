@@ -11,7 +11,75 @@ from openflight.nfc import (
     Pn5180Spi,
     format_uid,
 )
-from openflight.nfc.pn5180 import DEFAULT_SPI_BUS, DEFAULT_SPI_DEVICE
+from openflight.nfc.pn5180 import (
+    DEFAULT_SPI_BUS,
+    DEFAULT_SPI_DEVICE,
+    ISO14443A_REQA,
+    ISO14443A_REQA_VALID_BITS,
+    REG_IRQ_STATUS,
+    REG_RX_STATUS,
+    RF_CONFIG_ISO14443A_106,
+    RF_CONFIG_ISO15693_26,
+    TRANSCEIVE_WAIT_TRANSMIT,
+)
+
+
+def _probe(reader: Pn5180Spi) -> None:
+    """Walk the layers between "SPI answers" and "a tag was read".
+
+    Each step below can fail independently, and each has a different fix, so
+    the point is to name which one broke rather than reporting "no tag".
+    """
+    identity = reader.identify()
+    print("--- chip identity (EEPROM) ---")
+    print(f"  die id           {identity['die_id']}")
+    print(f"  product version  {identity['product_version']}")
+    print(f"  firmware version {identity['firmware_version']}")
+    print(f"  eeprom version   {identity['eeprom_version']}")
+    if set(identity["die_id"]) <= {"0", "f"}:
+        print("  ^ all 0s or all Fs means MISO is not returning data: check pin 21.")
+
+    print("--- registers ---")
+    for name in ("system_config", "irq_status", "rf_status", "rx_status"):
+        print(f"  {name:<16} 0x{identity[name]:08x}")
+    state = identity["transceive_state"]
+    expected = "WaitTransmit" if state == TRANSCEIVE_WAIT_TRANSMIT else "unexpected"
+    print(f"  transceive state {state} ({expected})")
+
+    for label, profile in (
+        ("ISO14443A 106k", RF_CONFIG_ISO14443A_106),
+        ("ISO15693 26k", RF_CONFIG_ISO15693_26),
+    ):
+        print(f"--- {label} ---")
+        # pylint: disable=protected-access
+        reader._select_rf_config(profile)
+        reader._set_crc(False)
+        reader._write_register(0x03, 0x000FFFFF)  # IRQ_CLEAR
+        reader._start_transceive()
+        print(f"  transceive state after arming: {reader._transceive_state()}")
+        frame = bytes([ISO14443A_REQA])
+        valid_bits = ISO14443A_REQA_VALID_BITS
+        if profile == RF_CONFIG_ISO15693_26:
+            reader._set_crc(True)
+            frame = bytes([0x26, 0x01, 0x00])  # single-slot Inventory
+            valid_bits = 8
+        try:
+            answer = reader._transceive(
+                frame, valid_bits=valid_bits, timeout_s=0.2, allow_timeout=True
+            )
+        except Exception as error:  # pylint: disable=broad-except
+            print(f"  transceive raised: {error}")
+            continue
+        irq = reader._read_register(REG_IRQ_STATUS)
+        rx = reader._read_register(REG_RX_STATUS)
+        print(f"  sent {frame.hex()} ({valid_bits} valid bits)")
+        print(f"  IRQ_STATUS 0x{irq:08x}   RX_STATUS 0x{rx:08x}")
+        print(f"  answer: {answer.hex() if answer else '(none -- no tag, or no transmit)'}")
+
+    print()
+    print("Reading: an answer above with a tag on the antenna means the RF layer works.")
+    print("No answer on both, with a tag present, points at the RF field or antenna;")
+    print("a transceive state that never reaches WaitTransmit points at the host link.")
 
 
 def main() -> None:
@@ -41,6 +109,11 @@ def main() -> None:
         default=DEFAULT_RESET_GPIO,
         help=f"BCM GPIO for NRESET (default: {DEFAULT_RESET_GPIO})",
     )
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="Dump chip identity, registers, and one raw poll per technology, then exit",
+    )
     parser.add_argument("--interval", type=float, default=0.2, help="Seconds between polls")
     parser.add_argument("--count", type=int, default=0, help="Tags to print; 0 runs forever")
     parser.add_argument(
@@ -69,6 +142,13 @@ def main() -> None:
         f"BUSY GPIO{args.busy_gpio} RESET GPIO{args.reset_gpio} "
         f"(firmware {reader.firmware_version}, product {reader.product_version})"
     )
+    if args.probe:
+        try:
+            _probe(reader)
+        finally:
+            reader.close()
+        return
+
     print(f"Club tags: {len(registry)} learned in {registry.path}")
     if args.assign:
         print(f"Present the tag to learn as {args.assign}...")

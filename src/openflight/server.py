@@ -1647,26 +1647,46 @@ def init_nfc(  # pylint: disable=too-many-arguments,too-many-positional-argument
     ``--mock`` does not replace this reader: NFC is optional, so omit
     ``--nfc`` when it is absent.
 
-    ``reader_chip`` picks the driver: ``"pn532"`` (default, SPI or I2C) or
-    ``"pn5180"`` (SPI + BUSY + RESET, no I2C fallback -- see ``docs/nfc``).
+    ``reader_chip`` picks the driver: ``"pn532"`` (default, SPI or I2C),
+    ``"pn5180"`` (SPI + BUSY + RESET, no I2C fallback -- see ``docs/nfc``), or
+    ``"auto"`` to probe for whichever of the two is actually wired up.
     """
     global nfc_service  # pylint: disable=global-statement
     global club_tag_registry  # pylint: disable=global-statement
     global nfc_runtime_config  # pylint: disable=global-statement
 
     from .nfc import (  # pylint: disable=import-outside-toplevel
-        PN532I2C,
         ClubTagRegistry,
         MockTagReader,
         NfcService,
-        Pn5180Spi,
+        build_reader,
+        detect_reader,
     )
 
+    settings = {
+        "interface": interface,
+        "spi_bus": spi_bus,
+        "spi_device": spi_device,
+        "irq_gpio": irq_gpio,
+        "bus_number": bus_number,
+        "address": address,
+        "busy_gpio": busy_gpio,
+        "reset_gpio": reset_gpio,
+    }
     if reader_chip == "pn5180":
         link = {
             "interface": "spi",
             "spi_bus": spi_bus,
             "spi_device": spi_device,
+            "busy_gpio": busy_gpio,
+            "reset_gpio": reset_gpio,
+        }
+    elif reader_chip == "auto":
+        link = {
+            "interface": "spi",
+            "spi_bus": spi_bus,
+            "spi_device": spi_device,
+            "irq_gpio": irq_gpio,
             "busy_gpio": busy_gpio,
             "reset_gpio": reset_gpio,
         }
@@ -1687,24 +1707,17 @@ def init_nfc(  # pylint: disable=too-many-arguments,too-many-positional-argument
         # `--mock` never takes this path: that flag only replaces the radar.
         if os.environ.get("OPENFLIGHT_NFC_MOCK") == "1":
             reader = MockTagReader()
-        elif reader_chip == "pn5180":
-            reader = Pn5180Spi(
-                spi_bus=spi_bus,
-                spi_device=spi_device,
-                busy_gpio=busy_gpio,
-                reset_gpio=reset_gpio,
-            )
+            started_open = False
+        elif reader_chip == "auto":
+            # Detection opens the reader that answered; opening it again
+            # would reset a chip that has already proved itself.
+            reader = detect_reader(**settings)
+            started_open = True
         else:
-            reader = PN532I2C(
-                interface=interface,
-                spi_bus=spi_bus,
-                spi_device=spi_device,
-                irq_gpio=irq_gpio,
-                bus_number=bus_number,
-                address=address,
-            )
+            reader = build_reader(reader_chip, **settings)
+            started_open = False
         service = NfcService(reader, club_tag_registry, on_scan=_on_nfc_scan)
-        service.start()
+        service.start(already_open=started_open)
         nfc_service = service
         nfc_runtime_config = {
             "enabled": True,
@@ -5511,11 +5524,12 @@ def main():
     )
     parser.add_argument(
         "--nfc-reader",
-        choices=("pn532", "pn5180"),
+        choices=("pn532", "pn5180", "auto"),
         default="pn532",
         help=(
             "Reader chip (default: pn532). pn5180 also reads ISO15693 tags "
-            "(e.g. Shot Scope) that the PN532 cannot see, and is SPI-only."
+            "(e.g. Shot Scope) that the PN532 cannot see, and is SPI-only. "
+            "auto probes for whichever of the two answers."
         ),
     )
     parser.add_argument(

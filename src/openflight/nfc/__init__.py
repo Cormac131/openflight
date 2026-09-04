@@ -1,6 +1,7 @@
 """NFC club tags: PN532/PN5180 drivers, NDEF codec, learned tag registry, and poll service."""
 
 from . import ndef
+from .detect import DETECT_ORDER, build_reader, detect_reader
 from .mock import MockTagReader
 from .models import ClubTag, InvalidTagUidError, TagScan, format_uid, normalize_uid
 from .pn532 import (
@@ -23,6 +24,7 @@ __all__ = [
     "ClubTagRegistry",
     "DEFAULT_BUSY_GPIO",
     "DEFAULT_CS_GPIO",
+    "DETECT_ORDER",
     "DEFAULT_I2C_ADDRESS",
     "DEFAULT_I2C_BUS",
     "DEFAULT_IRQ_GPIO",
@@ -40,6 +42,8 @@ __all__ = [
     "TagRead",
     "TagScan",
     "UnknownClubError",
+    "build_reader",
+    "detect_reader",
     "format_uid",
     "normalize_uid",
     "validate_club_id",

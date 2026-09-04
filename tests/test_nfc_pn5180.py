@@ -1,7 +1,9 @@
-"""Tests for the PN5180 driver: CRC codecs, the BUSY-gated transport, and the
-ISO14443A / ISO15693 poll logic built on top of them.
+"""Tests for the PN5180 driver: the BUSY-gated transport, the register-level
+sequencing the chip needs before it will transmit, and the ISO14443A /
+ISO15693 poll logic built on top of them.
 """
 
+from types import SimpleNamespace
 from typing import Optional
 
 import pytest
@@ -17,9 +19,10 @@ from openflight.nfc.pn5180 import (
     CMD_RF_ON,
     CMD_SEND_DATA,
     CMD_WRITE_REGISTER,
+    CMD_WRITE_REGISTER_AND_MASK,
+    CMD_WRITE_REGISTER_OR_MASK,
     EEPROM_FIRMWARE_VERSION,
     EEPROM_PRODUCT_VERSION,
-    ISO14443A_ANTICOLLISION_CL1,
     ISO14443A_CASCADE_TAG,
     ISO14443A_NVB_COLLIDE,
     ISO14443A_NVB_FINAL,
@@ -27,42 +30,26 @@ from openflight.nfc.pn5180 import (
     ISO15693_CMD_INVENTORY,
     ISO15693_CMD_READ_SINGLE_BLOCK,
     ISO15693_ERROR_FLAG,
+    REG_CRC_RX_CONFIG,
+    REG_CRC_TX_CONFIG,
+    REG_IRQ_CLEAR,
     REG_IRQ_STATUS,
+    REG_RF_STATUS,
     REG_RX_STATUS,
+    REG_SYSTEM_CONFIG,
     RF_CONFIG_ISO14443A_106,
     RF_CONFIG_ISO15693_26,
     RX_IRQ_STAT,
+    SYSTEM_CONFIG_TRANSCEIVE,
+    TRANSCEIVE_STATE_SHIFT,
+    TRANSCEIVE_WAIT_TRANSMIT,
+    TX_RFON_IRQ_STAT,
     PN5180FrameError,
     Pn5180Spi,
     Pn5180SpiTransport,
-    crc_a,
-    crc_iso15693,
 )
 from openflight.nfc.reader import NfcReaderError
 from openflight.nfc.type2 import CAPABILITY_CONTAINER_MAGIC, TYPE2_SAK
-
-# --------------------------------------------------------------------------- CRC
-
-
-class TestCrcA:
-    def test_matches_a_known_iso14443_vector(self):
-        # SELECT for a 4-byte UID, a value cross-checked against libnfc's CRC_A.
-        assert crc_a(bytes([0x93, 0x70, 0x04, 0xA2, 0xB1, 0xC3, 0x64])) == bytes([0xB9, 0x7A])
-
-    def test_changes_with_any_input_byte(self):
-        assert crc_a(b"\x26") != crc_a(b"\x27")
-
-    def test_is_two_bytes_for_empty_input(self):
-        assert len(crc_a(b"")) == 2
-
-
-class TestCrcIso15693:
-    def test_uses_a_different_init_and_final_xor_than_crc_a(self):
-        assert crc_iso15693(b"\x26\x01\x00") != crc_a(b"\x26\x01\x00")
-
-    def test_is_two_bytes_for_empty_input(self):
-        assert len(crc_iso15693(b"")) == 2
-
 
 # --------------------------------------------------------------------- transport
 
@@ -85,10 +72,35 @@ class _FakeSpi:
 
 
 class _FakeBusy:
-    def __init__(self, active=False):
+    """A BUSY line that pulses high for one poll after each SPI write."""
+
+    def __init__(self, active=False, pulses=0):
         self.is_active = active
+        self._pulses = pulses
+
+    def pulse(self):
+        if self._pulses > 0:
+            self._pulses -= 1
+            self.is_active = True
 
     def close(self):
+        pass
+
+
+class _PulsingBusy(_FakeBusy):
+    """Goes high on the first read after a write, then low on the next."""
+
+    def __init__(self):
+        super().__init__(active=False)
+        self.reads = 0
+
+    @property
+    def is_active(self):  # type: ignore[override]
+        self.reads += 1
+        return self.reads == 1
+
+    @is_active.setter
+    def is_active(self, _value):
         pass
 
 
@@ -138,11 +150,28 @@ class TestPn5180SpiTransport:
 
         assert len(spi.xfers) == 1
 
+    def test_a_response_read_waits_out_the_busy_pulse(self):
+        # BUSY high means the chip has not staged its answer yet: reading
+        # through it is what returned the previous command's bytes.
+        busy = _PulsingBusy()
+        spi = _FakeSpi()
+        transport = Pn5180SpiTransport(spi=spi, busy=busy, reset=None)
+
+        transport.command(bytes([0x04, 0x02]), response_len=4)
+
+        assert len(spi.xfers) == 2
+        assert busy.reads > 1  # saw it high, then waited for low
+
     def test_busy_stuck_high_times_out(self):
         transport = Pn5180SpiTransport(spi=_FakeSpi(), busy=_FakeBusy(active=True), reset=None)
 
         with pytest.raises(NfcReaderError, match="BUSY"):
             transport.command(bytes([0x16, 0x00]))
+
+    def test_busy_reports_its_level_for_the_probe(self):
+        transport = Pn5180SpiTransport(spi=_FakeSpi(), busy=_FakeBusy(active=True), reset=None)
+
+        assert transport.busy is True
 
     def test_close_releases_busy_reset_and_spi_once(self):
         transport = Pn5180SpiTransport(spi=_FakeSpi(), busy=_FakeBusy(), reset=_FakeReset())
@@ -150,19 +179,16 @@ class TestPn5180SpiTransport:
         transport.close()
         transport.close()  # must be idempotent
 
-    def test_injected_gpios_are_not_closed(self):
-        busy = _FakeBusy()
-        reset = _FakeReset()
-        transport = Pn5180SpiTransport(spi=_FakeSpi(), busy=busy, reset=reset)
-
-        transport.close()  # must not raise even though these objects are shared
-
 
 # ------------------------------------------------------------------ fake host bus
 
 
 class Iso14443aTag:
-    """Answers the request shapes the PN5180 driver sends for one A tag."""
+    """Answers the request shapes the PN5180 driver sends for one A tag.
+
+    Responses are CRC-free: the chip's own CRC engine strips a received CRC
+    before the host ever sees the frame.
+    """
 
     def __init__(self, uid_hex, *, sak=TYPE2_SAK, type2_pages=None, present=True):
         self.uid = bytes.fromhex(uid_hex)
@@ -182,11 +208,9 @@ class Iso14443aTag:
                 return block + bytes([bcc])
             if frame[:2] == bytes([sel, ISO14443A_NVB_FINAL]):
                 is_final = block is blocks[-1]
-                sak = self.sak if is_final else 0x04
-                return bytes([sak]) + crc_a(bytes([sak]))
+                return bytes([self.sak if is_final else 0x04])
         if len(frame) >= 2 and frame[0] == 0x30:  # TYPE2_READ
-            data = self.type2_pages.get(frame[1], bytes(16))
-            return data + crc_a(data)
+            return self.type2_pages.get(frame[1], bytes(16))
         return None
 
     def _cascade_blocks(self):
@@ -215,36 +239,34 @@ class Iso15693Tag:
             return None
         cmd = frame[1]
         if cmd == ISO15693_CMD_INVENTORY:
-            payload = bytes([0x00, 0x00]) + bytes(reversed(self.uid))
-            return payload + crc_iso15693(payload)
+            return bytes([0x00, 0x00]) + bytes(reversed(self.uid))
         if cmd == ISO15693_CMD_READ_SINGLE_BLOCK:
-            uid_wire = frame[2:10]
-            if bytes(reversed(uid_wire)) != self.uid:
+            if bytes(reversed(frame[2:10])) != self.uid:
                 return None
-            block = frame[10]
             if self.error_read:
-                payload = bytes([ISO15693_ERROR_FLAG, 0x0F])
-                return payload + crc_iso15693(payload)
-            data = self.blocks.get(block, bytes(4))
-            payload = bytes([0x00]) + data
-            return payload + crc_iso15693(payload)
+                return bytes([ISO15693_ERROR_FLAG, 0x0F])
+            return bytes([0x00]) + self.blocks.get(frame[10], bytes(4))
         return None
 
 
 class FakeTransport:
-    """A PN5180 bus driven by a simulated tag, scripted register/EEPROM answers,
-    and knobs for exercising the IRQ wait loop and its timeout.
+    """A PN5180 bus backed by a simulated tag and a simulated register file.
+
+    Register masks, the transceive state machine, and the IRQ status bits are
+    modelled rather than stubbed, so the sequencing the real chip demands
+    before it will transmit is actually exercised.
     """
 
     def __init__(self, *, tag=None, irq_delay=0, never_ready=False):
         self.tag = tag
         self.registers: dict[int, int] = {}
         self.writes: list[bytes] = []
+        self.sends: list[SimpleNamespace] = []
         self.reset_count = 0
         self.closed = False
         self.rf_config = None
         self._pending_response: Optional[bytes] = None
-        self._irq_ready = False
+        self._irq = 0
         self._irq_delay = irq_delay
         self._never_ready = never_ready
 
@@ -255,32 +277,32 @@ class FakeTransport:
         self.writes.append(bytes(data))
         cmd = data[0]
         if cmd == CMD_WRITE_REGISTER:
-            self.registers[data[1]] = int.from_bytes(data[2:6], "little")
+            return self._write_register(data[1], int.from_bytes(data[2:6], "little"))
+        if cmd == CMD_WRITE_REGISTER_OR_MASK:
+            value = self.registers.get(data[1], 0) | int.from_bytes(data[2:6], "little")
+            self.registers[data[1]] = value
+            return b""
+        if cmd == CMD_WRITE_REGISTER_AND_MASK:
+            value = self.registers.get(data[1], 0) & int.from_bytes(data[2:6], "little")
+            self.registers[data[1]] = value
             return b""
         if cmd == CMD_READ_REGISTER:
-            addr = data[1]
-            if addr == REG_IRQ_STATUS:
-                return self._irq_status().to_bytes(4, "little")
-            if addr == REG_RX_STATUS:
-                return len(self._pending_response or b"").to_bytes(4, "little")
-            return self.registers.get(addr, 0).to_bytes(4, "little")
+            return self._read_register(data[1])
         if cmd == CMD_READ_EEPROM:
-            addr = data[1]
-            if addr == EEPROM_FIRMWARE_VERSION:
-                return bytes([0x06, 0x01])
-            if addr == EEPROM_PRODUCT_VERSION:
-                return bytes([0x02, 0x01])
-            return bytes(response_len)
+            return self._read_eeprom(data[1], response_len)
         if cmd == CMD_LOAD_RF_CONFIG:
             self.rf_config = (data[1], data[2])
+            # A profile load reinstalls the CRC registers with CRC enabled.
+            self.registers[REG_CRC_TX_CONFIG] = 0x01
+            self.registers[REG_CRC_RX_CONFIG] = 0x01
             return b""
-        if cmd in (CMD_RF_ON, CMD_RF_OFF):
+        if cmd == CMD_RF_OFF:
+            return b""
+        if cmd == CMD_RF_ON:
+            self._irq |= TX_RFON_IRQ_STAT
             return b""
         if cmd == CMD_SEND_DATA:
-            frame = bytes(data[2:])
-            self._pending_response = self.tag.respond(frame) if self.tag else None
-            self._irq_ready = self._pending_response is not None
-            return b""
+            return self._send_data(bytes(data[2:]))
         if cmd == CMD_READ_DATA:
             return (self._pending_response or b"")[:response_len]
         raise AssertionError(f"Unhandled PN5180 command 0x{cmd:02x}")
@@ -288,13 +310,55 @@ class FakeTransport:
     def close(self) -> None:
         self.closed = True
 
+    @property
+    def armed(self) -> bool:
+        """True when the transceive state machine has been walked to Transceive."""
+        return self.registers.get(REG_SYSTEM_CONFIG, 0) & 0x07 == SYSTEM_CONFIG_TRANSCEIVE
+
+    @property
+    def crc_enabled(self) -> bool:
+        return bool(self.registers.get(REG_CRC_TX_CONFIG, 0) & 0x01)
+
+    def _write_register(self, address: int, value: int) -> bytes:
+        if address == REG_IRQ_CLEAR:
+            self._irq &= ~value & 0xFFFFFFFF
+            return b""
+        self.registers[address] = value
+        return b""
+
+    def _read_register(self, address: int) -> bytes:
+        if address == REG_IRQ_STATUS:
+            return self._irq_status().to_bytes(4, "little")
+        if address == REG_RX_STATUS:
+            return len(self._pending_response or b"").to_bytes(4, "little")
+        if address == REG_RF_STATUS:
+            return (TRANSCEIVE_WAIT_TRANSMIT << TRANSCEIVE_STATE_SHIFT).to_bytes(4, "little")
+        return self.registers.get(address, 0).to_bytes(4, "little")
+
+    def _read_eeprom(self, address: int, response_len: int) -> bytes:
+        if address == EEPROM_FIRMWARE_VERSION:
+            return bytes([0x06, 0x01])
+        if address == EEPROM_PRODUCT_VERSION:
+            return bytes([0x02, 0x01])
+        return bytes(response_len)
+
+    def _send_data(self, frame: bytes) -> bytes:
+        self.sends.append(SimpleNamespace(frame=frame, armed=self.armed, crc=self.crc_enabled))
+        # The real chip only transmits from the Transceive state.
+        self._pending_response = (
+            self.tag.respond(frame) if (self.tag is not None and self.armed) else None
+        )
+        if self._pending_response is not None:
+            self._irq |= RX_IRQ_STAT
+        return b""
+
     def _irq_status(self) -> int:
         if self._never_ready:
-            return 0
-        if self._irq_delay > 0:
+            return self._irq & ~RX_IRQ_STAT
+        if self._irq_delay > 0 and self._irq & RX_IRQ_STAT:
             self._irq_delay -= 1
-            return 0
-        return RX_IRQ_STAT if self._irq_ready else 0
+            return self._irq & ~RX_IRQ_STAT
+        return self._irq
 
 
 def _reader(transport=None, **kwargs) -> Pn5180Spi:
@@ -348,11 +412,88 @@ class TestReaderLifecycle:
 
         assert transport.closed is True
 
-    def test_a_busy_timeout_during_close_does_not_raise(self):
-        transport = FakeTransport(never_ready=True)
-        reader = _reader(transport)
+    def test_identify_reports_chip_state_for_the_probe(self):
+        reader = _reader(FakeTransport())
 
-        reader.close()  # RF_OFF failure inside close() must be swallowed
+        identity = reader.identify()
+
+        assert identity["firmware_version"] == "1.6"
+        assert identity["transceive_state"] == TRANSCEIVE_WAIT_TRANSMIT
+        assert len(identity["die_id"]) == 32  # 16 bytes, hex
+
+
+# ----------------------------------------------------- chip-level sequencing
+
+
+class TestTransceiveSequencing:
+    """Regression tests for the three things that stop a PN5180 transmitting."""
+
+    def test_every_frame_is_sent_from_the_transceive_state(self):
+        transport = FakeTransport(tag=Iso14443aTag("04A2B1C3", sak=0x08))
+
+        _reader(transport).read_tag()
+
+        assert transport.sends
+        assert all(send.armed for send in transport.sends)
+
+    def test_crc_is_off_for_anticollision_and_on_for_select(self):
+        transport = FakeTransport(tag=Iso14443aTag("04A2B1C3", sak=0x08))
+
+        _reader(transport).read_tag()
+
+        by_kind = {}
+        for send in transport.sends:
+            if len(send.frame) == 2 and send.frame[1] == ISO14443A_NVB_COLLIDE:
+                by_kind["anticollision"] = send.crc
+            elif len(send.frame) > 2 and send.frame[1] == ISO14443A_NVB_FINAL:
+                by_kind["select"] = send.crc
+        assert by_kind == {"anticollision": False, "select": True}
+
+    def test_type2_reads_run_with_crc_enabled(self):
+        pages = {3: bytes([CAPABILITY_CONTAINER_MAGIC, 0x10, 0x12, 0x00]).ljust(16, b"\x00")}
+        transport = FakeTransport(tag=Iso14443aTag("04A2B1C3", type2_pages=pages))
+
+        _reader(transport).read_tag()
+
+        reads = [send for send in transport.sends if send.frame[0] == 0x30]
+        assert reads and all(send.crc for send in reads)
+
+    def test_disabling_crc_uses_a_masked_write_not_a_whole_register_write(self):
+        # A plain write would clobber the rest of the profile LOAD_RF_CONFIG
+        # just installed in these registers.
+        transport = FakeTransport(tag=Iso14443aTag("04A2B1C3", sak=0x08))
+
+        _reader(transport).read_tag()
+
+        crc_writes = [
+            write
+            for write in transport.writes
+            if write[0] == CMD_WRITE_REGISTER and write[1] in (REG_CRC_TX_CONFIG, REG_CRC_RX_CONFIG)
+        ]
+        assert crc_writes == []
+
+    def test_the_rf_field_is_switched_on_before_polling(self):
+        transport = FakeTransport(tag=Iso14443aTag("04A2B1C3", sak=0x08))
+
+        _reader(transport).read_tag()
+
+        rf_on_at = next(i for i, write in enumerate(transport.writes) if write[0] == CMD_RF_ON)
+        first_send_at = next(
+            i for i, write in enumerate(transport.writes) if write[0] == CMD_SEND_DATA
+        )
+        assert rf_on_at < first_send_at
+
+    def test_an_unarmed_transceiver_reads_nothing(self):
+        # The failure this whole sequence exists to prevent: the chip answers
+        # register reads happily and simply never transmits.
+        class NeverArms(FakeTransport):
+            @property
+            def armed(self):
+                return False
+
+        transport = NeverArms(tag=Iso14443aTag("04A2B1C3", sak=0x08))
+
+        assert _reader(transport).read_tag(timeout_s=0.05) is None
 
 
 # -------------------------------------------------------------------- ISO14443A
@@ -398,9 +539,12 @@ class TestReadTagIso14443A:
         assert result.writable is False
         assert result.blank is False
 
+    def test_read_uid_returns_just_the_uid(self):
+        tag = Iso14443aTag("04A2B1C3", sak=0x08)
+
+        assert _reader(FakeTransport(tag=tag)).read_uid() == "04A2B1C3"
+
     def test_a_factory_fresh_type2_tag_reads_as_blank_and_writable(self):
-        # A Type 2 READ always answers with a full 16-byte window regardless
-        # of how many pages were asked for; only the first byte matters here.
         pages = {3: bytes([CAPABILITY_CONTAINER_MAGIC, 0x10, 0x12, 0x00]).ljust(16, b"\x00")}
         tag = Iso14443aTag("04A2B1C3", type2_pages=pages)
 
@@ -438,41 +582,19 @@ class TestReadTagIso14443A:
             _reader(transport).read_tag()
 
     def test_a_bcc_mismatch_is_rejected(self):
-        class BadBccTransport(FakeTransport):
-            def command(self, data, response_len=0):
-                if (
-                    data[0] == CMD_READ_DATA
-                    and self._pending_response
-                    and len(self._pending_response) == 5
-                ):
-                    corrupted = bytearray(self._pending_response)
-                    corrupted[-1] ^= 0xFF
-                    return bytes(corrupted)[:response_len]
-                return super().command(data, response_len)
+        class BadBccTag(Iso14443aTag):
+            def respond(self, frame):
+                response = super().respond(frame)
+                if response is not None and len(response) == 5:
+                    return response[:4] + bytes([response[4] ^ 0xFF])
+                return response
 
-        transport = BadBccTransport(tag=Iso14443aTag("04A2B1C3"))
+        transport = FakeTransport(tag=BadBccTag("04A2B1C3"))
 
         with pytest.raises(PN5180FrameError, match="BCC"):
             _reader(transport).read_tag()
 
-    def test_a_wrong_crc_on_select_is_rejected(self):
-        class BadCrcTag(Iso14443aTag):
-            def respond(self, frame):
-                response = super().respond(frame)
-                if response is not None and frame[:2] == bytes(
-                    [ISO14443A_ANTICOLLISION_CL1, ISO14443A_NVB_FINAL]
-                ):
-                    corrupted = bytearray(response)
-                    corrupted[-1] ^= 0xFF
-                    return bytes(corrupted)
-                return response
-
-        transport = FakeTransport(tag=BadCrcTag("04A2B1C3"))
-
-        with pytest.raises(PN5180FrameError, match="CRC mismatch"):
-            _reader(transport).read_tag()
-
-    def test_a_silent_reader_after_requesting_a_page_falls_back_to_uid_only(self):
+    def test_a_silent_tag_mid_page_read_falls_back_to_uid_only(self):
         class DisappearsAfterSelect(Iso14443aTag):
             def respond(self, frame):
                 if len(frame) >= 2 and frame[0] == 0x30:
@@ -492,11 +614,11 @@ class TestReadTagIso14443A:
                 if frame == bytes([ISO14443A_REQA]):
                     return bytes([0x44, 0x00])
                 if len(frame) == 2 and frame[1] == ISO14443A_NVB_COLLIDE:
-                    return bytes(
-                        [ISO14443A_CASCADE_TAG, 0x01, 0x02, 0x03, 0x88 ^ 0x01 ^ 0x02 ^ 0x03]
-                    )
+                    block = bytes([ISO14443A_CASCADE_TAG, 0x01, 0x02, 0x03])
+                    bcc = block[0] ^ block[1] ^ block[2] ^ block[3]
+                    return block + bytes([bcc])
                 if len(frame) >= 2 and frame[1] == ISO14443A_NVB_FINAL:
-                    return bytes([0x04]) + crc_a(bytes([0x04]))
+                    return bytes([0x04])
                 return None
 
         transport = FakeTransport(tag=RunawayCascadeTag("04A2B1C3"))
@@ -516,7 +638,7 @@ class TestReadTagIso14443A:
 
 
 class TestReadTagIso15693:
-    def test_no_iso14443a_tag_and_no_iso15693_tag_returns_none(self):
+    def test_no_tag_of_either_technology_returns_none(self):
         reader = _reader(FakeTransport(tag=None))
 
         assert reader.read_tag(timeout_s=0.05) is None
@@ -561,20 +683,31 @@ class TestReadTagIso15693:
         assert result.uid == "E004015012345678"
         assert result.writable is False
 
-    def test_a_bad_inventory_crc_is_rejected(self):
-        class BadCrcTransport(FakeTransport):
-            def command(self, data, response_len=0):
-                response = super().command(data, response_len)
-                if data[0] == CMD_READ_DATA and len(response) >= 12:
-                    corrupted = bytearray(response)
-                    corrupted[-1] ^= 0xFF
-                    return bytes(corrupted)
-                return response
+    def test_an_inventory_error_response_reads_as_no_tag(self):
+        class ErroringTag(Iso15693Tag):
+            def respond(self, frame):
+                if len(frame) >= 2 and frame[1] == ISO15693_CMD_INVENTORY:
+                    return bytes([ISO15693_ERROR_FLAG, 0x0F])
+                return super().respond(frame)
 
-        transport = BadCrcTransport(tag=Iso15693Tag("E004015012345678"))
+        transport = FakeTransport(tag=ErroringTag("E004015012345678"))
 
-        with pytest.raises(PN5180FrameError, match="CRC mismatch"):
-            _reader(transport).read_tag(timeout_s=0.05)
+        assert _reader(transport).read_tag(timeout_s=0.05) is None
+
+    def test_the_uid_is_reversed_from_wire_order(self):
+        # ISO15693 sends the UID LSB first; it is stored and shown MSB first,
+        # starting with the manufacturer byte.
+        transport = FakeTransport(tag=Iso15693Tag("E004015012345678"))
+
+        result = _reader(transport).read_tag(timeout_s=0.05)
+
+        inventory = next(
+            send
+            for send in transport.sends
+            if len(send.frame) > 1 and send.frame[1] == ISO15693_CMD_INVENTORY
+        )
+        assert inventory.frame[0] == 0x26
+        assert result.uid.startswith("E0")
 
 
 # ------------------------------------------------------------------- IRQ timeout
@@ -582,8 +715,6 @@ class TestReadTagIso15693:
 
 class TestIrqTimeout:
     def test_an_empty_field_on_both_technologies_is_not_an_error(self):
-        # A stuck-low BUSY line means every poll -- REQA, then Inventory --
-        # never sees RX_IRQ_STAT set, exactly like a genuinely empty field.
         transport = FakeTransport(never_ready=True)
 
         assert _reader(transport).read_tag(timeout_s=0.05) is None

@@ -9,6 +9,15 @@ Two reader chips are supported, selected with `--nfc-reader`:
 |----------------|------|-------------------|-----------|
 | `pn532` (default) | NXP PN532 | ISO14443A only (NTAG213/215, MIFARE Classic) | SPI, or I2C as a fallback |
 | `pn5180` | NXP PN5180 | ISO14443A **and** ISO15693 (adds ICODE SLIX/SLIX2 — including Shot Scope's watch tags) | SPI only |
+| `auto` | whichever answers | — | SPI |
+
+`--nfc-reader auto` probes for the chip that is actually wired up: it asks the
+PN5180 for its EEPROM version first (a passive read, no RF field), then the
+PN532 for its firmware version, and runs whichever answers. Use it if you swap
+readers between builds; name the chip explicitly for a fixed rig, since that
+skips a probe of hardware you know is not there. If neither answers, the
+startup error quotes both chips' failures — "nothing is attached" and "the
+PN5180 is attached but BUSY is not wired" need different fixes.
 
 Most of this document covers the PN532, which is the simpler and cheaper build.
 See [PN5180 Setup](#pn5180-setup) below if you specifically want to read
@@ -392,11 +401,12 @@ text records, session logging) works identically; only the reader chip and
 its wiring differ.
 
 > [!NOTE]
-> This driver has not been validated against physical PN5180 silicon in this
-> repository. The command framing and register map follow the NXP PN5180
-> datasheet; if bring-up behaves differently than described here, that is
-> more likely to be a wrong assumption in the driver than in this doc --
-> please file an issue with what you saw.
+> Bring-up status: the SPI link, reset, and EEPROM identification are
+> confirmed working on real hardware (the reader reports its firmware and
+> product version). The RF layer's register-level details still follow the
+> datasheet rather than measurement, so if a tag does not read, start with
+> `--probe` under [When Nothing Reads](#when-nothing-reads) and treat what
+> the chip actually does as authoritative over this doc.
 
 ### What To Buy
 
@@ -465,6 +475,30 @@ manufacturer code) -- a Shot Scope tag would read exactly like this. Useful
 options mirror `read_pn532.py`: `--count`, `--assign CLUB`, `--tags-file`,
 plus `--spi-bus`, `--spi-device`, `--busy-gpio`, and `--reset-gpio` for
 non-default wiring.
+
+### When Nothing Reads
+
+If the banner prints a firmware version but no tag ever appears, the SPI link
+is fine and the problem is above it. `--probe` walks the layers in between and
+names the one that broke:
+
+```bash
+uv run python scripts/hardware-test/read_pn5180.py --probe
+```
+
+It dumps the chip's die ID and version pair from EEPROM, the SYSTEM_CONFIG /
+IRQ_STATUS / RF_STATUS / RX_STATUS registers, the transceive state machine's
+state after arming, and then one raw poll per technology with the IRQ and
+RX_STATUS values each produced. Read it as:
+
+- **Die ID all `0`s or all `f`s** — MISO is not returning data. Check pin 21.
+- **Transceive state never reaches WaitTransmit (1)** — the chip is not being
+  armed, so `SEND_DATA` never transmits. A host-link problem, not RF.
+- **Armed, but no answer on either technology with a tag on the antenna** —
+  the RF field or the antenna. Check that the board is on 3.3 V and that the
+  tag is flat against the coil.
+- **An answer on one technology only** — that technology's RF profile is
+  loading and the other one's is not.
 
 ### Start OpenFlight With The PN5180
 
@@ -598,8 +632,9 @@ parsed.
   ICODE SLIX, SLIX2, ST25DV, and Shot Scope watch RFID tags — is a hardware
   limit of that chip, not a missing poll in this driver; use `--nfc-reader
   pn5180` (see [PN5180 Setup](#pn5180-setup)) to read those tags instead.
-- The PN5180 driver has not been run against physical silicon in this
-  repository; see the note at the top of [PN5180 Setup](#pn5180-setup).
+- The PN5180 driver's RF layer follows the datasheet rather than measurement;
+  its host link and identification are hardware-confirmed. See the note at the
+  top of [PN5180 Setup](#pn5180-setup).
 - SPI bus, CE, IRQ/BUSY/RESET GPIO, and tag file are command-line settings
   rather than a persisted rig configuration file.
 - The reader selects clubs only; it does not switch players or start sessions.

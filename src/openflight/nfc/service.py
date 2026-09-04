@@ -59,9 +59,15 @@ class NfcService:
 
     # ------------------------------------------------------------- lifecycle
 
-    def start(self) -> None:
-        """Open the reader and begin polling. Raises if the reader is absent."""
-        self.reader.open()
+    def start(self, *, already_open: bool = False) -> None:
+        """Open the reader and begin polling. Raises if the reader is absent.
+
+        ``already_open`` skips the open for a reader handed over ready to use
+        -- auto-detection opens each candidate to identify it, and opening the
+        winner a second time would reset a chip that just proved itself.
+        """
+        if not already_open:
+            self.reader.open()
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._poll_loop,
