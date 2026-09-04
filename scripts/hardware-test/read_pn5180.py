@@ -4,6 +4,7 @@
 import argparse
 import time
 
+from openflight.gpio_factory import close_pin_factory
 from openflight.nfc import (
     DEFAULT_BUSY_GPIO,
     DEFAULT_RESET_GPIO,
@@ -16,6 +17,8 @@ from openflight.nfc.pn5180 import (
     DEFAULT_SPI_DEVICE,
     ISO14443A_REQA,
     ISO14443A_REQA_VALID_BITS,
+    ISO15693_CMD_INVENTORY,
+    ISO15693_FLAGS_INVENTORY,
     REG_IRQ_STATUS,
     REG_RX_STATUS,
     RF_CONFIG_ISO14443A_106,
@@ -23,11 +26,67 @@ from openflight.nfc.pn5180 import (
     TRANSCEIVE_WAIT_TRANSMIT,
 )
 
+# IRQ_STATUS bits worth naming in a probe report. "TX set, RX clear" is the
+# whole diagnosis in two words: the chip transmitted and nothing answered.
+IRQ_BITS = (
+    (0x0001, "RX"),
+    (0x0002, "TX"),
+    (0x0004, "IDLE"),
+    (0x0200, "RFON"),
+    (0x4000, "RX_SOF"),
+)
 
-def _probe(reader: Pn5180Spi) -> None:
+
+def _describe_irq(value: int) -> str:
+    names = [name for bit, name in IRQ_BITS if value & bit]
+    return "+".join(names) if names else "none"
+
+
+def _probe_technology(reader: Pn5180Spi, label: str, profile, seconds: float) -> None:
+    """Send one technology's opening frame repeatedly for a few seconds."""
+    print(f"--- {label} ---")
+    # pylint: disable=protected-access
+    reader._select_rf_config(profile)
+    if profile == RF_CONFIG_ISO15693_26:
+        reader._set_crc(True)
+        frame = bytes([ISO15693_FLAGS_INVENTORY, ISO15693_CMD_INVENTORY, 0x00])
+        valid_bits = 8
+    else:
+        reader._set_crc(False)
+        frame = bytes([ISO14443A_REQA])
+        valid_bits = ISO14443A_REQA_VALID_BITS
+    print(f"  sending {frame.hex()} ({valid_bits} valid bits) for {seconds:.0f}s")
+
+    deadline = time.monotonic() + seconds
+    attempts = 0
+    while time.monotonic() < deadline:
+        attempts += 1
+        try:
+            answer = reader._transceive(
+                frame, valid_bits=valid_bits, timeout_s=0.2, allow_timeout=True
+            )
+        except Exception as error:  # pylint: disable=broad-except
+            print(f"  transceive raised: {error}")
+            return
+        if answer:
+            irq = reader._read_register(REG_IRQ_STATUS)
+            print(f"  ANSWER after {attempts} tries: {answer.hex()}")
+            print(f"  IRQ_STATUS 0x{irq:08x} ({_describe_irq(irq)})")
+            return
+        time.sleep(0.05)
+
+    irq = reader._read_register(REG_IRQ_STATUS)
+    rx = reader._read_register(REG_RX_STATUS)
+    print(f"  no answer in {attempts} tries")
+    print(f"  IRQ_STATUS 0x{irq:08x} ({_describe_irq(irq)})   RX_STATUS 0x{rx:08x}")
+    if irq & 0x0002 and not irq & 0x0001:
+        print("  ^ TX set, RX clear: the chip transmitted and nothing replied.")
+
+
+def _probe(reader: Pn5180Spi, seconds: float = 5.0) -> None:
     """Walk the layers between "SPI answers" and "a tag was read".
 
-    Each step below can fail independently, and each has a different fix, so
+    Each step below can fail independently and each has a different fix, so
     the point is to name which one broke rather than reporting "no tag".
     """
     identity = reader.identify()
@@ -43,43 +102,24 @@ def _probe(reader: Pn5180Spi) -> None:
     for name in ("system_config", "irq_status", "rf_status", "rx_status"):
         print(f"  {name:<16} 0x{identity[name]:08x}")
     state = identity["transceive_state"]
-    expected = "WaitTransmit" if state == TRANSCEIVE_WAIT_TRANSMIT else "unexpected"
-    print(f"  transceive state {state} ({expected})")
-
-    for label, profile in (
-        ("ISO14443A 106k", RF_CONFIG_ISO14443A_106),
-        ("ISO15693 26k", RF_CONFIG_ISO15693_26),
-    ):
-        print(f"--- {label} ---")
-        # pylint: disable=protected-access
-        reader._select_rf_config(profile)
-        reader._set_crc(False)
-        reader._write_register(0x03, 0x000FFFFF)  # IRQ_CLEAR
-        reader._start_transceive()
-        print(f"  transceive state after arming: {reader._transceive_state()}")
-        frame = bytes([ISO14443A_REQA])
-        valid_bits = ISO14443A_REQA_VALID_BITS
-        if profile == RF_CONFIG_ISO15693_26:
-            reader._set_crc(True)
-            frame = bytes([0x26, 0x01, 0x00])  # single-slot Inventory
-            valid_bits = 8
-        try:
-            answer = reader._transceive(
-                frame, valid_bits=valid_bits, timeout_s=0.2, allow_timeout=True
-            )
-        except Exception as error:  # pylint: disable=broad-except
-            print(f"  transceive raised: {error}")
-            continue
-        irq = reader._read_register(REG_IRQ_STATUS)
-        rx = reader._read_register(REG_RX_STATUS)
-        print(f"  sent {frame.hex()} ({valid_bits} valid bits)")
-        print(f"  IRQ_STATUS 0x{irq:08x}   RX_STATUS 0x{rx:08x}")
-        print(f"  answer: {answer.hex() if answer else '(none -- no tag, or no transmit)'}")
+    expected = "WaitTransmit" if state == TRANSCEIVE_WAIT_TRANSMIT else "idle/unexpected"
+    print(f"  transceive state {state} ({expected}, before arming)")
 
     print()
-    print("Reading: an answer above with a tag on the antenna means the RF layer works.")
-    print("No answer on both, with a tag present, points at the RF field or antenna;")
-    print("a transceive state that never reaches WaitTransmit points at the host link.")
+    print(">>> HOLD A TAG FLAT AGAINST THE ANTENNA NOW <<<")
+    print("    Each technology below is polled for a few seconds.")
+    print()
+    _probe_technology(reader, "ISO14443A 106k (NTAG, MIFARE)", RF_CONFIG_ISO14443A_106, seconds)
+    _probe_technology(
+        reader, "ISO15693 26k (ICODE SLIX, Shot Scope)", RF_CONFIG_ISO15693_26, seconds
+    )
+
+    print()
+    print("Reading the result:")
+    print("  ANSWER on either line          -> the RF layer works end to end.")
+    print("  TX set, RX clear, tag present  -> field or antenna: check 3.3V, and that")
+    print("                                    the tag is flat on the coil, not edge-on.")
+    print("  transceive state never 1       -> host link, not RF.")
 
 
 def main() -> None:
@@ -186,4 +226,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # Without this a one-shot run exits through gpiozero's still-running
+        # background thread, which prints an alarming "could not acquire lock
+        # for <stderr> at interpreter shutdown" for what is a clean exit.
+        close_pin_factory()

@@ -19,8 +19,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and runs whichever answers. When neither does, the error quotes both
   chips' own failures rather than a generic "no reader".
 - **`read_pn5180.py --probe`.** Dumps chip identity, the RF and transceive
-  registers, and one raw poll per technology, so a reader that opens but
-  never sees a tag reports which layer broke.
+  registers, and polls each technology for a few seconds with the IRQ bits
+  decoded by name, so a reader that opens but never sees a tag reports which
+  layer broke.
+
+### Fixed
+- **PN5180 gave passive tags no time to power up.** The driver drops the RF
+  field on every technology switch and then transmitted immediately, so a
+  tag resting on the antenna was asked to reply microseconds after its power
+  arrived. ISO14443-3 requires 5 ms between field-on and the first REQA;
+  that guard time is now waited out. Whichever technology answered last is
+  also polled first, so a club held against the reader stops being power-
+  cycled twice per poll.
+- **One-shot GPIO scripts no longer exit through a scary traceback.**
+  `close_pin_factory()` shuts gpiozero's background thread down, instead of
+  the interpreter dying with "could not acquire lock for &lt;stderr&gt; at
+  interpreter shutdown" on what is a clean exit.
 
 ### Changed
 - **Club-tag Forget is on the scan dialog only.** The menu no longer lists

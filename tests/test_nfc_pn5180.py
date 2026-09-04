@@ -8,7 +8,7 @@ from typing import Optional
 
 import pytest
 
-from openflight.nfc import ndef
+from openflight.nfc import ndef, pn5180
 from openflight.nfc.pn5180 import (
     _CASCADE_LEVELS,
     CMD_LOAD_RF_CONFIG,
@@ -483,6 +483,41 @@ class TestTransceiveSequencing:
         )
         assert rf_on_at < first_send_at
 
+    def test_a_tag_gets_time_to_power_up_after_the_field_comes_on(self, monkeypatch):
+        # ISO14443-3 wants 5ms between field-on and REQA. Without the wait a
+        # tag on the antenna is asked to reply microseconds after its power
+        # arrived -- the chip transmits, and nothing ever answers.
+        waits = []
+        monkeypatch.setattr(pn5180.time, "sleep", waits.append)
+        transport = FakeTransport(tag=Iso14443aTag("04A2B1C3", sak=0x08))
+
+        _reader(transport).read_tag()
+
+        assert max(waits) >= 0.005
+
+    def test_the_guard_wait_lands_between_rf_on_and_the_first_frame(self, monkeypatch):
+        order = []
+        monkeypatch.setattr(pn5180.time, "sleep", lambda seconds: order.append(("wait", seconds)))
+        transport = FakeTransport(tag=Iso14443aTag("04A2B1C3", sak=0x08))
+
+        class Recording(FakeTransport):
+            def command(self, data, response_len=0):
+                if data[0] in (CMD_RF_ON, CMD_SEND_DATA):
+                    order.append(("cmd", data[0]))
+                return super().command(data, response_len)
+
+        transport = Recording(tag=Iso14443aTag("04A2B1C3", sak=0x08))
+        _reader(transport).read_tag()
+
+        rf_on_at = next(i for i, item in enumerate(order) if item == ("cmd", CMD_RF_ON))
+        first_send_at = next(i for i, item in enumerate(order) if item == ("cmd", CMD_SEND_DATA))
+        guarded = [
+            seconds
+            for kind, seconds in order[rf_on_at:first_send_at]
+            if kind == "wait" and seconds >= 0.005
+        ]
+        assert guarded, "no guard wait between RF on and the first frame"
+
     def test_an_unarmed_transceiver_reads_nothing(self):
         # The failure this whole sequence exists to prevent: the chip answers
         # register reads happily and simply never transmits.
@@ -708,6 +743,53 @@ class TestReadTagIso15693:
         )
         assert inventory.frame[0] == 0x26
         assert result.uid.startswith("E0")
+
+
+# --------------------------------------------------------------- poll ordering
+
+
+class TestTechnologyOrder:
+    """Switching technology drops the field, so a tag on the antenna loses
+    power and reboots. Leading with whichever answered last avoids that."""
+
+    def test_iso14443a_is_tried_first_from_cold(self):
+        transport = FakeTransport(tag=Iso14443aTag("04A2B1C3", sak=0x08))
+
+        _reader(transport).read_tag()
+
+        assert transport.rf_config == RF_CONFIG_ISO14443A_106
+
+    def test_an_iso15693_tag_is_polled_first_on_the_next_read(self):
+        transport = FakeTransport(tag=Iso15693Tag("E004015012345678"))
+        reader = _reader(transport)
+
+        reader.read_tag(timeout_s=0.05)
+        transport.sends.clear()
+        reader.read_tag(timeout_s=0.05)
+
+        first = transport.sends[0].frame
+        assert first[1] == ISO15693_CMD_INVENTORY
+
+    def test_a_repeated_iso15693_read_does_not_cycle_the_field(self):
+        transport = FakeTransport(tag=Iso15693Tag("E004015012345678"))
+        reader = _reader(transport)
+
+        reader.read_tag(timeout_s=0.05)
+        before = sum(1 for write in transport.writes if write[0] == CMD_RF_ON)
+        reader.read_tag(timeout_s=0.05)
+        after = sum(1 for write in transport.writes if write[0] == CMD_RF_ON)
+
+        # The second read stays on the profile already loaded.
+        assert after == before
+
+    def test_falling_back_still_finds_a_type_a_tag_after_an_iso15693_one(self):
+        transport = FakeTransport(tag=Iso15693Tag("E004015012345678"))
+        reader = _reader(transport)
+        reader.read_tag(timeout_s=0.05)
+
+        transport.tag = Iso14443aTag("04A2B1C3", sak=0x08)
+
+        assert reader.read_tag(timeout_s=0.05).uid == "04A2B1C3"
 
 
 # ------------------------------------------------------------------- IRQ timeout

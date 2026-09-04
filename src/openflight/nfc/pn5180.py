@@ -70,6 +70,12 @@ BUSY_RISE_TIMEOUT_S = 0.002
 RESET_PULSE_S = 0.002  # NRESET low pulse; datasheet minimum is 10us.
 RESET_SETTLE_S = 0.003  # Boot time after reset before the host interface answers.
 RF_ON_TIMEOUT_S = 0.1
+# A passive tag is powered by the field, so it cannot answer the instant the
+# field comes up. ISO14443-3 requires 5ms between field-on and the first REQA
+# and ISO15693 requires 1ms; this driver drops the field on every technology
+# switch, so without this wait a tag resting on the antenna is asked to reply
+# microseconds after its power arrived, and never does.
+RF_FIELD_GUARD_S = 0.006
 
 # Host interface command codes (PN5180 datasheet, "Host Interface Commands").
 CMD_WRITE_REGISTER = 0x00
@@ -335,6 +341,7 @@ class Pn5180Spi:
         self._opened = False
         self._rf_config: Optional[tuple[int, int]] = None
         self._crc_enabled: Optional[bool] = None
+        self._last_technology: Optional[str] = None
         self.firmware_version: Optional[str] = None
         self.product_version: Optional[str] = None
 
@@ -386,15 +393,40 @@ class Pn5180Spi:
     # ---------------------------------------------------------------- public
 
     def read_tag(self, timeout_s: float = 0.5) -> Optional[TagRead]:
-        """Poll ISO14443A, then ISO15693, splitting the timeout between them."""
+        """Poll both technologies, splitting the timeout between them.
+
+        Whichever answered last is tried first. Switching technology drops the
+        RF field, so a tag resting on the antenna loses power and has to boot
+        again on every switch; leading with the one that worked keeps a club
+        held against the reader on a stable field instead of cycling it.
+        """
         half = max(timeout_s / 2, 0.01)
-        target = self._poll_iso14443a(half)
-        if target is not None:
-            return self._read_iso14443a(target)
-        uid = self._poll_iso15693(half)
-        if uid is not None:
-            return self._read_iso15693(uid)
+        for technology in self._poll_order():
+            tag = technology(half)
+            if tag is not None:
+                return tag
         return None
+
+    def _poll_order(self):
+        """The two poll passes, last-successful technology first."""
+        passes = {"iso14443a": self._read_any_iso14443a, "iso15693": self._read_any_iso15693}
+        if self._last_technology == "iso15693":
+            return [passes["iso15693"], passes["iso14443a"]]
+        return [passes["iso14443a"], passes["iso15693"]]
+
+    def _read_any_iso14443a(self, timeout_s: float) -> Optional[TagRead]:
+        target = self._poll_iso14443a(timeout_s)
+        if target is None:
+            return None
+        self._last_technology = "iso14443a"
+        return self._read_iso14443a(target)
+
+    def _read_any_iso15693(self, timeout_s: float) -> Optional[TagRead]:
+        uid = self._poll_iso15693(timeout_s)
+        if uid is None:
+            return None
+        self._last_technology = "iso15693"
+        return self._read_iso15693(uid)
 
     def read_uid(self, timeout_s: float = 0.5) -> Optional[str]:
         """Poll once for any tag, returning its UID or None."""
@@ -580,7 +612,7 @@ class Pn5180Spi:
         self._rf_config = profile
 
     def _rf_on(self) -> None:
-        """Switch the RF field on and wait for the chip to confirm it."""
+        """Switch the RF field on, confirm it, and let tags power up."""
         transport = self._require_transport()
         self._write_register(REG_IRQ_CLEAR, IRQ_CLEAR_ALL)
         transport.command(bytes([CMD_RF_ON, 0x00]))
@@ -593,6 +625,7 @@ class Pn5180Spi:
                 break
             time.sleep(0.002)
         self._write_register(REG_IRQ_CLEAR, IRQ_CLEAR_ALL)
+        time.sleep(RF_FIELD_GUARD_S)
 
     def _set_crc(self, enabled: bool) -> None:
         """Turn the hardware CRC on or off for both directions.

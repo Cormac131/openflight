@@ -120,3 +120,29 @@ def ensure_lgpio_pin_factory(chip: Optional[int] = None):
     device_cls.pin_factory = factory
     logger.info("[GPIO] Pin factory: lgpio on /dev/gpiochip%d", chip)
     return factory
+
+
+def close_pin_factory() -> None:
+    """Shut the pin factory down and forget it. Safe to call when none exists.
+
+    Closing individual devices is not enough for a short-lived process: the
+    factory keeps a background thread, and an interpreter that exits while it
+    is still running dies with "could not acquire lock for <stderr> at
+    interpreter shutdown, possibly due to daemon threads" -- alarming output
+    for what is really a clean exit. Long-running processes never reach this;
+    one-shot scripts should call it before returning.
+    """
+    try:
+        device_cls, _ = _load_gpiozero()
+    except ImportError:
+        return
+
+    factory = device_cls.pin_factory
+    if factory is None:
+        return
+    try:
+        factory.close()
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("[GPIO] Closing the pin factory failed: %s", exc)
+    finally:
+        device_cls.pin_factory = None

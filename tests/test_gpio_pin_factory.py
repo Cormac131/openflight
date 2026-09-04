@@ -28,6 +28,7 @@ import pytest
 
 from openflight.gpio_factory import (
     GPIO_CHIP_ENV,
+    close_pin_factory,
     detect_gpio_chip,
     ensure_lgpio_pin_factory,
 )
@@ -61,8 +62,58 @@ def _reset():
 
 
 def _install(**kwargs):
-    with patch("openflight.gpio_factory._load_gpiozero", return_value=(FakeDevice, FakeLGPIOFactory)):
+    with patch(
+        "openflight.gpio_factory._load_gpiozero", return_value=(FakeDevice, FakeLGPIOFactory)
+    ):
         return ensure_lgpio_pin_factory(**kwargs)
+
+
+def _close():
+    with patch(
+        "openflight.gpio_factory._load_gpiozero", return_value=(FakeDevice, FakeLGPIOFactory)
+    ):
+        close_pin_factory()
+
+
+class TestClosePinFactory:
+    """A one-shot script that exits with the factory's thread still running
+    dies with "could not acquire lock for <stderr> at interpreter shutdown",
+    which reads like a crash but is a clean exit."""
+
+    def test_the_factory_is_closed_and_forgotten(self):
+        _install()
+
+        _close()
+
+        assert FakeLGPIOFactory.instances[0].closed is True
+        assert FakeDevice.pin_factory is None
+
+    def test_closing_without_a_factory_is_a_no_op(self):
+        _close()  # must not raise
+
+    def test_a_factory_that_fails_to_close_is_still_forgotten(self):
+        _install()
+        factory = FakeDevice.pin_factory
+        factory.close = lambda: (_ for _ in ()).throw(OSError("gpiochip already gone"))
+
+        _close()
+
+        assert FakeDevice.pin_factory is None
+
+    def test_a_missing_gpiozero_is_not_an_error(self):
+        with patch(
+            "openflight.gpio_factory._load_gpiozero", side_effect=ImportError("no gpiozero")
+        ):
+            close_pin_factory()  # must not raise
+
+    def test_the_factory_can_be_installed_again_afterwards(self):
+        _install()
+        _close()
+
+        _install()
+
+        assert len(FakeLGPIOFactory.instances) == 2
+        assert FakeDevice.pin_factory is not None
 
 
 class TestChipDetection:
@@ -75,8 +126,10 @@ class TestChipDetection:
             assert detect_gpio_chip() == 0
 
     def test_env_override_wins(self):
-        with patch.dict(os.environ, {GPIO_CHIP_ENV: "0"}), \
-             patch.object(os.path, "exists", lambda p: p == "/dev/gpiochip4"):
+        with (
+            patch.dict(os.environ, {GPIO_CHIP_ENV: "0"}),
+            patch.object(os.path, "exists", lambda p: p == "/dev/gpiochip4"),
+        ):
             assert detect_gpio_chip() == 0
 
     def test_bad_env_override_is_rejected_loudly(self):
@@ -160,10 +213,13 @@ class TestMonitorInstallsFactory:
                 pass
 
         monitor = self._monitor(tmp_path)
-        with patch(
-            "openflight.iwr6843.monitor.ensure_lgpio_pin_factory",
-            side_effect=lambda: calls.append("factory"),
-        ), patch.dict("sys.modules"):
+        with (
+            patch(
+                "openflight.iwr6843.monitor.ensure_lgpio_pin_factory",
+                side_effect=lambda: calls.append("factory"),
+            ),
+            patch.dict("sys.modules"),
+        ):
             import sys
             import types
 
@@ -191,9 +247,7 @@ class TestMonitorInstallsFactory:
                 pass
 
         monitor = self._monitor(tmp_path, button_factory=FakeButton)
-        with patch(
-            "openflight.iwr6843.monitor.ensure_lgpio_pin_factory"
-        ) as ensure:
+        with patch("openflight.iwr6843.monitor.ensure_lgpio_pin_factory") as ensure:
             monitor.start(armed=False)
         try:
             ensure.assert_not_called()

@@ -486,17 +486,20 @@ names the one that broke:
 uv run python scripts/hardware-test/read_pn5180.py --probe
 ```
 
-It dumps the chip's die ID and version pair from EEPROM, the SYSTEM_CONFIG /
-IRQ_STATUS / RF_STATUS / RX_STATUS registers, the transceive state machine's
-state after arming, and then one raw poll per technology with the IRQ and
-RX_STATUS values each produced. Read it as:
+It dumps the chip's die ID and version pair from EEPROM and the SYSTEM_CONFIG
+/ IRQ_STATUS / RF_STATUS / RX_STATUS registers, then polls each technology
+for a few seconds — **hold a tag against the antenna while it does.** The
+IRQ bits are decoded by name, which is where the diagnosis lives:
 
 - **Die ID all `0`s or all `f`s** — MISO is not returning data. Check pin 21.
+- **`IRQ_STATUS ... (TX+IDLE)`, no `RX`** — the chip transmitted and nothing
+  answered. With no tag present that is the correct result. With a tag on the
+  antenna it points at the RF field or the antenna: confirm the board is on
+  3.3 V, and that the tag is flat on the coil rather than edge-on.
+- **`RX` or `RX_SOF` set, with an `ANSWER` line** — the RF layer works end to
+  end.
 - **Transceive state never reaches WaitTransmit (1)** — the chip is not being
   armed, so `SEND_DATA` never transmits. A host-link problem, not RF.
-- **Armed, but no answer on either technology with a tag on the antenna** —
-  the RF field or the antenna. Check that the board is on 3.3 V and that the
-  tag is flat against the coil.
 - **An answer on one technology only** — that technology's RF profile is
   loading and the other one's is not.
 
