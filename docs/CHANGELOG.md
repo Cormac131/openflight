@@ -22,6 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [Electron Kiosk Shell](electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
 
 ### Fixed
+- **A crash-looping boot service no longer kills the desktop kiosk.** Every
+  launcher exit ran a `pkill` that matched the Electron binary path, so an
+  `openflight.service` that failed at startup (for example because systemd's
+  PATH hides `~/.local/bin/uv`) restarted every 5 s and killed whichever
+  kiosk was on screen; Chromium then died with "GPU process isn't usable.
+  Goodbye." `start-kiosk.sh` now launches the browser in its own process
+  group and stops only that group (`scripts/kiosk-browser.sh`), refuses to
+  start while another instance holds `/tmp/openflight-kiosk-<port>.lock`
+  (exit 3, `OPENFLIGHT_KIOSK_LOCK_FILE` overrides the path), finds `uv` in
+  `~/.local/bin` / `~/.cargo/bin` when PATH omits them, and prints the
+  recovery hint to the terminal and journal. The unit file stops retrying
+  after five failures in five minutes and never retries exit 3. Re-copy
+  `scripts/setup/openflight.service` (or rerun `scripts/setup/setup.sh`) on
+  existing Pis to pick up the unit changes.
 - **Kiosk startup no longer rebuilds the UI after Electron has already launched.**
   `ensure_kiosk_ui` now runs before the splash browser. The helper is also
   stored with Unix line endings so a Windows checkout cannot make `ui/dist`

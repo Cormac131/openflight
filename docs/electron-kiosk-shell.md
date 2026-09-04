@@ -59,6 +59,18 @@ the WebSocket connection (`socketService.ts`), and the Flask server are
 untouched — `getServerOrigin()` still resolves to `window.location.origin`,
 which is the Electron window's origin now instead of a browser tab's.
 
+## Process Ownership
+
+`scripts/kiosk-browser.sh` launches Electron (or the Chromium fallback) with
+`setsid`, so the whole browser tree, including the zygote, GPU, network and
+renderer helpers Chromium forks, lives in one process group that nothing
+else on the Pi belongs to. Shutdown signals that group and nothing else. The
+earlier cleanup matched the Electron binary path with `pkill -f`, which also
+killed kiosks started by *other* launcher instances; see the changelog for
+the boot-service crash loop that exposed it. `start-kiosk.sh` additionally
+holds `/tmp/openflight-kiosk-<port>.lock` for its lifetime and exits with
+status 3 if another instance already holds it.
+
 ## Auto-Updates (Future Work)
 
 Nothing below is implemented. It's worth writing down now because "Electron

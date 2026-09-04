@@ -331,6 +331,27 @@ If the mapping is missing or points at the wrong radar, re-run the wizard:
 /dev/ttyUSB...` in the server logs. See [K-LD7 Troubleshooting](kld7-troubleshooting.md)
 for "Wrong length reply" and other connection issues.
 
+### Kiosk Window Closes Seconds After Loading
+
+If the UI appears and then vanishes with `GPU process launch failed`,
+`Failed to send GetTerminationStatus message to zygote`, and finally
+`GPU process isn't usable. Goodbye.` in the terminal, something outside the
+window killed Electron's helper processes. The usual culprit is a second
+copy of `start-kiosk.sh`, typically a failing boot service restarting in a
+loop while you launch by hand:
+
+```bash
+sudo systemctl status openflight --no-pager   # "activating (auto-restart)" = looping
+journalctl -u openflight -n 40 --no-pager     # the recovery hint is printed here
+```
+
+Fix whatever the journal reports, or `sudo systemctl disable openflight` if
+you launch from the desktop instead. Current launchers refuse to start while
+another instance holds `/tmp/openflight-kiosk-<port>.lock` (exit code 3) and
+only ever stop the browser they started, so an old unit file is the one thing
+left to update: re-copy `scripts/setup/openflight.service` as shown in
+[Auto-Start on Boot](#auto-start-on-boot).
+
 ### Service Won't Start
 
 ```bash
