@@ -288,15 +288,8 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
     echo ""
     if confirm "Start OpenFlight automatically on boot?" "N"; then
         log "Installing systemd service for user '$USER'..."
-        OPENFLIGHT_SKIP_DESKTOP_ENTRY=true OPENFLIGHT_SKIP_DESKTOP_TRUST=true \
-            "$SCRIPT_DIR/install_desktop_launcher.sh"
+        "$SCRIPT_DIR/install_openflight_service.sh"
         launcher_path="$("$SCRIPT_DIR/install_desktop_launcher.sh" --print-launcher-path)"
-        sed -e "s|^User=.*|User=$USER|" \
-            -e "s|/home/coleman/openflight|$PROJECT_DIR|g" \
-            -e "s|^ExecStart=/home/coleman/run-openflight.sh\$|ExecStart=$launcher_path|" \
-            "$SCRIPT_DIR/openflight.service" | sudo tee /etc/systemd/system/openflight.service > /dev/null
-        sudo systemctl daemon-reload
-        sudo systemctl enable openflight
         log "Service installed and enabled ✓ (starts on next boot)"
         info "Boot and desktop share flags in $launcher_path."
         info "Manage it with: sudo systemctl {start|stop|status} openflight"

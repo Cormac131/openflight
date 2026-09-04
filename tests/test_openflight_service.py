@@ -59,14 +59,18 @@ def test_boot_unit_puts_user_local_bin_on_path():
 
 
 def test_every_home_path_in_the_unit_is_rewritten_by_setup():
-    """setup.sh rewrites checkout paths and the wrapper ExecStart."""
+    """The service installer fills User=, checkout path, and wrapper ExecStart."""
+    installer = (REPO_ROOT / "scripts/setup/install_openflight_service.sh").read_text(
+        encoding="utf-8"
+    )
     setup = SETUP.read_text(encoding="utf-8")
-    assert "s|/home/coleman/openflight|$PROJECT_DIR|g" in setup
+    assert '"$SCRIPT_DIR/install_openflight_service.sh"' in setup
+    assert "s|^User=.*|User=$USER|" in installer
+    assert "s|/home/coleman/openflight|$project_dir|g" in installer
     assert (
         "s|^ExecStart=/home/coleman/run-openflight.sh\\$|ExecStart=$launcher_path|"
-        in setup
+        in installer
     )
-    assert "OPENFLIGHT_SKIP_DESKTOP_ENTRY=true" in setup
 
     for line in _unit_lines():
         if "/home/coleman" in line:

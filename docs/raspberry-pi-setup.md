@@ -236,16 +236,9 @@ username and install path.
 <summary>Manual steps and service management</summary>
 
 ```bash
-# Install the local wrapper first (boot and desktop share its openflight_args).
-scripts/setup/install_desktop_launcher.sh
-
-# Install (adjust User=, WorkingDirectory=, and ExecStart= if they are not
-# /home/coleman/openflight and /home/coleman/run-openflight.sh).
-# git pull does not update the installed unit; recopy it after PATH/HOME changes.
-sudo cp ~/openflight/scripts/setup/openflight.service /etc/systemd/system/
-sudo cp ~/openflight/scripts/setup/openflight.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable openflight
+# Fills User=, WorkingDirectory=, and ExecStart= for this account.
+# Do not sudo-copy the template; that leaves User=coleman.
+scripts/setup/install_openflight_service.sh
 sudo systemctl start openflight
 ```
 
@@ -356,7 +349,7 @@ Fix whatever the journal reports, or `sudo systemctl disable openflight` if
 you launch from the desktop instead. Current launchers refuse to start while
 another instance holds `/tmp/openflight-kiosk-<port>.lock` (exit code 3) and
 only ever stop the browser they started, so an old unit file is the one thing
-left to update: re-copy `scripts/setup/openflight.service` as shown in
+left to update: rerun `scripts/setup/install_openflight_service.sh` as shown in
 [Auto-Start on Boot](#auto-start-on-boot).
 
 ### Service Won't Start
@@ -366,10 +359,7 @@ journalctl -u openflight --no-pager -n 50
 
 # If service is masked
 sudo systemctl unmask openflight
-scripts/setup/install_desktop_launcher.sh
-sudo cp ~/openflight/scripts/setup/openflight.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable openflight
+scripts/setup/install_openflight_service.sh
 ```
 
 ### Slow UI Updates
