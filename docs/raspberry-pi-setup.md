@@ -36,9 +36,12 @@ Run the following command:
 sudo apt update && sudo apt install -y swig liblgpio-dev python3-dev
 ```
 
-The UI/Electron kiosk shell needs **Node.js 22.12 or newer**. Raspberry Pi OS
-`apt` Node is often 18 or 20 and will print `EBADENGINE` (or fail) on first
-build. Install Node 22 LTS before setup:
+The UI/Electron kiosk shell needs **Node.js 22.12 or newer** to *install*
+Electron. Raspberry Pi OS `apt` Node is often 18 or 20 and will print
+`EBADENGINE` (or fail) for `electron@44`. A Pi that already has `ui/dist` can
+still start: `start-kiosk.sh` falls back to system Chromium until Node is
+upgraded and `npm install` in `ui/` succeeds. Install Node 22 LTS before a
+first UI build or to actually run the Electron shell:
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -

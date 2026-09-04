@@ -18,14 +18,37 @@ carried a few risks an Electron shell removes:
 |---|---|---|
 | Rendering engine version | Whatever `apt` installed/upgraded on that Pi — can silently drift between units or after an OS update | Pinned in `ui/package-lock.json` (`electron@44.1.0` today), identical across every Pi until deliberately bumped |
 | Kiosk lockdown | `--kiosk` behaves differently across Chromium, Chrome, and Firefox; Firefox's kiosk mode in particular is looser (menu/shortcuts still reachable) | One `BrowserWindow` with `kiosk: true`, no application menu, and `setWindowOpenHandler` denying any popup — the same guarantees everywhere |
-| Startup noise | Chromium's "restore previous session" / crash bubbles needed extra flags (`--disable-session-crashed-bubble`) to suppress | Electron starts a fresh profile each launch; there's no session-restore prompt to suppress |
+| Startup noise | Chromium's "restore previous session" / crash bubbles needed extra flags (`--disable-session-crashed-bubble`) to suppress | Electron has no Chromium session-restore prompt to suppress. Its **default session still persists** under the app `userData` directory (`~/.config/openflight-ui` on Linux) — [Session](https://www.electronjs.org/docs/latest/api/session), [app.getPath('userData')](https://www.electronjs.org/docs/latest/api/app#appgetpathname). That is a *different* profile from system Chromium (`~/.config/chromium` / `chromium-browser`) |
 | Maintenance surface | A 4-branch `if/elif` detection ladder to keep working across Raspberry Pi OS Bookworm/Bullseye, Lite/Desktop images | One binary, one launch path; `npm ci` makes the exact runtime reproducible in CI the same way any other dependency is |
 | Extensibility | A browser tab is sandboxed from the OS — no filesystem, process, or native API access | The Electron **main process** is a regular Node.js process with full OS access, which is what makes [self-updating](#auto-updates-future-work) possible at all |
 
 The old detection ladder is kept as a fallback (`launch_kiosk_browser` still
 tries `chromium-browser`/`chromium` if `ui/node_modules/.bin/electron` is
-missing), so a Pi that hasn't run `npm install` yet doesn't lose its kiosk
+missing), so a Pi that hasn't installed Electron doesn't lose its kiosk
 entirely — it just loses the guarantees above until Electron is installed.
+
+`start-kiosk.sh` builds `ui/dist` only when that directory is missing. If the
+UI is already built but Electron is not installed, it *tries* `npm install`
+when Node.js is 22.12+. Old Node, an offline Pi, or a failed install logs a
+warning and continues to the Chromium fallback instead of aborting startup.
+
+## Browser-local state (breaking on first Electron launch)
+
+Electron does **not** reuse the system Chromium profile. The first time a unit
+switches from Chromium to Electron, browser-local `localStorage` looks empty:
+
+| Data | Storage | Survives the switch? |
+|---|---|---|
+| Profiles and shot logs | Server (`~/.config/openflight/profiles.json`, session JSONL) | Yes |
+| Units, theme, language, pinned Live metric | Chromium `localStorage` | No — re-set in the footer / Live grid |
+| Validation annotations (comparator device, speed, notes) | `localStorage` key `openflight-validation-entries` | No |
+
+**Before** switching a validation unit to Electron, export the Shots CSV
+(**Export CSV** on the Shots tab) while still on Chromium. After the switch,
+re-enter units, theme, language, and the pinned metric once.
+
+This is an accepted one-time reset, not a silent migration. Chromium's LevelDB
+profile is not copied into Electron `userData`.
 
 ## What Didn't Change
 

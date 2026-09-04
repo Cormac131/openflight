@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Chromium fallback is reachable during Electron upgrades.** If `ui/dist`
+  already exists, a missing Electron install no longer requires Node 22.12 and
+  a successful `npm install` before the kiosk can start. Old Node or a failed
+  install warns and continues to system Chromium. A missing UI still requires
+  Node 22.12+ and a successful build.
+- **First switch from Chromium to Electron resets browser-local UI state.**
+  Electron persists its own session under `~/.config/openflight-ui` (Linux),
+  not the system Chromium profile. Units, language, theme, pinned Live metric,
+  and validation annotations in `localStorage` do not carry over. Export the
+  Shots CSV on Chromium before switching. Profiles and shot logs are
+  server-owned and unaffected. See
+  [Electron Kiosk Shell](electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
+
 ### Fixed
 - **On-screen keyboard for profile names.** Adding or renaming a profile on the
   Pi kiosk now shows a full-screen keyboard. Chromium in `--kiosk` mode does not
@@ -22,8 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Electron kiosk shell.** `scripts/start-kiosk.sh` now opens the UI in a pinned
   Electron window (`electron@44`) instead of whichever system browser happens to
-  be installed. Chromium remains a fallback if Electron is not installed. This
-  needs **Node.js 22.12 or newer** (`npm WARN EBADENGINE` on Node 20). See
+  be installed. Chromium remains a fallback if Electron is not installed (including
+  when Node is older than 22.12 or `npm install` fails and `ui/dist` already
+  exists). Installing Electron needs **Node.js 22.12 or newer**. See
   [Electron Kiosk Shell](electron-kiosk-shell.md).
 - **Profiles replace players.** Shots are now attributed to a server-owned profile
   (a person *or* a place) with a stable id, persisted to

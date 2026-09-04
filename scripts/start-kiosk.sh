@@ -1020,28 +1020,9 @@ fi
 
 configure_kld7_latency
 
-# Check if UI is built and the Electron kiosk shell is installed
-if [ ! -d "ui/dist" ] || [ ! -x "ui/node_modules/.bin/electron" ]; then
-    warn "UI not built or Electron shell missing. Building now..."
-    # shellcheck source=require-node.sh
-    source "$SCRIPT_DIR/require-node.sh"
-    if ! openflight_node_meets_min; then
-        openflight_node_install_hint
-        show_startup_failure \
-            "server" \
-            "Node.js is too old to build the UI" \
-            "OpenFlight needs Node.js ${OPENFLIGHT_MIN_NODE} or newer (found $(openflight_node_version 2>/dev/null || echo none)). Upgrade Node, then relaunch."
-    fi
-    cd ui
-    if ! npm install || ! npm run build; then
-        cd ..
-        show_startup_failure \
-            "server" \
-            "OpenFlight interface build failed" \
-            "Check the terminal log or network connection, then relaunch OpenFlight."
-    fi
-    cd ..
-fi
+# shellcheck source=ensure-kiosk-ui.sh
+source "$SCRIPT_DIR/ensure-kiosk-ui.sh"
+ensure_kiosk_ui
 
 # Start Grafana Alloy for log shipping (if installed and credentials configured)
 if command -v alloy &> /dev/null || systemctl is-enabled alloy &> /dev/null 2>&1; then

@@ -1,6 +1,9 @@
 """Tests for the kiosk entry script flag wiring."""
 
+import os
+import shlex
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -422,19 +425,28 @@ def test_startup_splash_passes_status_file_to_server():
 def test_launcher_reports_distinct_failures_and_waits_for_dismissal():
     repo_root = Path(__file__).resolve().parents[1]
     script = (repo_root / "scripts/start-kiosk.sh").read_text(encoding="utf-8")
+    ensure_ui = (repo_root / "scripts/ensure-kiosk-ui.sh").read_text(encoding="utf-8")
 
     assert "show_startup_failure()" in script
     assert '"OpenFlight preparation failed"' in script
     assert '"server"' in script
     assert 'while [ ! -f "$STARTUP_DISMISS_FILE" ]' in script
     assert 'uv sync "${UV_SYNC_ARGS[@]}"' in script
-    assert "npm run build" in script
+    assert "ensure_kiosk_ui" in script
+    assert "npm run build" in ensure_ui
 
 
 def test_start_kiosk_script_has_valid_shell_syntax():
     repo_root = Path(__file__).resolve().parents[1]
     subprocess.run(
         ["bash", "-n", "scripts/start-kiosk.sh"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["bash", "-n", "scripts/ensure-kiosk-ui.sh"],
         cwd=repo_root,
         check=True,
         capture_output=True,
@@ -596,8 +608,159 @@ def test_cleanup_kills_the_electron_process_tree():
     assert 'pkill -f "ui/node_modules/electron/dist/electron"' in cleanup_fn
 
 
-def test_ui_build_check_also_requires_the_electron_shell():
-    """Rebuilding the UI must also install Electron if a checkout predates it."""
+def test_ui_build_check_does_not_block_startup_on_missing_electron():
+    """A built UI must still start when Electron cannot be installed."""
     script = _read_script()
 
-    assert 'if [ ! -d "ui/dist" ] || [ ! -x "ui/node_modules/.bin/electron" ]; then' in script
+    assert 'source "$SCRIPT_DIR/ensure-kiosk-ui.sh"' in script
+    assert "ensure_kiosk_ui" in script
+    assert 'if [ ! -d "ui/dist" ] || [ ! -x "ui/node_modules/.bin/electron" ]; then' not in script
+
+
+def _bash_path(path: Path) -> str:
+    resolved = str(path.resolve())
+    if os.name != "nt":
+        return resolved
+    converted = subprocess.run(
+        ["bash", "-lc", f"wslpath -u {shlex.quote(resolved.replace(chr(92), '/'))}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    mapped = converted.stdout.strip()
+    if converted.returncode == 0 and mapped:
+        return mapped
+    posix = Path(resolved).as_posix()
+    return f"/{posix[0].lower()}{posix[2:]}"
+
+
+def _write_executable(path: Path, contents: str) -> None:
+    path.write_text(contents, encoding="utf-8", newline="\n")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _run_ensure_kiosk_ui(
+    tmp_path: Path,
+    *,
+    node_version: str,
+    has_dist: bool,
+    npm_exit: int,
+) -> subprocess.CompletedProcess[str]:
+    repo_scripts = Path(__file__).resolve().parents[1] / "scripts"
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    for name in ("ensure-kiosk-ui.sh", "require-node.sh"):
+        text = (repo_scripts / name).read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        (scripts_dir / name).write_bytes(text.encode("utf-8"))
+    project_dir = tmp_path / "project"
+    ui_dir = project_dir / "ui"
+    ui_dir.mkdir(parents=True)
+    if has_dist:
+        (ui_dir / "dist").mkdir()
+        (ui_dir / "dist" / "index.html").write_text("<html></html>\n", encoding="utf-8")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    npm_called = tmp_path / "npm-called"
+    _write_executable(
+        bin_dir / "node",
+        f"#!/usr/bin/env bash\necho 'v{node_version}'\n",
+    )
+    _write_executable(
+        bin_dir / "npm",
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                f"printf '%s\\n' \"$*\" >> {_bash_path(npm_called)}",
+                f"exit {npm_exit}",
+                "",
+            ]
+        ),
+    )
+
+    harness = tmp_path / "run-ensure.sh"
+    _write_executable(
+        harness,
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                'PROJECT_DIR="$1"',
+                'SCRIPT_DIR="$2"',
+                'BIN_DIR="$3"',
+                'chmod +x "$BIN_DIR"/* || true',
+                'export PATH="$BIN_DIR:$PATH"',
+                "log() { printf 'LOG %s\\n' \"$1\"; }",
+                "warn() { printf 'WARN %s\\n' \"$1\"; }",
+                "show_startup_failure() {",
+                '  printf \'FAILURE component=%s message=%s\\n\' "$1" "$2"',
+                "  exit 42",
+                "}",
+                '# shellcheck source=/dev/null',
+                'source "$SCRIPT_DIR/ensure-kiosk-ui.sh"',
+                "ensure_kiosk_ui",
+                "printf 'CONTINUED\\n'",
+                "",
+            ]
+        ),
+    )
+
+    return subprocess.run(
+        [
+            "bash",
+            _bash_path(harness),
+            _bash_path(project_dir),
+            _bash_path(scripts_dir),
+            _bash_path(bin_dir),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_existing_ui_continues_when_node_is_too_old_to_install_electron(tmp_path):
+    """A Pi with a built UI and Node 20 must keep using Chromium instead of dying at startup."""
+    result = _run_ensure_kiosk_ui(
+        tmp_path,
+        node_version="20.19.0",
+        has_dist=True,
+        npm_exit=1,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, combined
+    assert "CONTINUED" in result.stdout
+    assert "FAILURE" not in combined
+    assert not (tmp_path / "npm-called").exists()
+
+
+def test_existing_ui_continues_when_electron_npm_install_fails(tmp_path):
+    """Offline or failed Electron install must not block a unit that already has ui/dist."""
+    result = _run_ensure_kiosk_ui(
+        tmp_path,
+        node_version="22.12.0",
+        has_dist=True,
+        npm_exit=1,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, combined
+    assert "CONTINUED" in result.stdout
+    assert "FAILURE" not in combined
+    assert (tmp_path / "npm-called").exists()
+
+
+def test_missing_ui_still_fails_when_node_is_too_old(tmp_path):
+    result = _run_ensure_kiosk_ui(
+        tmp_path,
+        node_version="20.19.0",
+        has_dist=False,
+        npm_exit=0,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode == 42, combined
+    assert "FAILURE" in combined
+    assert "CONTINUED" not in result.stdout
