@@ -57,8 +57,8 @@ describe('PanelFooter', () => {
     }
   });
 
-  it('hides units, battery, and shutdown on Players, Camera, and Debug', () => {
-    for (const view of ['players', 'camera', 'debug'] as const) {
+  it('hides units, battery, and shutdown on Profiles, Camera, and Debug', () => {
+    for (const view of ['profiles', 'camera', 'debug'] as const) {
       const html = render(view, 4, null);
 
       expect(html).not.toContain('panel-footer__meta');
@@ -96,7 +96,7 @@ describe('PanelFooter', () => {
   });
 
   it('does not keep shutdown in the footer on any panel', () => {
-    for (const view of ['live', 'stats', 'shots', 'camera', 'players', 'debug'] as const) {
+    for (const view of ['live', 'stats', 'shots', 'camera', 'profiles', 'debug'] as const) {
       const html = render(view, 0, null);
 
       expect(html).not.toContain('panel-footer__power');

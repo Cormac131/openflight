@@ -34,7 +34,8 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     spin_source: 'measured',
     spin_method: null,
     carry_spin_adjusted: 214,
-    player_name: 'James',
+    profile_id: 'james',
+    profile_name: 'James',
     ...overrides,
   };
 }
@@ -52,7 +53,8 @@ function render(
       <LivePanel
         shot={shot}
         shots={shots}
-        playerName="James"
+        profileId="james"
+        profileName="James"
         clubLabel="DR"
         selectedMetricId={selectedMetricId}
         onSelectMetric={() => {}}
@@ -245,7 +247,7 @@ describe('LivePanel', () => {
     expect(html).toContain('aria-pressed="true"');
   });
 
-  it('shows the player and club in the header', () => {
+  it('shows the profile and club in the header', () => {
     const html = render(makeShot(), [makeShot(), makeShot(), makeShot()]);
 
     expect(html).toContain('panel-header__subtitle">James<');
@@ -260,7 +262,8 @@ describe('LivePanel', () => {
         <LivePanel
           shot={null}
           shots={[]}
-          playerName="James"
+          profileId="james"
+          profileName="James"
           clubLabel="DR"
           headerAction={
             <button type="button" className="panel-action">
@@ -276,9 +279,9 @@ describe('LivePanel', () => {
     expect(header).toContain('panel-action');
   });
 
-  it("shows the current player's last shot, not the previous player's", () => {
+  it("shows the current profile's last shot, not the previous profile's", () => {
     const james = makeShot({ ball_speed_mph: 90, timestamp: 'a' });
-    const alex = makeShot({ player_name: 'Alex', ball_speed_mph: 150, timestamp: 'b' });
+    const alex = makeShot({ profile_id: 'alex', profile_name: 'Alex', ball_speed_mph: 150, timestamp: 'b' });
     const html = render(alex, [james, alex]);
 
     expect(html).toContain('>90.0<');
@@ -286,8 +289,8 @@ describe('LivePanel', () => {
     expect(html).not.toContain('Ready');
   });
 
-  it('returns to ready when the current player has no shots', () => {
-    const alex = makeShot({ player_name: 'Alex', ball_speed_mph: 150, timestamp: 'b' });
+  it('returns to ready when the current profile has no shots', () => {
+    const alex = makeShot({ profile_id: 'alex', profile_name: 'Alex', ball_speed_mph: 150, timestamp: 'b' });
     const html = render(alex, [alex]);
 
     expect(html).toContain('Ready');
@@ -299,14 +302,16 @@ describe('LivePanel', () => {
       mode: 'swing-speed',
       training_implement: 'stack-100g',
       training_implement_label: 'Stack 100g',
-      player_name: 'James',
+      profile_id: 'james',
+      profile_name: 'James',
     });
     const html = text(
       renderToString(
         <LivePanel
           shot={swing}
           shots={[swing]}
-          playerName="James"
+          profileId="james"
+          profileName="James"
           clubLabel="Stack 100g"
           activeTrainingImplement="stack-100g"
           onSelectMetric={() => {}}
@@ -331,7 +336,8 @@ describe('LivePanel', () => {
         <LivePanel
           shot={makeShot()}
           shots={[makeShot()]}
-          playerName="James"
+          profileId="james"
+          profileName="James"
           clubLabel="DR"
           ballDetectionEnabled
           ballDetected={false}
@@ -347,7 +353,15 @@ describe('LivePanel', () => {
   it('still warns on the ready screen so a swing is not taken without a ball', () => {
     const html = text(
       renderToString(
-        <LivePanel shot={null} shots={[]} playerName="James" clubLabel="DR" ballDetectionEnabled ballDetected={false} />
+        <LivePanel
+          shot={null}
+          shots={[]}
+          profileId="james"
+          profileName="James"
+          clubLabel="DR"
+          ballDetectionEnabled
+          ballDetected={false}
+        />
       )
     );
 
@@ -360,7 +374,8 @@ describe('LivePanel', () => {
         <LivePanel
           shot={makeShot()}
           shots={[makeShot()]}
-          playerName="James"
+          profileId="james"
+          profileName="James"
           clubLabel="DR"
           ballDetectionEnabled
           ballDetected

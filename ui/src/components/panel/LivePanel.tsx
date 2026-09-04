@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from 'react';
 import type { Shot } from '../../types/shot';
-import { computeSwingSpeedStats, filterShotsByPlayer } from '../../types/shot';
+import { computeSwingSpeedStats, filterShotsByProfile } from '../../types/shot';
 import { useUnitPreference } from '../../state/useUnitPreference';
 import { useI18n } from '../../i18n/useI18n';
 import { useSharedFitFontSize } from '../../hooks/useFitFontSize';
@@ -13,7 +13,8 @@ import { useShotSpotlight } from './useShotSpotlight';
 interface LivePanelProps {
   shot: Shot | null;
   shots: Shot[];
-  playerName: string;
+  profileId: string;
+  profileName: string;
   clubLabel: string;
   /** Undefined outside swing-speed mode. Scopes the swing stats to one implement. */
   activeTrainingImplement?: string;
@@ -37,7 +38,8 @@ interface LivePanelProps {
 export function LivePanel({
   shot,
   shots,
-  playerName,
+  profileId,
+  profileName,
   clubLabel,
   activeTrainingImplement,
   selectedMetricId = null,
@@ -52,13 +54,13 @@ export function LivePanel({
   useLiveViewStore((state) => state.mode);
   useLiveViewStore((state) => state.durationMs);
   const { mode, durationMs } = useLiveViewStore.getState();
-  const playerShots = useMemo(() => filterShotsByPlayer(shots, playerName), [shots, playerName]);
-  const displayedShot = playerShots[playerShots.length - 1] ?? null;
-  const isPlayersNewShot = Boolean(isNewShot && shot && displayedShot && shot.timestamp === displayedShot.timestamp);
+  const profileShots = useMemo(() => filterShotsByProfile(shots, profileId), [shots, profileId]);
+  const displayedShot = profileShots[profileShots.length - 1] ?? null;
+  const isProfileNewShot = Boolean(isNewShot && shot && displayedShot && shot.timestamp === displayedShot.timestamp);
 
   const swingStats = useMemo(
-    () => computeSwingSpeedStats(playerShots, { playerName, trainingImplement: activeTrainingImplement }),
-    [playerShots, playerName, activeTrainingImplement]
+    () => computeSwingSpeedStats(profileShots, { profileId, trainingImplement: activeTrainingImplement }),
+    [profileShots, profileId, activeTrainingImplement]
   );
   const metrics = useMemo(
     () =>
@@ -69,7 +71,7 @@ export function LivePanel({
     [displayedShot, unitSystem, swingStats, selectedMetricId, locale]
   );
   const selected = metrics[0] ?? null;
-  const { open: spotlightOpen, dismiss } = useShotSpotlight(mode, durationMs, isPlayersNewShot);
+  const { open: spotlightOpen, dismiss } = useShotSpotlight(mode, durationMs, isProfileNewShot);
   const gridRef = useSharedFitFontSize(
     metrics.length > 0,
     metrics.map((metric) => `${metric.value}:${metric.unit ?? ''}`).join('|')
@@ -82,7 +84,7 @@ export function LivePanel({
     </div>
   ) : null;
 
-  const header = <PanelHeader title={t('nav.live')} subtitle={playerName} club={clubLabel} actions={headerAction} />;
+  const header = <PanelHeader title={t('nav.live')} subtitle={profileName} club={clubLabel} actions={headerAction} />;
 
   if (!selected) {
     return (
@@ -102,7 +104,7 @@ export function LivePanel({
       {header}
       <div className="panel__body live-panel__body">
         {ballWarning}
-        {isPlayersNewShot ? <div className="shot-flash" /> : null}
+        {isProfileNewShot ? <div className="shot-flash" /> : null}
         {spotlightOpen && selected ? (
           <button type="button" className="live-panel__spotlight" aria-label={t('live.hideOverlay')} onClick={dismiss}>
             <span className="live-panel__spotlight-label">

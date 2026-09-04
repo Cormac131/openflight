@@ -11,7 +11,6 @@ interface SystemState {
   simStatuses: Record<string, SimStatus>;
   latestSimShots: Record<string, SimShotInfo>;
   serverClub: string | null;
-  serverPlayerName: string | null;
   powerStatus: PowerStatus | null;
   shutdownDialogOpen: boolean;
   setConnected: (connected: boolean) => void;
@@ -21,7 +20,6 @@ interface SystemState {
   setSimStatus: (status: SimStatus) => void;
   setLatestSimShot: (shot: SimShotInfo) => void;
   setServerClub: (club: string | null) => void;
-  setServerPlayerName: (playerName: string | null) => void;
   setPowerStatus: (status: PowerStatus) => void;
   openShutdownDialog: () => void;
   closeShutdownDialog: () => void;
@@ -36,7 +34,6 @@ export const useSystemStore = create<SystemState>((set) => ({
   simStatuses: {},
   latestSimShots: {},
   serverClub: null,
-  serverPlayerName: null,
   powerStatus: null,
   shutdownDialogOpen: false,
   setConnected: (connected) => set({ connected }),
@@ -52,7 +49,6 @@ export const useSystemStore = create<SystemState>((set) => ({
       latestSimShots: { ...state.latestSimShots, [shot.target]: shot },
     })),
   setServerClub: (serverClub) => set({ serverClub }),
-  setServerPlayerName: (serverPlayerName) => set({ serverPlayerName }),
   setPowerStatus: (status) => set({ powerStatus: status }),
   openShutdownDialog: () => set({ shutdownDialogOpen: true }),
   closeShutdownDialog: () => set({ shutdownDialogOpen: false }),
