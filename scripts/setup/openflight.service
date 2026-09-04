@@ -14,9 +14,11 @@ Type=simple
 User=coleman
 WorkingDirectory=/home/coleman/openflight
 Environment=DISPLAY=:0
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Same wrapper as the desktop launcher; edit that file's openflight_args.
 ExecStart=/home/coleman/run-openflight.sh
-Restart=on-failure
+Restart=on-abnormal
 RestartSec=5
 # Exit 3 means another OpenFlight instance already owns the kiosk (see
 # acquire_instance_lock in scripts/start-kiosk.sh); retrying cannot help.

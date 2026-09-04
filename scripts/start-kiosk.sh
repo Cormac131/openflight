@@ -714,10 +714,13 @@ acquire_instance_lock() {
 }
 
 ensure_uv_on_path() {
-    # systemd's PATH omits user-local install dirs. Prepend them even when
-    # another uv is already on PATH so a boot start matches a desktop tap.
+    # systemd does not source .bashrc and its default PATH omits ~/.local/bin.
+    if [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; then
+        HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
+        export HOME
+    fi
     local candidate
-    for candidate in "$HOME/.local/bin" "$HOME/.cargo/bin"; do
+    for candidate in "$HOME/.local/bin" "$HOME/.cargo/bin" /usr/local/bin /snap/bin; do
         if [ -x "$candidate/uv" ]; then
             case ":$PATH:" in
                 *":$candidate:"*) ;;
@@ -725,6 +728,7 @@ ensure_uv_on_path() {
             esac
         fi
     done
+    hash -r 2>/dev/null || true
 }
 
 sync_uv_environment() {
@@ -1036,7 +1040,7 @@ if ! command -v uv >/dev/null 2>&1; then
     show_startup_failure \
         "server" \
         "OpenFlight preparation failed" \
-        "The uv command is unavailable (checked PATH, ~/.local/bin and ~/.cargo/bin). Install it with: curl -LsSf https://astral.sh/uv/install.sh | sh"
+        "The uv command is unavailable (HOME=${HOME:-unset} PATH=$PATH). Install it with: curl -LsSf https://astral.sh/uv/install.sh | sh"
 fi
 
 UV_SYNC_ARGS=(--quiet)

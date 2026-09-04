@@ -1041,9 +1041,13 @@ def test_uv_is_found_in_user_install_dirs_before_the_preparation_check():
     check_idx = script.index("if ! command -v uv >/dev/null 2>&1; then")
     assert resolve_idx < check_idx
 
-    resolver = script[script.index("ensure_uv_on_path() {") : resolve_idx]
+    resolver = script[
+        script.index("ensure_uv_on_path() {") : script.index("\nsync_uv_environment() {")
+    ]
     assert '"$HOME/.local/bin"' in resolver
     assert '"$HOME/.cargo/bin"' in resolver
+    assert "getent passwd" in resolver
+    assert "hash -r" in resolver
     # A desktop session already has *a* uv via login PATH, often not the
     # user-local one. systemd may have a different uv earlier on PATH; still
     # prepend ~/.local/bin so boot matches a desktop tap.

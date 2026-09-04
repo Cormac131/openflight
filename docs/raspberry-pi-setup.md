@@ -240,7 +240,9 @@ username and install path.
 scripts/setup/install_desktop_launcher.sh
 
 # Install (adjust User=, WorkingDirectory=, and ExecStart= if they are not
-# /home/coleman/openflight and /home/coleman/run-openflight.sh)
+# /home/coleman/openflight and /home/coleman/run-openflight.sh).
+# git pull does not update the installed unit; recopy it after PATH/HOME changes.
+sudo cp ~/openflight/scripts/setup/openflight.service /etc/systemd/system/
 sudo cp ~/openflight/scripts/setup/openflight.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable openflight

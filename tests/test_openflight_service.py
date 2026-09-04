@@ -47,6 +47,17 @@ def test_boot_unit_starts_the_local_wrapper_not_start_kiosk_directly():
     assert "start-kiosk.sh" not in exec_start
 
 
+def test_boot_unit_puts_user_local_bin_on_path():
+    """systemd's default PATH omits ~/.local/bin, where astral installs uv."""
+    path_line = next(line for line in _section("Service") if line.startswith("Environment=PATH="))
+    assert "%h/.local/bin" in path_line
+    assert "%h/.cargo/bin" in path_line
+    home_line = next(
+        line for line in _section("Service") if line.startswith("Environment=HOME=")
+    )
+    assert home_line == "Environment=HOME=%h"
+
+
 def test_every_home_path_in_the_unit_is_rewritten_by_setup():
     """setup.sh rewrites checkout paths and the wrapper ExecStart."""
     setup = SETUP.read_text(encoding="utf-8")
@@ -62,3 +73,4 @@ def test_every_home_path_in_the_unit_is_rewritten_by_setup():
             assert "/home/coleman/openflight" in line or line.endswith(
                 "/run-openflight.sh"
             ), line
+

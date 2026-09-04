@@ -29,11 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **systemd kiosk start matches a desktop tap.** A system unit only passed
   `DISPLAY=:0`, so Electron died with "Missing X server or $DISPLAY" while the
-  same wrapper launched from the desktop worked. The kiosk helper now passes
-  the user's Wayland/X11 sockets, Xauthority, and session bus to the browser
-  process only (not to `uv sync`), and always prepends `~/.local/bin`. `uv sync`
-  uses `--offline` when `.venv` already exists so a network-less boot does not
-  fail the splash.
+  same wrapper launched from the desktop worked. The unit now sets `HOME=%h` and
+  puts `%h/.local/bin` on `PATH` (astral's `uv`). The kiosk helper passes
+  Wayland/X11 sockets to the browser process only. `uv sync` uses `--offline`
+  when `.venv` already exists. Re-copy `openflight.service` and run
+  `systemctl daemon-reload`.
 - **A crash-looping boot service no longer kills the desktop kiosk.** Every
   launcher exit ran a `pkill` that matched the Electron binary path, so an
   `openflight.service` that failed at startup (for example because systemd's
