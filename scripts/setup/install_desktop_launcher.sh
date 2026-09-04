@@ -47,6 +47,45 @@ if [[ "$launcher_path" == *[[:space:]]* ]]; then
     exit 1
 fi
 
+if [[ "${1:-}" == --print-launcher-path ]]; then
+    printf '%s\n' "$launcher_path"
+    exit 0
+fi
+
+install_local_launcher() {
+    mkdir -p "$(dirname "$launcher_path")"
+    if [[ ! -e "$launcher_path" ]]; then
+        temporary_launcher="$(mktemp "$(dirname "$launcher_path")/.$launcher_name.XXXXXX")"
+        {
+            IFS= read -r shebang < "$example_launcher"
+            printf '%s\n' "$shebang"
+            printf 'openflight_installed_dir=%q\n' "$project_dir"
+            tail -n +2 "$example_launcher"
+        } > "$temporary_launcher"
+        install -m 755 "$temporary_launcher" "$launcher_path"
+        rm -f "$temporary_launcher"
+        temporary_launcher=""
+        echo "Installed the example local launcher at $launcher_path"
+    else
+        chmod +x "$launcher_path"
+        echo "Preserved the existing local launcher at $launcher_path"
+    fi
+}
+
+if [[ "${OPENFLIGHT_SKIP_DESKTOP_ENTRY:-false}" == true ]]; then
+    temporary_launcher=""
+    cleanup() {
+        if [[ -n "$temporary_launcher" ]]; then
+            rm -f "$temporary_launcher"
+        fi
+    }
+    trap cleanup EXIT
+    install_local_launcher
+    trap - EXIT
+    echo "Edit $launcher_path to configure hardware specific to this Pi."
+    exit 0
+fi
+
 mkdir -p "$desktop_dir"
 temporary_entry="$(mktemp "$desktop_dir/.$desktop_name.XXXXXX")"
 temporary_launcher=""
@@ -97,23 +136,7 @@ if [[ -e "$desktop_path" ]]; then
     echo "Backed up the existing desktop entry to $backup_path"
 fi
 
-mkdir -p "$(dirname "$launcher_path")"
-if [[ ! -e "$launcher_path" ]]; then
-    temporary_launcher="$(mktemp "$(dirname "$launcher_path")/.$launcher_name.XXXXXX")"
-    {
-        IFS= read -r shebang < "$example_launcher"
-        printf '%s\n' "$shebang"
-        printf 'openflight_installed_dir=%q\n' "$project_dir"
-        tail -n +2 "$example_launcher"
-    } > "$temporary_launcher"
-    install -m 755 "$temporary_launcher" "$launcher_path"
-    rm -f "$temporary_launcher"
-    temporary_launcher=""
-    echo "Installed the example local launcher at $launcher_path"
-else
-    chmod +x "$launcher_path"
-    echo "Preserved the existing local launcher at $launcher_path"
-fi
+install_local_launcher
 
 install -m 755 "$temporary_entry" "$desktop_path"
 rm -f "$temporary_entry"

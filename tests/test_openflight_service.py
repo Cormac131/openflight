@@ -40,11 +40,25 @@ def test_service_stops_crash_looping_instead_of_retrying_forever():
     assert int(interval.split("=", 1)[1]) >= 60
 
 
+def test_boot_unit_starts_the_local_wrapper_not_start_kiosk_directly():
+    """Boot and desktop must share openflight_args in ~/run-openflight.sh."""
+    exec_start = next(line for line in _section("Service") if line.startswith("ExecStart="))
+    assert exec_start == "ExecStart=/home/coleman/run-openflight.sh"
+    assert "start-kiosk.sh" not in exec_start
+
+
 def test_every_home_path_in_the_unit_is_rewritten_by_setup():
-    """setup.sh only rewrites the project path; any other /home/coleman entry would ship stale."""
+    """setup.sh rewrites checkout paths and the wrapper ExecStart."""
     setup = SETUP.read_text(encoding="utf-8")
     assert "s|/home/coleman/openflight|$PROJECT_DIR|g" in setup
+    assert (
+        "s|^ExecStart=/home/coleman/run-openflight.sh\\$|ExecStart=$launcher_path|"
+        in setup
+    )
+    assert "OPENFLIGHT_SKIP_DESKTOP_ENTRY=true" in setup
 
     for line in _unit_lines():
         if "/home/coleman" in line:
-            assert "/home/coleman/openflight" in line, line
+            assert "/home/coleman/openflight" in line or line.endswith(
+                "/run-openflight.sh"
+            ), line

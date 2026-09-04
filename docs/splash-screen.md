@@ -9,7 +9,9 @@ scripts/start-kiosk.sh --startup-splash
 ```
 
 The splash is opt-in. Without the flag, `scripts/start-kiosk.sh` retains its
-existing startup behavior.
+existing startup behavior. On a Pi, put the flag in the local wrapper
+(`~/run-openflight.sh`) so a desktop tap and `openflight.service` share the
+same argument list.
 
 ![OpenFlight starting the server and TI radar](assets/startup-splash-ti-loading.png)
 

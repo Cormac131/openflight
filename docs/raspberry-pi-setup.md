@@ -236,7 +236,11 @@ username and install path.
 <summary>Manual steps and service management</summary>
 
 ```bash
-# Install (adjust User= and paths in the file if your username isn't the default)
+# Install the local wrapper first (boot and desktop share its openflight_args).
+scripts/setup/install_desktop_launcher.sh
+
+# Install (adjust User=, WorkingDirectory=, and ExecStart= if they are not
+# /home/coleman/openflight and /home/coleman/run-openflight.sh)
 sudo cp ~/openflight/scripts/setup/openflight.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable openflight
@@ -253,7 +257,8 @@ sudo systemctl restart openflight             # Restart
 sudo systemctl disable openflight             # Disable auto-start
 ```
 
-To modify the service:
+Hardware flags (`--startup-splash`, `--iwr6843`, …) belong in
+`~/run-openflight.sh`, not in the unit. To change the unit itself:
 
 ```bash
 sudo nano /etc/systemd/system/openflight.service
@@ -359,6 +364,7 @@ journalctl -u openflight --no-pager -n 50
 
 # If service is masked
 sudo systemctl unmask openflight
+scripts/setup/install_desktop_launcher.sh
 sudo cp ~/openflight/scripts/setup/openflight.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable openflight

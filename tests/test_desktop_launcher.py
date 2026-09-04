@@ -39,7 +39,8 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_example_launcher_is_valid_and_uses_safe_defaults():
-    subprocess.run(["bash", "-n", str(EXAMPLE_LAUNCHER)], check=True)
+    if os.name != "nt":
+        subprocess.run(["bash", "-n", str(EXAMPLE_LAUNCHER)], check=True)
 
     launcher = EXAMPLE_LAUNCHER.read_text(encoding="utf-8")
     assert "flock -n" in launcher
@@ -52,6 +53,7 @@ def test_example_launcher_is_valid_and_uses_safe_defaults():
     assert "lxterminal" not in launcher
 
 
+@pytest.mark.skipif(os.name == "nt", reason="installer subprocess tests need a native Unix HOME")
 def test_installer_creates_terminal_free_desktop_entry_and_preserves_launcher(tmp_path):
     home = tmp_path / "home"
     desktop = home / "Desktop"
@@ -97,6 +99,7 @@ def test_installer_creates_terminal_free_desktop_entry_and_preserves_launcher(tm
     assert "Existing desktop entry preserved" in repeated_install.stdout
 
 
+@pytest.mark.skipif(os.name == "nt", reason="installer subprocess tests need a native Unix HOME")
 def test_installer_prompts_before_replacing_and_backs_up_existing_desktop_entry(tmp_path):
     home = tmp_path / "home"
     desktop = home / "Desktop"
@@ -146,3 +149,53 @@ def test_main_setup_uses_the_terminal_free_launcher_installer():
     setup_script = (REPO_ROOT / "scripts/setup/setup.sh").read_text(encoding="utf-8")
 
     assert '"$SCRIPT_DIR/install_desktop_launcher.sh"' in setup_script
+
+
+def test_installer_exposes_boot_service_hooks():
+    installer = INSTALLER.read_text(encoding="utf-8")
+
+    assert '[[ "${1:-}" == --print-launcher-path ]]' in installer
+    assert "${OPENFLIGHT_SKIP_DESKTOP_ENTRY:-false}" in installer
+
+
+@pytest.mark.skipif(os.name == "nt", reason="installer subprocess tests need a native Unix HOME")
+def test_print_launcher_path_does_not_install_anything(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {**os.environ, "HOME": str(home)}
+
+    printed = subprocess.run(
+        ["bash", str(INSTALLER), "--print-launcher-path"],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    launcher_path, _ = installed_paths(home)
+    assert printed.stdout.strip() == str(launcher_path)
+    assert not launcher_path.exists()
+    assert list(home.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="installer subprocess tests need a native Unix HOME")
+def test_skip_desktop_entry_installs_only_the_wrapper(tmp_path):
+    home = tmp_path / "home"
+    desktop = home / "Desktop"
+    home.mkdir()
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "OPENFLIGHT_DESKTOP_DIR": str(desktop),
+        "OPENFLIGHT_SKIP_DESKTOP_ENTRY": "true",
+        "OPENFLIGHT_SKIP_DESKTOP_TRUST": "true",
+    }
+
+    subprocess.run(["bash", str(INSTALLER)], check=True, cwd=REPO_ROOT, env=env)
+
+    launcher_path, desktop_path = installed_paths(home)
+    assert launcher_path.exists()
+    assert os.access(launcher_path, os.X_OK)
+    assert "--startup-splash" in launcher_path.read_text(encoding="utf-8")
+    assert not desktop_path.exists()

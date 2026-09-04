@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Boot and desktop share one OpenFlight argument list.** `openflight.service`
+  now starts `~/run-openflight.sh` (or the checkout-specific wrapper) instead of
+  calling `scripts/start-kiosk.sh` with no flags. Edit that wrapper for
+  `--startup-splash`, `--ballistics`, and hardware options. Re-copy the unit or
+  rerun `scripts/setup/setup.sh` on existing Pis.
 - **Chromium fallback is reachable during Electron upgrades.** If `ui/dist`
   already exists, a missing Electron install no longer requires Node 22.12 and
   a successful `npm install` before the kiosk can start. Old Node or a failed
