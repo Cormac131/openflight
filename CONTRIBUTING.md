@@ -7,7 +7,7 @@ Thank you for your interest in contributing to OpenFlight! This document provide
 ### Prerequisites
 
 - Python 3.10 or higher
-- Node.js 20+ (for UI development)
+- Node.js 22.12 or newer (for UI development; CI uses the version in `.node-version`)
 - Git
 - [uv](https://github.com/astral-sh/uv) package manager (required)
 
@@ -31,6 +31,10 @@ Thank you for your interest in contributing to OpenFlight! This document provide
    uv sync --group dev
    cd ui && npm install
    ```
+
+   `uv.lock` is committed so every Pi installs the same dependency tree.
+   After changing dependencies in `pyproject.toml`, run `uv lock` and commit
+   the updated lockfile; CI fails when it is stale.
 
 3. **Install pre-commit hooks**
    ```bash
@@ -167,6 +171,8 @@ will fail if:
    - Update README.md for user-facing changes
    - Update relevant docs in `docs/`
    - Add entry to `docs/CHANGELOG.md` under `[Unreleased]`
+     (it becomes the release notes of the next stable release; see
+     [docs/release-process.md](docs/release-process.md))
 
 7. **Submit a pull request** and fill out the PR template — including the automated
    tests, manual testing, and "why it was required" sections

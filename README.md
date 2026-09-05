@@ -315,6 +315,7 @@ uv run pytest tests/ -v
 - **[Parts List](docs/PARTS.md)** — What to buy
 - **[Sound Trigger Wiring](docs/sound-trigger-wiring.md)** — How to wire the sound trigger
 - **[Raspberry Pi Setup](docs/raspberry-pi-setup.md)** — Full setup guide
+- **[Electron Kiosk Shell](docs/electron-kiosk-shell.md)** — Why the kiosk runs in Electron and how self-updating could work later
 - **[Battery Monitoring](docs/battery/README.md)** — Provider architecture, UI states, and shared Pi support
 - **[Geekworm X1202/X1206 Operator Guide](docs/battery/geekworm.md)** — Batteries, Pi setup, native telemetry, and warnings
 - **[IWR6843 Operator Guide](docs/iwr6843/README.md)** — Wire, flash, mount, aim, and calibrate the angle radar
@@ -323,6 +324,7 @@ uv run pytest tests/ -v
 - **[IWR6843 Firmware Developer Guide](firmware/README.md)** — Build the firmware from source (not needed to flash the prebuilt image)
 - **[Simulator Connectors](docs/simulator/README.md)** — Stream shots to GSPro, OpenGolfSim, and others
 - **[Cloud Sync](docs/cloud-sync.md)** — Push filtered sessions to FlightWeb
+- **[Release Process](docs/release-process.md)** — Stable and experimental channels, cutting a release, Discord announcements
 - **[Rolling Buffer & Spin Detection](docs/rolling_buffer_spin_detection.md)** — Production capture and experimental spin details
 - **[Dechirped-Sideband Spin Replay](docs/spin-dechirp-replay.md)** — Next-gen spin estimator test bench
 - **[Camera and YOLO Experiments](docs/yolo-performance-tuning.md)** — Optional, non-production vision work
