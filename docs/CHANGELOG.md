@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`uv.lock` is committed.** `uv sync` on a Pi now installs the exact
+  dependency tree the release was tested with, and CI fails when the
+  lockfile is stale (`uv lock --check`). Dependabot updates the lockfile
+  through the `uv` ecosystem.
+
 ### Fixed
 - **On-screen keyboard for profile names.** Adding or renaming a profile on the
   Pi kiosk now shows a full-screen keyboard. Chromium in `--kiosk` mode does not

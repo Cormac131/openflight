@@ -27,3 +27,12 @@ jobs:
       - name: Run tests
         run: |
           pytest tests/ -v --tb=short
+
+  lock:
+    name: uv.lock is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v6
+      - name: Check the lockfile matches pyproject.toml
+        run: uv lock --check

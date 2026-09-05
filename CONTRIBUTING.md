@@ -32,6 +32,10 @@ Thank you for your interest in contributing to OpenFlight! This document provide
    cd ui && npm install
    ```
 
+   `uv.lock` is committed so every Pi installs the same dependency tree.
+   After changing dependencies in `pyproject.toml`, run `uv lock` and commit
+   the updated lockfile; CI fails when it is stale.
+
 3. **Install pre-commit hooks**
    ```bash
    make hooks
