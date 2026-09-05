@@ -1,0 +1,44 @@
+name: Announce release on Discord
+description: Post a prepared payload to a Discord webhook without ever failing the release.
+inputs:
+  webhook-url:
+    description: Discord webhook URL (empty skips the post with a warning)
+    required: false
+    default: ""
+  payload-file:
+    description: JSON file produced by scripts/release/discord_payload.py
+    required: true
+  dry-run:
+    description: Print the payload instead of posting it
+    required: false
+    default: "false"
+  source:
+    description: Which secret supplied the webhook, for the log line
+    required: false
+    default: "DISCORD_RELEASE_WEBHOOK_URL"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        WEBHOOK_URL: ${{ inputs.webhook-url }}
+        PAYLOAD: ${{ inputs.payload-file }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        SOURCE: ${{ inputs.source }}
+      run: |
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "Dry run; Discord payload that would be posted:"
+          cat "$PAYLOAD"
+          exit 0
+        fi
+        if [ -z "$WEBHOOK_URL" ]; then
+          echo "::warning::No Discord webhook secret is set; skipping the announcement"
+          exit 0
+        fi
+        echo "Posting the announcement using $SOURCE"
+        if curl -sS -f --retry 2 --max-time 20 -H 'Content-Type: application/json' \
+             --data @"$PAYLOAD" "$WEBHOOK_URL" >/dev/null; then
+          echo "Announcement posted"
+        else
+          echo "::warning::Discord announcement failed; the release itself is already published"
+        fi

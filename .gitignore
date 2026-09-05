@@ -28,7 +28,9 @@ env/
 
 # uv
 .uv/
-uv.lock
+
+# Release identity (written into release artifacts, never into a checkout)
+release.json
 
 # IDE
 .vscode/

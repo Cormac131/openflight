@@ -1,1 +1,16 @@
 *.sh text eol=lf
+
+# Kept out of `git archive`, so release tarballs (and GitHub's source
+# archives) carry only what a Pi needs to run OpenFlight.
+models/ export-ignore
+cad/ export-ignore
+session_logs/ export-ignore
+archive/ export-ignore
+plans/ export-ignore
+docs/plans/ export-ignore
+docs/prs/ export-ignore
+docs/superpowers/ export-ignore
+docs/assets/ export-ignore
+docs/*.pdf export-ignore
+docs/*.html export-ignore
+.github/ export-ignore

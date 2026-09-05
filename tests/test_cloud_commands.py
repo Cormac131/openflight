@@ -7,6 +7,7 @@ import pytest
 from openflight.cloud import commands, spool
 from openflight.cloud.client import LinkPoll, LinkStart, UploadResult
 from openflight.cloud.config import CloudConfig
+from openflight.release import ReleaseInfo
 
 
 class FakeClient:
@@ -265,6 +266,18 @@ class TestStatus:
         out = []
         commands.cmd_status(CloudConfig(), tmp_path, out=out.append)
         assert "not linked" in "\n".join(out).lower()
+
+    def test_reports_client_version_and_channel_first(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            commands,
+            "get_release_info",
+            lambda: ReleaseInfo(
+                version="0.3.0-dev.7", base_version="0.3.0", channel="experimental"
+            ),
+        )
+        out = []
+        commands.cmd_status(CloudConfig(), tmp_path, out=out.append)
+        assert out[0] == "Client:     0.3.0-dev.7 (experimental)"
 
     def test_reports_reachability_when_client_given(self, tmp_path):
         out = []

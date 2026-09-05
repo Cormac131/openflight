@@ -1,0 +1,124 @@
+name: Stable release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vX.Y.Z tag to build
+        required: true
+        type: string
+      dry_run:
+        description: Build the artifact and print the Discord payload without publishing
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-stable-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - name: Check the tag against __version__ and the changelog
+        id: meta
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$TAG is not a stable vX.Y.Z tag"
+            exit 1
+          fi
+          uv run python scripts/release/prepare_release.py check "${TAG#v}"
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)" = "false" ]; then
+            echo "::error::Release $TAG already exists; delete it deliberately before re-running"
+            exit 1
+          fi
+          git merge-base --is-ancestor HEAD origin/main || echo "::warning::$TAG is not on main (hotfix release?)"
+          printf 'tag=%s\nversion=%s\n' "$TAG" "${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  tests:
+    needs: verify
+    uses: ./.github/workflows/pytest.yml
+
+  ui:
+    needs: verify
+    uses: ./.github/workflows/ui-build.yml
+    with:
+      upload-dist: true
+
+  release:
+    needs: [verify, tests, ui]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.verify.outputs.tag }}
+      VERSION: ${{ needs.verify.outputs.version }}
+      DRY_RUN: ${{ inputs.dry_run || 'false' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - uses: actions/download-artifact@v7
+        with:
+          name: ui-dist
+          path: ui/dist
+
+      - name: Build the artifact and release notes
+        run: |
+          uv run python scripts/release/build_artifact.py \
+            --tag "$TAG" --channel stable --repository "$GITHUB_REPOSITORY" \
+            --commit "$(git rev-parse HEAD)" --output dist/release
+          uv run python scripts/release/prepare_release.py notes "$VERSION" > dist/notes.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ env.TAG }}
+          path: dist
+
+      - name: Publish the release
+        id: publish
+        if: env.DRY_RUN != 'true'
+        run: |
+          highest="$( { echo "$TAG"; gh release list --exclude-pre-releases --exclude-drafts --limit 200 --json tagName --jq '.[].tagName'; } | sort -V | tail -1)"
+          latest=false
+          [ "$highest" = "$TAG" ] && latest=true
+          gh release create "$TAG" dist/release/* --draft --title "OpenFlight $TAG" \
+            --notes-file dist/notes.md --target "$(git rev-parse HEAD)" --latest="$latest"
+          gh release edit "$TAG" --draft=false --latest="$latest"
+
+      - name: Build the Discord payload
+        run: |
+          uv run python scripts/release/discord_payload.py \
+            --title "OpenFlight $TAG" --channel stable \
+            --artifact "openflight-$TAG.tar.gz" \
+            --release-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
+            --notes-file dist/notes.md --output dist/discord.json
+
+      - name: Announce on Discord
+        if: steps.publish.outcome == 'success' || env.DRY_RUN == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/announce-discord
+        with:
+          webhook-url: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
+          payload-file: dist/discord.json
+          dry-run: ${{ env.DRY_RUN }}

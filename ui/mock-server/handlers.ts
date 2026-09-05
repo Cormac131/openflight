@@ -25,6 +25,7 @@ export function registerHandlers(io: Server, session: MockSession): void {
   io.on('connection', (socket: Socket) => {
     console.log('[mock-server] client connected');
 
+    socket.emit('release_info', session.releaseInfo());
     socket.emit('session_state', session.sessionStatePayload(true));
     socket.emit('profiles', session.snapshot());
     socket.emit('trigger_status', session.triggerStatus());
