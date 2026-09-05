@@ -171,6 +171,8 @@ will fail if:
    - Update README.md for user-facing changes
    - Update relevant docs in `docs/`
    - Add entry to `docs/CHANGELOG.md` under `[Unreleased]`
+     (it becomes the release notes of the next stable release; see
+     [docs/release-process.md](docs/release-process.md))
 
 7. **Submit a pull request** and fill out the PR template — including the automated
    tests, manual testing, and "why it was required" sections

@@ -1,4 +1,4 @@
-.PHONY: test lint format dev build-ui start
+.PHONY: test lint format dev build-ui start release-check
 
 ## Run Python tests
 test:
@@ -35,3 +35,7 @@ install:
 ## Install pre-commit hooks
 hooks:
 	uv run pre-commit install
+
+## Verify a version is ready to tag (make release-check VERSION=0.3.0)
+release-check:
+	uv run python scripts/release/prepare_release.py check $(VERSION)

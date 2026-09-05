@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the `uv` ecosystem.
 
 ### Added
+- **Stable and experimental release workflows.** Pushing a `vX.Y.Z` tag
+  publishes a stable GitHub Release; every push to `main` publishes a
+  `vX.Y.Z-dev.N` pre-release on the experimental channel. Both ship
+  `openflight-<tag>.tar.gz` (source tree, prebuilt `ui/dist`, `release.json`)
+  with a checksum and announce on Discord. `scripts/release/` holds the
+  changelog roll, artifact build, and announcement tooling; see
+  [docs/release-process.md](release-process.md).
 - **Build identity and release channels (stage 1).** The server now knows
   which build it is running: `src/openflight/release.py` reads a `release.json`
   shipped in release artifacts (channels `stable` and `experimental`) and
