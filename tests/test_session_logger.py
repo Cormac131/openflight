@@ -707,7 +707,10 @@ class TestSessionIdentity:
         assert parsed.version == 4
         assert entry["session_uuid"] != entry["session_id"]
         assert entry["format_version"] == 1
-        assert entry["app_version"] == openflight.__version__
+        release = openflight.release.get_release_info()
+        assert entry["app_version"] == release.version
+        assert entry["app_channel"] == release.channel
+        assert entry["app_version"].startswith(openflight.__version__)
 
     def test_session_uuid_is_unique_per_session(self, tmp_path):
         first = self._start_entry(tmp_path / "a")

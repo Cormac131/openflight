@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from ..release import get_release_info
 from . import filtering, spool
 from .client import CloudNetworkError, RateLimited
 from .config import CloudConfig, save_config
@@ -230,6 +231,7 @@ def cmd_status(
     out: OutFn = print,
 ) -> Dict[str, Any]:
     """Report link state, queue counts, and parked sessions."""
+    out(f"Client:     {get_release_info().label}")
     out(f"Endpoint:   {config.endpoint}")
     if config.is_linked():
         out(f"Linked:     yes (device_id={config.device_id})")

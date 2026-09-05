@@ -18,6 +18,23 @@ def _requirement_name(dependency: str) -> str:
     return re.split(r"[<>=!~ \[;]", dependency, maxsplit=1)[0].strip()
 
 
+def test_version_has_a_single_source():
+    """Hatchling reads the version from the package so release tooling edits one file."""
+    project = _pyproject()
+
+    assert "version" not in project["project"]
+    assert "version" in project["project"]["dynamic"]
+    assert project["tool"]["hatch"]["version"]["path"] == "src/openflight/__init__.py"
+
+
+def test_package_version_is_a_plain_release_version():
+    """Dev builds and source checkouts derive their identity from a plain X.Y.Z base."""
+    init_source = Path("src/openflight/__init__.py").read_text(encoding="utf-8")
+    matches = re.findall(r'^__version__ = "(\d+\.\d+\.\d+)"$', init_source, flags=re.MULTILINE)
+
+    assert len(matches) == 1
+
+
 def test_kld7_is_installed_by_default():
     """K-LD7 driver must be a base dependency so every install path includes it.
 

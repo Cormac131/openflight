@@ -7,10 +7,16 @@ import uuid
 import pytest
 
 from openflight.cloud import filtering as flt
+from openflight.release import get_release_info
 
 
 def _line(entry_type, **fields):
     return json.dumps({"ts": "2026-06-14T00:00:00", "type": entry_type, **fields})
+
+
+def test_client_version_is_the_build_version():
+    """The manifest and device link report the running build, not just the base version."""
+    assert flt.CLIENT_VERSION == get_release_info().version
 
 
 class TestFilterSessionLines:

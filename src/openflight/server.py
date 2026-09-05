@@ -35,6 +35,7 @@ from .ops243 import (
 )
 from .power import SUPPORTED_BATTERY_PROVIDERS, PowerMonitor, PowerStatus
 from .profiles import ProfileStore
+from .release import get_release_info
 from .rolling_buffer.monitor import estimate_carry_with_spin, get_optimal_spin_for_ball_speed
 from .session_logger import get_session_logger, init_session_logger, log_session_error
 from .sim import (
@@ -2332,6 +2333,7 @@ def start_power_monitor(provider: str) -> None:
 def handle_connect():
     """Handle client connection."""
     print("Client connected")
+    socketio.emit("release_info", get_release_info().to_dict())
     _emit_sim_snapshot()
     _emit_profiles()
     if power_monitor and power_monitor.status:
@@ -5014,6 +5016,11 @@ def main():
     import argparse  # pylint: disable=import-outside-toplevel
 
     parser = argparse.ArgumentParser(description="OpenFlight UI Server")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"openflight-server {get_release_info().label}",
+    )
     parser.add_argument("--port", "-p", help="Serial port for radar")
     parser.add_argument(
         "--ops-baud",
@@ -5946,6 +5953,7 @@ def main():
     if args.swing_speed:
         print("Running in SWING SPEED mode - no ball impact trigger required")
 
+    print(f"OpenFlight {get_release_info().label}")
     print(f"Server starting at http://{args.host}:{args.web_port}")
     print()
     startup_status.start("server", "Starting OpenFlight server")

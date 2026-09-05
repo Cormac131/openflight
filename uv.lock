@@ -1316,7 +1316,6 @@ wheels = [
 
 [[package]]
 name = "openflight"
-version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "flask" },
@@ -1389,7 +1388,7 @@ requires-dist = [
     { name = "smbus2", marker = "sys_platform == 'linux'", specifier = ">=0.5.0" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.1" },
 ]
-provides-extras = ["ui", "camera", "analysis"]
+provides-extras = ["analysis", "camera", "ui"]
 
 [package.metadata.requires-dev]
 dev = [
