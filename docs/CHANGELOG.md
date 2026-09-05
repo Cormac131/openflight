@@ -7,12 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-- **`uv.lock` is committed.** `uv sync` on a Pi now installs the exact
-  dependency tree the release was tested with, and CI fails when the
-  lockfile is stale (`uv lock --check`). Dependabot updates the lockfile
-  through the `uv` ecosystem.
-
 ### Added
 - **Stable and experimental release workflows.** Pushing a `vX.Y.Z` tag
   publishes a stable GitHub Release; every push to `main` publishes a
@@ -32,20 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from `openflight.__version__` (hatch dynamic version). The release
   workflows that produce the artifacts are planned in
   [docs/plans/2026-09-04-release-channels-plan.md](plans/2026-09-04-release-channels-plan.md).
-
-### Fixed
-- **On-screen keyboard for profile names.** Adding or renaming a profile on the
-  Pi kiosk now shows a full-screen keyboard. Chromium in `--kiosk` mode does not
-  surface a system keyboard, so the native text field was unusable on the
-  touchscreen.
-- **Clear-session confirmation is a modal again.** The overlay, scrim, and
-  centered dialog styles were missing after the class-name rename, so at the
-  800×480 kiosk size the prompt rendered as inline page content.
-- **Attack angle no longer inflated by 1/cos(club path).** The camera club
-  delivery divided vertical speed by the forward component alone instead of the
-  full horizontal speed, overstating attack angle on any shot with club path.
-
-### Added
 - **Profiles replace players.** Shots are now attributed to a server-owned profile
   (a person *or* a place) with a stable id, persisted to
   `~/.config/openflight/profiles.json` (override with `OPENFLIGHT_PROFILES_PATH`
@@ -167,8 +147,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from out-to-in swings but does not support degree-level claims. Ships
   experimental; validate with `scripts/iwr6843/club_path_report.py` before
   trusting it.
+- `scripts/analysis/replay_club_speed.py`: offline replay of a proposed
+  MEDIAN club-speed picker against any session log. Builds the same
+  candidate set the production picker uses, applies a 30 % magnitude
+  floor, and reports the median speed for each `rolling_buffer_capture`
+  alongside the originally logged (magnitude-pick) value, with smash
+  factors as a physical sanity check. The script is exploratory and
+  does not change production behaviour — it lets us inspect what a
+  median-based picker would have produced before committing to a code
+  change.
+- `scripts/analysis/plot_spin_debug.py`: 4-panel diagnostic for a single
+  `rolling_buffer_capture` (speed timeline, raw I/Q, bandpass envelope,
+  envelope FFT spectrum) to inspect what the spin algorithm saw and why
+  it accepted or rejected a shot.
+- K-LD7 shot-correlation analysis workflow and theory writeup
+  - `scripts/analyze_kld7.py --pair-shots` for offline club-to-ball pairing on `.pkl` captures
+  - `docs/kld7-ball-detection-theory.md` with capture findings and detection rationale
+- K-LD7 session-review workflow for full JSONL logs
+  - `scripts/review_kld7_session.py` for per-shot profile review on `session_logs/session_*.jsonl`
+  - `docs/kld7-session-review.md` documenting the empirical review method and outputs
+- Persistent rolling buffer mode workaround for OPS243-A HOST_INT pin bug (per OmniPreSense)
+  - `persist_rolling_buffer_mode()` method saves settings to flash memory
+  - `test_rolling_buffer_persist.py` script for one-time radar setup and verification
+  - Rolling buffer + sound trigger is now the default operating mode
+- Grafana Alloy integration for shipping session logs to Grafana Cloud Loki
+  - Setup script (`scripts/setup_alloy.sh`) and config (`config/alloy.alloy`)
+  - Auto-starts with `start-kiosk.sh` when credentials are configured
+  - Observability documentation with LogQL query examples
+- Launch angle estimation from club type and ball speed (fallback when camera unavailable)
+- Tunable Hough circle detection with all 5 parameters as CLI args (`--hough-param1`, `--hough-param2`, `--hough-min-radius`, `--hough-max-radius`, `--hough-min-dist`)
+- Interactive `--tune` mode in `test_launch_angle.py` with live OpenCV trackbar sliders
+- Mock mode now simulates realistic spin and launch angle data (TrackMan-based per-club averages)
+- Sound trigger wiring guide with MOSFET circuit design (`docs/sound-trigger-wiring.md`)
+- Camera integration with real-time ball detection in UI
+- Ball detection indicator in header (shows detection status)
+- Camera tab with live MJPEG stream and detection overlay
+- Hough circle transform as default ball detector (replaces YOLO dependency)
+- ByteTrack object tracking for persistent ball identification
+- Club speed detection and smash factor calculation
+- Rolling buffer mode for experimental spin rate detection
+- Session logging to JSONL files (`~/openflight_sessions/`)
+- I/Q streaming mode with FFT and 2D CFAR noise rejection
+- `--mode rolling-buffer` flag for spin detection
+- `--session-location` and `--log-dir` flags for session logging
+- Roboflow API integration as optional detection backend
+- YOLO performance tuning documentation for Raspberry Pi
+- ONNX model export support for faster inference
+- Threaded camera capture for improved FPS
+- Rolling buffer spin detection documentation
 
 ### Changed
+- **`uv.lock` is committed.** `uv sync` on a Pi now installs the exact
+  dependency tree the release was tested with, and CI fails when the
+  lockfile is stale (`uv lock --check`). Dependabot updates the lockfile
+  through the `uv` ecosystem.
 - Display mode (`/display`) now uses the same metric cards and theme tokens as
   the kiosk Live view.
 - The vertical estimator is now a fixed cascade (two_ray → geometry →
@@ -176,6 +208,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source and confidence semantics changed accordingly.
 - `--experimental-kld7-raw-radc-logging` promoted to `--kld7-raw-logging` (it
   is the standard replay/review path, not an experiment).
+- Spin detection: drop the autocorrelation override branch. The autocorr
+  peak inside the envelope search region often lands at minimum lag
+  (~12000 RPM / upper rail) by spectral coincidence, which previously
+  flipped legitimate mid-range FFT seam picks to the upper rail and got
+  them rejected as bandpass-shoulder noise. The autocorr fallback still
+  *confirms* the FFT pick when the two agree within 10%; disagreements
+  are now logged for diagnostics but never replace the FFT result.
+- Spin detection: lower `SPIN_SNR_MIN` from 3.0 → 2.5 so marginal but
+  real seam tones are reported at low confidence instead of dropped.
+- K-LD7 launch-angle processing now uses OPS243 impact timestamps for live correlation
+- K-LD7 ball-burst selection now prefers coherent far-target paths instead of averaging all far PDAT detections
+- Live K-LD7 vertical launch angles now fall back to the existing club-and-speed estimate when the radar result is an obvious false positive
+- Spin detection improved: Hann windowing, zero-padding to 256 points, band-limited search
+- All shot metrics (spin, launch angle, club speed, carry) always shown in UI
+- Shot logging unified — all metrics in single `shot_detected` entry
+- Shot `mode` and `readings_data` are now proper dataclass fields (no more monkey-patching)
+- Session logging enabled in mock mode for testing Alloy integration
+- Default ball detection uses Hough circles instead of YOLO (no ML model required)
+- Camera enabled by default in kiosk mode (use `--no-camera` to disable)
+- Dropped Python 3.9 support (requires >=3.10)
+- Updated Raspberry Pi setup guide with camera UI and observability instructions
 
 ### Removed
 - `--kld7-vertical-estimator` (estimator is a fixed cascade), `--kld7-geometry`
@@ -183,6 +236,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--kld7-bypass-vertical-gate` renamed to `--kld7-vertical-raw`.
 
 ### Fixed
+- **On-screen keyboard for profile names.** Adding or renaming a profile on the
+  Pi kiosk now shows a full-screen keyboard. Chromium in `--kiosk` mode does not
+  surface a system keyboard, so the native text field was unusable on the
+  touchscreen.
+- **Clear-session confirmation is a modal again.** The overlay, scrim, and
+  centered dialog styles were missing after the class-name rename, so at the
+  800×480 kiosk size the prompt rendered as inline page content.
+- **Attack angle no longer inflated by 1/cos(club path).** The camera club
+  delivery divided vertical speed by the forward component alone instead of the
+  full horizontal speed, overstating attack angle on any shot with club path.
 - **Graceful IWR6843 shutdown.** Kiosk shutdown now asks the server to finish
   hardware cleanup before escalating to process signals. An active TI dump is
   allowed to complete, capture firmware is stopped and verified inactive, and
@@ -268,7 +331,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   captures never computed the fast-time models.
 
 ### Known Limitations
-
 Deferred pending a session paired with a reference instrument. See
 [the IWR6843 operator guide](iwr6843/README.md#launch-angle-estimator-limitations).
 
@@ -287,81 +349,6 @@ Deferred pending a session paired with a reference instrument. See
   selecting, 7.93° on the disagreeing subset. The 8° gate's justification is a
   gap between one shot at 4.59° and six at 15.9–20.2°, from a single session,
   club, geometry and tilt.
-
-### Changed
-- Spin detection: drop the autocorrelation override branch. The autocorr
-  peak inside the envelope search region often lands at minimum lag
-  (~12000 RPM / upper rail) by spectral coincidence, which previously
-  flipped legitimate mid-range FFT seam picks to the upper rail and got
-  them rejected as bandpass-shoulder noise. The autocorr fallback still
-  *confirms* the FFT pick when the two agree within 10%; disagreements
-  are now logged for diagnostics but never replace the FFT result.
-- Spin detection: lower `SPIN_SNR_MIN` from 3.0 → 2.5 so marginal but
-  real seam tones are reported at low confidence instead of dropped.
-
-### Added
-- `scripts/analysis/replay_club_speed.py`: offline replay of a proposed
-  MEDIAN club-speed picker against any session log. Builds the same
-  candidate set the production picker uses, applies a 30 % magnitude
-  floor, and reports the median speed for each `rolling_buffer_capture`
-  alongside the originally logged (magnitude-pick) value, with smash
-  factors as a physical sanity check. The script is exploratory and
-  does not change production behaviour — it lets us inspect what a
-  median-based picker would have produced before committing to a code
-  change.
-- `scripts/analysis/plot_spin_debug.py`: 4-panel diagnostic for a single
-  `rolling_buffer_capture` (speed timeline, raw I/Q, bandpass envelope,
-  envelope FFT spectrum) to inspect what the spin algorithm saw and why
-  it accepted or rejected a shot.
-- K-LD7 shot-correlation analysis workflow and theory writeup
-  - `scripts/analyze_kld7.py --pair-shots` for offline club-to-ball pairing on `.pkl` captures
-  - `docs/kld7-ball-detection-theory.md` with capture findings and detection rationale
-- K-LD7 session-review workflow for full JSONL logs
-  - `scripts/review_kld7_session.py` for per-shot profile review on `session_logs/session_*.jsonl`
-  - `docs/kld7-session-review.md` documenting the empirical review method and outputs
-- Persistent rolling buffer mode workaround for OPS243-A HOST_INT pin bug (per OmniPreSense)
-  - `persist_rolling_buffer_mode()` method saves settings to flash memory
-  - `test_rolling_buffer_persist.py` script for one-time radar setup and verification
-  - Rolling buffer + sound trigger is now the default operating mode
-- Grafana Alloy integration for shipping session logs to Grafana Cloud Loki
-  - Setup script (`scripts/setup_alloy.sh`) and config (`config/alloy.alloy`)
-  - Auto-starts with `start-kiosk.sh` when credentials are configured
-  - Observability documentation with LogQL query examples
-- Launch angle estimation from club type and ball speed (fallback when camera unavailable)
-- Tunable Hough circle detection with all 5 parameters as CLI args (`--hough-param1`, `--hough-param2`, `--hough-min-radius`, `--hough-max-radius`, `--hough-min-dist`)
-- Interactive `--tune` mode in `test_launch_angle.py` with live OpenCV trackbar sliders
-- Mock mode now simulates realistic spin and launch angle data (TrackMan-based per-club averages)
-- Sound trigger wiring guide with MOSFET circuit design (`docs/sound-trigger-wiring.md`)
-- Camera integration with real-time ball detection in UI
-- Ball detection indicator in header (shows detection status)
-- Camera tab with live MJPEG stream and detection overlay
-- Hough circle transform as default ball detector (replaces YOLO dependency)
-- ByteTrack object tracking for persistent ball identification
-- Club speed detection and smash factor calculation
-- Rolling buffer mode for experimental spin rate detection
-- Session logging to JSONL files (`~/openflight_sessions/`)
-- I/Q streaming mode with FFT and 2D CFAR noise rejection
-- `--mode rolling-buffer` flag for spin detection
-- `--session-location` and `--log-dir` flags for session logging
-- Roboflow API integration as optional detection backend
-- YOLO performance tuning documentation for Raspberry Pi
-- ONNX model export support for faster inference
-- Threaded camera capture for improved FPS
-- Rolling buffer spin detection documentation
-
-### Changed
-- K-LD7 launch-angle processing now uses OPS243 impact timestamps for live correlation
-- K-LD7 ball-burst selection now prefers coherent far-target paths instead of averaging all far PDAT detections
-- Live K-LD7 vertical launch angles now fall back to the existing club-and-speed estimate when the radar result is an obvious false positive
-- Spin detection improved: Hann windowing, zero-padding to 256 points, band-limited search
-- All shot metrics (spin, launch angle, club speed, carry) always shown in UI
-- Shot logging unified — all metrics in single `shot_detected` entry
-- Shot `mode` and `readings_data` are now proper dataclass fields (no more monkey-patching)
-- Session logging enabled in mock mode for testing Alloy integration
-- Default ball detection uses Hough circles instead of YOLO (no ML model required)
-- Camera enabled by default in kiosk mode (use `--no-camera` to disable)
-- Dropped Python 3.9 support (requires >=3.10)
-- Updated Raspberry Pi setup guide with camera UI and observability instructions
 
 ## [0.2.0] - 2024-12-01
 
@@ -391,6 +378,6 @@ Deferred pending a session paired with a reference instrument. See
 - Python API for integration
 - Carry distance estimation based on ball speed
 
-[Unreleased]: https://github.com/jewbetcha/openflight/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/jewbetcha/openflight/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/jewbetcha/openflight/releases/tag/v0.1.0
+[Unreleased]: https://github.com/open-flight/openflight/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/open-flight/openflight/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/open-flight/openflight/releases/tag/v0.1.0
