@@ -1,0 +1,12 @@
+[Unit]
+Description=OpenFlight updater (stage the newest release on the selected channel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=coleman
+WorkingDirectory=/home/coleman/openflight
+# Runs through the install link, so it always uses the current release's venv.
+ExecStart=/home/coleman/openflight/.venv/bin/openflight-update check
+Nice=10

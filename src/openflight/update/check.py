@@ -5,14 +5,17 @@ and prepares the candidate, and the launcher applies it on the next start.
 """
 
 import logging
+import subprocess
 from datetime import datetime, timezone
 from typing import Callable, Iterable, Optional, Tuple
 
 from ..release import ReleaseInfo, get_release_info
 from .config import load_update_config
 from .github import GitHubReleases, ReleaseLookupError, RemoteRelease
+from .layout import InstallLayout, UpdateBusy, locked, prune, remove_symlink
 from .paths import UpdatePaths
-from .status import read_check_status, write_check_status
+from .stage import StageError, stage_release
+from .status import CheckStatus, read_check_status, write_check_status
 from .version import parse_version
 
 logger = logging.getLogger(__name__)
@@ -70,6 +73,7 @@ def run_check(
     installed: Optional[ReleaseInfo] = None,
     github_factory: Callable[[str], GitHubReleases] = GitHubReleases,
     now: Callable[[], str] = utc_now_iso,
+    run: Callable = subprocess.run,
 ) -> int:
     """Record what is available for the configured channel; exit code for the CLI."""
     installed = installed or get_release_info()
@@ -98,16 +102,70 @@ def run_check(
         return 0
 
     candidate, why = select_candidate(installed, config.channel, remote, status.bad_tags)
+    layout = InstallLayout(paths.install_link, paths.releases_root)
+    managed = layout.is_managed()
     if candidate is None:
         status.state = "held_back" if why == WHY_HELD_BACK else "up_to_date"
         if why == WHY_HELD_BACK and remote is not None:
             status.available = _available(remote)
         write_check_status(status, paths.status)
+        if managed:
+            _drop_stale_staged(layout, keep=None)
         logger.info("No update to stage (%s)", why)
         return 0
 
-    status.state = "up_to_date"
     status.available = _available(candidate)
+    if not managed:
+        status.state = "up_to_date"
+        write_check_status(status, paths.status)
+        logger.info("%s is available but this install is not managed; not staging", candidate.tag)
+        return 0
+    return _stage(layout, paths, status, candidate, config.repository, github_factory, run)
+
+
+def _drop_stale_staged(layout: InstallLayout, keep: Optional[str]) -> None:
+    staged = layout.staged_target()
+    if staged is None or staged.name == keep:
+        return
+    try:
+        with locked(layout):
+            remove_symlink(layout.staged_link)
+            prune(layout)
+    except UpdateBusy:
+        return
+    logger.info("Dropped stale staged release %s", staged.name)
+
+
+def _stage(layout, paths, status: CheckStatus, candidate, repository, github_factory, run) -> int:
+    staged = layout.staged_target()
+    if staged is not None and staged.name == candidate.tag and staged.is_dir():
+        status.state = "up_to_date"
+        write_check_status(status, paths.status)
+        logger.info("%s is already staged", candidate.tag)
+        return 0
+    _drop_stale_staged(layout, keep=candidate.tag)
+
+    def on_state(state: str) -> None:
+        status.state = state
+        write_check_status(status, paths.status)
+
+    try:
+        with locked(layout):
+            stage_release(layout, candidate, github_factory(repository), run=run, on_state=on_state)
+    except UpdateBusy as error:
+        logger.info("Skipping: %s", error)
+        status.state = "up_to_date"
+        write_check_status(status, paths.status)
+        return 0
+    except StageError as error:
+        status.state = "failed"
+        status.error = str(error)
+        if error.kind == "unsupported_release":
+            status.mark_bad(candidate.tag)
+        write_check_status(status, paths.status)
+        logger.error("Staging %s failed: %s", candidate.tag, error)
+        return 1
+    status.state = "up_to_date"
     write_check_status(status, paths.status)
-    logger.info("%s is available on the %s channel (%s)", candidate.tag, config.channel, why)
+    logger.info("%s is staged and will be applied on the next start", candidate.tag)
     return 0

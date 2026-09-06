@@ -1,8 +1,13 @@
 """``openflight-update`` command-line entry point.
 
 openflight-update status [--json]              # what is installed, staged, available
-openflight-update check                        # look for a newer release on the channel
+openflight-update check                        # stage the newest release on the channel
 openflight-update set-channel stable|experimental|off
+openflight-update apply [--if-staged]          # swap the install link to the staged release
+openflight-update confirm                      # the swapped release started fine
+openflight-update rollback [--reason TEXT]     # it did not; go back to the previous one
+openflight-update migrate                      # turn this checkout into a managed install
+openflight-update prune                        # delete release trees no link points at
 """
 
 import argparse
@@ -13,6 +18,7 @@ from typing import List, Optional
 
 from ..release import get_release_info
 from .config import UpdateConfig, load_update_config, save_update_config, validate_channel
+from .layout import InstallLayout, UpdateError, locked, migrate_install, prune
 from .paths import resolve_update_paths
 from .status import compose_update_status
 
@@ -48,6 +54,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     set_channel.add_argument("channel", choices=["stable", "experimental", "off"])
     set_channel.add_argument("--repository", default=None, help="GitHub owner/name to follow.")
+
+    apply = sub.add_parser("apply", parents=[common], help="Swap to the staged release.")
+    apply.add_argument(
+        "--if-staged", action="store_true", help="Stay quiet when nothing is staged."
+    )
+    sub.add_parser("confirm", parents=[common], help="Mark the applied release as working.")
+    rollback = sub.add_parser("rollback", parents=[common], help="Return to the previous release.")
+    rollback.add_argument("--reason", default="rollback requested", help="Recorded in the status.")
+    rollback.add_argument(
+        "--force", action="store_true", help="Roll back even when nothing is pending."
+    )
+    sub.add_parser("migrate", parents=[common], help="Turn this checkout into a managed install.")
+    sub.add_parser("prune", parents=[common], help="Delete release trees no link points at.")
     return parser
 
 
@@ -91,6 +110,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         return run_check(paths, installed=installed)
 
+    layout = InstallLayout(paths.install_link, paths.releases_root)
+    try:
+        if args.command in ("apply", "confirm", "rollback", "migrate", "prune"):
+            return _run_layout_command(args, layout, paths)
+    except UpdateError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return EXIT_ERROR
+
     if args.command == "set-channel":
         channel = validate_channel(None if args.channel == "off" else args.channel)
         existing = load_update_config(paths.config, installed)
@@ -101,6 +128,42 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     parser.print_help()
     return EXIT_ERROR
+
+
+def _run_layout_command(args, layout: InstallLayout, paths) -> int:
+    from . import apply as apply_module  # pylint: disable=import-outside-toplevel
+
+    if args.command == "apply":
+        applied = apply_module.apply_staged(layout)
+        if applied is None:
+            if not args.if_staged:
+                print("Nothing is staged")
+            return EXIT_NOTHING_TO_DO
+        print(f"Applied {applied}; restart OpenFlight to run it")
+        return EXIT_OK
+    if args.command == "confirm":
+        if apply_module.confirm_applied(layout):
+            print("Confirmed the current release")
+            return EXIT_OK
+        print("Nothing to confirm")
+        return EXIT_NOTHING_TO_DO
+    if args.command == "rollback":
+        failed = apply_module.rollback_pending(
+            layout, paths.status, reason=args.reason, force=args.force
+        )
+        if failed is None:
+            print("Nothing to roll back")
+            return EXIT_NOTHING_TO_DO
+        print(f"Rolled back {failed}; the previous release runs on the next start")
+        return EXIT_OK
+    if args.command == "migrate":
+        target = migrate_install(layout)
+        print(f"{layout.install_link} -> {target}")
+        return EXIT_OK
+    with locked(layout):
+        removed = prune(layout)
+    print(f"Removed {len(removed)} item(s)")
+    return EXIT_OK
 
 
 if __name__ == "__main__":  # pragma: no cover

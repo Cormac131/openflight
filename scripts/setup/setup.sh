@@ -8,6 +8,7 @@
 #   - K-LD7 device naming + FTDI low-latency rules
 #   - Optional battery-provider telemetry
 #   - Auto-start on boot (systemd service)
+#   - Automatic updates from a release channel (systemd timer)
 #   - Desktop shortcut
 #
 # Usage:
@@ -281,6 +282,34 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
         info "Manage it with: sudo systemctl {start|stop|status} openflight"
     else
         info "Skipped. See docs/raspberry-pi-setup.md → Auto-Start on Boot."
+    fi
+
+    # --- Automatic updates (opt-in) ---
+    echo ""
+    info "Automatic updates download new releases in the background and install"
+    info "them the next time OpenFlight starts. $PROJECT_DIR becomes a link into"
+    info "${PROJECT_DIR}-releases/; this checkout is kept there as a release."
+    echo ""
+    if confirm "Enable automatic updates for this Pi?" "N"; then
+        channel="stable"
+        if confirm "Follow the experimental channel (every merge to main) instead of stable?" "N"; then
+            channel="experimental"
+        fi
+        if openflight-update migrate --install-link "$PROJECT_DIR" && openflight-update set-channel "$channel"; then
+            for unit in openflight-update.service openflight-update.timer; do
+                sed -e "s|^User=.*|User=$USER|" \
+                    -e "s|/home/coleman/openflight|$PROJECT_DIR|g" \
+                    "$SCRIPT_DIR/$unit" | sudo tee "/etc/systemd/system/$unit" > /dev/null
+            done
+            sudo systemctl daemon-reload
+            sudo systemctl enable --now openflight-update.timer
+            log "Automatic updates enabled on the $channel channel ✓"
+            info "Check with: openflight-update status"
+        else
+            warn "Automatic updates were not enabled; see docs/auto-update.md"
+        fi
+    else
+        info "Skipped. Re-run this script to enable, or see docs/auto-update.md"
     fi
 
     # --- Desktop shortcut ---

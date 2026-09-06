@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Staged updates and rollback (auto-update stage 2, part 2).**
+  `openflight-update check` now downloads the channel's newest release,
+  verifies its checksum, prepares it beside the running install
+  (`~/openflight-releases/<tag>/` with its own `.venv`), and points a
+  `staged` link at it; `apply` swaps the `~/openflight` link, `confirm` and
+  `rollback` finish or undo the swap, and `migrate` turns an existing
+  checkout into a managed install. `scripts/setup/setup.sh` offers to enable
+  it and installs `openflight-update.timer` (every ~6 h). See
+  [docs/auto-update.md](auto-update.md).
 - **`openflight-update` preference, lookup and status (auto-update stage 2,
   part 1).** A new `openflight.update` package records which release channel
   a Pi follows (`~/.config/openflight/update.json`, set with
