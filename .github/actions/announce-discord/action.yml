@@ -13,9 +13,8 @@ inputs:
     required: false
     default: "false"
   source:
-    description: Which secret supplied the webhook, for the log line
-    required: false
-    default: "DISCORD_RELEASE_WEBHOOK_URL"
+    description: Name of the secret that supplies the webhook, for log lines
+    required: true
 runs:
   using: composite
   steps:
@@ -32,7 +31,7 @@ runs:
           exit 0
         fi
         if [ -z "$WEBHOOK_URL" ]; then
-          echo "::warning::No Discord webhook secret is set; skipping the announcement"
+          echo "::warning::$SOURCE is not set; skipping the Discord announcement"
           exit 0
         fi
         echo "Posting the announcement using $SOURCE"
