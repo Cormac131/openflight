@@ -4,6 +4,7 @@
 
 import type { Server, Socket } from 'socket.io';
 import type { RadarConfig } from '../src/types/socket.js';
+import type { UpdateState } from '../src/types/update.js';
 import type { MockSession } from './session.js';
 
 const BALL_DETECTION_INTERVAL_MS = 1500;
@@ -26,6 +27,7 @@ export function registerHandlers(io: Server, session: MockSession): void {
     console.log('[mock-server] client connected');
 
     socket.emit('release_info', session.releaseInfo());
+    socket.emit('update_status', session.updateStatus());
     socket.emit('session_state', session.sessionStatePayload(true));
     socket.emit('profiles', session.snapshot());
     socket.emit('trigger_status', session.triggerStatus());
@@ -159,6 +161,57 @@ export function registerHandlers(io: Server, session: MockSession): void {
 
     socket.on('toggle_camera_stream', () => {
       io.emit('camera_status', session.toggleCameraStream());
+    });
+
+    socket.on('get_update_status', () => {
+      socket.emit('update_status', session.updateStatus());
+    });
+
+    // Walk the real states with delays so the menu row and chips can be watched.
+    const runUpdateCheck = () => {
+      const steps: Array<[UpdateState, number]> = [
+        ['checking', 0],
+        ['downloading', 800],
+        ['staging', 1600],
+        ['staged', 2400],
+      ];
+      for (const [state, delay] of steps) {
+        setTimeout(() => {
+          session.updateState = state;
+          io.emit('update_status', session.updateStatus());
+        }, delay);
+      }
+    };
+
+    socket.on('set_update_channel', (data: { channel?: string }) => {
+      const channel = data?.channel;
+      if (channel !== 'stable' && channel !== 'experimental' && channel !== 'off') {
+        socket.emit('update_error', { action: 'set_update_channel', reason: 'invalid_channel' });
+        return;
+      }
+      session.updateChannel = channel === 'off' ? null : channel;
+      if (session.updateChannel === null) {
+        io.emit('update_status', session.updateStatus());
+        return;
+      }
+      runUpdateCheck();
+    });
+
+    socket.on('check_for_updates', () => {
+      runUpdateCheck();
+    });
+
+    socket.on('apply_update', () => {
+      if (session.updateState !== 'staged') {
+        socket.emit('update_error', { action: 'apply_update', reason: 'nothing_staged' });
+        return;
+      }
+      session.updateState = 'restarting';
+      io.emit('update_status', session.updateStatus());
+      setTimeout(() => {
+        session.updateState = 'up_to_date';
+        io.emit('update_status', session.updateStatus());
+      }, 2500);
     });
 
     socket.on('disconnect', () => {

@@ -10,10 +10,12 @@ import { ballDetectionStatusLabel } from '../../utils/ballDetectionStatus';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { SimStatus } from '../SimStatus';
 import { releaseVersionLabel } from '../../utils/releaseLabel';
+import { UpdatesSection } from './UpdatesSection';
 
 interface MenuSheetProps {
   onClose: () => void;
   onShutdown: () => void;
+  onRestartToUpdate: () => void;
 }
 
 /**
@@ -24,9 +26,10 @@ interface MenuSheetProps {
  * and ball-detection state had nowhere else to go. Battery lives in the footer.
  * Socket connection lives on the panel header LED.
  */
-export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
+export function MenuSheet({ onClose, onShutdown, onRestartToUpdate }: MenuSheetProps) {
   const simStatuses = useSystemStore((state) => state.simStatuses);
   const releaseInfo = useSystemStore((state) => state.releaseInfo);
+  const updateStatus = useSystemStore((state) => state.updateStatus);
   const cameraStatus = useCameraStore((state) => state.cameraStatus);
   const { t } = useI18n();
   const { unitSystem, setUnitSystem } = useUnitPreference();
@@ -104,6 +107,13 @@ export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
             <span className="menu-sheet__status-value">{versionValue}</span>
           </div>
         </section>
+
+        <UpdatesSection
+          status={updateStatus}
+          onSetChannel={(channel) => socketService.setUpdateChannel(channel)}
+          onCheck={() => socketService.checkForUpdates()}
+          onRestartToUpdate={onRestartToUpdate}
+        />
 
         <button type="button" className="menu-sheet__shutdown" onClick={onShutdown}>
           {t('menu.shutdown')}

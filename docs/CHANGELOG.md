@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Release channel and restart-to-update in the kiosk menu (auto-update
+  stage 2, part 5).** The menu gains an Updates section: a Stable /
+  Experimental / Off channel control (hidden on installs the updater does not
+  manage), a status row fed by `update_status`, "Check now", and "Restart to
+  update" once a release is staged. Restarting confirms in a dialog, shows
+  progress while the server exits, and explains a "busy" refusal. The
+  shutdown and update dialogs now share one `ActionDialog`.
 - **Update status and restart-to-update over the WebSocket (auto-update
   stage 2, part 4).** The server emits `update_status` on connect and after
   each check, and accepts `set_update_channel`, `check_for_updates` and

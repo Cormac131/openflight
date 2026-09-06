@@ -84,6 +84,16 @@ Releases published before the updater existed are refused
 Any other server exit status now runs `cleanup` (closing the kiosk window)
 and is passed through as the launcher's exit status.
 
+### The kiosk menu
+
+The footer menu's **Updates** section shows the channel control (Stable /
+Experimental / Off; hidden while the install is `unmanaged`), the status
+line, **Check now**, and **Restart to update** once a release is staged.
+Restart asks for confirmation, then shows progress until the window closes;
+if a shot is still in flight the server answers `busy` and the dialog says
+so. The `npm run dev` mock server plays a staged install so every control can
+be tried without a Pi.
+
 ### The server's part
 
 `openflight-server` never swaps anything. Over the WebSocket it:

@@ -13,6 +13,8 @@ import {
 import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
 import type { PowerStatus } from '../types/power';
 import type { ReleaseInfo } from '../types/release';
+import type { UpdateError, UpdateStatus } from '../types/update';
+import type { UpdateChannelValue } from '../utils/updateLabel';
 import { getServerOrigin } from '../utils/serverOrigin';
 import { handleShotMessage, handleShotUpdate, type ShotMessage, type ShotUpdateMessage } from './handleShotMessage';
 import { ingestSessionClub } from './sessionClubSync';
@@ -54,6 +56,7 @@ class SocketService {
       this.socket?.emit('get_radar_config');
       this.socket?.emit('get_camera_capture_settings');
       this.socket?.emit('get_profiles');
+      this.socket?.emit('get_update_status');
     });
 
     this.socket.on('disconnect', () => {
@@ -95,6 +98,15 @@ class SocketService {
 
     this.socket.on('release_info', (data: ReleaseInfo) => {
       useSystemStore.getState().setReleaseInfo(data);
+    });
+
+    this.socket.on('update_status', (data: UpdateStatus) => {
+      useSystemStore.getState().setUpdateStatus(data);
+    });
+
+    this.socket.on('update_error', (data: UpdateError) => {
+      console.warn(`Update ${data.action} rejected: ${data.reason}`);
+      useSystemStore.getState().setUpdateError(data);
     });
 
     this.socket.on('sim_shot', (data: SimShotInfo) => {
@@ -291,6 +303,25 @@ class SocketService {
 
   setCameraCaptureSettings(settings: Partial<CameraCaptureSettings>) {
     this.socket?.emit('set_camera_capture_settings', settings);
+  }
+
+  getUpdateStatus() {
+    this.socket?.emit('get_update_status');
+  }
+
+  setUpdateChannel(channel: UpdateChannelValue) {
+    useSystemStore.getState().setUpdateError(null);
+    this.socket?.emit('set_update_channel', { channel });
+  }
+
+  checkForUpdates() {
+    useSystemStore.getState().setUpdateError(null);
+    this.socket?.emit('check_for_updates');
+  }
+
+  applyUpdate() {
+    useSystemStore.getState().setUpdateError(null);
+    this.socket?.emit('apply_update');
   }
 }
 
