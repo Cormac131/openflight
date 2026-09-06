@@ -7,7 +7,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 DEFAULT_STARTUP_LOG_PATH = str(Path.home() / "openflight_sessions" / "terminal_logs")
 
@@ -84,7 +84,8 @@ def initialize_startup_status(
     reporter.start("server", "Preparing OpenFlight server")
 
 
-def _atomic_write_payload(path: Path, payload: dict) -> None:
+def write_json_atomically(path: Path, payload: dict, *, indent: Optional[int] = None) -> None:
+    """Write ``payload`` as JSON via a temp file and rename, so readers never see a partial file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = None
     try:
@@ -95,7 +96,10 @@ def _atomic_write_payload(path: Path, payload: dict) -> None:
             prefix=f".{path.name}.",
             delete=False,
         ) as temporary:
-            json.dump(payload, temporary, separators=(",", ":"))
+            if indent is None:
+                json.dump(payload, temporary, separators=(",", ":"))
+            else:
+                json.dump(payload, temporary, indent=indent)
             temporary.write("\n")
             temporary_path = Path(temporary.name)
         os.replace(temporary_path, path)
@@ -120,7 +124,7 @@ def complete_startup_status(path: Path | str) -> None:
     server["state"] = "ready"
     payload["overall"] = "ready"
     payload["message"] = "OpenFlight is ready"
-    _atomic_write_payload(status_path, payload)
+    write_json_atomically(status_path, payload)
 
 
 def fail_startup_status(
@@ -152,7 +156,7 @@ def fail_startup_status(
     payload["overall"] = "error"
     payload["message"] = message
     payload["error"] = {"recovery": recovery, "log_path": log_path}
-    _atomic_write_payload(status_path, payload)
+    write_json_atomically(status_path, payload)
     return True
 
 
@@ -223,7 +227,7 @@ class StartupStatusReporter:
         }
         if self._error is not None:
             payload["error"] = self._error
-        _atomic_write_payload(self._path, payload)
+        write_json_atomically(self._path, payload)
 
 
 def main() -> None:

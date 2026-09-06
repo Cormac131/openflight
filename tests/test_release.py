@@ -259,6 +259,30 @@ class TestSourceFallback:
         assert release.source_release_info(tmp_path, base_version="0.3.0").commit is None
 
 
+class TestParseReleaseTag:
+    @pytest.mark.parametrize(
+        ("tag", "base", "dev", "channel"),
+        [
+            ("v0.3.0", "0.3.0", None, "stable"),
+            ("v0.3.0-dev.42", "0.3.0", 42, "experimental"),
+            ("v10.2.1-dev.0", "10.2.1", 0, "experimental"),
+        ],
+    )
+    def test_splits_base_version_and_dev_number(self, tag, base, dev, channel):
+        parsed = release.parse_release_tag(tag)
+
+        assert parsed.base_version == base
+        assert parsed.dev == dev
+        assert parsed.channel == channel
+        assert f"v{parsed.version}" == tag
+
+    @pytest.mark.parametrize(
+        "tag", ["0.3.0", "v0.3", "v0.3.0-rc.1", "v0.3.0-dev", "v0.3.0+abc", ""]
+    )
+    def test_rejects_non_release_tags(self, tag):
+        assert release.parse_release_tag(tag) is None
+
+
 class TestGetReleaseInfo:
     def test_resolves_once_and_caches(self, monkeypatch):
         calls = []

@@ -24,9 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Sequence
 
-from openflight.release import RELEASE_CHANNELS, RELEASE_FILE_NAME, ReleaseInfo
+from openflight.release import RELEASE_CHANNELS, RELEASE_FILE_NAME, ReleaseInfo, parse_release_tag
 
-TAG_RE = re.compile(r"^v(?P<base>\d+\.\d+\.\d+)(?P<dev>-dev\.\d+)?$")
 VERSION_LINE_RE = re.compile(r'^__version__ = "(?P<version>[^"]+)"$', re.MULTILINE)
 
 
@@ -40,15 +39,14 @@ def artifact_name(tag: str) -> str:
 
 def parse_tag(tag: str, channel: str) -> str:
     """Return the version encoded in ``tag`` after checking it matches ``channel``."""
-    match = TAG_RE.match(tag)
-    if not match:
+    parsed = parse_release_tag(tag)
+    if parsed is None:
         raise ArtifactError(f"{tag!r} is not vX.Y.Z or vX.Y.Z-dev.N")
     if channel not in RELEASE_CHANNELS:
         raise ArtifactError(f"channel must be one of {', '.join(RELEASE_CHANNELS)}")
-    is_dev = match.group("dev") is not None
-    if is_dev != (channel == "experimental"):
+    if parsed.channel != channel:
         raise ArtifactError(f"{tag} does not belong to the {channel} channel")
-    return tag[1:]
+    return parsed.version
 
 
 def read_base_version(repo_root: Path) -> str:

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`openflight-update` preference, lookup and status (auto-update stage 2,
+  part 1).** A new `openflight.update` package records which release channel
+  a Pi follows (`~/.config/openflight/update.json`, set with
+  `openflight-update set-channel stable|experimental|off`), looks up the
+  newest release for that channel on GitHub (`openflight-update check`), and
+  reports what is installed, available and staged (`openflight-update
+  status [--json]`, backed by `~/.config/openflight/update-status.json`).
+  Nothing is downloaded or installed yet; staging and applying follow.
 - **Electron kiosk shell.** `scripts/start-kiosk.sh` now opens the UI in a pinned
   Electron window (`electron@44`) instead of whichever system browser happens to
   be installed. Chromium remains a fallback if Electron is not installed (including
