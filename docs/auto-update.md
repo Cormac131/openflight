@@ -84,6 +84,25 @@ Releases published before the updater existed are refused
 Any other server exit status now runs `cleanup` (closing the kiosk window)
 and is passed through as the launcher's exit status.
 
+### The server's part
+
+`openflight-server` never swaps anything. Over the WebSocket it:
+
+- emits `update_status` (the composed status above) on connect, on
+  `get_update_status`, and whenever a check it started finishes;
+- accepts `set_update_channel {channel: stable|experimental|off}`,
+  `check_for_updates` and `apply_update` **only from the kiosk on the
+  device**: the peer address must be loopback and the `Origin` header, when
+  present, must name `localhost`, `127.0.0.1` or `::1`. Anything else gets
+  `update_error {action, reason: "forbidden"}`;
+- runs checks as a detached `python -m openflight.update check` (log in
+  `~/openflight_sessions/terminal_logs/update.log`), at most one at a time
+  and, for `check_for_updates`, at most every 30 s (`throttled`);
+- on `apply_update` refuses with `nothing_staged` or `busy` (a shot is being
+  finalized or enriched, or one happened within the last 30 s), otherwise
+  emits `update_status` with `state: "restarting"`, releases the hardware and
+  exits with status 75 so the launcher applies the staged release.
+
 ## Commands
 
 | Command | Purpose | Exit |

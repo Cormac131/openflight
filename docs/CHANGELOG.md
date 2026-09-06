@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Update status and restart-to-update over the WebSocket (auto-update
+  stage 2, part 4).** The server emits `update_status` on connect and after
+  each check, and accepts `set_update_channel`, `check_for_updates` and
+  `apply_update` from the kiosk on the device only (loopback peer and
+  loopback `Origin`; anything else is answered with `update_error
+  forbidden`). `apply_update` waits for an idle moment (no shot in flight,
+  none in the last 30 s), then exits with status 75 so the launcher swaps
+  to the staged release.
 - **Launcher applies staged updates (auto-update stage 2, part 3).**
   `scripts/start-kiosk.sh` now applies a staged release right after taking
   its instance lock and relaunches itself from the new tree, confirms the
