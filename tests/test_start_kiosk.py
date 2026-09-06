@@ -582,10 +582,13 @@ def test_kiosk_shell_scripts_use_unix_newlines():
         "scripts/start-kiosk.sh",
         "scripts/ensure-kiosk-ui.sh",
         "scripts/kiosk-browser.sh",
+        "scripts/kiosk-update.sh",
         "scripts/require-node.sh",
     ):
         data = (repo_root / relative).read_bytes()
-        assert b"\r" not in data, f"{relative} must use LF newlines so sourced path checks match on the Pi"
+        assert b"\r" not in data, (
+            f"{relative} must use LF newlines so sourced path checks match on the Pi"
+        )
 
 
 def test_ui_is_ensured_before_the_kiosk_browser_launches():
@@ -692,7 +695,12 @@ def _run_ensure_kiosk_ui(
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
     for name in ("ensure-kiosk-ui.sh", "require-node.sh"):
-        text = (repo_scripts / name).read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        text = (
+            (repo_scripts / name)
+            .read_text(encoding="utf-8")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+        )
         (scripts_dir / name).write_bytes(text.encode("utf-8"))
     project_dir = tmp_path / "project"
     ui_dir = project_dir / "ui"
@@ -738,7 +746,7 @@ def _run_ensure_kiosk_ui(
                 '  printf \'FAILURE component=%s message=%s\\n\' "$1" "$2"',
                 "  exit 42",
                 "}",
-                '# shellcheck source=/dev/null',
+                "# shellcheck source=/dev/null",
                 'source "$SCRIPT_DIR/ensure-kiosk-ui.sh"',
                 "ensure_kiosk_ui",
                 "printf 'CONTINUED\\n'",
@@ -1022,7 +1030,7 @@ def test_instance_lock_is_taken_after_dry_run_and_before_any_side_effect():
 
     assert dry_run_idx < lock_idx < ensure_idx < splash_idx
     guard = script[script.index("acquire_instance_lock() {") : lock_idx]
-    assert "flock -n" in guard
+    assert "flock_args=(-n)" in guard
     assert "exit 3" in guard
     # The default path must not depend on XDG_RUNTIME_DIR: a system service and
     # a desktop session have different runtime dirs but must share one lock.

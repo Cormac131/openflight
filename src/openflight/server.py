@@ -11,6 +11,7 @@ import os
 import queue
 import random
 import statistics
+import subprocess
 import sys
 import threading
 import time
@@ -53,6 +54,11 @@ from .speed_correction import correct_ball_speed
 from .spin_estimate import calculated_spin_rpm
 from .startup_status import StartupStatusReporter, configured_startup_components
 from .swing_speed import SwingSpeedEvent
+from .update import RESTART_EXIT_CODE
+from .update.config import UpdateConfig, load_update_config, save_update_config, validate_channel
+from .update.local import is_local_kiosk_request
+from .update.paths import resolve_update_paths
+from .update.status import compose_update_status
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -475,13 +481,13 @@ def _cleanup_hardware_for_shutdown() -> bool:
     return True
 
 
-def _shutdown_process_after_delay(delay_s: float = 0.5) -> None:
+def _shutdown_process_after_delay(delay_s: float = 0.5, exit_code: int = 0) -> None:
     """Give the HTTP/WebSocket response time to flush, then clean up and exit."""
     time.sleep(delay_s)
     if not _cleanup_hardware_for_shutdown():
         return
-    logger.info("[SERVER] Goodbye")
-    os._exit(0)
+    logger.info("[SERVER] Goodbye (exit %d)", exit_code)
+    os._exit(exit_code)
 
 
 # Baseline launch angles by club (TrackMan data)
@@ -2334,6 +2340,7 @@ def handle_connect():
     """Handle client connection."""
     print("Client connected")
     socketio.emit("release_info", get_release_info().to_dict())
+    _emit_update_status()
     _emit_sim_snapshot()
     _emit_profiles()
     if power_monitor and power_monitor.status:
@@ -2666,7 +2673,175 @@ def handle_shutdown():
 
 def on_shot_processing(state: str) -> None:
     """Forward the rolling-buffer processing lifecycle to the UI."""
+    _note_shot_activity()
     socketio.emit("shot_processing", {"state": state})
+
+
+# --- On-device updates -------------------------------------------------------
+# The updater CLI does the work; the server only reports its status and, for
+# the kiosk on this device, records the channel, starts a check, or exits with
+# RESTART_EXIT_CODE so the launcher swaps to the staged release.
+
+UPDATE_IDLE_SECONDS = 30.0
+UPDATE_CHECK_MIN_INTERVAL_S = 30.0
+_update_state_lock = threading.Lock()
+_update_last_activity_monotonic = float("-inf")
+_update_last_check_monotonic: float | None = None
+_update_check_process: subprocess.Popen | None = None
+_update_recheck_requested = False
+
+
+def _note_shot_activity() -> None:
+    """Remember that a shot event happened, for the restart-to-update idle gate."""
+    global _update_last_activity_monotonic  # pylint: disable=global-statement
+    _update_last_activity_monotonic = time.monotonic()
+
+
+def _is_idle_for_update() -> bool:
+    """No shot is being finalized or enriched and none happened recently."""
+    with _shot_finalization_condition:
+        if _shot_finalization_running or _shot_finalization_order:
+            return False
+    if not shot_enrichment_queue.empty():
+        return False
+    return time.monotonic() - _update_last_activity_monotonic >= UPDATE_IDLE_SECONDS
+
+
+def _update_status_payload() -> dict:
+    return compose_update_status(resolve_update_paths(), get_release_info())
+
+
+def _emit_update_status(state: str | None = None) -> None:
+    try:
+        payload = _update_status_payload()
+    except OSError as error:
+        logger.warning("[UPDATE] Could not read update status: %s", error)
+        return
+    if state is not None:
+        payload["state"] = state
+    socketio.emit("update_status", payload)
+
+
+def _emit_update_error(action: str, reason: str) -> None:
+    logger.warning("[UPDATE] %s rejected: %s", action, reason)
+    socketio.emit("update_error", {"action": action, "reason": reason})
+
+
+def _request_is_from_local_kiosk() -> bool:
+    return is_local_kiosk_request(request.remote_addr, request.headers.get("Origin"))
+
+
+def _update_log_path() -> Path:
+    return Path.home() / "openflight_sessions" / "terminal_logs" / "update.log"
+
+
+def _spawn_update_check() -> bool:
+    """Run ``openflight-update check`` detached; False when it could not start."""
+    global _update_check_process, _update_last_check_monotonic  # pylint: disable=global-statement
+    global _update_recheck_requested  # pylint: disable=global-statement
+    with _update_state_lock:
+        if _update_check_process is not None and _update_check_process.poll() is None:
+            _update_recheck_requested = True
+            return True
+        log_path = _update_log_path()
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "ab") as log_file:
+                process = subprocess.Popen(  # pylint: disable=consider-using-with
+                    [sys.executable, "-m", "openflight.update", "check", "--verbose"],
+                    cwd=REPO_ROOT,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+        except OSError as error:
+            logger.error("[UPDATE] Could not start the update check: %s", error)
+            return False
+        _update_check_process = process
+        _update_last_check_monotonic = time.monotonic()
+        _update_recheck_requested = False
+    threading.Thread(target=_await_update_check, args=(process,), daemon=True).start()
+    return True
+
+
+def _await_update_check(process: subprocess.Popen) -> None:
+    global _update_recheck_requested  # pylint: disable=global-statement
+    exit_code = process.wait()
+    logger.info("[UPDATE] Check finished with exit %d", exit_code)
+    with _update_state_lock:
+        rerun = _update_recheck_requested
+        _update_recheck_requested = False
+    if rerun and _spawn_update_check():
+        return
+    _emit_update_status()
+
+
+@socketio.on("get_update_status")
+def handle_get_update_status():
+    """Re-send the composed update status to the UI."""
+    _emit_update_status()
+
+
+@socketio.on("set_update_channel")
+def handle_set_update_channel(data):
+    """Record the release channel to follow and start a check (local kiosk only)."""
+    if not _request_is_from_local_kiosk():
+        _emit_update_error("set_update_channel", "forbidden")
+        return
+    raw = (data or {}).get("channel")
+    try:
+        channel = validate_channel(None if raw in (None, "off") else raw)
+    except ValueError:
+        _emit_update_error("set_update_channel", "invalid_channel")
+        return
+    paths = resolve_update_paths()
+    existing = load_update_config(paths.config, get_release_info())
+    save_update_config(UpdateConfig(channel=channel, repository=existing.repository), paths.config)
+    logger.info("[UPDATE] Channel set to %s", channel or "off")
+    if channel is None:
+        _emit_update_status()
+    elif _spawn_update_check():
+        _emit_update_status("checking")
+    else:
+        _emit_update_error("set_update_channel", "spawn_failed")
+
+
+@socketio.on("check_for_updates")
+def handle_check_for_updates():
+    """Start an update check now (local kiosk only, at most every 30 s)."""
+    if not _request_is_from_local_kiosk():
+        _emit_update_error("check_for_updates", "forbidden")
+        return
+    last = _update_last_check_monotonic
+    if last is not None and time.monotonic() - last < UPDATE_CHECK_MIN_INTERVAL_S:
+        _emit_update_error("check_for_updates", "throttled")
+        return
+    if _spawn_update_check():
+        _emit_update_status("checking")
+    else:
+        _emit_update_error("check_for_updates", "spawn_failed")
+
+
+@socketio.on("apply_update")
+def handle_apply_update():
+    """Exit so the launcher swaps to the staged release (local kiosk only, when idle)."""
+    if not _request_is_from_local_kiosk():
+        _emit_update_error("apply_update", "forbidden")
+        return
+    status = _update_status_payload()
+    if status.get("staged") is None:
+        _emit_update_error("apply_update", "nothing_staged")
+        return
+    if not _is_idle_for_update():
+        _emit_update_error("apply_update", "busy")
+        return
+    logger.info("[UPDATE] Restarting to apply %s", status["staged"].get("name"))
+    socketio.emit("update_status", {**status, "state": "restarting"})
+    threading.Thread(
+        target=_shutdown_process_after_delay,
+        kwargs={"exit_code": RESTART_EXIT_CODE},
+        daemon=True,
+    ).start()
 
 
 def _forward_shot_to_simulators(shot: Shot) -> None:
@@ -3796,6 +3971,7 @@ def _finalize_shot_detected(
     enrichment: _ShotEnrichmentResult | None = None,
 ) -> None:
     """Apply required fallbacks, persist once, and publish the final shot."""
+    _note_shot_activity()
     enrichment = enrichment or _ShotEnrichmentResult()
     iwr6843_ms = enrichment.iwr6843_ms
     kld7_ms = enrichment.kld7_ms
@@ -4231,6 +4407,7 @@ def _defer_shot_enrichment(
 
 def on_shot_detected(shot: Shot) -> None:
     """Serialize detection order before publishing or queueing a shot."""
+    _note_shot_activity()
     with _shot_callback_lock:
         _handle_shot_detected(shot)
 
@@ -4378,6 +4555,7 @@ def swing_speed_to_shot_dict(event: SwingSpeedEvent) -> dict:
 
 def on_swing_speed_detected(event: SwingSpeedEvent):
     """Handle swing speed training reps and emit them to connected clients."""
+    _note_shot_activity()
     active_profile = get_profile_store().get_active()
     event.profile_id = active_profile.id
     event.profile_name = active_profile.name

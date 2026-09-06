@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { PowerStatus } from '../types/power';
 import type { ReleaseInfo } from '../types/release';
 import type { SimShotInfo, SimStatus } from '../types/socket';
+import type { UpdateError, UpdateStatus } from '../types/update';
 
 interface SystemState {
   connected: boolean;
@@ -14,6 +15,8 @@ interface SystemState {
   serverClub: string | null;
   powerStatus: PowerStatus | null;
   releaseInfo: ReleaseInfo | null;
+  updateStatus: UpdateStatus | null;
+  updateError: UpdateError | null;
   setConnected: (connected: boolean) => void;
   setMockMode: (mockMode: boolean) => void;
   setDebugMode: (debugMode: boolean) => void;
@@ -23,6 +26,8 @@ interface SystemState {
   setServerClub: (club: string | null) => void;
   setPowerStatus: (status: PowerStatus) => void;
   setReleaseInfo: (info: ReleaseInfo) => void;
+  setUpdateStatus: (status: UpdateStatus) => void;
+  setUpdateError: (error: UpdateError | null) => void;
 }
 
 export const useSystemStore = create<SystemState>((set) => ({
@@ -36,6 +41,8 @@ export const useSystemStore = create<SystemState>((set) => ({
   serverClub: null,
   powerStatus: null,
   releaseInfo: null,
+  updateStatus: null,
+  updateError: null,
   setConnected: (connected) => set({ connected }),
   setMockMode: (mockMode) => set({ mockMode }),
   setDebugMode: (debugMode) => set({ debugMode }),
@@ -51,4 +58,6 @@ export const useSystemStore = create<SystemState>((set) => ({
   setServerClub: (serverClub) => set({ serverClub }),
   setPowerStatus: (status) => set({ powerStatus: status }),
   setReleaseInfo: (releaseInfo) => set({ releaseInfo }),
+  setUpdateStatus: (updateStatus) => set({ updateStatus }),
+  setUpdateError: (updateError) => set({ updateError }),
 }));

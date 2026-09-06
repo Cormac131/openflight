@@ -10,6 +10,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.0] - 2026-09-05
 
 ### Added
+- **Release channel and restart-to-update in the kiosk menu (auto-update
+  stage 2, part 5).** The menu gains an Updates section: a Stable /
+  Experimental / Off channel control (hidden on installs the updater does not
+  manage), a status row fed by `update_status`, "Check now", and "Restart to
+  update" once a release is staged. Restarting confirms in a dialog, shows
+  progress while the server exits, and explains a "busy" refusal. The
+  shutdown and update dialogs now share one `ActionDialog`.
+- **Update status and restart-to-update over the WebSocket (auto-update
+  stage 2, part 4).** The server emits `update_status` on connect and after
+  each check, and accepts `set_update_channel`, `check_for_updates` and
+  `apply_update` from the kiosk on the device only (loopback peer and
+  loopback `Origin`; anything else is answered with `update_error
+  forbidden`). `apply_update` waits for an idle moment (no shot in flight,
+  none in the last 30 s), then exits with status 75 so the launcher swaps
+  to the staged release.
+- **Launcher applies staged updates (auto-update stage 2, part 3).**
+  `scripts/start-kiosk.sh` now applies a staged release right after taking
+  its instance lock and relaunches itself from the new tree, confirms the
+  release once the server answers, rolls it back when startup fails, and
+  restarts into a staged release when the server exits with status 75
+  (`openflight.update.RESTART_EXIT_CODE`). Any other non-zero server exit
+  now runs the normal cleanup instead of leaving the kiosk window open.
+- **Staged updates and rollback (auto-update stage 2, part 2).**
+  `openflight-update check` now downloads the channel's newest release,
+  verifies its checksum, prepares it beside the running install
+  (`~/openflight-releases/<tag>/` with its own `.venv`), and points a
+  `staged` link at it; `apply` swaps the `~/openflight` link, `confirm` and
+  `rollback` finish or undo the swap, and `migrate` turns an existing
+  checkout into a managed install. `scripts/setup/setup.sh` offers to enable
+  it and installs `openflight-update.timer` (every ~6 h). See
+  [docs/auto-update.md](auto-update.md).
+- **`openflight-update` preference, lookup and status (auto-update stage 2,
+  part 1).** A new `openflight.update` package records which release channel
+  a Pi follows (`~/.config/openflight/update.json`, set with
+  `openflight-update set-channel stable|experimental|off`), looks up the
+  newest release for that channel on GitHub (`openflight-update check`), and
+  reports what is installed, available and staged (`openflight-update
+  status [--json]`, backed by `~/.config/openflight/update-status.json`).
+  Nothing is downloaded or installed yet; staging and applying follow.
 - **Electron kiosk shell.** `scripts/start-kiosk.sh` now opens the UI in a pinned
   Electron window (`electron@44`) instead of whichever system browser happens to
   be installed. Chromium remains a fallback if Electron is not installed (including

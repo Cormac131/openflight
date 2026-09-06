@@ -8,6 +8,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+ORIGINAL_ARGS=("$@")
 PORT=8080
 HOST="localhost"
 RADAR_PORT=""
@@ -508,6 +509,8 @@ error() {
 
 # shellcheck source=kiosk-browser.sh
 source "$SCRIPT_DIR/kiosk-browser.sh"
+# shellcheck source=kiosk-update.sh
+source "$SCRIPT_DIR/kiosk-update.sh"
 
 stop_startup_splash_server() {
     if [ -n "$SPLASH_PID" ] && kill -0 "$SPLASH_PID" 2>/dev/null; then
@@ -599,6 +602,7 @@ show_startup_failure() {
 
     error "$message"
     error "  $recovery"
+    rollback_pending_update "$message"
     if [ -n "$STARTUP_STATUS_FILE" ] && [ -f "$STARTUP_STATUS_FILE" ]; then
         local status_args=(
             fail "$STARTUP_STATUS_FILE"
@@ -704,12 +708,27 @@ acquire_instance_lock() {
         return 0
     fi
     exec {INSTANCE_LOCK_FD}>>"$lock_file"
-    if ! flock -n "$INSTANCE_LOCK_FD"; then
+    # A restart-to-update relaunch replaces the instance that held the lock;
+    # its browser helpers may take a moment to drop their inherited copies.
+    local flock_args=(-n)
+    if [ "${OPENFLIGHT_UPDATE_RESTART:-}" = 1 ]; then
+        flock_args=(-w 15)
+    fi
+    if ! flock "${flock_args[@]}" "$INSTANCE_LOCK_FD"; then
         error "OpenFlight is already running (lock held on $lock_file)."
         error "  Stop the other instance first. If it is the boot service: sudo systemctl stop openflight"
         # Exit 3 is listed in openflight.service's RestartPreventExitStatus so
         # systemd does not retry every 5 s while someone else owns the kiosk.
         exit 3
+    fi
+}
+
+release_instance_lock() {
+    # Closing the descriptor drops the flock; a relaunch through exec would
+    # otherwise inherit it and fail its own guard against this same process.
+    if [ -n "${INSTANCE_LOCK_FD:-}" ]; then
+        exec {INSTANCE_LOCK_FD}>&-
+        INSTANCE_LOCK_FD=""
     fi
 }
 
@@ -1002,6 +1021,7 @@ if [ "$DRY_RUN" = true ]; then
 fi
 
 acquire_instance_lock
+apply_staged_update
 
 # shellcheck source=ensure-kiosk-ui.sh
 source "$SCRIPT_DIR/ensure-kiosk-ui.sh"
@@ -1146,6 +1166,7 @@ if [ -n "$STARTUP_STATUS_FILE" ]; then
 fi
 
 log "Server is running!"
+confirm_applied_update
 
 KIOSK_URL="http://$HOST:$PORT"
 if [ "$STARTUP_SPLASH" != true ] || [ "$BROWSER_LAUNCHED" != true ]; then
@@ -1156,6 +1177,11 @@ fi
 
 log "OpenFlight is running! Press Ctrl+C to stop."
 
-# Wait for server process — exits when server stops (Ctrl+C or UI shutdown)
-wait $SERVER_PID
-cleanup
+# Wait for the server; it exits on Ctrl+C, UI shutdown, or a restart request.
+SERVER_EXIT_STATUS=0
+wait "$SERVER_PID" || SERVER_EXIT_STATUS=$?
+SERVER_PID=""
+if [ "$SERVER_EXIT_STATUS" -eq "$OPENFLIGHT_UPDATE_RESTART_STATUS" ]; then
+    restart_into_staged_update
+fi
+cleanup "$SERVER_EXIT_STATUS"

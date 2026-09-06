@@ -1,13 +1,5 @@
 import { test } from '@playwright/test';
-import {
-  expect,
-  gotoApp,
-  resetSession,
-  setClub,
-  simulateShot,
-  waitForEvent,
-  withControlSocket,
-} from './helpers';
+import { expect, gotoApp, resetSession, setClub, simulateShot, waitForEvent, withControlSocket } from './helpers';
 
 /** Dismiss the club picker that opens on every load, keeping the default club. */
 async function dismissPicker(page: import('@playwright/test').Page) {
@@ -64,6 +56,19 @@ test('shows the build version and release channel reported by the server', async
   await expect(versionRow.locator('.menu-sheet__status-value')).toHaveText(
     /^\d+\.\d+\.\d+(\+[0-9a-f]{12})? · Source checkout$/
   );
+});
+
+test('reports updates as unavailable for a source checkout and hides the channel control', async ({ page }) => {
+  await gotoApp(page);
+  await dismissPicker(page);
+
+  await openMenu(page);
+  const menu = page.getByRole('dialog', { name: 'Menu' });
+  const statusRow = menu.locator('.menu-sheet__status-row', { hasText: 'Status' });
+  await expect(statusRow.locator('.menu-sheet__status-value')).toHaveText('Unavailable for this install');
+  await expect(menu.getByRole('group', { name: 'Release channel' })).toHaveCount(0);
+  await expect(menu.getByRole('button', { name: 'Restart to update' })).toHaveCount(0);
+  await expect(menu.getByRole('button', { name: 'Check now' })).toHaveCount(0);
 });
 
 test('supports club selection choose and dismiss flows against mock backend', async ({ page }) => {

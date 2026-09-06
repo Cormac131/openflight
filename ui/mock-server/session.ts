@@ -6,6 +6,7 @@ import type { SessionStats, Shot, TriggerStatus } from '../src/types/shot.js';
 import type { RadarConfig } from '../src/types/socket.js';
 import type { Profile } from '../src/types/profile.js';
 import type { ReleaseInfo } from '../src/types/release.js';
+import type { UpdateChannel, UpdateState, UpdateStatus } from '../src/types/update.js';
 import { generateShot } from './shotGenerator.js';
 
 function mean(values: number[]): number {
@@ -34,12 +35,8 @@ export function computeSessionStats(shots: Shot[]): SessionStats {
   }
 
   const ballSpeeds = shots.map((s) => s.ball_speed_mph);
-  const clubSpeeds = shots
-    .map((s) => s.club_speed_mph)
-    .filter((v): v is number => v != null);
-  const smashFactors = shots
-    .map((s) => s.smash_factor)
-    .filter((v): v is number => v != null);
+  const clubSpeeds = shots.map((s) => s.club_speed_mph).filter((v): v is number => v != null);
+  const smashFactors = shots.map((s) => s.smash_factor).filter((v): v is number => v != null);
   const spinRpms = shots.map((s) => s.spin_rpm).filter((v): v is number => v != null);
 
   return {
@@ -60,9 +57,7 @@ export function computeSessionStats(shots: Shot[]): SessionStats {
 export class MockSession {
   shots: Shot[] = [];
   club = 'driver';
-  profiles: Profile[] = [
-    { id: 'mock-profile-1', name: 'Profile 1', created_at: '2026-01-01T00:00:00Z', settings: {} },
-  ];
+  profiles: Profile[] = [{ id: 'mock-profile-1', name: 'Profile 1', created_at: '2026-01-01T00:00:00Z', settings: {} }];
   activeProfileId = 'mock-profile-1';
   private nextProfileNumber = 2;
   trainingImplement = 'driver';
@@ -76,6 +71,10 @@ export class MockSession {
   triggersTotal = 0;
   triggersAccepted = 0;
   triggersRejected = 0;
+
+  /** A managed install with a release already staged, so every menu control shows. */
+  updateChannel: UpdateChannel | null = 'experimental';
+  updateState: UpdateState = 'staged';
 
   /** Status-only camera mock — no MJPEG; toggles + fake ball detection. */
   cameraAvailable = true;
@@ -97,7 +96,9 @@ export class MockSession {
   }
 
   addProfile(rawName: unknown): void {
-    const name = String(rawName ?? '').trim().slice(0, 40);
+    const name = String(rawName ?? '')
+      .trim()
+      .slice(0, 40);
     if (!name || this.profiles.length >= 12) return;
     const profile: Profile = {
       id: `mock-profile-${this.nextProfileNumber++}`,
@@ -110,7 +111,9 @@ export class MockSession {
   }
 
   renameProfile(profileId: unknown, rawName: unknown): void {
-    const name = String(rawName ?? '').trim().slice(0, 40);
+    const name = String(rawName ?? '')
+      .trim()
+      .slice(0, 40);
     const profile = this.profiles.find((entry) => entry.id === profileId);
     if (!name || !profile) return;
     profile.name = name;
@@ -144,6 +147,31 @@ export class MockSession {
       commit: '0123456789ab',
       built_at: '2026-09-04T12:00:00+00:00',
       repository: 'open-flight/openflight',
+    };
+  }
+
+  updateStatus(): UpdateStatus {
+    const staged = this.updateState === 'staged' || this.updateState === 'restarting';
+    const stagedRelease = {
+      name: 'v0.3.0-dev.43',
+      tag: 'v0.3.0-dev.43',
+      version: '0.3.0-dev.43',
+      channel: 'experimental',
+    };
+    return {
+      format_version: 1,
+      managed: true,
+      state: this.updateChannel === null ? 'disabled' : this.updateState,
+      channel: this.updateChannel,
+      repository: 'open-flight/openflight',
+      current: { tag: 'v0.3.0-dev.42', version: '0.3.0-dev.42', channel: 'experimental' },
+      available:
+        this.updateState === 'up_to_date' ? null : { tag: 'v0.3.0-dev.43', version: '0.3.0-dev.43', size: 6_500_000 },
+      staged: staged ? stagedRelease : null,
+      previous: { name: 'v0.3.0-dev.41', tag: 'v0.3.0-dev.41', version: '0.3.0-dev.41', channel: 'experimental' },
+      pending_confirm: false,
+      last_check_at: '2026-09-06T08:00:00+00:00',
+      error: this.updateState === 'failed' ? 'offline: no route to api.github.com' : null,
     };
   }
 

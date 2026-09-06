@@ -14,6 +14,7 @@ import { DisplayMode } from './components/DisplayMode';
 import { SimShotBadges } from './components/SimShotBadges';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
+import { UpdateDialog, type UpdateDialogState } from './components/UpdateDialog';
 import { CameraReplayDialog } from './components/CameraReplayDialog';
 import {
   CameraPanel,
@@ -47,13 +48,15 @@ import './components/panel/panel.css';
 function AppContent() {
   const { t } = useI18n();
   const { shutdown } = useSocket();
-  const { connected, mockMode, debugMode, latestSimShots, serverClub } = useSystemStore(
+  const { connected, mockMode, debugMode, latestSimShots, serverClub, updateStatus, updateError } = useSystemStore(
     useShallow((state) => ({
       connected: state.connected,
       mockMode: state.mockMode,
       debugMode: state.debugMode,
       latestSimShots: state.latestSimShots,
       serverClub: state.serverClub,
+      updateStatus: state.updateStatus,
+      updateError: state.updateError,
     }))
   );
   const { latestShot, shots, isNewShot, shotProcessingPhase, shotVersion } = useShotStore(
@@ -110,6 +113,12 @@ function AppContent() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [showShutdown, setShowShutdown] = useState(false);
   const [shutdownState, setShutdownState] = useState<ShutdownState>('confirm');
+  // 'requested' remembers the status we asked against: any later status that
+  // is not `restarting` means the server came back (or never left) and the
+  // dialog has nothing more to show.
+  const [updateRequest, setUpdateRequest] = useState<
+    { phase: 'closed' } | { phase: 'confirm' } | { phase: 'requested'; askedWith: typeof updateStatus }
+  >({ phase: 'closed' });
   // Open on every app load so the user confirms their club before the first
   // shot; dismissing keeps the default. The /display route returns early below,
   // so this never appears in the passive TV view.
@@ -223,6 +232,24 @@ function AppContent() {
     setShutdownState('confirm');
   };
 
+  const closeUpdateDialog = () => setUpdateRequest({ phase: 'closed' });
+  const handleApplyUpdate = () => {
+    setUpdateRequest({ phase: 'requested', askedWith: updateStatus });
+    socketService.applyUpdate();
+  };
+  let updateDialogState: UpdateDialogState | null = null;
+  if (updateRequest.phase === 'confirm') {
+    updateDialogState = 'confirm';
+  } else if (updateRequest.phase === 'requested') {
+    if (updateError?.action === 'apply_update') {
+      updateDialogState = updateError.reason === 'busy' ? 'blocked' : 'error';
+    } else if (updateStatus !== updateRequest.askedWith && updateStatus?.state !== 'restarting') {
+      closeUpdateDialog();
+    } else {
+      updateDialogState = 'pending';
+    }
+  }
+
   const profileShots = filterShotsByProfile(shots, activeProfileId);
   const profileLatestShot = profileShots[profileShots.length - 1] ?? null;
   const profileIsNewShot = Boolean(
@@ -283,6 +310,15 @@ function AppContent() {
 
       {showShutdown ? (
         <ShutdownDialog state={shutdownState} onConfirm={handleShutdown} onCancel={closeShutdown} />
+      ) : null}
+
+      {updateDialogState ? (
+        <UpdateDialog
+          state={updateDialogState}
+          stagedName={updateStatus?.staged?.name ?? null}
+          onConfirm={handleApplyUpdate}
+          onCancel={closeUpdateDialog}
+        />
       ) : null}
 
       {activeReplay ? (
@@ -404,6 +440,10 @@ function AppContent() {
             setMenuOpen(false);
             setShutdownState('confirm');
             setShowShutdown(true);
+          }}
+          onRestartToUpdate={() => {
+            setMenuOpen(false);
+            setUpdateRequest({ phase: 'confirm' });
           }}
         />
       ) : null}

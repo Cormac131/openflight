@@ -227,6 +227,13 @@ and calibration remain outside Git. See the
 [Startup Splash Screen](splash-screen.md) guide for configuration, screenshots,
 error recovery, updating existing launchers, and rollback.
 
+### Automatic Updates
+
+The setup script can put the Pi on a release channel so new releases are
+downloaded in the background and installed at the next start. See
+[Automatic Updates](auto-update.md) for how it works, the commands, and
+rollback.
+
 ### Auto-Start on Boot
 
 The setup script installs and enables a systemd service configured for your

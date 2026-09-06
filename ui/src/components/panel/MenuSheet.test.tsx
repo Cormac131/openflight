@@ -5,7 +5,7 @@ import { useSystemStore } from '../../stores/useSystemStore';
 import type { PowerStatus } from '../../types/power';
 
 function renderMenu() {
-  return renderToString(<MenuSheet onClose={() => {}} onShutdown={() => {}} />);
+  return renderToString(<MenuSheet onClose={() => {}} onShutdown={() => {}} onRestartToUpdate={() => {}} />);
 }
 
 describe('MenuSheet profiles', () => {
@@ -65,5 +65,21 @@ describe('MenuSheet version', () => {
     expect(html).toContain(
       'menu-sheet__status-label">Version</span><span class="menu-sheet__status-value">Unavailable'
     );
+  });
+});
+
+describe('MenuSheet updates', () => {
+  // Populated statuses are covered in UpdatesSection.test.tsx (renderToString
+  // renders zustand's initial state).
+  it('shows the section as Unavailable with no controls before update_status arrives', () => {
+    const html = renderMenu();
+
+    expect(html).toContain('menu-sheet__section-title">Updates');
+    expect(html).toContain(
+      'menu-sheet__status-label">Status</span><span class="menu-sheet__status-value">Unavailable<'
+    );
+    expect(html).not.toContain('aria-label="Release channel"');
+    expect(html).not.toContain('Check now');
+    expect(html).not.toContain('Restart to update');
   });
 });

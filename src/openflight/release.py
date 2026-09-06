@@ -11,11 +11,12 @@ cloud uploader, and the session logger always get a usable answer.
 import functools
 import json
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 from . import __version__
 
@@ -27,6 +28,31 @@ DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[2]
 RELEASE_CHANNELS = ("stable", "experimental")
 SOURCE_CHANNEL = "source"
 GIT_TIMEOUT_S = 5
+RELEASE_TAG_RE = re.compile(r"^v(?P<base>\d+\.\d+\.\d+)(?:-dev\.(?P<dev>\d+))?$")
+
+
+class ParsedTag(NamedTuple):
+    """A release tag split into its base version and experimental build number."""
+
+    base_version: str
+    dev: Optional[int]
+
+    @property
+    def version(self) -> str:
+        return self.base_version if self.dev is None else f"{self.base_version}-dev.{self.dev}"
+
+    @property
+    def channel(self) -> str:
+        return "stable" if self.dev is None else "experimental"
+
+
+def parse_release_tag(tag: str) -> Optional[ParsedTag]:
+    """Parse ``vX.Y.Z`` or ``vX.Y.Z-dev.N``; anything else is not a release tag."""
+    match = RELEASE_TAG_RE.match(tag)
+    if not match:
+        return None
+    dev = match.group("dev")
+    return ParsedTag(match.group("base"), int(dev) if dev is not None else None)
 
 
 @dataclass(frozen=True)

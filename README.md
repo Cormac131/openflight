@@ -325,6 +325,7 @@ uv run pytest tests/ -v
 - **[Simulator Connectors](docs/simulator/README.md)** — Stream shots to GSPro, OpenGolfSim, and others
 - **[Cloud Sync](docs/cloud-sync.md)** — Push filtered sessions to FlightWeb
 - **[Release Process](docs/release-process.md)** — Stable and experimental channels, cutting a release, Discord announcements
+- **[Automatic Updates](docs/auto-update.md)** — Put a Pi on a channel; staged releases, rollback, commands
 - **[Rolling Buffer & Spin Detection](docs/rolling_buffer_spin_detection.md)** — Production capture and experimental spin details
 - **[Dechirped-Sideband Spin Replay](docs/spin-dechirp-replay.md)** — Next-gen spin estimator test bench
 - **[Camera and YOLO Experiments](docs/yolo-performance-tuning.md)** — Optional, non-production vision work

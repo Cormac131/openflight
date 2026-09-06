@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +31,7 @@ from openflight.server import (
     swing_speed_to_shot_dict,
 )
 from openflight.swing_speed import SwingSpeedEvent
+from openflight.update import layout as layout_module
 
 
 def _wait_for_shot_finalization_idle(timeout_s: float = 2.0) -> None:
@@ -2466,9 +2468,7 @@ class TestProfileSocketHandlers:
 
         assert self._last_snapshot(emitted)["active_profile_id"] == first.id
 
-    def test_set_active_profile_with_unknown_id_broadcasts_unchanged_snapshot(
-        self, store, emitted
-    ):
+    def test_set_active_profile_with_unknown_id_broadcasts_unchanged_snapshot(self, store, emitted):
         before = store.get_active().id
 
         server_module.handle_set_active_profile({"profile_id": "ghost"})
@@ -5041,3 +5041,258 @@ class TestOpsBaudValidation:
         a stricter check would reject a legitimate fallback to 115200, which the
         flag's own help text tells operators to use."""
         assert good in UART_BAUD_COMMANDS
+
+
+class TestUpdateEvents:
+    """Update status is broadcast to everyone; update commands obey the local kiosk only."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_updater(self, tmp_path, monkeypatch):
+        self.tmp_path = tmp_path
+        releases = tmp_path / "releases"
+        releases.mkdir()
+        monkeypatch.setenv("OPENFLIGHT_INSTALL_LINK", str(tmp_path / "openflight"))
+        monkeypatch.setenv("OPENFLIGHT_RELEASES_ROOT", str(releases))
+        monkeypatch.setenv("OPENFLIGHT_UPDATE_CONFIG", str(tmp_path / "update.json"))
+        monkeypatch.setenv("OPENFLIGHT_UPDATE_STATUS", str(tmp_path / "update-status.json"))
+        monkeypatch.setattr(server_module, "_update_last_check_monotonic", None)
+        monkeypatch.setattr(server_module, "_update_check_process", None)
+        monkeypatch.setattr(server_module, "_update_last_activity_monotonic", float("-inf"))
+        monkeypatch.setattr(
+            server_module,
+            "get_release_info",
+            lambda: ReleaseInfo("0.3.0", "0.3.0", "stable", tag="v0.3.0"),
+        )
+        self.emitted = []
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: self.emitted.append(args)
+        )
+        self.spawned = []
+        monkeypatch.setattr(
+            server_module, "_spawn_update_check", lambda: self.spawned.append(True) or True
+        )
+        self.exit_codes = []
+
+        def fake_shutdown(delay_s=0.5, exit_code=0):
+            self.exit_codes.append(exit_code)
+
+        monkeypatch.setattr(server_module, "_shutdown_process_after_delay", fake_shutdown)
+        self.monkeypatch = monkeypatch
+        self._as_client("127.0.0.1", "http://localhost:8080")
+
+    def _as_client(self, remote_addr, origin):
+        headers = {} if origin is None else {"Origin": origin}
+        self.monkeypatch.setattr(
+            server_module, "request", SimpleNamespace(remote_addr=remote_addr, headers=headers)
+        )
+
+    def _make_managed(self, staged=True):
+        current = self.tmp_path / "releases" / "v0.3.0"
+        current.mkdir()
+        (self.tmp_path / "openflight").symlink_to(current)
+        self.monkeypatch.setattr(
+            layout_module.InstallLayout, "is_managed", lambda self, running_root=None: True
+        )
+        if staged:
+            new = self.tmp_path / "releases" / "v0.3.1"
+            new.mkdir()
+            (self.tmp_path / "releases" / "staged").symlink_to(new)
+
+    def _events(self, name):
+        return [payload for event, payload in self.emitted if event == name]
+
+    def test_connect_broadcasts_the_update_status(self):
+        self.monkeypatch.setattr(server_module, "monitor", None)
+        self.monkeypatch.setattr(server_module, "power_monitor", None)
+        self.monkeypatch.setattr(server_module, "_emit_sim_snapshot", lambda: None)
+        self.monkeypatch.setattr(server_module, "_emit_profiles", lambda: None)
+
+        server_module.handle_connect()
+
+        status = self._events("update_status")[0]
+        assert status["state"] == "unmanaged"
+        assert status["current"]["tag"] == "v0.3.0"
+
+    def test_get_update_status_needs_no_authorization(self):
+        self._as_client("192.168.1.20", "http://192.168.1.20:8080")
+
+        server_module.handle_get_update_status()
+
+        assert self._events("update_status")[0]["managed"] is False
+        assert self._events("update_error") == []
+
+    @pytest.mark.parametrize(
+        "remote_addr,origin",
+        [
+            ("192.168.1.20", "http://localhost:8080"),
+            ("192.168.1.20", None),
+            ("127.0.0.1", "http://192.168.1.5:8080"),
+            ("127.0.0.1", "http://openflight.local:8080"),
+        ],
+    )
+    def test_mutating_events_are_forbidden_off_the_local_kiosk(self, remote_addr, origin):
+        self._as_client(remote_addr, origin)
+        self._make_managed()
+
+        server_module.handle_set_update_channel({"channel": "experimental"})
+        server_module.handle_check_for_updates()
+        server_module.handle_apply_update()
+
+        assert [e["reason"] for e in self._events("update_error")] == ["forbidden"] * 3
+        assert [e["action"] for e in self._events("update_error")] == [
+            "set_update_channel",
+            "check_for_updates",
+            "apply_update",
+        ]
+        assert not (self.tmp_path / "update.json").exists()
+        assert self.spawned == []
+        assert self.exit_codes == []
+
+    @pytest.mark.parametrize(
+        "remote_addr,origin",
+        [
+            ("127.0.0.1", None),
+            ("127.0.0.1", "http://localhost:8080"),
+            ("127.0.0.1", "http://127.0.0.1:8080"),
+            ("::1", "http://[::1]:8080"),
+            ("::ffff:127.0.0.1", "http://localhost:8080"),
+        ],
+    )
+    def test_local_kiosk_may_check(self, remote_addr, origin):
+        self._as_client(remote_addr, origin)
+
+        server_module.handle_check_for_updates()
+
+        assert self.spawned == [True]
+        assert self._events("update_status")[0]["state"] == "checking"
+        assert self._events("update_error") == []
+
+    def test_set_channel_persists_and_starts_a_check(self):
+        server_module.handle_set_update_channel({"channel": "experimental"})
+
+        saved = json.loads((self.tmp_path / "update.json").read_text())
+        assert saved["channel"] == "experimental"
+        assert self.spawned == [True]
+        assert self._events("update_status")[0]["state"] == "checking"
+
+    def test_set_channel_off_does_not_check(self):
+        server_module.handle_set_update_channel({"channel": "off"})
+
+        assert json.loads((self.tmp_path / "update.json").read_text())["channel"] is None
+        assert self.spawned == []
+        assert self._events("update_status")[0]["channel"] is None
+
+    @pytest.mark.parametrize("payload", [None, {}, {"channel": "nightly"}, {"channel": 3}])
+    def test_set_channel_rejects_invalid_values(self, payload):
+        server_module.handle_set_update_channel(payload)
+
+        if payload and payload.get("channel") is not None:
+            assert self._events("update_error")[0]["reason"] == "invalid_channel"
+            assert not (self.tmp_path / "update.json").exists()
+        else:
+            assert json.loads((self.tmp_path / "update.json").read_text())["channel"] is None
+
+    def test_check_is_throttled(self):
+        self.monkeypatch.setattr(server_module, "_update_last_check_monotonic", time.monotonic())
+
+        server_module.handle_check_for_updates()
+
+        assert self.spawned == []
+        assert self._events("update_error")[0]["reason"] == "throttled"
+
+    def test_spawn_failure_is_reported(self):
+        self.monkeypatch.setattr(server_module, "_spawn_update_check", lambda: False)
+
+        server_module.handle_check_for_updates()
+        server_module.handle_set_update_channel({"channel": "stable"})
+
+        assert [e["reason"] for e in self._events("update_error")] == ["spawn_failed"] * 2
+
+    def test_apply_with_nothing_staged(self):
+        self._make_managed(staged=False)
+
+        server_module.handle_apply_update()
+
+        assert self._events("update_error")[0]["reason"] == "nothing_staged"
+        assert self.exit_codes == []
+
+    def test_apply_while_idle_restarts_with_the_launcher_code(self):
+        self._make_managed()
+
+        server_module.handle_apply_update()
+
+        assert self.exit_codes == [server_module.RESTART_EXIT_CODE] == [75]
+        status = self._events("update_status")[0]
+        assert status["state"] == "restarting"
+        assert status["staged"]["name"] == "v0.3.1"
+
+    def test_apply_is_refused_while_busy(self):
+        self._make_managed()
+        server_module._note_shot_activity()
+
+        server_module.handle_apply_update()
+
+        assert self._events("update_error")[0]["reason"] == "busy"
+        assert self.exit_codes == []
+
+    def test_idle_gate_watches_finalization_and_enrichment(self):
+        assert server_module._is_idle_for_update() is True
+        with server_module._shot_finalization_condition:
+            server_module._shot_finalization_order.append(99)
+        try:
+            assert server_module._is_idle_for_update() is False
+        finally:
+            with server_module._shot_finalization_condition:
+                server_module._shot_finalization_order.clear()
+        self.monkeypatch.setattr(
+            server_module, "shot_enrichment_queue", SimpleNamespace(empty=lambda: False)
+        )
+        assert server_module._is_idle_for_update() is False
+
+    def test_shot_events_count_as_activity(self):
+        server_module.on_shot_processing("capturing")
+        assert server_module._is_idle_for_update() is False
+
+    def test_restart_exit_code_reaches_os_exit(self):
+        self.monkeypatch.setattr(server_module, "_cleanup_hardware_for_shutdown", lambda: True)
+        codes = []
+        self.monkeypatch.setattr(server_module.os, "_exit", codes.append)
+
+        type(self)._original_shutdown(delay_s=0, exit_code=75)
+
+        assert codes == [75]
+
+    _original_shutdown = staticmethod(server_module._shutdown_process_after_delay)
+
+    def test_spawn_runs_the_updater_module_detached(self, monkeypatch):
+        calls = []
+
+        class FakeProcess:
+            def poll(self):
+                return None
+
+            def wait(self):
+                return 0
+
+        def fake_popen(args, **kwargs):
+            calls.append((args, kwargs))
+            return FakeProcess()
+
+        monkeypatch.setattr(server_module.subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(server_module, "_update_log_path", lambda: self.tmp_path / "u.log")
+        monkeypatch.setattr(
+            server_module.threading, "Thread", lambda **kw: SimpleNamespace(start=lambda: None)
+        )
+        spawn = type(self)._original_spawn
+
+        assert spawn() is True
+        assert spawn() is True
+
+        assert len(calls) == 1
+        args, kwargs = calls[0]
+        assert args == [sys.executable, "-m", "openflight.update", "check", "--verbose"]
+        assert kwargs["start_new_session"] is True
+        assert kwargs["cwd"] == server_module.REPO_ROOT
+        assert server_module._update_recheck_requested is True
+
+    _original_spawn = staticmethod(server_module._spawn_update_check)
