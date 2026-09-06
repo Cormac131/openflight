@@ -63,6 +63,27 @@ the kiosk menu.
 Releases published before the updater existed are refused
 (`unsupported_release`): they could not confirm or roll back a swap.
 
+### The launcher's part
+
+`scripts/kiosk-update.sh` (sourced by `start-kiosk.sh`) owns every swap:
+
+- Right after the single-instance lock, `openflight-update apply --if-staged`
+  runs. On success the launcher drops the lock and re-executes itself from
+  `~/openflight` (now the new tree) with its original arguments;
+  `OPENFLIGHT_UPDATE_APPLIED=1` stops the relaunch from applying twice.
+- Once the server answers on its port, `confirm` clears the pending marker.
+  If startup fails first, `rollback --reason "<failure>"` runs before the
+  failure is shown, and the exit lets `openflight.service` restart the
+  previous release.
+- When the server exits with status 75 (`openflight.update.RESTART_EXIT_CODE`,
+  sent by "Restart to update"), the launcher stops the splash and the kiosk
+  window, drops the lock and re-executes itself, so the apply step above runs
+  again; `OPENFLIGHT_UPDATE_RESTART=1` lets it wait up to 15 s for the old
+  instance's helpers to release the lock.
+
+Any other server exit status now runs `cleanup` (closing the kiosk window)
+and is passed through as the launcher's exit status.
+
 ## Commands
 
 | Command | Purpose | Exit |

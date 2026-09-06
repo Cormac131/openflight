@@ -3,9 +3,8 @@
 `scripts/start-kiosk.sh` launches the React UI inside Electron
 (`ui/electron/main.js`) rather than shelling out to whatever browser
 happens to be installed on the Pi. This document explains why that's an
-improvement, and sketches how it could support self-updating later. It does
-not describe anything implemented yet beyond the shell itself — see
-[Auto-Updates (Future Work)](#auto-updates-future-work).
+improvement. Self-updating is handled outside the shell; see
+[Auto-Updates](#auto-updates).
 
 ## Why Electron Instead Of A System Browser
 
@@ -20,7 +19,7 @@ carried a few risks an Electron shell removes:
 | Kiosk lockdown | `--kiosk` behaves differently across Chromium, Chrome, and Firefox; Firefox's kiosk mode in particular is looser (menu/shortcuts still reachable) | One `BrowserWindow` with `kiosk: true`, no application menu, and `setWindowOpenHandler` denying any popup — the same guarantees everywhere |
 | Startup noise | Chromium's "restore previous session" / crash bubbles needed extra flags (`--disable-session-crashed-bubble`) to suppress | Electron has no Chromium session-restore prompt to suppress. Its **default session still persists** under the app `userData` directory (`~/.config/openflight-ui` on Linux) — [Session](https://www.electronjs.org/docs/latest/api/session), [app.getPath('userData')](https://www.electronjs.org/docs/latest/api/app#appgetpathname). That is a *different* profile from system Chromium (`~/.config/chromium` / `chromium-browser`) |
 | Maintenance surface | A 4-branch `if/elif` detection ladder to keep working across Raspberry Pi OS Bookworm/Bullseye, Lite/Desktop images | One binary, one launch path; `npm ci` makes the exact runtime reproducible in CI the same way any other dependency is |
-| Extensibility | A browser tab is sandboxed from the OS — no filesystem, process, or native API access | The Electron **main process** is a regular Node.js process with full OS access, which is what makes [self-updating](#auto-updates-future-work) possible at all |
+| Extensibility | A browser tab is sandboxed from the OS — no filesystem, process, or native API access | The Electron **main process** is a regular Node.js process with full OS access, which is what makes [self-updating](#auto-updates) possible at all |
 
 The old detection ladder is kept as a fallback (`launch_kiosk_browser` still
 tries `chromium-browser`/`chromium` if `ui/node_modules/.bin/electron` is
@@ -71,9 +70,19 @@ the boot-service crash loop that exposed it. `start-kiosk.sh` additionally
 holds `/tmp/openflight-kiosk-<port>.lock` for its lifetime and exits with
 status 3 if another instance already holds it.
 
-## Auto-Updates (Future Work)
+## Auto-Updates
 
-Nothing below is implemented. It's worth writing down now because "Electron
+Self-updating is implemented outside Electron: `openflight-update` stages
+GitHub releases beside the install and `scripts/start-kiosk.sh` swaps to a
+staged release at launch or when the server exits with status 75 after a
+"Restart to update" request. See [auto-update.md](auto-update.md). The
+constraints below (trust boundary, partial-failure safety, mid-round updates)
+still describe why it is built that way; the `git pull` design sketched
+here is superseded by release artifacts.
+
+### Original notes
+
+The notes below predate the updater. They are kept because "Electron
 shell" and "auto-update" are usually mentioned in the same breath, and
 because OpenFlight's deployment shape (a small fleet of Pis you personally
 maintain, not a public app store release) points toward a different design

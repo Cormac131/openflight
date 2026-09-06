@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Launcher applies staged updates (auto-update stage 2, part 3).**
+  `scripts/start-kiosk.sh` now applies a staged release right after taking
+  its instance lock and relaunches itself from the new tree, confirms the
+  release once the server answers, rolls it back when startup fails, and
+  restarts into a staged release when the server exits with status 75
+  (`openflight.update.RESTART_EXIT_CODE`). Any other non-zero server exit
+  now runs the normal cleanup instead of leaving the kiosk window open.
 - **Staged updates and rollback (auto-update stage 2, part 2).**
   `openflight-update check` now downloads the channel's newest release,
   verifies its checksum, prepares it beside the running install
