@@ -119,6 +119,7 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/announce-discord
         with:
-          webhook-url: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
+          webhook-url: ${{ secrets.DISCORD_STABLE_WEBHOOK_URL }}
+          source: DISCORD_STABLE_WEBHOOK_URL
           payload-file: dist/discord.json
           dry-run: ${{ env.DRY_RUN }}

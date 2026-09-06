@@ -111,18 +111,17 @@ can never claim to be a release.
 
 ## Discord announcements
 
-Both workflows post to a Discord webhook after the release is published.
-The post never fails the workflow: a missing secret logs a warning, and a
-failed post logs a warning.
+Each channel posts to its own Discord webhook after the release is published.
+The post never fails the workflow: a missing secret logs a warning naming the
+secret, and a failed post logs a warning.
 
-1. In Discord: Server Settings → Integrations → Webhooks → New Webhook,
-   pick the channel, **Copy Webhook URL**.
+1. In Discord: Server Settings → Integrations → Webhooks → New Webhook, pick
+   the channel, **Copy Webhook URL**. Do this twice, once per Discord channel.
 2. In GitHub: repository Settings → Secrets and variables → Actions → New
    repository secret:
-   - `DISCORD_RELEASE_WEBHOOK_URL`: stable releases (and experimental ones
-     until the next secret exists);
-   - `DISCORD_EXPERIMENTAL_WEBHOOK_URL` (optional): experimental releases,
-     so the per-merge posts can go to a quieter channel.
+   - `DISCORD_STABLE_WEBHOOK_URL`: stable releases;
+   - `DISCORD_EXPERIMENTAL_WEBHOOK_URL`: experimental releases (one post per
+     merge to `main`, so give it a quieter channel).
 3. Rotate by regenerating the webhook in Discord and updating the secret.
 
 Messages are capped at Discord's 2000 characters and never resolve
@@ -132,7 +131,7 @@ tested.
 ## Rehearsing on a fork
 
 The workflows carry no repository guard. On a fork, enable Actions, add the
-Discord secret pointing at a private test server, and merge to the fork's
+two Discord secrets pointing at a private test server, and merge to the fork's
 `main`; the experimental workflow runs for real against the fork's own
 Releases. Delete rehearsal releases with `gh release delete <tag>
 --cleanup-tag --yes` when done.

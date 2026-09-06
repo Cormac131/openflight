@@ -19,6 +19,15 @@ def test_release_workflows_can_publish_but_never_fail_on_discord(workflow):
     assert "--draft" in workflow and "--draft=false" in workflow
 
 
+def test_each_channel_announces_through_its_own_webhook_only():
+    assert "secrets.DISCORD_STABLE_WEBHOOK_URL" in STABLE
+    assert "DISCORD_EXPERIMENTAL" not in STABLE
+    assert "secrets.DISCORD_EXPERIMENTAL_WEBHOOK_URL" in EXPERIMENTAL
+    assert "DISCORD_STABLE" not in EXPERIMENTAL
+    webhook_line = next(line for line in EXPERIMENTAL.splitlines() if "webhook-url:" in line)
+    assert "||" not in webhook_line
+
+
 def test_release_workflows_gate_on_the_shared_test_suites():
     for workflow in (EXPERIMENTAL, STABLE):
         assert "uses: ./.github/workflows/pytest.yml" in workflow
