@@ -50,7 +50,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   view; simulator and ball-detection status live in the header status menu. A
   persistent header power button opens the shutdown confirmation. Club (or
   training implement) selection is a Live header action.
-  See the [UI README](../ui/README.md).
 - **Kiosk languages.** English, Spanish, French, and Portuguese. Choice is
   stored in `localStorage` (`openflight.locale:v1`).
 - **Dark and light themes.** Toggle in the footer menu; stored as
