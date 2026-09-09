@@ -132,7 +132,7 @@ If this pull is the first that launches **Electron** instead of system
 Chromium, browser-local settings (units, theme, language, pinned Live metric)
 and Shots validation notes do not migrate. Export **Export CSV** on the Shots
 tab while Chromium is still the kiosk, then re-set preferences after Electron
-starts. See [Electron Kiosk Shell](electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
+starts. See [Electron Kiosk Shell](../electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
 If Node is still 20 or the Pi is offline, startup keeps using Chromium until
 Electron can be installed.
 

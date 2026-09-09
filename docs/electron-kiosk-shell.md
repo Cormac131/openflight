@@ -87,7 +87,7 @@ different mechanisms.
 Electron loads a URL, not a bundled copy of `ui/dist`. Whatever Flask is
 currently serving is what the window shows. So once a Pi has pulled a new
 `ui/dist` (via the existing `git pull && npm run build` flow in
-[splash-screen.md](splash-screen.md#updating-an-existing-pi)) and the
+[splash-screen.md](setup/splash-screen.md#updating-an-existing-pi)) and the
 service restarts, the Electron window shows the new UI on its next launch —
 no Electron-specific update logic needed for this layer. This is already
 true today.
@@ -103,7 +103,7 @@ through `git pull` + reinstall rather than an out-of-band download.
 Installing that package (not running the Electron binary) needs **Node.js
 22.12+** on the Pi. Node 20 prints `npm WARN EBADENGINE` for `electron@44`
 and its `@electron/get` helper. See the Node install step in
-[raspberry-pi-setup.md](raspberry-pi-setup.md).
+[Raspberry Pi setup](setup/raspberry-pi.md).
 
 ### 3. The interesting case: OpenFlight self-updating without an SSH session
 
