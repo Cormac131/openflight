@@ -12,11 +12,11 @@ setup specific to PAR-TEE.
 ## Requirements
 
 - **PAR-TEE 1.2 or later** with OpenFlight chosen as the launch monitor
-  (**Settings → Launch Monitor → OPENFLIGHT**). That screen shows the address
+  (**Settings → MONITOR → DEVICE → OPENFLIGHT**). That screen shows the address
   OpenFlight should connect to (`ip:port`) and lets you change the port.
 - **Same Wi-Fi.** The machine running OpenFlight (e.g. the Raspberry Pi) and
   the phone must be on the same network. The address PAR-TEE shows is the
-  phone's Wi-Fi address; it is blank when the phone is not on Wi-Fi.
+  phone's Wi-Fi address; off Wi-Fi it reads "Join Wi-Fi to get an address".
 - **PAR-TEE in the foreground.** The listener stops when the app goes to the
   background and comes back when the app returns; OpenFlight reconnects on its
   own.
@@ -24,7 +24,7 @@ setup specific to PAR-TEE.
 
 ## Setup
 
-1. In PAR-TEE, open **Settings → Launch Monitor** and choose **OPENFLIGHT**.
+1. In PAR-TEE, open **Settings → MONITOR** and choose **OPENFLIGHT** under **DEVICE**.
    Note the address shown (e.g. `192.168.1.70:921`).
 2. **Configure OpenFlight.** Copy the example config if you haven't already:
    ```bash
