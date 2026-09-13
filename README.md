@@ -12,6 +12,13 @@
   </a>
 </p>
 
+<p align="center">
+  Related projects:
+  <a href="https://github.com/open-flight/openflight-enclosure">Enclosure</a>
+  &middot;
+  <a href="https://github.com/open-flight/openflight-mobile">Mobile App</a>
+</p>
+
 > [!WARNING]
 > **This project is in active development.** Features may be incomplete, unstable, or change without notice. Contributions and bug reports are welcome!
 
