@@ -5,7 +5,6 @@ import { useI18n } from '../../i18n/useI18n';
 interface StatusMenuProps {
   connected: boolean;
   radarConnected: boolean;
-  ballDetection: string;
   onClose: () => void;
 }
 
@@ -30,7 +29,7 @@ function OverlayOnApp({ children }: { children: ReactNode }) {
  * Portaled onto `.panel-app` so the dim uses the same `.panel-scrim` as the
  * footer menu (absolute inset covering the whole kiosk, not just the header).
  */
-export function StatusMenu({ connected, radarConnected, ballDetection, onClose }: StatusMenuProps) {
+export function StatusMenu({ connected, radarConnected, onClose }: StatusMenuProps) {
   const { t } = useI18n();
   const linkValue = (ok: boolean) => (ok ? t('header.connected') : t('header.disconnected'));
 
@@ -45,10 +44,6 @@ export function StatusMenu({ connected, radarConnected, ballDetection, onClose }
         <div className="panel-header__status-row">
           <span className="panel-header__status-label">{t('header.radar')}</span>
           <span className="panel-header__status-value">{linkValue(radarConnected)}</span>
-        </div>
-        <div className="panel-header__status-row">
-          <span className="panel-header__status-label">{t('menu.ballDetection')}</span>
-          <span className="panel-header__status-value">{ballDetection}</span>
         </div>
       </div>
     </OverlayOnApp>

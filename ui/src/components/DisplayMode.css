@@ -198,6 +198,7 @@
   }
 
   .display-mode__camera {
+    min-height: 0;
     aspect-ratio: 16 / 9;
   }
 

@@ -1,8 +1,8 @@
 # Camera and YOLO Experiments
 
-Camera detection is experimental and is not part of the production kiosk. The
-standard setup omits camera dependencies, and `scripts/start-kiosk.sh` starts
-the server with `--no-camera`.
+YOLO camera detection is experimental and is not part of the production kiosk.
+The kiosk's optional `--camera-capture` path records high-speed video without
+running this object-detection experiment.
 
 Use this guide only to evaluate a CSI camera such as the optional InnoMaker
 OV9281 global-shutter module. OpenFlight shot measurements still come from the
@@ -76,7 +76,6 @@ after checking the accuracy loss on representative ball images.
 
 ## Production status
 
-The server still contains an optional camera tracker, but the kiosk disables it
-and the camera dependency extra is empty. Restoring camera-assisted measurement
-requires dependency packaging, startup integration, hardware validation, and
-tests; this benchmark script alone does not enable it.
+The server does not integrate this YOLO tracker. Adding camera-assisted
+measurement would require dependency packaging, startup integration, hardware
+validation, and tests; this benchmark script alone does not enable it.

@@ -5,6 +5,7 @@ Provides Shot, ClubType, and carry distance estimation used by
 RollingBufferMonitor and the Flask server.
 """
 
+import statistics
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -418,3 +419,121 @@ class Shot:
         if self.spin_confidence >= 0.4:
             return "medium"
         return "low"
+
+    def to_dict(self) -> dict:
+        """Return the canonical, unrounded representation of this shot."""
+        return {
+            "shot_number": self.shot_number,
+            "ball_speed_mph": self.ball_speed_mph,
+            "ball_speed_raw_mph": self.ball_speed_raw_mph,
+            "club_speed_mph": self.club_speed_mph,
+            "smash_factor": self.smash_factor,
+            "estimated_carry_yards": self.estimated_carry_yards,
+            "carry_range": list(self.estimated_carry_range),
+            "club": self.club.value,
+            "profile_id": self.profile_id,
+            "profile_name": self.profile_name,
+            "timestamp": self.timestamp.isoformat(),
+            "impact_timestamp": self.impact_timestamp,
+            "peak_magnitude": self.peak_magnitude,
+            "readings_count": len(self.readings),
+            "readings": self.readings_data,
+            "mode": self.mode,
+            "launch_angle_vertical": self.launch_angle_vertical,
+            "launch_angle_horizontal": self.launch_angle_horizontal,
+            "launch_angle_confidence": self.launch_angle_confidence,
+            "launch_angle_vertical_confidence": self.launch_angle_vertical_confidence,
+            "launch_angle_horizontal_confidence": self.launch_angle_horizontal_confidence,
+            "launch_angle_vertical_source": self.launch_angle_vertical_source,
+            "launch_angle_horizontal_source": self.launch_angle_horizontal_source,
+            "angle_source": self.angle_source,
+            "club_angle_deg": self.club_angle_deg,
+            "club_path_deg": self.club_path_deg,
+            "experimental_attack_angle_deg": self.experimental_attack_angle_deg,
+            "experimental_attack_angle_status": self.experimental_attack_angle_status,
+            "experimental_club_path_deg": self.experimental_club_path_deg,
+            "experimental_club_path_status": self.experimental_club_path_status,
+            "experimental_fused_attack_angle_deg": self.experimental_fused_attack_angle_deg,
+            "experimental_fused_club_path_deg": self.experimental_fused_club_path_deg,
+            "experimental_fused_status": self.experimental_fused_status,
+            "experimental_fused_attack_angle_confidence": (
+                self.experimental_fused_attack_angle_confidence
+            ),
+            "experimental_fused_club_path_confidence": (
+                self.experimental_fused_club_path_confidence
+            ),
+            "experimental_camera_trace_deg": self.experimental_camera_trace_deg,
+            "experimental_aoa_offset_source": self.experimental_aoa_offset_source,
+            "iwr6843_horizontal_deg": self.iwr6843_horizontal_deg,
+            "iwr6843_horizontal_confidence": self.iwr6843_horizontal_confidence,
+            "experimental_camera_horizontal_deg": self.experimental_camera_horizontal_deg,
+            "experimental_camera_horizontal_confidence": (
+                self.experimental_camera_horizontal_confidence
+            ),
+            "experimental_camera_horizontal_status": self.experimental_camera_horizontal_status,
+            "experimental_camera_iwr_delta_deg": self.experimental_camera_iwr_delta_deg,
+            "camera_replay": dict(self.camera_replay) if self.camera_replay else None,
+            "spin_axis_deg": self.spin_axis_deg,
+            "inclinometer": self.inclinometer,
+            "spin_rpm": self.spin_rpm,
+            "spin_rpm_measured": self.spin_rpm_measured,
+            "spin_source": self.spin_source,
+            "spin_method": self.spin_method,
+            "spin_confidence": self.spin_confidence,
+            "spin_quality": self.spin_quality,
+            "spin_multipath_fade_hz": self.spin_multipath_fade_hz,
+            "spin_snr": self.spin_snr,
+            "spin_modulation_depth": self.spin_modulation_depth,
+            "spin_peak_freq_hz": self.spin_peak_freq_hz,
+            "spin_candidate_rpm": (
+                self.spin_peak_freq_hz * 60 if self.spin_peak_freq_hz is not None else None
+            ),
+            "spin_seam_cycles": self.spin_seam_cycles,
+            "spin_at_lower_rail": self.spin_at_lower_rail,
+            "spin_at_upper_rail": self.spin_at_upper_rail,
+            "spin_candidates": self.spin_candidates,
+            "spin_phase_method": self.spin_phase_method,
+            "spin_phase_rpm": self.spin_phase_rpm,
+            "spin_phase_snr": self.spin_phase_snr,
+            "spin_phase_agreement_pct": self.spin_phase_agreement_pct,
+            "spin_phase_confirmed": self.spin_phase_confirmed,
+            "spin_rejection_reason": self.spin_rejection_reason,
+            "carry_spin_adjusted": self.carry_spin_adjusted,
+        }
+
+
+def summarize_shots(shots: List[Shot], mode: str) -> dict:
+    """Calculate the shared session summary for a list of shots."""
+    summary = {
+        "shot_count": len(shots),
+        "avg_ball_speed": 0,
+        "max_ball_speed": 0,
+        "min_ball_speed": 0,
+        "avg_club_speed": None,
+        "avg_smash_factor": None,
+        "avg_carry_est": 0,
+        "avg_spin_rpm": None,
+        "spin_detection_rate": 0,
+        "mode": mode,
+    }
+    if not shots:
+        return summary
+
+    ball_speeds = [shot.ball_speed_mph for shot in shots]
+    club_speeds = [shot.club_speed_mph for shot in shots if shot.club_speed_mph]
+    smash_factors = [shot.smash_factor for shot in shots if shot.smash_factor]
+    spin_rpms = [shot.spin_rpm for shot in shots if shot.spin_rpm is not None]
+    summary.update(
+        {
+            "avg_ball_speed": statistics.mean(ball_speeds),
+            "max_ball_speed": max(ball_speeds),
+            "min_ball_speed": min(ball_speeds),
+            "std_dev": statistics.stdev(ball_speeds) if len(ball_speeds) > 1 else 0,
+            "avg_club_speed": statistics.mean(club_speeds) if club_speeds else None,
+            "avg_smash_factor": statistics.mean(smash_factors) if smash_factors else None,
+            "avg_carry_est": statistics.mean([shot.estimated_carry_yards for shot in shots]),
+            "avg_spin_rpm": statistics.mean(spin_rpms) if spin_rpms else None,
+            "spin_detection_rate": len(spin_rpms) / len(shots),
+        }
+    )
+    return summary

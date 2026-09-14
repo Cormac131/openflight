@@ -29,6 +29,7 @@ Binding, ports, and debug output.
 | `--mock-swing-speed` | flag | Run swing speed training mode with simulated reps and no OPS radar |
 | `--host` | default `0.0.0.0` | Host to bind to (default: 0.0.0.0) |
 | `--web-port` | int; default `8080` | Web server port (default: 8080) |
+| `--startup-status-file` | path | Write structured initialization progress for the optional kiosk splash |
 | `--debug`, `-d` | flag | Enable verbose FFT/CFAR debug output |
 | `--radar-log` | flag | Log raw radar data to console (Python logging) |
 | `--show-raw` | flag | Show raw radar readings in console (signed values) |
@@ -49,7 +50,7 @@ How a capture is initiated and framed.
 
 | Flag | Type / default | Description |
 | --- | --- | --- |
-| `--trigger` | choices: `polling`, `threshold`, `speed`, `sound`; default `polling` | Trigger strategy (default: polling) |
+| `--trigger` | choices: `sound`, `speed`; default `sound` | Trigger strategy |
 | `--sound-pre-trigger` | int; default `16` | Pre-trigger segments S#n, 0-32 (default: 16 = 50/50 split, each segment ~4.27ms at 30ksps) |
 
 ## IWR6843 angle radar
@@ -69,7 +70,7 @@ The supported angle radar.
 | `--iwr6843-radar-height-m` | float | Override antenna-center height from the TI calibration JSON |
 | `--iwr6843-ball-height-m` | float; default `0.04` | Ball-center height above the floor/mat (default: 0.040) |
 | `--iwr6843-tx-order` | choices: `auto`, `normal`, `reversed`; default `auto` | TI TDM chirp order; auto reads the chirp masks from the cfg |
-| `--iwr6843-capture-timeout` | float; default `12.0` | Maximum seconds an OPS shot waits for its TI UART dump (default: 12) |
+| `--iwr6843-capture-timeout` | float; default `16.0` | Maximum seconds an OPS shot waits for its TI UART dump |
 | `--iwr6843-output-dir` | — | Raw TI dump directory when --debug is enabled (default: <session-log-dir>/iwr6843) |
 | `--iwr6843-azimuth-offset-deg` | float | Azimuth of the radar boresight relative to the target line, in degrees. Positive means boresight points right of the target line. Added to the measured club path; 0 reports club path relative to boresight. |
 | `--iwr6843-horizontal-phase-reference-rad` | float | Static target-line phase measured by horizontal aim calibration. Subtracted from the TX2 horizontal proxy before angle conversion. |
@@ -117,6 +118,7 @@ Where session logs go and what they capture.
 | --- | --- | --- |
 | `--session-location`, `-l` | default `range` | Location identifier for session logs (e.g., 'range', 'course', 'home') |
 | `--log-dir` | — | Directory for session logs (default: ~/openflight_sessions) |
+| `--profiles-path` | path | Profile store (default: `OPENFLIGHT_PROFILES_PATH` or `~/.config/openflight/profiles.json`) |
 | `--no-logging` | flag | Disable session logging |
 
 ## Simulators & power
@@ -128,22 +130,28 @@ Outbound connectors and battery status.
 | `--battery` | — | Show battery and external-power status using the selected provider |
 | `--sim` | flag | Enable simulator connectors from config/sim.json (GSPro / OpenGolfSim). Off by default. |
 
-## Camera (experimental)
+## High-speed camera capture
 
-Disabled in the production kiosk. See [camera & YOLO](../development/camera-yolo.md).
+Optional rolling-buffer capture and replay. See [camera setup](../camera/README.md).
 
 | Flag | Type / default | Description |
 | --- | --- | --- |
-| `--no-camera` | flag | Disable camera (auto-enabled if available) |
-| `--camera-model` | — | Path to YOLO model for ball detection (uses Hough by default) |
-| `--camera-imgsz` | int; default `256` | YOLO inference input size (256 for speed, 640 for accuracy) |
-| `--hough-param2` | int; default `33` | Hough accumulator threshold (lower = more sensitive, default 33) |
-| `--hough-param1` | int; default `48` | Canny edge threshold (lower = detects weaker edges, default 48) |
-| `--hough-min-radius` | int; default `4` | Min ball radius in pixels (default 4) |
-| `--hough-max-radius` | int; default `43` | Max ball radius in pixels (default 43) |
-| `--hough-min-dist` | int; default `266` | Min distance between detected circles in pixels (default 266) |
-| `--roboflow-model` | — | Roboflow model ID (e.g., 'golfballdetector/10'). Uses Roboflow API instead of Hough. |
-| `--roboflow-api-key` | — | Roboflow API key (can also use ROBOFLOW_API_KEY env var) |
+| `--camera-capture` | flag | Enable high-speed rolling-buffer capture and replay |
+| `--camera-capture-width` | int; default `640` | Capture width |
+| `--camera-capture-height` | int; default `400` | Capture height |
+| `--camera-capture-fps` | float; default `300` | Capture frame rate |
+| `--camera-capture-pre-ms` | float; default `150` | Milliseconds retained before the trigger |
+| `--camera-capture-post-ms` | float; default `50` | Milliseconds retained after the trigger |
+| `--camera-capture-exposure-us` | int; default `1000` | Exposure seed for startup calibration |
+| `--camera-capture-gain` | float; default `4.0` | Analogue-gain seed for startup calibration |
+| `--camera-capture-mount-height-m` | float; default `0.20955` | Camera optical-center height above the hitting surface |
+| `--camera-capture-horizontal-offset-deg` | float; default `0` | Target-line correction added to horizontal launch angles |
+| `--camera-capture-lateral-offset-m` | float; default `0` | Camera position relative to radar center; positive is target-right |
+| `--camera-capture-roll-deg` | float; default `0` | Clockwise image-roll correction for preview and geometry |
+| `--camera-capture-stream` | `raw` or `main-y`; default `raw` | Camera stream to persist |
+| `--camera-capture-scaler-crop` | `X,Y,W,H` | Optional Picamera2 scaler crop |
+| `--camera-capture-rotate-180` | flag | Rotate saved frames 180 degrees |
+| `--camera-capture-mirror-horizontal` | flag | Mirror saved frames left-to-right after rotation |
 
 ## K-LD7 (deprecated)
 
@@ -162,25 +170,6 @@ Retained for existing builds only. See [Legacy (K-LD7)](../legacy/index.md).
 | `--kld7-horizontal` | flag | [DEPRECATED] Enable K-LD7 horizontal angle radar (club path) |
 | `--kld7-horizontal-port` | — | K-LD7 horizontal serial port |
 | `--kld7-horizontal-offset` | float | K-LD7 horizontal angle offset in degrees (default: 0.0) |
-| `--kld7-raw-logging` | flag | Log raw K-LD7 RADC payloads (base64) in kld7_buffer session logs for offline replay and the session reviewer, without changing live angle extraction |
-
-## K-LD7 experimental tuning (deprecated)
-
-Off by default; for estimator work on deprecated hardware.
-
-| Flag | Type / default | Description |
-| --- | --- | --- |
-| `--experimental-kld7-radc-tuning` | flag | Enable temporary K-LD7 RADC extraction tuning parameters (off by default) |
-| `--experimental-kld7-speed-tolerance` | float; default `10.0` | Experimental K-LD7 RADC speed tolerance in mph (default: 10.0) |
-| `--experimental-kld7-centroid-floor` | float; default `0.5` | Experimental K-LD7 RADC centroid floor fraction (default: 0.5) |
-| `--experimental-kld7-spectrum-source` | choices: `f1a`, `f2a`, `f1b`, `sum12`, `sum1b`, `sumall`, `min12`, `geom12`; default `f1a` | Experimental K-LD7 spectrum used for target-bin selection (default: f1a; try sum12 for F1A+F2A non-coherent selection) |
-| `--experimental-kld7-ops-bin-tol` | int; default `25` | Experimental K-LD7 RADC OPS-bin outlier tolerance (default: 25) |
-| `--experimental-kld7-ops-bin-penalty` | float; default `10.0` | Experimental K-LD7 RADC OPS-bin outlier penalty (default: 10.0) |
-| `--experimental-kld7-ops-anchored-min-snr` | float; default `5.0` | Experimental K-LD7 RADC OPS-anchored local peak minimum SNR (default: 5.0) |
-| `--experimental-kld7-vertical-impact-energy` | float; default `3.0` | Experimental vertical K-LD7 RADC impact energy threshold (default: 3.0) |
-| `--experimental-kld7-horizontal-impact-energy` | float; default `1.85` | Experimental horizontal K-LD7 RADC impact energy threshold (default: 1.85) |
-| `--experimental-kld7-horizontal-retry-impact-energy` | float; default `0.5` | Experimental horizontal K-LD7 RADC retry impact energy threshold (default: 0.5) |
-| `--experimental-kld7-horizontal-angle-limit` | float; default `15.0` | Experimental horizontal K-LD7 RADC angle acceptance limit in degrees (default: 15.0) |
 
 ## Wrapper-only flags
 
@@ -189,9 +178,11 @@ Handled by `scripts/start-kiosk.sh` itself rather than passed through.
 | Flag | Description |
 | --- | --- |
 | `--dry-run` | Print the command that would run, then exit |
-| `--trackman-test` | Enable the TrackMan comparison session workflow |
-| `--mode` | **Deprecated** — rolling buffer is the only mode |
-| `--buffer-split` | Buffer split point for the capture window |
+| `--startup-splash` | Show component progress while the kiosk starts |
+| `--startup-splash-port` | Port used by the temporary splash server |
+| `--port`, `--web-port` | Set the kiosk web port |
+| `--radar-port`, `--ops-port` | Forward the OPS serial port as the server's `--port` |
+| `--buffer-split` | Buffer split preset (`balanced`, `post-heavy`, `pre-heavy`) or raw segment count |
 
 ## Related
 
