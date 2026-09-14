@@ -597,6 +597,14 @@ test('refreshes the display camera preview at supported kiosk sizes', async ({ p
   });
 
   await gotoApp(page, '/display');
+  await expect
+    .poll(() =>
+      page.evaluate(
+        "import('/src/stores/useCameraStore.ts').then(({ useCameraStore }) => " +
+          'useCameraStore.getState().captureSettings.enabled)'
+      )
+    )
+    .toBe(false);
   await page.evaluate(
     "import('/src/stores/useCameraStore.ts').then(({ useCameraStore }) => " +
       'useCameraStore.getState().setCaptureSettings({ available: true, enabled: true, running: true }))'
