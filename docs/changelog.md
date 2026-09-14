@@ -124,9 +124,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `spin_rpm_measured` for scoring.
 - `--kld7-vertical-raw` test mode surfaces the raw radar angle for every shot
   (all display guards bypassed).
-- Offline `scripts/analysis/session_shot_report.py` per-shot HTML report, a
-  visual explainer (`docs/kld7-launch-angle-explained.html`), and a
-  setup/usage guide (`docs/kld7.md`).
 - **Club path from the IWR6843's pre-impact frames.** `Shot.club_path_deg` has
   been wired end to end since the K-LD7 era but unpopulated since that radar
   was deprecated. It now comes from the six pre-impact frames the L3-dump
@@ -143,20 +140,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trusting it.
 
 ### Changed
+- Core server, session logging, kiosk startup, and UI code now share canonical
+  shot/session helpers and omit redundant compatibility paths.
+- Session JSONL format version is now 2 after consolidating trigger and shot
+  entries and removing obsolete entry types.
 - Display mode (`/display`) now uses the same metric cards and theme tokens as
   the kiosk Live view.
 - The vertical estimator is now a fixed cascade (two_ray → geometry →
   single-frame geometry → naive); it is no longer user-selectable. Launch-angle
   source and confidence semantics changed accordingly.
-- `--experimental-kld7-raw-radc-logging` promoted to `--kld7-raw-logging` (it
-  is the standard replay/review path, not an experiment).
 
 ### Removed
+- Deprecated integrated-camera detection, obsolete K-LD7 experiment/replay
+  tooling, unused session-log writers, and their redundant tests and controls.
 - `--kld7-vertical-estimator` (estimator is a fixed cascade), `--kld7-geometry`
   (kiosk preset), and `--ball-speed-cosine-correction` (folded into `--kld7`).
   `--kld7-bypass-vertical-gate` renamed to `--kld7-vertical-raw`.
 
 ### Fixed
+- Kiosk startup no longer exits when the optional Alloy service is unavailable,
+  and it rebuilds the UI bundle before launching the server.
 - **Graceful IWR6843 shutdown.** Kiosk shutdown now asks the server to finish
   hardware cleanup before escalating to process signals. An active TI dump is
   allowed to complete, capture firmware is stopped and verified inactive, and
@@ -290,9 +293,6 @@ Deferred pending a session paired with a reference instrument. See
 - K-LD7 shot-correlation analysis workflow and theory writeup
   - `scripts/analyze_kld7.py --pair-shots` for offline club-to-ball pairing on `.pkl` captures
   - `docs/kld7-ball-detection-theory.md` with capture findings and detection rationale
-- K-LD7 session-review workflow for full JSONL logs
-  - `scripts/review_kld7_session.py` for per-shot profile review on `session_logs/session_*.jsonl`
-  - `docs/kld7-session-review.md` documenting the empirical review method and outputs
 - Persistent rolling buffer mode workaround for OPS243-A HOST_INT pin bug (per OmniPreSense)
   - `persist_rolling_buffer_mode()` method saves settings to flash memory
   - `test_rolling_buffer_persist.py` script for one-time radar setup and verification

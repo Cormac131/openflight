@@ -1,13 +1,5 @@
 import { create } from 'zustand';
 
-export interface CameraStatus {
-  available: boolean;
-  enabled: boolean;
-  streaming: boolean;
-  ball_detected: boolean;
-  ball_confidence: number;
-}
-
 export interface CameraCaptureSettings {
   available: boolean;
   enabled?: boolean;
@@ -62,28 +54,15 @@ export interface CameraAutoExposureStatus {
 }
 
 interface CameraState {
-  cameraStatus: CameraStatus;
   captureSettings: CameraCaptureSettings;
   captureSettingsError: string | null;
-  setCameraStatus: (status: Partial<CameraStatus>) => void;
   setCaptureSettings: (settings: CameraCaptureSettings) => void;
   setCaptureSettingsError: (error: string | null) => void;
 }
 
 export const useCameraStore = create<CameraState>((set) => ({
-  cameraStatus: {
-    available: false,
-    enabled: false,
-    streaming: false,
-    ball_detected: false,
-    ball_confidence: 0,
-  },
   captureSettings: { available: false },
   captureSettingsError: null,
-  setCameraStatus: (status) =>
-    set((state) => ({
-      cameraStatus: { ...state.cameraStatus, ...status },
-    })),
   setCaptureSettings: (settings) => set({ captureSettings: settings, captureSettingsError: null }),
   setCaptureSettingsError: (error) => set({ captureSettingsError: error }),
 }));

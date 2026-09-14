@@ -1,13 +1,5 @@
 import { test } from '@playwright/test';
-import {
-  expect,
-  gotoApp,
-  resetSession,
-  setClub,
-  simulateShot,
-  waitForEvent,
-  withControlSocket,
-} from './helpers';
+import { expect, gotoApp, resetSession, setClub, simulateShot, waitForEvent, withControlSocket } from './helpers';
 
 /** Dismiss the club picker that opens on every load, keeping the default club. */
 async function dismissPicker(page: import('@playwright/test').Page) {
@@ -40,7 +32,6 @@ test('stays usable when websocket upgrade fails and socket.io falls back to poll
   await expect(statusMenu).toBeVisible();
   await expect(statusMenu.getByText('Server', { exact: true })).toBeVisible();
   await expect(statusMenu.getByText('Radar', { exact: true })).toBeVisible();
-  await expect(statusMenu.getByText('Ball detection', { exact: true })).toBeVisible();
   await expect(statusMenu.getByText('Connected', { exact: true }).first()).toBeVisible();
 
   await page.getByLabel('Close status').click();
@@ -180,7 +171,7 @@ test('switches between primary navigation views', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Change club' })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Camera' }).click();
-  await expect(page.getByText('Camera unavailable')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Camera Not Available' })).toBeVisible();
   await expect(page.locator('.panel-footer__units')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Simulate shot' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Change club' })).toHaveCount(0);
@@ -589,6 +580,54 @@ test('display route shows latest shot and recent shots from mock backend session
   await expect(page.getByLabel('Recent shots').locator('.display-shot-chip')).toHaveCount(3);
   await expect(page.getByLabel('Recent shots')).toContainText('pw');
   await expect(page.getByLabel('Recent shots')).toContainText('7-iron');
+});
+
+test('refreshes the display camera preview at supported kiosk sizes', async ({ page }) => {
+  let previewRequests = 0;
+  await page.route('**/api/camera/preview.jpg*', async (route) => {
+    previewRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      body: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64'
+      ),
+    });
+  });
+
+  await gotoApp(page, '/display');
+  await expect
+    .poll(() =>
+      page.evaluate(
+        "import('/src/stores/useCameraStore.ts').then(({ useCameraStore }) => " +
+          'useCameraStore.getState().captureSettings.enabled)'
+      )
+    )
+    .toBe(false);
+  await page.evaluate(
+    "import('/src/stores/useCameraStore.ts').then(({ useCameraStore }) => " +
+      'useCameraStore.getState().setCaptureSettings({ available: true, enabled: true, running: true }))'
+  );
+  const preview = page.getByRole('img', { name: 'Camera stream' });
+  for (const viewport of [
+    { width: 800, height: 400 },
+    { width: 800, height: 480 },
+    { width: 1024, height: 600 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(preview).toBeVisible();
+    const bounds = await preview.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y).toBeLessThan(viewport.height);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+  }
+  await page.waitForTimeout(5_500);
+
+  expect(previewRequests).toBeGreaterThanOrEqual(2);
 });
 
 test('unit toggle in the menu sheet updates displayed units', async ({ page }) => {

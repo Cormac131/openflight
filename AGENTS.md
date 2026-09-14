@@ -317,12 +317,11 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
 Logs written to `~/openflight_sessions/session_*.jsonl` with entry types:
 
 - `session_start`, `session_end` - Session metadata
-- `reading_accepted` - Individual radar readings
 - `shot_detected` - Detected shots with metrics (ball_speed, club_speed, spin_rpm, carry_spin_adjusted)
-- `iq_reading` - I/Q streaming detections with SNR/CFAR data
-- `iq_blocks` - Raw I/Q data for post-session analysis
 - `trigger_event` - Trigger accept/reject with latency (for rolling buffer mode)
 - `rolling_buffer_capture` - Raw I/Q samples (4096 each) for offline analysis
+- `kld7_buffer`, `iwr6843_capture`, `camera_capture` - Optional hardware evidence correlated by shot number
+- `connection`, `ops_clock_sync`, `config_change`, `power_status`, `error` - Runtime diagnostics
 
 ## Sound Trigger Hardware
 

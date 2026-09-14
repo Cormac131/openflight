@@ -92,6 +92,3 @@ means different things depending on which subsystem produced it.
 
 Collect a session log and the diagnostic output, then open an issue at
 [github.com/jewbetcha/openflight/issues](https://github.com/jewbetcha/openflight/issues).
-
-The [TrackMan test process](../development/trackman-testing.md) describes what
-data is worth collecting when a measurement looks wrong rather than absent.

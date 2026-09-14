@@ -63,46 +63,7 @@ moves and pass them on the command line.
 | `--kld7-port` / `--kld7-horizontal-port` | Override serial port autodetection |
 | `--kld7-horizontal-offset` | Boresight offset for the horizontal radar |
 | `--kld7-vertical-raw` | Emit the raw vertical estimator output with **all display gating bypassed** (plausibility, lane, and confidence guards). For debugging/validation only. |
-| `--kld7-raw-logging` | Log raw RADC frames to the session file for offline replay and review |
 | `--calculated-spin` | Off by default. Replaces radar spin with the kinematic estimate (`170·v·sin(LA)^1.2`). Opt-in; see the spin notes. |
-
-## Reviewing a session offline
-
-After a session, render a **per-shot HTML report** that re-runs the
-two-ray estimator offline on the saved RADC frames and lays the result
-next to what the system logged live (displayed angle, source, two_ray's
-own answer, the accept/reject gate, frame timing, and the tier
-classification). Because the offline columns use the *current* code, this
-doubles as a regression lens — replay an old session to see how today's
-gates would classify each shot.
-
-```bash
-uv run python scripts/analysis/session_shot_report.py SESSION.jsonl --open
-```
-
-- `SESSION.jsonl` — a session log that contains raw RADC frames (run the
-  live session with `--kld7-raw-logging`).
-- `-o, --output PATH` — output HTML path (default: `SESSION.report.html`).
-- `--open` — open the report in the default browser when done.
-- **Geometry** (must match the physical rig; printed into the report
-  header so the result is never ambiguous):
-  - `--mount-tilt` (default 10.3)
-  - `--angle-offset` (default: auto-detected from the log, else 2.5)
-  - `--ball-distance` (default 5.0 ft)
-  - `--radar-height-inches` (default 4.0)
-  - `--net-distance` (default 10.0 ft; enables de-aliasing past the range wrap)
-
-Example, matching the standard mount:
-
-```bash
-uv run python scripts/analysis/session_shot_report.py \
-    ~/openflight_sessions/session_20260620_121141_trackman.jsonl \
-    --mount-tilt 10.3 --ball-distance 5.0 --radar-height-inches 4.0 --open
-```
-
-> An older text/CSV review workflow also exists
-> ([kld7-session-review.md](session-review.md)); the HTML report
-> above is the recommended reviewer.
 
 ## Horizontal / aim
 
@@ -117,6 +78,4 @@ by the two-ray pipeline.
 ## Troubleshooting
 
 See [kld7-troubleshooting.md](troubleshooting.md) for detection and
-serial issues. For validation sessions and offline tooling, see the
-[TrackMan test process](../development/trackman-testing.md) and
-[K-LD7 analysis tools](../development/analysis-tooling.md).
+serial issues.

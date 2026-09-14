@@ -400,10 +400,6 @@ class TestShutdownCleanup:
         monkeypatch.setattr(server_module, "kld7_horizontal", GoodKLD7())
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         monkeypatch.setattr(server_module, "shutdown_cleanup_started", False)
-        monkeypatch.setattr(
-            server_module, "stop_camera_thread", lambda: calls.append("camera_thread")
-        )
-        monkeypatch.setattr(server_module, "camera", None)
         monkeypatch.setattr(server_module, "stop_monitor", lambda: calls.append("stop_monitor"))
 
         server_module._cleanup_hardware_for_shutdown()
@@ -411,7 +407,6 @@ class TestShutdownCleanup:
         assert calls == [
             "kld7_vertical.stop",
             "kld7_horizontal.stop",
-            "camera_thread",
             "stop_monitor",
         ]
 
@@ -423,14 +418,12 @@ class TestShutdownCleanup:
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         monkeypatch.setattr(server_module, "shutdown_cleanup_started", False)
-        monkeypatch.setattr(server_module, "stop_camera_thread", lambda: calls.append("camera"))
-        monkeypatch.setattr(server_module, "camera", None)
         monkeypatch.setattr(server_module, "stop_monitor", lambda: calls.append("monitor"))
 
         first_request_owned_cleanup = server_module._cleanup_hardware_for_shutdown()
         duplicate_request_owned_cleanup = server_module._cleanup_hardware_for_shutdown()
 
-        assert calls == ["camera", "monitor"]
+        assert calls == ["monitor"]
         assert first_request_owned_cleanup is True
         assert duplicate_request_owned_cleanup is False
 
@@ -444,8 +437,6 @@ class TestShutdownCleanup:
             SimpleNamespace(stop=lambda: calls.append("iwr6843")),
         )
         monkeypatch.setattr(server_module, "shutdown_cleanup_started", False)
-        monkeypatch.setattr(server_module, "camera", None)
-        monkeypatch.setattr(server_module, "stop_camera_thread", lambda: None)
         monkeypatch.setattr(server_module, "stop_monitor", lambda: calls.append("ops243"))
 
         server_module._cleanup_hardware_for_shutdown()
@@ -1062,7 +1053,7 @@ class TestSessionErrorLogging:
         class FailingTracker:
             orientation = "vertical"
 
-            def snapshot_buffer(self, include_radc_payload=False):
+            def snapshot_buffer(self):
                 raise RuntimeError("snapshot failed")
 
             def get_angle_for_shot(self, **kwargs):
@@ -1076,8 +1067,6 @@ class TestSessionErrorLogging:
 
         monkeypatch.setattr(server_module, "kld7_vertical", FailingTracker())
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -1157,139 +1146,6 @@ class TestSessionErrorLogging:
 class TestKLD7Initialization:
     """Tests for K-LD7 startup wiring."""
 
-    def _radc_args(self, enabled: bool) -> SimpleNamespace:
-        return SimpleNamespace(
-            experimental_kld7_radc_tuning=enabled,
-            experimental_kld7_speed_tolerance=8.0,
-            experimental_kld7_centroid_floor=0.65,
-            experimental_kld7_spectrum_source="sum12",
-            experimental_kld7_ops_bin_tol=12,
-            experimental_kld7_ops_bin_penalty=4.0,
-            experimental_kld7_ops_anchored_min_snr=2.5,
-            experimental_kld7_vertical_impact_energy=2.5,
-            experimental_kld7_horizontal_impact_energy=1.4,
-            experimental_kld7_horizontal_retry_impact_energy=0.35,
-            experimental_kld7_horizontal_angle_limit=30.0,
-        )
-
-    def test_radc_tuning_args_ignored_without_experimental_gate(self):
-        """Experimental RADC values must not affect startup unless gated."""
-        kwargs = server_module._kld7_radc_tuning_kwargs(self._radc_args(enabled=False))
-
-        assert kwargs == server_module._DEFAULT_KLD7_RADC_TUNING
-
-    def test_radc_tuning_args_used_with_experimental_gate(self):
-        """The gated path should pass replay-discovered parameters through."""
-        kwargs = server_module._kld7_radc_tuning_kwargs(self._radc_args(enabled=True))
-
-        assert kwargs == {
-            "radc_speed_tolerance_mph": 8.0,
-            "radc_centroid_floor_frac": 0.65,
-            "radc_spectrum_source": "sum12",
-            "radc_ops_bin_outlier_tol": 12,
-            "radc_ops_bin_outlier_penalty": 4.0,
-            "radc_ops_anchored_peak_min_snr": 2.5,
-            "radc_vertical_impact_energy_threshold": 2.5,
-            "radc_horizontal_impact_energy_threshold": 1.4,
-            "radc_horizontal_retry_impact_energy_threshold": 0.35,
-            "radc_horizontal_angle_limit_deg": 30.0,
-        }
-
-    @pytest.mark.parametrize(
-        ("raw_logging_enabled", "radc_tuning_enabled", "expected"),
-        [
-            (False, False, False),
-            (True, False, True),
-            (False, True, True),
-            (True, True, True),
-        ],
-    )
-    def test_raw_radc_logging_enabled_for_any_kld7_experiment(
-        self,
-        monkeypatch,
-        raw_logging_enabled,
-        radc_tuning_enabled,
-        expected,
-    ):
-        """Any K-LD7 experiment path should preserve raw RADC for replay."""
-        monkeypatch.setattr(
-            server_module,
-            "experimental_kld7_raw_radc_logging",
-            raw_logging_enabled,
-        )
-        monkeypatch.setattr(server_module, "experimental_kld7_radc_tuning", radc_tuning_enabled)
-
-        assert server_module._experimental_kld7_raw_radc_logging_enabled() is expected
-
-    def test_session_start_config_records_kld7_experiment_provenance(self, monkeypatch):
-        """Session logs should preserve exact experiment settings for replay."""
-        tuning = {
-            "radc_speed_tolerance_mph": 8.0,
-            "radc_centroid_floor_frac": 0.25,
-            "radc_spectrum_source": "sum12",
-            "radc_ops_bin_outlier_tol": 12,
-            "radc_ops_bin_outlier_penalty": 4.0,
-            "radc_ops_anchored_peak_min_snr": 2.5,
-            "radc_vertical_impact_energy_threshold": 2.5,
-            "radc_horizontal_impact_energy_threshold": 1.4,
-            "radc_horizontal_retry_impact_energy_threshold": 0.35,
-            "radc_horizontal_angle_limit_deg": 30.0,
-        }
-        monkeypatch.setattr(server_module, "experimental_kld7_raw_radc_logging", True)
-        monkeypatch.setattr(server_module, "experimental_kld7_radc_tuning", True)
-        monkeypatch.setattr(server_module, "active_kld7_radc_tuning", tuning)
-
-        config = server_module._session_start_config()
-
-        assert config["min_speed"] == server_module.radar_config["min_speed"]
-        assert config["kld7_experiments"] == {
-            "trackman_calibration_enabled": False,
-            "trackman_calibration_model": None,
-            "raw_radc_payload_logging_enabled": True,
-            "raw_radc_payload_logging_requested": True,
-            "radc_tuning_enabled": True,
-            "radc_tuning_params": tuning,
-        }
-
-    def test_start_monitor_writes_kld7_experiment_provenance(self, monkeypatch):
-        """The session_start row should include K-LD7 experiment settings."""
-        started = {}
-
-        class FakeSessionLogger:
-            def start_session(self, **kwargs):
-                started.update(kwargs)
-
-            def end_session(self):
-                pass
-
-        tuning = {
-            "radc_speed_tolerance_mph": 8.0,
-            "radc_centroid_floor_frac": 0.25,
-            "radc_spectrum_source": "sum12",
-            "radc_ops_bin_outlier_tol": 12,
-            "radc_ops_bin_outlier_penalty": 4.0,
-            "radc_ops_anchored_peak_min_snr": 2.5,
-            "radc_vertical_impact_energy_threshold": 2.5,
-            "radc_horizontal_impact_energy_threshold": 1.4,
-            "radc_horizontal_retry_impact_energy_threshold": 0.35,
-            "radc_horizontal_angle_limit_deg": 30.0,
-        }
-        monkeypatch.setattr(server_module, "monitor", None)
-        monkeypatch.setattr(server_module, "camera", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "get_session_logger", lambda: FakeSessionLogger())
-        monkeypatch.setattr(server_module, "experimental_kld7_raw_radc_logging", True)
-        monkeypatch.setattr(server_module, "experimental_kld7_radc_tuning", True)
-        monkeypatch.setattr(server_module, "active_kld7_radc_tuning", tuning)
-
-        server_module.start_monitor(mock=True, trigger_type="sound")
-
-        assert started["config"]["kld7_experiments"]["trackman_calibration_enabled"] is False
-        assert started["config"]["kld7_experiments"]["raw_radc_payload_logging_enabled"] is True
-        assert started["config"]["kld7_experiments"]["raw_radc_payload_logging_requested"] is True
-        assert started["config"]["kld7_experiments"]["radc_tuning_params"] == tuning
-        server_module.stop_monitor()
-
     def test_start_monitor_applies_cli_debug_mode(self, monkeypatch):
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
@@ -1300,8 +1156,7 @@ class TestKLD7Initialization:
         assert server_module.debug_mode is True
         server_module.stop_monitor()
 
-    def test_init_kld7_passes_radc_tuning_parameters(self, monkeypatch):
-        """Server startup should forward experimental replay knobs to KLD7Tracker."""
+    def test_init_kld7_uses_stable_runtime_defaults(self, monkeypatch):
         import openflight.kld7 as kld7_package
 
         created = []
@@ -1329,16 +1184,6 @@ class TestKLD7Initialization:
             orientation="horizontal",
             angle_offset_deg=1.5,
             base_freq=2,
-            radc_speed_tolerance_mph=8.0,
-            radc_centroid_floor_frac=0.65,
-            radc_spectrum_source="sum12",
-            radc_ops_bin_outlier_tol=12,
-            radc_ops_bin_outlier_penalty=4.0,
-            radc_ops_anchored_peak_min_snr=2.5,
-            radc_vertical_impact_energy_threshold=2.5,
-            radc_horizontal_impact_energy_threshold=1.4,
-            radc_horizontal_retry_impact_energy_threshold=0.35,
-            radc_horizontal_angle_limit_deg=30.0,
         )
 
         assert ok is True
@@ -1350,47 +1195,11 @@ class TestKLD7Initialization:
             "angle_offset_deg": 1.5,
             "base_freq": 2,
             "buffer_seconds": 6.0,
-            "radc_speed_tolerance_mph": 8.0,
-            "radc_centroid_floor_frac": 0.65,
-            "radc_spectrum_source": "sum12",
-            "radc_ops_bin_outlier_tol": 12,
-            "radc_ops_bin_outlier_penalty": 4.0,
-            "radc_ops_anchored_peak_min_snr": 2.5,
-            "radc_vertical_impact_energy_threshold": 2.5,
-            "radc_horizontal_impact_energy_threshold": 1.4,
-            "radc_horizontal_retry_impact_energy_threshold": 0.35,
-            "radc_horizontal_angle_limit_deg": 30.0,
             "vertical_estimator": "naive",
             "mount_tilt_deg": 18.0,
             "ball_distance_ft": 5.5,
             "vertical_flight_window_net_distance_ft": 10.0,
         }
-
-    def test_init_kld7_defaults_to_legacy_vertical_estimator(self, monkeypatch):
-        """Plain --kld7 should use the legacy bearing-average path unless opted in."""
-        import openflight.kld7 as kld7_package
-
-        created = []
-
-        class FakeKLD7Tracker:
-            def __init__(self, **kwargs):
-                self.kwargs = kwargs
-                created.append(self)
-
-            def connect(self):
-                return True
-
-            def start(self):
-                pass
-
-        monkeypatch.setattr(kld7_package, "KLD7Tracker", FakeKLD7Tracker)
-        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
-        monkeypatch.setattr(server_module, "kld7_vertical", None)
-        monkeypatch.setattr(server_module, "kld7_horizontal", None)
-
-        assert server_module.init_kld7(port="/dev/test-kld7") is True
-
-        assert created[0].kwargs["vertical_estimator"] == "naive"
 
 
 class TestStaticRoutes:
@@ -1438,8 +1247,10 @@ class TestShotToDict:
             club=ClubType.DRIVER,
         )
 
+        raw = shot.to_dict()
         result = shot_to_dict(shot)
 
+        assert set(result) == set(raw) - {"mode", "readings", "readings_count"}
         assert result["ball_speed_mph"] == 150.5
         assert result["club_speed_mph"] == 103.2
         assert result["club"] == "driver"
@@ -1768,10 +1579,6 @@ class TestSessionStateClub:
         monkeypatch.setattr(server_module, "monitor", monitor)
         monkeypatch.setattr(server_module, "mock_mode", True)
         monkeypatch.setattr(server_module, "debug_mode", False)
-        monkeypatch.setattr(server_module, "camera", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
-        monkeypatch.setattr(server_module, "camera_streaming", False)
-        monkeypatch.setattr(server_module, "ball_detected", False)
         monkeypatch.setattr(server_module, "power_monitor", None)
         monkeypatch.setattr(server_module, "_emit_sim_snapshot", lambda: None)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -1893,8 +1700,6 @@ class TestSwingSpeedMode:
                 session["clock_sync"] = kwargs
 
         monkeypatch.setattr(server_module, "monitor", None)
-        monkeypatch.setattr(server_module, "camera", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: FakeSessionLogger())
         monkeypatch.setattr(
             "openflight.swing_speed.SwingSpeedMonitor",
@@ -1943,8 +1748,6 @@ class TestSwingSpeedMode:
                 pass
 
         monkeypatch.setattr(server_module, "monitor", None)
-        monkeypatch.setattr(server_module, "camera", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: FakeSessionLogger())
 
         server_module.start_monitor(
@@ -2426,9 +2229,7 @@ class TestProfileSocketHandlers:
 
         assert self._last_snapshot(emitted)["active_profile_id"] == first.id
 
-    def test_set_active_profile_with_unknown_id_broadcasts_unchanged_snapshot(
-        self, store, emitted
-    ):
+    def test_set_active_profile_with_unknown_id_broadcasts_unchanged_snapshot(self, store, emitted):
         before = store.get_active().id
 
         server_module.handle_set_active_profile({"profile_id": "ghost"})
@@ -2870,153 +2671,6 @@ class TestKLD7BufferUnderfillWarning:
         assert not warns
 
 
-class TestKLD7RawPayloadWarning:
-    """TrackMan experiments should warn when replay payloads are missing."""
-
-    def test_raw_payload_warning_disabled_when_not_expected(self, caplog):
-        import logging
-
-        from openflight.server import _warn_if_kld7_raw_payload_missing
-
-        with caplog.at_level(logging.WARNING, logger="openflight.server"):
-            _warn_if_kld7_raw_payload_missing(
-                "vertical",
-                [{"timestamp": 1.0, "has_radc": True}],
-                raw_payload_expected=False,
-            )
-
-        warns = [r for r in caplog.records if "raw RADC replay payload" in r.message]
-        assert not warns
-
-    def test_missing_raw_payload_warns_when_expected(self, caplog):
-        import logging
-
-        from openflight.server import _warn_if_kld7_raw_payload_missing
-
-        with caplog.at_level(logging.WARNING, logger="openflight.server"):
-            _warn_if_kld7_raw_payload_missing(
-                "vertical",
-                [{"timestamp": 1.0, "has_radc": True}],
-                raw_payload_expected=True,
-            )
-
-        warns = [r for r in caplog.records if "raw RADC replay payload missing" in r.message]
-        assert warns
-        assert "0/1 RADC frames have radc_b64" in warns[0].message
-
-    def test_partial_raw_payload_warns_when_expected(self, caplog):
-        import logging
-
-        from openflight.server import _warn_if_kld7_raw_payload_missing
-
-        with caplog.at_level(logging.WARNING, logger="openflight.server"):
-            _warn_if_kld7_raw_payload_missing(
-                "horizontal",
-                [
-                    {"timestamp": 1.0, "radc_b64": "AQID"},
-                    {"timestamp": 2.0, "has_radc": True},
-                ],
-                raw_payload_expected=True,
-            )
-
-        warns = [r for r in caplog.records if "raw RADC replay payload incomplete" in r.message]
-        assert warns
-        assert "1/2 RADC frames have radc_b64" in warns[0].message
-
-    def test_complete_raw_payload_ignores_non_radc_frames(self, caplog):
-        import logging
-
-        from openflight.server import _warn_if_kld7_raw_payload_missing
-
-        with caplog.at_level(logging.WARNING, logger="openflight.server"):
-            _warn_if_kld7_raw_payload_missing(
-                "vertical",
-                [
-                    {"timestamp": 1.0},
-                    {"timestamp": 2.0, "has_radc": True, "radc_b64": "AQID"},
-                ],
-                raw_payload_expected=True,
-            )
-
-        warns = [r for r in caplog.records if "raw RADC replay payload" in r.message]
-        assert not warns
-
-    def test_wrong_size_raw_payload_warns_when_expected(self, caplog):
-        import logging
-
-        from openflight.server import _warn_if_kld7_raw_payload_missing
-
-        with caplog.at_level(logging.WARNING, logger="openflight.server"):
-            _warn_if_kld7_raw_payload_missing(
-                "vertical",
-                [
-                    {
-                        "timestamp": 1.0,
-                        "has_radc": True,
-                        "radc_b64": "AQID",
-                        "radc_payload_bytes": 3,
-                        "radc_payload_valid": False,
-                    },
-                ],
-                raw_payload_expected=True,
-            )
-
-        warns = [r for r in caplog.records if "raw RADC replay payload invalid" in r.message]
-        assert warns
-        assert "1/1 payloads" in warns[0].message
-
-    def test_no_radc_frames_warns_when_raw_payload_expected(self, caplog):
-        import logging
-
-        from openflight.server import _warn_if_kld7_raw_payload_missing
-
-        with caplog.at_level(logging.WARNING, logger="openflight.server"):
-            _warn_if_kld7_raw_payload_missing(
-                "horizontal",
-                [{"timestamp": 1.0}],
-                raw_payload_expected=True,
-            )
-
-        warns = [r for r in caplog.records if "buffer has no RADC frames" in r.message]
-        assert warns
-
-
-class TestKLD7PostShotSnapshotWarning:
-    """TrackMan replay snapshots should include frames after the OPS impact timestamp."""
-
-    def test_no_post_shot_frames_warns_when_expected(self, caplog):
-        import logging
-
-        from openflight.server import _warn_if_kld7_snapshot_lacks_post_shot_frames
-
-        with caplog.at_level(logging.WARNING, logger="openflight.server"):
-            _warn_if_kld7_snapshot_lacks_post_shot_frames(
-                "vertical",
-                [{"timestamp": 99.9, "has_radc": True}, {"timestamp": 100.0, "has_radc": True}],
-                100.0,
-                raw_payload_expected=True,
-            )
-
-        warns = [r for r in caplog.records if "no frames after shot timestamp" in r.message]
-        assert warns
-
-    def test_post_shot_frames_do_not_warn(self, caplog):
-        import logging
-
-        from openflight.server import _warn_if_kld7_snapshot_lacks_post_shot_frames
-
-        with caplog.at_level(logging.WARNING, logger="openflight.server"):
-            _warn_if_kld7_snapshot_lacks_post_shot_frames(
-                "vertical",
-                [{"timestamp": 99.9, "has_radc": True}, {"timestamp": 100.1, "has_radc": True}],
-                100.0,
-                raw_payload_expected=True,
-            )
-
-        warns = [r for r in caplog.records if "no frames after shot timestamp" in r.message]
-        assert not warns
-
-
 class TestKLD7PostShotCaptureDelay:
     """Live K-LD7 extraction should include post-impact frames."""
 
@@ -3057,9 +2711,13 @@ class TestOnShotDetected:
             self.camera_captures = []
             self.all_shots_logged = threading.Event()
 
-        def log_shot(self, **shot_data):
+        def log_shot(self, shot, pipeline_ms=None):
             self.stats["shots_detected"] += 1
-            shot_data.setdefault("shot_number", self.stats["shots_detected"])
+            shot_data = shot.to_dict()
+            if shot_data["shot_number"] is None:
+                shot_data["shot_number"] = self.stats["shots_detected"]
+            if pipeline_ms is not None:
+                shot_data["pipeline_ms"] = pipeline_ms
             self.shots.append(shot_data)
             if len(self.shots) == 4:
                 self.all_shots_logged.set()
@@ -3093,8 +2751,6 @@ class TestOnShotDetected:
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "kld7_vertical", None)
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "camera_capture_runtime", None)
         monkeypatch.setattr(server_module, "ball_speed_correction_enabled", False)
         monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
@@ -3169,8 +2825,6 @@ class TestOnShotDetected:
         monkeypatch.setattr(server_module, "iwr6843_runtime", BlockingRuntime())
         monkeypatch.setattr(server_module, "kld7_vertical", None)
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "camera_capture_runtime", None)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
@@ -3603,8 +3257,8 @@ class TestOnShotDetected:
 
         original_log_shot = session_log.log_shot
 
-        def log_shot(**shot_data):
-            original_log_shot(**shot_data)
+        def log_shot(shot, pipeline_ms=None):
+            original_log_shot(shot, pipeline_ms)
             if len(session_log.shots) == 1:
                 first_shot_logged.set()
             if len(session_log.shots) == shot_count:
@@ -3693,7 +3347,7 @@ class TestOnShotDetected:
         class StubTracker:
             orientation = "vertical"
 
-            def snapshot_buffer(self, include_radc_payload=False):
+            def snapshot_buffer(self):
                 return []
 
             def get_angle_for_shot(
@@ -3711,8 +3365,6 @@ class TestOnShotDetected:
 
         emitted = []
         monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -3735,125 +3387,13 @@ class TestOnShotDetected:
         assert ("club", 1234.5) in calls
         assert emitted
 
-    def test_radc_tuning_logs_raw_kld7_payloads_without_calibration(self, monkeypatch):
-        """Tuning-only experiments still need raw RADC buffers for replay."""
-        snapshot_calls = []
-
-        class StubTracker:
-            orientation = "vertical"
-
-            def snapshot_buffer(self, include_radc_payload=False):
-                snapshot_calls.append(include_radc_payload)
-                return [{"timestamp": 1000.0, "has_radc": True, "radc_b64": "AQID"}]
-
-            def get_angle_for_shot(
-                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None, **kwargs
-            ):
-                return KLD7Angle(vertical_deg=12.0, confidence=0.8, num_frames=2)
-
-            def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
-                return None
-
-            def reset(self):
-                return None
-
-        logged_buffers = []
-
-        class StubSessionLogger:
-            @property
-            def stats(self):
-                return {"shots_detected": 0}
-
-            def log_kld7_buffer(self, **kwargs):
-                logged_buffers.append(kwargs)
-
-        monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
-        monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
-        monkeypatch.setattr(server_module, "monitor", None)
-        monkeypatch.setattr(server_module, "debug_mode", False)
-        monkeypatch.setattr(server_module, "experimental_kld7_radc_tuning", True)
-        monkeypatch.setattr(server_module, "get_session_logger", lambda: StubSessionLogger())
-        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
-
-        shot = Shot(
-            ball_speed_mph=150.0,
-            club_speed_mph=100.0,
-            timestamp=datetime.now(),
-            impact_timestamp=1234.5,
-            club=ClubType.DRIVER,
-        )
-
-        on_shot_detected(shot)
-        self._wait_for_finalization_coordinator_idle()
-
-        assert snapshot_calls == [True]
-        assert logged_buffers[0]["buffer_frames"][0]["radc_b64"] == "AQID"
-        assert logged_buffers[0]["raw_payload_expected"] is True
-
-    def test_experiment_warns_when_snapshot_lacks_raw_payloads(self, monkeypatch, caplog):
-        """A TrackMan run should warn immediately if future replay will fail."""
-        import logging
-
-        class StubTracker:
-            orientation = "vertical"
-
-            def snapshot_buffer(self, include_radc_payload=False):
-                assert include_radc_payload is True
-                return [{"timestamp": 1000.0, "has_radc": True}]
-
-            def get_angle_for_shot(
-                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None, **kwargs
-            ):
-                return KLD7Angle(vertical_deg=12.0, confidence=0.8, num_frames=2)
-
-            def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
-                return None
-
-            def reset(self):
-                return None
-
-        class StubSessionLogger:
-            @property
-            def stats(self):
-                return {"shots_detected": 0}
-
-            def log_kld7_buffer(self, **kwargs):
-                return None
-
-        monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
-        monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
-        monkeypatch.setattr(server_module, "monitor", None)
-        monkeypatch.setattr(server_module, "debug_mode", False)
-        monkeypatch.setattr(server_module, "experimental_kld7_raw_radc_logging", True)
-        monkeypatch.setattr(server_module, "experimental_kld7_radc_tuning", False)
-        monkeypatch.setattr(server_module, "get_session_logger", lambda: StubSessionLogger())
-        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
-
-        shot = Shot(
-            ball_speed_mph=150.0,
-            club_speed_mph=100.0,
-            timestamp=datetime.now(),
-            impact_timestamp=1234.5,
-            club=ClubType.DRIVER,
-        )
-
-        with caplog.at_level(logging.WARNING, logger="openflight.server"):
-            on_shot_detected(shot)
-            self._wait_for_finalization_coordinator_idle()
-
-        assert any("raw RADC replay payload missing" in r.message for r in caplog.records)
-
     def test_implausible_kld7_angle_falls_back_to_estimate(self, monkeypatch):
         """Radar angles that conflict with club+speed should not override the estimate."""
 
         class StubTracker:
             orientation = "vertical"
 
-            def snapshot_buffer(self, include_radc_payload=False):
+            def snapshot_buffer(self):
                 return []
 
             def get_angle_for_shot(
@@ -3865,8 +3405,6 @@ class TestOnShotDetected:
                 return None
 
         monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -3907,8 +3445,6 @@ class TestOnShotDetected:
 
         monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -3951,8 +3487,6 @@ class TestOnShotDetected:
 
         monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -4027,8 +3561,6 @@ class TestOnShotDetected:
 
         monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: StubSessionLogger())
@@ -4109,8 +3641,6 @@ class TestOnShotDetected:
 
         monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: StubSessionLogger())
@@ -4130,9 +3660,9 @@ class TestOnShotDetected:
         assert shot.launch_angle_vertical_source == "radar"
         assert shot.launch_angle_confidence == pytest.approx(0.67)
         assert shot.angle_source == "radar"
-        assert logged_shots[0]["launch_angle_vertical"] == pytest.approx(19.9)
-        assert logged_shots[0]["launch_angle_vertical_source"] == "radar"
-        assert logged_shots[0]["angle_source"] == "radar"
+        assert logged_shots[0]["shot"].launch_angle_vertical == pytest.approx(19.9)
+        assert logged_shots[0]["shot"].launch_angle_vertical_source == "radar"
+        assert logged_shots[0]["shot"].angle_source == "radar"
         assert logged_buffers[0]["ball_angle"]["selection_reason"] == "low_confidence_accept"
         assert logged_buffers[0]["ball_angle"]["acceptance_path"] == "low_confidence"
         assert logged_buffers[0]["ball_angle"]["radc_selection"] == {
@@ -4176,8 +3706,6 @@ class TestOnShotDetected:
 
         monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: StubSessionLogger())
@@ -4214,7 +3742,7 @@ class TestOnShotDetected:
         class StubHorizontalTracker:
             orientation = "horizontal"
 
-            def snapshot_buffer(self, include_radc_payload=False):
+            def snapshot_buffer(self):
                 return []
 
             def get_angle_for_shot(
@@ -4230,8 +3758,6 @@ class TestOnShotDetected:
 
         monkeypatch.setattr(server_module, "kld7_vertical", None)
         monkeypatch.setattr(server_module, "kld7_horizontal", StubHorizontalTracker())
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -4250,51 +3776,6 @@ class TestOnShotDetected:
         assert shot.launch_angle_vertical == pytest.approx(20.5)
         assert shot.launch_angle_horizontal == pytest.approx(1.5)
         assert shot.launch_angle_vertical_source == "estimated"
-        assert shot.launch_angle_horizontal_source == "radar"
-
-    def test_radc_tuning_horizontal_limit_accepts_wider_trackman_angle(self, monkeypatch):
-        """Experimental RADC tuning can widen the server-side horizontal guard."""
-
-        class StubHorizontalTracker:
-            orientation = "horizontal"
-
-            def snapshot_buffer(self, include_radc_payload=False):
-                return []
-
-            def get_angle_for_shot(
-                self, shot_timestamp=None, ball_speed_mph=None, impact_timestamp=None, **kwargs
-            ):
-                return KLD7Angle(horizontal_deg=16.1, confidence=0.68, num_frames=3)
-
-            def get_club_angle(self, club_speed_mph=None, shot_timestamp=None):
-                return None
-
-            def reset(self):
-                return None
-
-        tuning = dict(server_module._DEFAULT_KLD7_RADC_TUNING)
-        tuning["radc_horizontal_angle_limit_deg"] = 30.0
-        monkeypatch.setattr(server_module, "kld7_vertical", None)
-        monkeypatch.setattr(server_module, "kld7_horizontal", StubHorizontalTracker())
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
-        monkeypatch.setattr(server_module, "monitor", None)
-        monkeypatch.setattr(server_module, "debug_mode", False)
-        monkeypatch.setattr(server_module, "experimental_kld7_radc_tuning", True)
-        monkeypatch.setattr(server_module, "active_kld7_radc_tuning", tuning)
-        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
-        monkeypatch.setattr(server_module.socketio, "emit", lambda *args, **kwargs: None)
-
-        shot = Shot(
-            ball_speed_mph=100.0,
-            timestamp=datetime.now(),
-            club=ClubType.IRON_7,
-        )
-
-        on_shot_detected(shot)
-        self._wait_for_finalization_coordinator_idle()
-
-        assert shot.launch_angle_horizontal == pytest.approx(16.1)
         assert shot.launch_angle_horizontal_source == "radar"
 
     def test_low_confidence_horizontal_radar_falls_back_to_neutral(self, monkeypatch):
@@ -4319,8 +3800,6 @@ class TestOnShotDetected:
 
         monkeypatch.setattr(server_module, "kld7_vertical", None)
         monkeypatch.setattr(server_module, "kld7_horizontal", StubHorizontalTracker())
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -4372,8 +3851,6 @@ class TestOnShotDetected:
 
         monkeypatch.setattr(server_module, "kld7_vertical", None)
         monkeypatch.setattr(server_module, "kld7_horizontal", StubHorizontalTracker())
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: StubSessionLogger())
@@ -4426,8 +3903,6 @@ class TestOnShotDetected:
 
         monkeypatch.setattr(server_module, "kld7_vertical", None)
         monkeypatch.setattr(server_module, "kld7_horizontal", StubHorizontalTracker())
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: StubSessionLogger())
@@ -4480,8 +3955,6 @@ class TestOnShotDetected:
 
         monkeypatch.setattr(server_module, "kld7_vertical", None)
         monkeypatch.setattr(server_module, "kld7_horizontal", StubHorizontalTracker())
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: StubSessionLogger())
@@ -4522,8 +3995,6 @@ class TestOnShotDetected:
 
         monkeypatch.setattr(server_module, "kld7_vertical", StubVerticalTracker())
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -4588,8 +4059,6 @@ class TestOnShotDetected:
                 return None
 
         monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -4627,8 +4096,6 @@ class TestOnShotDetected:
                 return None
 
         monkeypatch.setattr(server_module, "kld7_vertical", StubTracker())
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -4666,8 +4133,6 @@ class TestOnShotDetected:
         monkeypatch.setattr(server_module, "iwr6843_runtime", None)
         monkeypatch.setattr(server_module, "kld7_vertical", None)
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -4738,14 +4203,29 @@ class TestBatteryConfiguration:
             parser.parse_args(["--battery", "unknown"])
 
 
+def test_kld7_device_symlinks_supply_stable_defaults(tmp_path):
+    (tmp_path / "kld7_vertical").touch()
+    (tmp_path / "kld7_horizontal").touch()
+    args = argparse.Namespace(
+        kld7=True,
+        kld7_port=None,
+        kld7_horizontal=False,
+        kld7_horizontal_port=None,
+    )
+
+    server_module._apply_kld7_device_defaults(args, tmp_path)
+
+    assert args.kld7_port == str(tmp_path / "kld7_vertical")
+    assert args.kld7_horizontal is True
+    assert args.kld7_horizontal_port == str(tmp_path / "kld7_horizontal")
+
+
 class TestCarryComputation:
     """Tests for the ballistic carry path in on_shot_detected."""
 
     def _patch_environment(self, monkeypatch):
         monkeypatch.setattr(server_module, "kld7_vertical", None)
         monkeypatch.setattr(server_module, "kld7_horizontal", None)
-        monkeypatch.setattr(server_module, "camera_tracker", None)
-        monkeypatch.setattr(server_module, "camera_enabled", False)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "debug_mode", False)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)

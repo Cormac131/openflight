@@ -317,8 +317,7 @@ scripts/start-kiosk.sh \
   --session-location home
 ```
 
-`--camera-capture` is separate from the legacy camera tracker. When capture is
-enabled, OpenFlight keeps a rolling pre-trigger frame buffer and freezes it
+When capture is enabled, OpenFlight keeps a rolling pre-trigger frame buffer and freezes it
 from the same sound-trigger event used by the radar pipeline.
 
 ## Shot Replay

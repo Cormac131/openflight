@@ -21,10 +21,6 @@ interface LivePanelProps {
   onSelectMetric?: (id: string) => void;
   /** True for a freshly captured shot (not a restored session). */
   isNewShot?: boolean;
-  /** Camera ball-detection is running. */
-  ballDetectionEnabled?: boolean;
-  /** YOLO currently sees a ball. */
-  ballDetected?: boolean;
   /** Pinned header control, e.g. Change club. */
   headerAction?: ReactNode;
 }
@@ -43,8 +39,6 @@ export function LivePanel({
   selectedMetricId = null,
   onSelectMetric,
   isNewShot = false,
-  ballDetectionEnabled = false,
-  ballDetected = false,
   headerAction,
 }: LivePanelProps) {
   const { locale, t } = useI18n();
@@ -70,14 +64,6 @@ export function LivePanel({
     metrics.length > 0,
     metrics.map((metric) => `${metric.value}:${metric.unit ?? ''}`).join('|')
   );
-  const showBallWarning = ballDetectionEnabled && !ballDetected;
-  const ballWarning = showBallWarning ? (
-    <div className="live-panel__ball-warning" role="alert">
-      <span className="live-panel__ball-warning-title">{t('live.noBall')}</span>
-      <span className="live-panel__ball-warning-detail">{t('live.noBallDetail')}</span>
-    </div>
-  ) : null;
-
   const header = <PanelHeader title={t('nav.live')} subtitle={profileName} club={clubLabel} actions={headerAction} />;
 
   if (!selected) {
@@ -85,7 +71,6 @@ export function LivePanel({
       <div className="panel">
         {header}
         <div className="panel__body panel__body--empty live-panel__empty">
-          {ballWarning}
           <span className="panel__empty-title live-panel__empty-title">{t('live.ready')}</span>
           <span className="panel__empty-detail live-panel__empty-detail">{t('live.readyDetail')}</span>
         </div>
@@ -97,7 +82,6 @@ export function LivePanel({
     <div className="panel">
       {header}
       <div className="panel__body live-panel__body">
-        {ballWarning}
         {isProfileNewShot ? <div className="shot-flash" /> : null}
         <div ref={gridRef} className={`live-panel__grid live-panel__grid--of-${metrics.length}`}>
           {metrics.map((metric) => (

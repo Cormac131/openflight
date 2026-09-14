@@ -114,4 +114,3 @@ default; shots without a vertical launch angle fall back to the table anyway.
 
 - [Rolling buffer & spin detection](rolling-buffer.md) — where spin comes from
 - [Constants](../reference/constants.md) — the full constant set
-- [TrackMan test process](../development/trackman-testing.md) — validation

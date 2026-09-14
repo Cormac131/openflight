@@ -16,8 +16,6 @@ function render(
       onOpenMenu={() => {}}
       menuOpen={false}
       shotCount={shotCount}
-      cameraStreaming={false}
-      ballDetected={false}
       debugRecording={false}
       powerStatus={powerStatus}
       onShutdown={() => {}}
