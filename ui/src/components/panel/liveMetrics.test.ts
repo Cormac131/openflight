@@ -5,7 +5,6 @@ import {
   LIVE_METRIC_COUNT,
   NO_VALUE,
   pinSelectedMetric,
-  shouldEnableLiveBallWarning,
   SWING_METRIC_COUNT,
   type LiveMetric,
 } from './liveMetrics';
@@ -288,22 +287,5 @@ describe('pinSelectedMetric', () => {
 
   it('handles an empty metric list', () => {
     expect(pinSelectedMetric([], 'ball_speed')).toEqual([]);
-  });
-});
-
-describe('shouldEnableLiveBallWarning', () => {
-  const cameraOn = { available: true, enabled: true };
-
-  it('is true only on the Live tab', () => {
-    expect(shouldEnableLiveBallWarning('live', cameraOn)).toBe(true);
-    expect(shouldEnableLiveBallWarning('stats', cameraOn)).toBe(false);
-    expect(shouldEnableLiveBallWarning('shots', cameraOn)).toBe(false);
-    expect(shouldEnableLiveBallWarning('camera', cameraOn)).toBe(false);
-    expect(shouldEnableLiveBallWarning('debug', cameraOn)).toBe(false);
-  });
-
-  it('is false when the camera is unavailable or disabled', () => {
-    expect(shouldEnableLiveBallWarning('live', { available: false, enabled: true })).toBe(false);
-    expect(shouldEnableLiveBallWarning('live', { available: true, enabled: false })).toBe(false);
   });
 });

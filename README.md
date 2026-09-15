@@ -338,7 +338,6 @@ Build it locally with `make docs` (serves at `localhost:8000`).
 - **[Camera and YOLO Experiments](docs/development/camera-yolo.md)** — Optional, non-production vision work
 - **[Legacy K-LD7 Setup](docs/legacy/index.md)** — Existing K-LD7 builds only
 - **[K-LD7 Ball Detection Theory](docs/legacy/ball-detection-theory.md)** — How angle detection works (deprecated hardware)
-- **[K-LD7 Session Review](docs/legacy/session-review.md)** — Offline review workflow for session JSONL files (deprecated hardware)
 - **[Observability & Log Shipping](docs/using/observability.md)** — Ship logs to Grafana Cloud
 - **[Contributing Guide](CONTRIBUTING.md)** — How to contribute
 - **[Changelog](docs/changelog.md)** — Version history

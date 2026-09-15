@@ -3,25 +3,13 @@
  */
 
 import type { Server, Socket } from 'socket.io';
+import type { CameraCaptureSettings } from '../src/stores/useCameraStore.js';
 import type { RadarConfig } from '../src/types/socket.js';
 import type { MockSession } from './session.js';
 
-const BALL_DETECTION_INTERVAL_MS = 1500;
+const CAMERA_CAPTURE_SETTINGS: CameraCaptureSettings = { available: false };
 
 export function registerHandlers(io: Server, session: MockSession): void {
-  // Shared timer so all connected clients see the same fake detections
-  const ballTimer = setInterval(() => {
-    const detection = session.tickBallDetection();
-    if (!detection) return;
-    io.emit('ball_detection', detection);
-  }, BALL_DETECTION_INTERVAL_MS);
-
-  // Avoid keeping the process alive solely for the timer if nobody imported this module oddly;
-  // the HTTP server keeps the process running either way.
-  if (typeof ballTimer.unref === 'function') {
-    ballTimer.unref();
-  }
-
   io.on('connection', (socket: Socket) => {
     console.log('[mock-server] client connected');
 
@@ -29,7 +17,7 @@ export function registerHandlers(io: Server, session: MockSession): void {
     socket.emit('profiles', session.snapshot());
     socket.emit('trigger_status', session.triggerStatus());
     socket.emit('radar_config', session.radarConfig);
-    socket.emit('camera_status', session.cameraStatus());
+    socket.emit('camera_capture_settings', CAMERA_CAPTURE_SETTINGS);
     socket.emit('power_status', {
       available: true,
       provider: 'mock',
@@ -53,8 +41,8 @@ export function registerHandlers(io: Server, session: MockSession): void {
       socket.emit('radar_config', session.radarConfig);
     });
 
-    socket.on('get_camera_status', () => {
-      socket.emit('camera_status', session.cameraStatus());
+    socket.on('get_camera_capture_settings', () => {
+      socket.emit('camera_capture_settings', CAMERA_CAPTURE_SETTINGS);
     });
 
     socket.on('get_debug_status', () => {
@@ -152,12 +140,10 @@ export function registerHandlers(io: Server, session: MockSession): void {
       io.emit('radar_config', config);
     });
 
-    socket.on('toggle_camera', () => {
-      io.emit('camera_status', session.toggleCamera());
-    });
-
-    socket.on('toggle_camera_stream', () => {
-      io.emit('camera_status', session.toggleCameraStream());
+    socket.on('set_camera_capture_settings', () => {
+      socket.emit('camera_capture_settings_error', {
+        error: 'High-speed camera capture is not running',
+      });
     });
 
     socket.on('disconnect', () => {

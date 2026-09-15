@@ -42,20 +42,16 @@ Written by `src/openflight/session_logger.py`.
 | Type | Written when |
 | --- | --- |
 | `shot_detected` | A shot is measured. Ball speed, club speed, spin, angles, carry. |
-| `reading_accepted` | An individual radar speed reading passed the filters. |
-| `shot_camera` | Camera-derived data for a shot (experimental). |
 
 ### Capture data
 
 | Type | Written when |
 | --- | --- |
 | `trigger_event` | Trigger accepted or rejected, with latency. |
-| `trigger_diagnostic` | Extended trigger diagnostics. |
 | `rolling_buffer_capture` | Raw OPS243 I/Q samples — 4,096 each. |
-| `iq_reading` | I/Q streaming detection with SNR and CFAR data. |
-| `iq_blocks` | Raw I/Q blocks for a shot. |
+| `camera_capture` | High-speed camera clip metadata and its correlated shot. |
 | `iwr6843_capture` | IWR6843 L3 dump for a shot. |
-| `kld7_buffer` | Raw K-LD7 RADC payload, base64 (deprecated hardware). |
+| `kld7_buffer` | K-LD7 frame timing and selected angle metadata (deprecated hardware). |
 
 ### Outbound and system
 
@@ -66,11 +62,6 @@ Written by `src/openflight/session_logger.py`.
 | `sim_player` | Player state — target, handedness, club. |
 | `power_status` | Battery and external-power status. |
 
-!!! warning "`CLAUDE.md` lists only eight of these"
-
-    The repository's `CLAUDE.md` documents a subset. The 20 types above are the
-    complete set as written by `session_logger.py`.
-
 ## Size
 
 Raw capture entries dominate. A session with a few hundred shots produces a
@@ -79,8 +70,7 @@ samples per shot.
 
 This is deliberate — those captures are what make offline estimator work
 possible without re-hitting balls. See
-[spin replay](../development/spin-replay.md) and
-[analysis tooling](../development/analysis-tooling.md).
+[spin replay](../development/spin-replay.md).
 
 [Cloud sync](../using/cloud-sync.md) strips the raw ADC entries before upload;
 that filtering is **required** by the wire contract, not optional — see the
@@ -105,4 +95,3 @@ For LogQL queries against shipped logs, see
 
 - [Observability & log shipping](../using/observability.md)
 - [Cloud uploader contract](cloud-uploader-spec.md)
-- [K-LD7 session review](../legacy/session-review.md) — offline review workflow

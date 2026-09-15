@@ -2,8 +2,6 @@
 .camera-feed {
   -webkit-user-select: none;
   user-select: none;
-}
-.camera-feed {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -50,53 +48,6 @@
   letter-spacing: 0.02em;
 }
 
-.camera-feed__controls {
-  display: flex;
-  gap: var(--space-xs);
-}
-
-.camera-feed__button {
-  padding: var(--space-xs) var(--space-md);
-  border: 1px solid rgba(245, 240, 230, 0.15);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all var(--transition-smooth);
-  min-height: 36px;
-}
-
-.camera-feed__button:hover {
-  background: rgba(245, 240, 230, 0.05);
-  border-color: rgba(245, 240, 230, 0.25);
-}
-
-.camera-feed__button:active {
-  transform: scale(0.97);
-}
-
-.camera-feed__button--active {
-  background: rgba(74, 222, 128, 0.12);
-  border-color: rgba(74, 222, 128, 0.4);
-  color: var(--color-success);
-}
-
-.camera-feed__button--streaming {
-  background: rgba(248, 113, 113, 0.12);
-  border-color: rgba(248, 113, 113, 0.4);
-  color: var(--color-danger);
-}
-
-.camera-feed__content {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: var(--space-md);
-}
-
 .camera-feed__workspace {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
@@ -130,17 +81,6 @@
   color: var(--text-secondary);
 }
 
-.camera-feed__message--error {
-  color: var(--color-danger);
-}
-
-.camera-feed__icon {
-  font-size: 2.5rem;
-  display: block;
-  margin-bottom: var(--space-md);
-  opacity: 0.6;
-}
-
 .camera-feed__message h3 {
   margin: 0 0 var(--space-xs) 0;
   font-size: 1.125rem;
@@ -152,23 +92,6 @@
   margin: 0;
   font-size: 0.8125rem;
   color: var(--text-muted);
-}
-
-.camera-feed__detection {
-  margin-top: var(--space-md);
-  padding: var(--space-sm) var(--space-lg);
-  border-radius: var(--radius-xl);
-  background: rgba(251, 191, 36, 0.12);
-  border: 1px solid rgba(251, 191, 36, 0.3);
-  color: var(--color-warning);
-  font-weight: 600;
-  font-size: 0.8125rem;
-}
-
-.camera-feed__detection--detected {
-  background: rgba(74, 222, 128, 0.12);
-  border-color: rgba(74, 222, 128, 0.3);
-  color: var(--color-success);
 }
 
 .camera-feed__stream {
@@ -216,10 +139,6 @@
   font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.05em;
-}
-
-.camera-feed__status--detected {
-  color: var(--color-success);
 }
 
 .camera-settings {
@@ -535,20 +454,6 @@
 
   .camera-feed__title {
     font-size: 0.875rem;
-  }
-
-  .camera-feed__button {
-    padding: var(--space-xs) var(--space-sm);
-    font-size: 0.75rem;
-    min-height: 32px;
-  }
-
-  .camera-feed__content {
-    padding: var(--space-sm);
-  }
-
-  .camera-feed__icon {
-    font-size: 2rem;
   }
 
   .camera-feed__message h3 {
