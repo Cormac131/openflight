@@ -14,10 +14,6 @@ is not part of the production path.
     Build the IWR6843 configurable image from source. Not needed to flash the
     prebuilt release.
 
-- :material-target: **[TrackMan test process](trackman-testing.md)**
-
-    How accuracy claims here were validated against a reference monitor.
-
 - :material-sine-wave: **[Spin replay bench](spin-replay.md)**
 
     The dechirped-sideband spin estimator test bench.
@@ -25,10 +21,6 @@ is not part of the production path.
 - :material-camera-outline: **[Camera & YOLO](camera-yolo.md)**
 
     Experimental vision work. Disabled in the production kiosk.
-
-- :material-chart-scatter-plot: **[Analysis tooling](analysis-tooling.md)**
-
-    Offline and live session analysis. K-LD7 era, deprecated hardware.
 
 </div>
 

@@ -1,11 +1,8 @@
 import { useState, type ReactNode } from 'react';
-import type { CameraStatus } from '../../stores/useCameraStore';
-import { useCameraStore } from '../../stores/useCameraStore';
 import { useDebugStore } from '../../stores/useDebugStore';
 import { useLaunchDaddyStore } from '../../stores/useLaunchDaddyStore';
 import { useSystemStore } from '../../stores/useSystemStore';
 import { useI18n } from '../../i18n/useI18n';
-import { ballDetectionStatusLabel } from '../../utils/ballDetectionStatus';
 import { StatusMenu } from './StatusMenu';
 
 interface PanelHeaderProps {
@@ -24,8 +21,6 @@ interface PanelHeaderProps {
   connected?: boolean;
   /** OPS243 link from `trigger_status`. Omit to read `useDebugStore`. */
   radarConnected?: boolean;
-  /** Camera / YOLO snapshot. Omit to read `useCameraStore`. */
-  cameraStatus?: CameraStatus;
   /**
    * Force the status menu open or closed. Omit to toggle from the LED + title
    * tap (the path the kiosk uses).
@@ -58,19 +53,16 @@ export function PanelHeader({
   actions,
   connected: connectedProp,
   radarConnected: radarConnectedProp,
-  cameraStatus: cameraStatusProp,
   statusMenuOpen: statusMenuOpenProp,
 }: PanelHeaderProps) {
   const { t } = useI18n();
   const storeConnected = useSystemStore((state) => state.connected);
   const storeRadarConnected = useDebugStore((state) => state.triggerStatus.radar_connected);
-  const storeCameraStatus = useCameraStore((state) => state.cameraStatus);
   const handleSecretTap = useLaunchDaddyStore((state) => state.handleSecretTap);
   const [internalOpen, setInternalOpen] = useState(false);
 
   const connected = connectedProp ?? storeConnected;
   const radarConnected = radarConnectedProp ?? storeRadarConnected;
-  const cameraStatus = cameraStatusProp ?? storeCameraStatus;
   const menuOpen = statusMenuOpenProp ?? internalOpen;
   const status = connected ? 'connected' : 'disconnected';
   const statusLabel = connected ? t('header.serverConnected') : t('header.serverDisconnected');
@@ -104,7 +96,6 @@ export function PanelHeader({
         <StatusMenu
           connected={connected}
           radarConnected={radarConnected}
-          ballDetection={ballDetectionStatusLabel(cameraStatus)}
           onClose={() => {
             if (statusMenuOpenProp === undefined) {
               setInternalOpen(false);

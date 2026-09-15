@@ -1,16 +1,13 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { useCameraPointerDragScroll } from '../hooks/useCameraPointerDragScroll';
-import type { CameraAutoExposureStatus, CameraCaptureSettings, CameraStatus } from '../stores/useCameraStore';
+import type { CameraAutoExposureStatus, CameraCaptureSettings } from '../stores/useCameraStore';
 import { verticalViewTargets } from '../utils/cameraView';
 import { getServerOrigin } from '../utils/serverOrigin';
 import './CameraFeed.css';
 
 interface CameraFeedProps {
-  cameraStatus: CameraStatus;
   captureSettings: CameraCaptureSettings;
   captureSettingsError: string | null;
-  onToggleCamera: () => void;
-  onToggleStream: () => void;
   onUpdateCaptureSettings: (settings: Partial<CameraCaptureSettings>) => void;
 }
 
@@ -21,7 +18,6 @@ interface CaptureSettingsPanelProps {
   onUpdate: (settings: Partial<CameraCaptureSettings>) => void;
 }
 
-const STREAM_URL = `${getServerOrigin()}/camera/stream`;
 const PREVIEW_URL = `${getServerOrigin()}/api/camera/preview.jpg`;
 const EXPOSURE_QUALITY_URL = `${getServerOrigin()}/api/camera/exposure-quality`;
 const PREVIEW_REFRESH_MS = 5000;
@@ -207,22 +203,12 @@ function CaptureSettingsPanel({ settings, exposureQuality, error, onUpdate }: Ca
  * still refreshed every 5 s from the concurrent preview stream. The raw
  * rolling buffer keeps running, so shots are never missed while viewing.
  */
-export function CameraFeed({
-  cameraStatus,
-  captureSettings,
-  captureSettingsError,
-  onToggleCamera,
-  onToggleStream,
-  onUpdateCaptureSettings,
-}: CameraFeedProps) {
+export function CameraFeed({ captureSettings, captureSettingsError, onUpdateCaptureSettings }: CameraFeedProps) {
   useCameraPointerDragScroll();
   const [previewState, setPreviewState] = useState<PreviewState>('checking');
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [exposureQuality, setExposureQuality] = useState<ExposureQuality | null>(null);
-  const [streamError, setStreamError] = useState(false);
-  const [prevStreaming, setPrevStreaming] = useState(false);
-  const { available, enabled, streaming, ball_detected, ball_confidence } = cameraStatus;
   const crosshairStyle = {
     '--camera-crosshair-x': `${BALL_GUIDE_X_PCT}%`,
     '--camera-crosshair-y': `${BALL_GUIDE_Y_PCT}%`,
@@ -339,79 +325,11 @@ export function CameraFeed({
     );
   }
 
-  // Legacy detection-camera UI (no high-speed capture runtime on this server).
-  if (streaming && !prevStreaming) {
-    setStreamError(false);
-  }
-  if (streaming !== prevStreaming) {
-    setPrevStreaming(streaming);
-  }
-
-  if (!available) {
-    return (
-      <div className="camera-feed camera-feed--unavailable">
-        <div className="camera-feed__message">
-          <h3>Camera Not Available</h3>
-          <p>Start the server with --camera-capture (preview) or --camera (detection)</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="camera-feed">
-      <div className="camera-feed__header">
-        <h2 className="camera-feed__title">Camera Feed</h2>
-        <div className="camera-feed__controls">
-          <button
-            className={`camera-feed__button ${enabled ? 'camera-feed__button--active' : ''}`}
-            onClick={onToggleCamera}
-          >
-            {enabled ? 'Disable Camera' : 'Enable Camera'}
-          </button>
-          {enabled && (
-            <button
-              className={`camera-feed__button ${streaming ? 'camera-feed__button--streaming' : ''}`}
-              onClick={onToggleStream}
-            >
-              {streaming ? 'Stop Stream' : 'Start Stream'}
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="camera-feed__content">
-        {!enabled ? (
-          <div className="camera-feed__message">
-            <h3>Camera Disabled</h3>
-            <p>Enable the camera to start ball detection</p>
-          </div>
-        ) : !streaming ? (
-          <div className="camera-feed__message">
-            <h3>Stream Paused</h3>
-            <p>Ball detection remains active while the stream is paused.</p>
-            <div className={`camera-feed__detection ${ball_detected ? 'camera-feed__detection--detected' : ''}`}>
-              {ball_detected ? `Ball Detected (${Math.round(ball_confidence * 100)}%)` : 'No Ball Detected'}
-            </div>
-          </div>
-        ) : streamError ? (
-          <div className="camera-feed__message camera-feed__message--error">
-            <h3>Stream Error</h3>
-            <p>Could not load camera stream</p>
-            <button className="camera-feed__button" onClick={() => setStreamError(false)}>
-              Retry
-            </button>
-          </div>
-        ) : (
-          <div className="camera-feed__stream">
-            <img
-              src={STREAM_URL}
-              alt="Camera Feed"
-              className="camera-feed__video"
-              onError={() => setStreamError(true)}
-            />
-          </div>
-        )}
+    <div className="camera-feed camera-feed--unavailable">
+      <div className="camera-feed__message">
+        <h3>Camera Not Available</h3>
+        <p>Start the server with --camera-capture to enable previews.</p>
       </div>
     </div>
   );

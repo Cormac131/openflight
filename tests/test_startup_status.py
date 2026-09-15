@@ -220,7 +220,7 @@ def test_reporter_can_mark_optional_component_skipped(tmp_path):
     assert payload["components"][0]["state"] == "skipped"
 
 
-def test_server_publishes_camera_kld7_and_ops_success(tmp_path, monkeypatch):
+def test_server_publishes_kld7_and_ops_success(tmp_path, monkeypatch):
     """The real sequential startup boundaries should publish their success events."""
     from openflight import server
 
@@ -239,8 +239,6 @@ def test_server_publishes_camera_kld7_and_ops_success(tmp_path, monkeypatch):
         ],
     )
     monkeypatch.setattr(server, "init_session_logger", lambda **_kwargs: None)
-    monkeypatch.setattr(server, "init_camera", lambda **_kwargs: True)
-    monkeypatch.setattr(server, "start_camera_thread", lambda: None)
     monkeypatch.setattr(server, "init_kld7", lambda **_kwargs: True)
     monkeypatch.setattr(server, "start_monitor", lambda **_kwargs: None)
     monkeypatch.setattr(server.socketio, "run", lambda *_args, **_kwargs: None)
@@ -252,7 +250,6 @@ def test_server_publishes_camera_kld7_and_ops_success(tmp_path, monkeypatch):
     states = {component["id"]: component["state"] for component in payload["components"]}
     assert payload["overall"] == "starting"
     assert states == {
-        "camera": "ready",
         "kld7_vertical": "ready",
         "ops": "ready",
         "server": "starting",
@@ -275,7 +272,6 @@ def test_server_publishes_high_speed_camera_status_without_blocking_ops(
         "argv",
         [
             "openflight-server",
-            "--no-camera",
             "--no-logging",
             "--camera-capture",
             "--startup-status-file",
@@ -310,7 +306,6 @@ def test_server_publishes_ops_failure_and_cleans_up(tmp_path, monkeypatch):
         "argv",
         [
             "openflight-server",
-            "--no-camera",
             "--no-logging",
             "--startup-status-file",
             str(status_path),
@@ -363,7 +358,6 @@ def test_server_publishes_specific_ti_recovery(
         "argv",
         [
             "openflight-server",
-            "--no-camera",
             "--no-logging",
             "--iwr6843",
             "--startup-status-file",

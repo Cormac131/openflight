@@ -9,7 +9,7 @@ Session Logs (JSONL)  →  Grafana Alloy  →  Grafana Cloud Loki  →  Grafana 
 ~/openflight_sessions/     (local agent)       (cloud storage)       (query & visualize)
 ```
 
-- **What gets shipped**: Every JSONL entry — session start/end, shot data (ball speed, club speed, spin, launch angle, carry), trigger events, I/Q readings
+- **What gets shipped**: Every JSONL entry — session start/end, shot data (ball speed, club speed, spin, launch angle, carry), trigger events, and raw I/Q captures
 - **Labels**: `app=openflight`, `host=<hostname>`, `log_type` (shot_detected, session_start, etc.), `mode`, `club`
 - **Extracted fields**: `ball_speed`, `club_speed`, `carry`, `spin_rpm`, `launch_v`, `launch_h`, `angle_source`, `club_aoa`, `club_path`, `shot_number`
 - **Buffering**: Local WAL (write-ahead log) buffers during network outages

@@ -79,11 +79,9 @@ the TI toolchain.
 
 ## Accuracy
 
-Validated against a TrackMan — see the
-[TrackMan test process](../development/trackman-testing.md) for methodology and
-the July 2026 baseline. Ball speed and club speed are the strongest numbers;
-launch angle is good within the estimator's stated limits; club path is honest
-but coarse; spin is not yet trustworthy per-shot.
+The July 2026 TrackMan baseline found ball speed and club speed are the strongest
+numbers; launch angle is good within the estimator's stated limits; club path is
+honest but coarse; spin is not yet trustworthy per-shot.
 
 ## Next
 
