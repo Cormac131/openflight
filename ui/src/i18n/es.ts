@@ -21,6 +21,7 @@ export const es: Messages = {
 
   'live.ready': 'Listo',
   'live.readyDetail': 'Empieza un golpe o una sesión de velocidad de swing',
+  'live.hideOverlay': 'Ocultar superposición del golpe',
   'live.tiRadarFailed': 'Fallo de captura del radar TI',
   'live.tiRadarDetail': 'Este golpe usó un ángulo de salida estimado. {reason}',
   'live.dismiss': 'Cerrar',

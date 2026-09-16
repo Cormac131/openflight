@@ -21,6 +21,7 @@ export const fr: Messages = {
 
   'live.ready': 'Prêt',
   'live.readyDetail': 'Lancez un coup ou une session de vitesse de swing',
+  'live.hideOverlay': 'Masquer la superposition du coup',
   'live.tiRadarFailed': 'Échec de capture du radar TI',
   'live.tiRadarDetail': 'Ce coup a utilisé un angle de lancement estimé. {reason}',
   'live.dismiss': 'Fermer',

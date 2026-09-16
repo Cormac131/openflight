@@ -34,12 +34,7 @@ function OverlayOnApp({ children }: { children: ReactNode }) {
  * footer menu (absolute inset covering the whole kiosk, not just the header).
  * Simulator connector pills appear only after at least one `sim_status` event.
  */
-export function StatusMenu({
-  connected,
-  radarConnected,
-  simStatuses: simStatusesProp,
-  onClose,
-}: StatusMenuProps) {
+export function StatusMenu({ connected, radarConnected, simStatuses: simStatusesProp, onClose }: StatusMenuProps) {
   const { t } = useI18n();
   const storeSimStatuses = useSystemStore((state) => state.simStatuses);
   const simStatuses = simStatusesProp ?? storeSimStatuses;
