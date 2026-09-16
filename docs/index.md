@@ -68,7 +68,8 @@ work.
 ## Once it's running
 
 - **[Simulator connectors](using/simulator/index.md)** — stream shots to
-  [GSPro](using/simulator/gspro.md), [OpenGolfSim](using/simulator/opengolfsim.md), and others.
+  [GSPro](using/simulator/gspro.md), [OpenGolfSim](using/simulator/opengolfsim.md),
+  [PAR-TEE](using/simulator/partee.md), and others.
 - **[Swing speed training](using/swing-speed.md)** — club-only mode for air
   swings and speed sticks. No ball strike, no sound trigger.
 - **[Cloud sync](using/cloud-sync.md)** — push filtered sessions to FlightWeb.
@@ -80,8 +81,6 @@ work.
   how a capture becomes a ball speed, and why spin is still experimental.
 - **[Dechirped-sideband spin replay](development/spin-replay.md)** — the next-gen
   spin estimator test bench.
-- **[TrackMan test process](development/trackman-testing.md)** — how accuracy claims
-  here were validated.
 
 !!! warning "The K-LD7 angle radars are deprecated"
 

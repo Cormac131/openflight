@@ -76,9 +76,9 @@ The app is entirely client-side. Everything flows through one socket connection.
   (`5173`), otherwise the page's own origin (the production case, where the
   backend serves the built UI).
 - **`services/socketService.ts`** owns the connection. It receives events like
-  `shot`, `session_state`, `camera_status`, `ball_detection`, and
-  `trigger_status`, and sends commands like `set_club`, `clear_session`,
-  `simulate_shot`, and `toggle_camera`. Read it before assuming what the
+  `shot`, `session_state`, `camera_capture_settings`, and `trigger_status`, and
+  sends commands like `set_club`, `clear_session`, `simulate_shot`, and
+  `set_camera_capture_settings`. Read it before assuming what the
   backend emits. **`mock-server/`** implements that contract in Node for
   `npm run dev:mock`.
 - **State** lives in `stores/` (Zustand: shots, system, camera, debug, profiles, …).
@@ -119,8 +119,8 @@ from the `profiles` roster (joined by `profile_id`), so renaming updates the
 on-screen name for past shots.
 
 **Kiosk shell.** Footer tabs switch views. The footer logo opens a sheet for
-units (MPH/YDS vs KMH/M), dark/light theme, language, simulator and
-ball-detection status. The footer power icon is always visible and opens a
+units (MPH/YDS vs KMH/M), dark/light theme, language, and simulator status.
+The footer power icon is always visible and opens a
 shutdown confirmation. Change club (or training implement) lives on the Live
 header. Tap a Live metric to pin it top-left while keeping all metrics visible.
 Camera-backed shots add a **Replay** action in the Live header and a play button

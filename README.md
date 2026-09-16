@@ -12,6 +12,13 @@
   </a>
 </p>
 
+<p align="center">
+  Related projects:
+  <a href="https://github.com/open-flight/openflight-enclosure">Enclosure</a>
+  &middot;
+  <a href="https://github.com/open-flight/openflight-mobile">Mobile App</a>
+</p>
+
 > [!WARNING]
 > **This project is in active development.** Features may be incomplete, unstable, or change without notice. Contributions and bug reports are welcome!
 
@@ -325,14 +332,13 @@ Build it locally with `make docs` (serves at `localhost:8000`).
 - **[IWR6843 Firmware Developer Guide](docs/development/firmware.md)** — Build the firmware from source (not needed to flash the prebuilt image)
 - **[Enclosure & Case](docs/build/enclosure.md)** — The printed IARC v3 case
 - **[Hardware Diagnostic](docs/setup/raspberry-pi.md)** — Pi setup, auto-start, and troubleshooting
-- **[Simulator Connectors](docs/using/simulator/index.md)** — Stream shots to GSPro, OpenGolfSim, and others
+- **[Simulator Connectors](docs/using/simulator/index.md)** — Stream shots to GSPro, OpenGolfSim, PAR-TEE, and others
 - **[Cloud Sync](docs/using/cloud-sync.md)** — Push filtered sessions to FlightWeb
 - **[Rolling Buffer & Spin Detection](docs/how-it-works/rolling-buffer.md)** — Production capture and experimental spin details
 - **[Dechirped-Sideband Spin Replay](docs/development/spin-replay.md)** — Next-gen spin estimator test bench
 - **[Camera and YOLO Experiments](docs/development/camera-yolo.md)** — Optional, non-production vision work
 - **[Legacy K-LD7 Setup](docs/legacy/index.md)** — Existing K-LD7 builds only
 - **[K-LD7 Ball Detection Theory](docs/legacy/ball-detection-theory.md)** — How angle detection works (deprecated hardware)
-- **[K-LD7 Session Review](docs/legacy/session-review.md)** — Offline review workflow for session JSONL files (deprecated hardware)
 - **[Observability & Log Shipping](docs/using/observability.md)** — Ship logs to Grafana Cloud
 - **[Contributing Guide](CONTRIBUTING.md)** — How to contribute
 - **[Changelog](docs/changelog.md)** — Version history

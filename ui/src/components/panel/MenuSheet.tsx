@@ -1,12 +1,9 @@
 import { LOCALES, type LocaleId } from '../../i18n';
 import { useI18n } from '../../i18n/useI18n';
 import { useSystemStore } from '../../stores/useSystemStore';
-import { useCameraStore } from '../../stores/useCameraStore';
 import { useThemeStore } from '../../stores/useThemeStore';
 import { useLocaleStore } from '../../stores/useLocaleStore';
 import { useUnitPreference } from '../../state/useUnitPreference';
-import { socketService } from '../../services/socketService';
-import { ballDetectionStatusLabel } from '../../utils/ballDetectionStatus';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { SimStatus } from '../SimStatus';
 
@@ -20,18 +17,15 @@ interface MenuSheetProps {
  *
  * 6a draws Units / Shut down. Profiles live on their own panel. The System
  * block is an addition: the mockup replaced the old top header, and simulator
- * and ball-detection state had nowhere else to go. Battery lives in the footer.
+ * state had nowhere else to go. Battery lives in the footer.
  * Socket connection lives on the panel header LED.
  */
 export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
   const simStatuses = useSystemStore((state) => state.simStatuses);
-  const cameraStatus = useCameraStore((state) => state.cameraStatus);
   const { t } = useI18n();
   const { unitSystem, setUnitSystem } = useUnitPreference();
   const { theme, setTheme } = useThemeStore();
   const { locale, setLocale } = useLocaleStore();
-
-  const ballDetectionValue = ballDetectionStatusLabel(cameraStatus);
 
   return (
     <>
@@ -81,15 +75,6 @@ export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
 
         <section className="menu-sheet__section">
           <span className="menu-sheet__section-title">{t('menu.system')}</span>
-          <div className="menu-sheet__status-row">
-            <span className="menu-sheet__status-label">{t('menu.ballDetection')}</span>
-            <span className="menu-sheet__status-value">{ballDetectionValue}</span>
-            {cameraStatus.available ? (
-              <button type="button" className="menu-sheet__chip" onClick={() => socketService.toggleCamera()}>
-                {cameraStatus.enabled ? t('menu.disable') : t('menu.enable')}
-              </button>
-            ) : null}
-          </div>
           {Object.keys(simStatuses).length > 0 ? (
             <div className="menu-sheet__status-row">
               <span className="menu-sheet__status-label">{t('menu.simulators')}</span>

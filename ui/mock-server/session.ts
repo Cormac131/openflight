@@ -33,12 +33,8 @@ export function computeSessionStats(shots: Shot[]): SessionStats {
   }
 
   const ballSpeeds = shots.map((s) => s.ball_speed_mph);
-  const clubSpeeds = shots
-    .map((s) => s.club_speed_mph)
-    .filter((v): v is number => v != null);
-  const smashFactors = shots
-    .map((s) => s.smash_factor)
-    .filter((v): v is number => v != null);
+  const clubSpeeds = shots.map((s) => s.club_speed_mph).filter((v): v is number => v != null);
+  const smashFactors = shots.map((s) => s.smash_factor).filter((v): v is number => v != null);
   const spinRpms = shots.map((s) => s.spin_rpm).filter((v): v is number => v != null);
 
   return {
@@ -75,13 +71,6 @@ export class MockSession {
   triggersTotal = 0;
   triggersAccepted = 0;
   triggersRejected = 0;
-
-  /** Status-only camera mock — no MJPEG; toggles + fake ball detection. */
-  cameraAvailable = true;
-  cameraEnabled = false;
-  cameraStreaming = false;
-  ballDetected = false;
-  ballConfidence = 0;
 
   getStats(): SessionStats {
     return computeSessionStats(this.shots);
@@ -146,10 +135,6 @@ export class MockSession {
       ...base,
       mock_mode: true,
       debug_mode: this.debugMode,
-      camera_available: this.cameraAvailable,
-      camera_enabled: this.cameraEnabled,
-      camera_streaming: this.cameraStreaming,
-      ball_detected: this.ballDetected,
     };
   }
 
@@ -206,49 +191,5 @@ export class MockSession {
   updateRadarConfig(partial: Partial<RadarConfig>): RadarConfig {
     this.radarConfig = { ...this.radarConfig, ...partial };
     return this.radarConfig;
-  }
-
-  cameraStatus() {
-    return {
-      available: this.cameraAvailable,
-      enabled: this.cameraEnabled,
-      streaming: this.cameraStreaming,
-      ball_detected: this.ballDetected,
-      ball_confidence: this.ballConfidence,
-    };
-  }
-
-  toggleCamera(): ReturnType<MockSession['cameraStatus']> {
-    this.cameraEnabled = !this.cameraEnabled;
-    if (!this.cameraEnabled) {
-      this.cameraStreaming = false;
-      this.ballDetected = false;
-      this.ballConfidence = 0;
-    }
-    return this.cameraStatus();
-  }
-
-  toggleCameraStream(): ReturnType<MockSession['cameraStatus']> {
-    if (!this.cameraEnabled) {
-      return this.cameraStatus();
-    }
-    this.cameraStreaming = !this.cameraStreaming;
-    return this.cameraStatus();
-  }
-
-  /** Advance fake ball-detection state while the camera is enabled. */
-  tickBallDetection(): { detected: boolean; confidence: number } | null {
-    if (!this.cameraEnabled) {
-      return null;
-    }
-    // ~35% chance of a "detection" flicker each tick
-    if (Math.random() < 0.35) {
-      this.ballDetected = true;
-      this.ballConfidence = 0.55 + Math.random() * 0.4;
-    } else {
-      this.ballDetected = false;
-      this.ballConfidence = Math.random() * 0.25;
-    }
-    return { detected: this.ballDetected, confidence: this.ballConfidence };
   }
 }
