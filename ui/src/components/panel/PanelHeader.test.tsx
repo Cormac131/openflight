@@ -37,31 +37,15 @@ describe('PanelHeader', () => {
     expect(html).toContain('panel-header__title">Live<');
   });
 
-  it('opens a status menu with server, radar, and ball detection in words', () => {
-    const html = renderToString(
-      <PanelHeader
-        title="Shots"
-        connected
-        radarConnected
-        statusMenuOpen
-        cameraStatus={{
-          available: true,
-          enabled: true,
-          streaming: false,
-          ball_detected: true,
-          ball_confidence: 0.91,
-        }}
-      />
-    );
+  it('opens a status menu with server and radar state', () => {
+    const html = renderToString(<PanelHeader title="Shots" connected radarConnected statusMenuOpen />);
 
     expect(html).toContain('aria-expanded="true"');
     expect(html).toContain('panel-scrim');
     expect(html).toContain('aria-label="System status"');
     expect(html).toContain('>Server<');
     expect(html).toContain('>Radar<');
-    expect(html).toContain('>Ball detection<');
     expect(html).toContain('>Connected<');
-    expect(html).toContain('>Ball 91%<');
     expect(html).not.toContain('GSPro');
   });
 

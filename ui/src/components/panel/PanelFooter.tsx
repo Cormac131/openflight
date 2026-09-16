@@ -17,8 +17,6 @@ interface PanelFooterProps {
   onOpenMenu: () => void;
   menuOpen: boolean;
   shotCount: number;
-  cameraStreaming: boolean;
-  ballDetected: boolean;
   debugRecording: boolean;
   /** Replaces the logo when Launch Daddy mode is active. */
   brand?: ReactNode;
@@ -44,8 +42,6 @@ export function PanelFooter({
   onOpenMenu,
   menuOpen,
   shotCount,
-  cameraStreaming,
-  ballDetected,
   debugRecording,
   brand,
   powerStatus: powerStatusProp,
@@ -64,13 +60,6 @@ export function PanelFooter({
           ...view,
           label,
           badge: shotCount > 0 ? <span className="nav__badge">{shotCount}</span> : undefined,
-        };
-      case 'camera':
-        return {
-          ...view,
-          label,
-          extraClassName: cameraStreaming ? 'nav__button--streaming' : undefined,
-          badge: ballDetected ? <span className="nav__ball-dot" /> : undefined,
         };
       case 'debug':
         return {

@@ -1,12 +1,9 @@
 import { useState, type ReactNode } from 'react';
-import type { CameraStatus } from '../../stores/useCameraStore';
-import { useCameraStore } from '../../stores/useCameraStore';
 import { useDebugStore } from '../../stores/useDebugStore';
 import { useLaunchDaddyStore } from '../../stores/useLaunchDaddyStore';
 import { useSystemStore } from '../../stores/useSystemStore';
 import type { SimStatus } from '../../types/socket';
 import { useI18n } from '../../i18n/useI18n';
-import { ballDetectionStatusLabel } from '../../utils/ballDetectionStatus';
 import { StatusMenu } from './StatusMenu';
 
 interface PanelHeaderProps {
@@ -25,8 +22,6 @@ interface PanelHeaderProps {
   connected?: boolean;
   /** OPS243 link from `trigger_status`. Omit to read `useDebugStore`. */
   radarConnected?: boolean;
-  /** Camera / YOLO snapshot. Omit to read `useCameraStore`. */
-  cameraStatus?: CameraStatus;
   /** Simulator connectors. Omit to read `useSystemStore`. */
   simStatuses?: Record<string, SimStatus>;
   /**
@@ -51,8 +46,8 @@ function IdentityPart({ children, className }: { children: ReactNode; className:
 
 /**
  * Page chrome: title plus a connection LED on the left, and shutdown on the
- * right. Tapping the LED and title opens a status menu (server, radar, ball
- * detection, simulators). Five taps still toggle Launch Daddy, which used to live on this
+ * right. Tapping the LED and title opens a status menu (server, radar,
+ * simulators). Five taps still toggle Launch Daddy, which used to live on this
  * LED alone. Header actions sit to the left of shutdown, separated by a
  * hairline divider.
  */
@@ -63,21 +58,18 @@ export function PanelHeader({
   actions,
   connected: connectedProp,
   radarConnected: radarConnectedProp,
-  cameraStatus: cameraStatusProp,
   simStatuses: simStatusesProp,
   statusMenuOpen: statusMenuOpenProp,
 }: PanelHeaderProps) {
   const { t } = useI18n();
   const storeConnected = useSystemStore((state) => state.connected);
   const storeRadarConnected = useDebugStore((state) => state.triggerStatus.radar_connected);
-  const storeCameraStatus = useCameraStore((state) => state.cameraStatus);
   const storeSimStatuses = useSystemStore((state) => state.simStatuses);
   const handleSecretTap = useLaunchDaddyStore((state) => state.handleSecretTap);
   const [internalOpen, setInternalOpen] = useState(false);
 
   const connected = connectedProp ?? storeConnected;
   const radarConnected = radarConnectedProp ?? storeRadarConnected;
-  const cameraStatus = cameraStatusProp ?? storeCameraStatus;
   const simStatuses = simStatusesProp ?? storeSimStatuses;
   const menuOpen = statusMenuOpenProp ?? internalOpen;
   const status = connected ? 'connected' : 'disconnected';
@@ -131,7 +123,6 @@ export function PanelHeader({
         <StatusMenu
           connected={connected}
           radarConnected={radarConnected}
-          ballDetection={ballDetectionStatusLabel(cameraStatus)}
           simStatuses={simStatuses}
           onClose={() => {
             if (statusMenuOpenProp === undefined) {

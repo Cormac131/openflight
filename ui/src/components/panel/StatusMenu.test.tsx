@@ -3,20 +3,16 @@ import { renderToString } from 'react-dom/server';
 import { StatusMenu } from './StatusMenu';
 
 describe('StatusMenu', () => {
-  it('states server, radar, and ball detection in words', () => {
-    const html = renderToString(
-      <StatusMenu connected radarConnected={false} ballDetection="Searching" onClose={() => {}} />
-    );
+  it('states server and radar connectivity in words', () => {
+    const html = renderToString(<StatusMenu connected radarConnected={false} onClose={() => {}} />);
 
     expect(html).toContain('class="panel-scrim"');
     expect(html).toContain('aria-label="Close status"');
     expect(html).toContain('aria-label="System status"');
     expect(html).toContain('>Server<');
     expect(html).toContain('>Radar<');
-    expect(html).toContain('>Ball detection<');
     expect(html).toContain('>Connected<');
     expect(html).toContain('>Disconnected<');
-    expect(html).toContain('>Searching<');
     expect(html).not.toContain('GSPro');
     expect(html).not.toContain('sim-status');
   });
@@ -26,7 +22,6 @@ describe('StatusMenu', () => {
       <StatusMenu
         connected
         radarConnected
-        ballDetection="Off"
         simStatuses={{
           gspro: { target: 'gspro', state: 'reconnecting', attempt: 2, next_retry_in_s: 4 },
           opengolfsim: { target: 'opengolfsim', state: 'error', message: 'Connection refused' },

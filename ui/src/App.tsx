@@ -35,7 +35,6 @@ import {
   trainingImplementSections,
   type PanelView,
 } from './components/panel';
-import { shouldEnableLiveBallWarning } from './components/panel/liveMetrics';
 import { filterShotsByProfile } from './types/shot';
 import type { Profile } from './types/profile';
 import { getClubName } from './data/clubs';
@@ -67,9 +66,8 @@ function AppContent() {
       shotVersion: state.shotVersion,
     }))
   );
-  const { cameraStatus, captureSettings, captureSettingsError } = useCameraStore(
+  const { captureSettings, captureSettingsError } = useCameraStore(
     useShallow((state) => ({
-      cameraStatus: state.cameraStatus,
       captureSettings: state.captureSettings,
       captureSettingsError: state.captureSettingsError,
     }))
@@ -238,7 +236,9 @@ function AppContent() {
   );
 
   if (isDisplayRoute) {
-    return <DisplayMode connected={connected} cameraStatus={cameraStatus} latestShot={latestShot} shots={shots} />;
+    return (
+      <DisplayMode connected={connected} captureSettings={captureSettings} latestShot={latestShot} shots={shots} />
+    );
   }
 
   if (!onboardingCompleted) {
@@ -322,8 +322,6 @@ function AppContent() {
                 selectedMetricId={heroMetricId}
                 onSelectMetric={setHeroMetricId}
                 isNewShot={profileIsNewShot}
-                ballDetectionEnabled={shouldEnableLiveBallWarning(currentView, cameraStatus)}
-                ballDetected={cameraStatus.ball_detected}
                 headerAction={liveHeaderActions}
               />
             </ShotProcessingArea>
@@ -365,12 +363,8 @@ function AppContent() {
         )}
         {currentView === 'camera' && (
           <CameraPanel
-            cameraStatus={cameraStatus}
-            clubLabel={activeImplementLabel}
             captureSettings={captureSettings}
             captureSettingsError={captureSettingsError}
-            onToggleCamera={() => socketService.toggleCamera()}
-            onToggleStream={() => socketService.toggleCameraStream()}
             onUpdateCaptureSettings={(settings) => socketService.setCameraCaptureSettings(settings)}
           />
         )}
@@ -387,7 +381,6 @@ function AppContent() {
                 readings={debugReadings}
                 shotLogs={debugShotLogs}
                 radarConfig={radarConfig}
-                cameraStatus={cameraStatus}
                 mockMode={mockMode}
                 onToggle={() => socketService.toggleDebug()}
                 onUpdateConfig={(config) => socketService.setRadarConfig(config)}
@@ -446,8 +439,6 @@ function AppContent() {
         onOpenMenu={() => setMenuOpen((open) => !open)}
         menuOpen={menuOpen}
         shotCount={profileShots.length}
-        cameraStreaming={cameraStatus.streaming}
-        ballDetected={cameraStatus.ball_detected}
         debugRecording={debugMode}
         brand={isLaunchDaddyMode ? <LaunchDaddyBrand /> : undefined}
       />

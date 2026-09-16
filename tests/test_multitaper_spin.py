@@ -148,7 +148,7 @@ def test_multitaper_candidate_is_reported_without_confidence_or_rail_gate():
         ),
         capture=capture,
     )
-    monitor = RollingBufferMonitor(port=None, trigger_type="manual")
+    monitor = RollingBufferMonitor(port=None, trigger_type="sound")
     monitor.set_club(ClubType.PW)
 
     shot = monitor._create_shot(processed)

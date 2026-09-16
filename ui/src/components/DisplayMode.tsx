@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { CameraStatus } from '../stores/useCameraStore';
+import { useEffect, useState } from 'react';
+import type { CameraCaptureSettings } from '../stores/useCameraStore';
 import type { Shot } from '../types/shot';
 import { computeSwingSpeedStats, getSwingSpeedMph, isSwingSpeedShot } from '../types/shot';
 import { useUnitPreference } from '../state/useUnitPreference';
@@ -14,7 +14,7 @@ type Translate = (key: MessageKey, vars?: Record<string, string | number>) => st
 
 interface DisplayModeProps {
   connected: boolean;
-  cameraStatus: CameraStatus;
+  captureSettings: CameraCaptureSettings;
   latestShot: Shot | null;
   shots: Shot[];
 }
@@ -27,7 +27,8 @@ interface DisplayMetric {
   experimental?: boolean;
 }
 
-const CAMERA_STREAM_URL = `${getServerOrigin()}/camera/stream`;
+const CAMERA_PREVIEW_URL = `${getServerOrigin()}/api/camera/preview.jpg`;
+const CAMERA_PREVIEW_REFRESH_MS = 5_000;
 const RECENT_SHOT_COUNT = 5;
 
 function formatOptionalNumber(value: number | null, digits = 1, prefixPositive = false): string {
@@ -194,9 +195,19 @@ function toMetricCard(metric: DisplayMetric, featured = false) {
   );
 }
 
-export function DisplayMode({ connected, cameraStatus, latestShot, shots }: DisplayModeProps) {
+export function DisplayMode({ connected, captureSettings, latestShot, shots }: DisplayModeProps) {
   const { t } = useI18n();
   const [failedCameraKey, setFailedCameraKey] = useState<string | null>(null);
+  const [cameraRefresh, setCameraRefresh] = useState(0);
+  const cameraAvailable = Boolean(captureSettings.available && captureSettings.running);
+  useEffect(() => {
+    if (!cameraAvailable) return undefined;
+    const timer = window.setInterval(() => {
+      setFailedCameraKey(null);
+      setCameraRefresh((value) => value + 1);
+    }, CAMERA_PREVIEW_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [cameraAvailable]);
   const { unitSystem } = useUnitPreference();
   const isSwingSpeedSession = latestShot ? isSwingSpeedShot(latestShot) : false;
   const swingStats = computeSwingSpeedStats(shots);
@@ -222,20 +233,20 @@ export function DisplayMode({ connected, cameraStatus, latestShot, shots }: Disp
       ]
     : buildMetrics(latestShot, unitSystem, t);
   const recentShots = shots.slice(-RECENT_SHOT_COUNT).reverse();
-  const cameraKey = `${cameraStatus.available}-${cameraStatus.streaming}`;
+  const cameraKey = `${captureSettings.available}-${captureSettings.running}`;
   const cameraError = failedCameraKey === cameraKey;
 
   return (
     <main className="display-mode">
       <section className="display-mode__hero" aria-label={t('display.tvAria')}>
         <div className="display-mode__camera">
-          {cameraError ? (
+          {!cameraAvailable || cameraError ? (
             <div className="display-mode__camera-placeholder">
               <span>{t('display.streamUnavailable')}</span>
             </div>
           ) : (
             <img
-              src={CAMERA_STREAM_URL}
+              src={`${CAMERA_PREVIEW_URL}?refresh=${cameraRefresh}`}
               alt={t('display.streamAlt')}
               className="display-mode__camera-image"
               onError={() => setFailedCameraKey(cameraKey)}
@@ -249,11 +260,9 @@ export function DisplayMode({ connected, cameraStatus, latestShot, shots }: Disp
               {connected ? t('display.socketOn') : t('display.socketOff')}
             </span>
             <span
-              className={`display-mode__status ${cameraStatus.available && cameraStatus.streaming && !cameraError ? 'display-mode__status--online' : 'display-mode__status--offline'}`}
+              className={`display-mode__status ${cameraAvailable && !cameraError ? 'display-mode__status--online' : 'display-mode__status--offline'}`}
             >
-              {cameraStatus.available && cameraStatus.streaming && !cameraError
-                ? t('display.streamActive')
-                : t('display.cameraUnavailable')}
+              {cameraAvailable && !cameraError ? t('display.streamActive') : t('display.cameraUnavailable')}
             </span>
           </div>
         </div>

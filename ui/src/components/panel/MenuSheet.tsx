@@ -17,8 +17,7 @@ interface MenuSheetProps {
  *
  * 6a draws Units / Shut down. Profiles live on their own panel. Battery lives
  * in the footer. Socket connection lives on the panel header LED. Shutdown is
- * the header power button. Ball detection and simulators stay in the header
- * status menu.
+ * the header power button. Simulators stay in the header status menu.
  */
 export function MenuSheet({ onClose }: MenuSheetProps) {
   const { t } = useI18n();

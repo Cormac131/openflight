@@ -3,7 +3,6 @@ import { getSwingSpeedMph, isSwingSpeedShot } from '../../types/shot';
 import type { UnitSystem } from '../../utils/units';
 import { formatDistance, formatSpeed, getDistanceUnit, getSpeedUnit } from '../../utils/units';
 import { getHtmlLang, t } from '../../i18n';
-import type { PanelView } from './views';
 
 /** Placeholder for a metric the current shot has no value for. */
 export const NO_VALUE = '—';
@@ -276,12 +275,4 @@ export function pinSelectedMetric(metrics: LiveMetric[], selectedId: string | nu
   const index = selectedIndex === -1 ? 0 : selectedIndex;
 
   return [metrics[index], ...metrics.filter((_, i) => i !== index)];
-}
-
-/** Ball-missing overlay is a Live-tab concern; other panels have their own camera UI. */
-export function shouldEnableLiveBallWarning(
-  currentView: PanelView,
-  camera: { available: boolean; enabled: boolean }
-): boolean {
-  return currentView === 'live' && camera.available && camera.enabled;
 }

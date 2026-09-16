@@ -1,15 +1,13 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { CameraStatus } from '../stores/useCameraStore';
+import type { CameraCaptureSettings } from '../stores/useCameraStore';
 import type { Shot } from '../types/shot';
 import { DisplayMode } from './DisplayMode';
 
-const cameraStatus: CameraStatus = {
+const captureSettings: CameraCaptureSettings = {
   available: true,
   enabled: true,
-  streaming: true,
-  ball_detected: false,
-  ball_confidence: 0,
+  running: true,
 };
 
 const shot: Shot = {
@@ -37,7 +35,9 @@ const shot: Shot = {
 
 describe('DisplayMode', () => {
   it('renders latest shot metrics and recent shot strip', () => {
-    const html = renderToString(<DisplayMode connected cameraStatus={cameraStatus} latestShot={shot} shots={[shot]} />);
+    const html = renderToString(
+      <DisplayMode connected captureSettings={captureSettings} latestShot={shot} shots={[shot]} />
+    );
 
     expect(html).toContain('OpenFlight Display');
     expect(html).toContain('151.2');
@@ -46,6 +46,15 @@ describe('DisplayMode', () => {
     expect(html).toContain('display-shot-chip__number');
     expect(html).toContain('metric-card--emphasis');
     expect(html).not.toContain('display-metric');
+  });
+
+  it('does not request a preview when camera capture is unavailable', () => {
+    const html = renderToString(
+      <DisplayMode connected captureSettings={{ available: false }} latestShot={shot} shots={[shot]} />
+    );
+
+    expect(html).not.toContain('/api/camera/preview.jpg');
+    expect(html).toContain('Camera unavailable');
   });
 
   it('shows rejection details for status-only experimental club metrics', () => {
@@ -58,7 +67,7 @@ describe('DisplayMode', () => {
     };
 
     const html = renderToString(
-      <DisplayMode connected cameraStatus={cameraStatus} latestShot={rejectedShot} shots={[rejectedShot]} />
+      <DisplayMode connected captureSettings={captureSettings} latestShot={rejectedShot} shots={[rejectedShot]} />
     );
 
     expect(html).toContain('metric-card__experimental');
@@ -79,7 +88,7 @@ describe('DisplayMode', () => {
     };
 
     const html = renderToString(
-      <DisplayMode connected cameraStatus={cameraStatus} latestShot={fusedShot} shots={[fusedShot]} />
+      <DisplayMode connected captureSettings={captureSettings} latestShot={fusedShot} shots={[fusedShot]} />
     );
 
     expect(html).toContain('metric-card__experimental');

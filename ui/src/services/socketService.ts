@@ -1,7 +1,7 @@
 import { io, type Socket } from 'socket.io-client';
 import { useSystemStore } from '../stores/useSystemStore';
 import { useShotStore } from '../stores/useShotStore';
-import { useCameraStore, type CameraCaptureSettings, type CameraStatus } from '../stores/useCameraStore';
+import { useCameraStore, type CameraCaptureSettings } from '../stores/useCameraStore';
 import { useDebugStore } from '../stores/useDebugStore';
 import {
   type Shot,
@@ -112,42 +112,20 @@ class SocketService {
       useProfileStore.getState().applySnapshot(data);
     });
 
-    this.socket.on(
-      'session_state',
-      (
-        data: SessionState & {
-          mock_mode?: boolean;
-          debug_mode?: boolean;
-          camera_available?: boolean;
-          camera_enabled?: boolean;
-          camera_streaming?: boolean;
-          ball_detected?: boolean;
-        }
-      ) => {
-        console.log('Session state received:', data);
-        // Need to get latest state of setShots
-        useShotStore.getState().setShots(data.shots);
+    this.socket.on('session_state', (data: SessionState & { mock_mode?: boolean; debug_mode?: boolean }) => {
+      console.log('Session state received:', data);
+      // Need to get latest state of setShots
+      useShotStore.getState().setShots(data.shots);
 
-        const systemStore = useSystemStore.getState();
-        if (data.mock_mode !== undefined) {
-          systemStore.setMockMode(data.mock_mode);
-        }
-        if (data.debug_mode !== undefined) {
-          systemStore.setDebugMode(data.debug_mode);
-        }
-        ingestSessionClub(data.club);
-
-        // Update camera status from session state
-        if (data.camera_available !== undefined) {
-          useCameraStore.getState().setCameraStatus({
-            available: data.camera_available!,
-            enabled: data.camera_enabled || false,
-            streaming: data.camera_streaming || false,
-            ball_detected: data.ball_detected || false,
-          });
-        }
+      const systemStore = useSystemStore.getState();
+      if (data.mock_mode !== undefined) {
+        systemStore.setMockMode(data.mock_mode);
       }
-    );
+      if (data.debug_mode !== undefined) {
+        systemStore.setDebugMode(data.debug_mode);
+      }
+      ingestSessionClub(data.club);
+    });
 
     this.socket.on('debug_toggled', (data: { enabled: boolean }) => {
       useSystemStore.getState().setDebugMode(data.enabled);
@@ -168,23 +146,12 @@ class SocketService {
       useDebugStore.getState().setRadarConfig(data);
     });
 
-    this.socket.on('camera_status', (data: CameraStatus) => {
-      useCameraStore.getState().setCameraStatus(data);
-    });
-
     this.socket.on('camera_capture_settings', (data: CameraCaptureSettings) => {
       useCameraStore.getState().setCaptureSettings(data);
     });
 
     this.socket.on('camera_capture_settings_error', (data: { error: string }) => {
       useCameraStore.getState().setCaptureSettingsError(data.error);
-    });
-
-    this.socket.on('ball_detection', (data: { detected: boolean; confidence: number }) => {
-      useCameraStore.getState().setCameraStatus({
-        ball_detected: data.detected,
-        ball_confidence: data.confidence,
-      });
     });
 
     this.socket.on('session_cleared', (data?: { profile_id?: string; shots?: Shot[] }) => {
@@ -274,14 +241,6 @@ class SocketService {
 
   setRadarConfig(config: Partial<RadarConfig>) {
     this.socket?.emit('set_radar_config', config);
-  }
-
-  toggleCamera() {
-    this.socket?.emit('toggle_camera');
-  }
-
-  toggleCameraStream() {
-    this.socket?.emit('toggle_camera_stream');
   }
 
   setCameraCaptureSettings(settings: Partial<CameraCaptureSettings>) {

@@ -1,16 +1,8 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import type { CameraCaptureSettings, CameraStatus } from '../stores/useCameraStore';
+import type { CameraCaptureSettings } from '../stores/useCameraStore';
 import { verticalViewTargets } from '../utils/cameraView';
 import { CameraFeed } from './CameraFeed';
-
-const cameraStatus: CameraStatus = {
-  available: true,
-  enabled: true,
-  streaming: false,
-  ball_detected: false,
-  ball_confidence: 0,
-};
 
 const captureSettings: CameraCaptureSettings = {
   available: true,
@@ -60,14 +52,7 @@ describe('CameraFeed', () => {
 
   it('renders the dominant preview workspace and operator settings', () => {
     const html = renderToString(
-      <CameraFeed
-        cameraStatus={cameraStatus}
-        captureSettings={captureSettings}
-        captureSettingsError={null}
-        onToggleCamera={vi.fn()}
-        onToggleStream={vi.fn()}
-        onUpdateCaptureSettings={vi.fn()}
-      />
+      <CameraFeed captureSettings={captureSettings} captureSettingsError={null} onUpdateCaptureSettings={vi.fn()} />
     );
 
     expect(html).toContain('camera-feed__workspace');
@@ -100,7 +85,6 @@ describe('CameraFeed', () => {
   it('explains lighting failure without disabling capture', () => {
     const html = renderToString(
       <CameraFeed
-        cameraStatus={cameraStatus}
         captureSettings={{
           ...captureSettings,
           auto_exposure: {
@@ -111,8 +95,6 @@ describe('CameraFeed', () => {
           },
         }}
         captureSettingsError={null}
-        onToggleCamera={vi.fn()}
-        onToggleStream={vi.fn()}
         onUpdateCaptureSettings={vi.fn()}
       />
     );

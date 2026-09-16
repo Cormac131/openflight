@@ -64,6 +64,7 @@ nav = [
       "using/simulator/index.md",
       "using/simulator/gspro.md",
       "using/simulator/opengolfsim.md",
+      "using/simulator/partee.md",
     ] },
     "using/cloud-sync.md",
     "using/battery.md",
@@ -96,10 +97,8 @@ nav = [
   { "Development" = [
     "development/index.md",
     "development/firmware.md",
-    "development/trackman-testing.md",
     "development/spin-replay.md",
     "development/camera-yolo.md",
-    "development/analysis-tooling.md",
     "development/color-palette.md",
   ] },
 
@@ -108,7 +107,6 @@ nav = [
     "legacy/troubleshooting.md",
     "legacy/ball-detection-theory.md",
     "legacy/launch-angle-explained.md",
-    "legacy/session-review.md",
   ] },
 
   { "Archive" = [

@@ -8,7 +8,6 @@ import { SimStatus } from '../SimStatus';
 interface StatusMenuProps {
   connected: boolean;
   radarConnected: boolean;
-  ballDetection: string;
   simStatuses?: Record<string, SimStatusData>;
   onClose: () => void;
 }
@@ -38,7 +37,6 @@ function OverlayOnApp({ children }: { children: ReactNode }) {
 export function StatusMenu({
   connected,
   radarConnected,
-  ballDetection,
   simStatuses: simStatusesProp,
   onClose,
 }: StatusMenuProps) {
@@ -59,10 +57,6 @@ export function StatusMenu({
         <div className="panel-header__status-row">
           <span className="panel-header__status-label">{t('header.radar')}</span>
           <span className="panel-header__status-value">{linkValue(radarConnected)}</span>
-        </div>
-        <div className="panel-header__status-row">
-          <span className="panel-header__status-label">{t('menu.ballDetection')}</span>
-          <span className="panel-header__status-value">{ballDetection}</span>
         </div>
         {hasSimulators ? (
           <div className="panel-header__status-sims">
