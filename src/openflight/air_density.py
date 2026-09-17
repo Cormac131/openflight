@@ -373,6 +373,7 @@ class AirConditions:
         return {
             "density_kg_m3": round(self.density_kg_m3, 4),
             "pressure_pa": round(self.pressure_pa, 1),
+            "pressure_hpa": round(self.pressure_pa / PA_PER_HPA, 2),
             "temperature_c": round(self.temperature_c, 2),
             "relative_humidity_pct": (
                 None if self.relative_humidity is None else round(self.relative_humidity * 100.0, 1)

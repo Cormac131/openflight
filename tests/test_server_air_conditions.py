@@ -1,6 +1,7 @@
 """Tests for altitude-aware carry wiring in the server shot pipeline."""
 
 import argparse
+import json
 import time
 from datetime import datetime
 
@@ -513,3 +514,135 @@ class TestBarometerReadingObserver:
         )
         assert service.add_sample(service.sensor.read()) is not None
         assert service.current_conditions() is not None
+
+
+class TestCorrectionAppliesOnEveryCarryPath:
+    """
+    The density correction must not depend on which stage produced the carry.
+
+    Rolling buffer is the default production mode, and its monitor sets
+    carry_spin_adjusted directly whenever spin is reliable. Gating the
+    correction on the server computing carry meant the whole feature silently
+    did nothing for exactly the shots with the best data.
+    """
+
+    def test_monitor_supplied_carry_still_gets_an_actual_conditions_carry(
+        self, quiet_pipeline
+    ):
+        quiet_pipeline.setattr(server_module, "air_conditions", DENVER)
+        quiet_pipeline.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+        quiet_pipeline.setattr(server_module, "ballistics_enabled", True)
+
+        # Exactly what rolling_buffer/monitor.py does when spin is reliable.
+        shot = _shot(carry_spin_adjusted=265.0, mode="rolling-buffer")
+        on_shot_detected(shot)
+
+        assert shot.carry_actual_yards is not None
+        assert shot.carry_actual_yards > shot.carry_spin_adjusted
+        assert shot.air_conditions_source == "config"
+
+    def test_monitor_supplied_headline_carry_is_not_recomputed(self, quiet_pipeline):
+        """The correction scales the existing carry; it must not replace it."""
+        quiet_pipeline.setattr(server_module, "air_conditions", DENVER)
+        quiet_pipeline.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+        quiet_pipeline.setattr(server_module, "ballistics_enabled", True)
+
+        shot = _shot(carry_spin_adjusted=265.0, mode="rolling-buffer")
+        on_shot_detected(shot)
+        assert shot.carry_spin_adjusted == 265.0
+
+    def test_correction_size_matches_the_server_computed_path(self, quiet_pipeline):
+        """A Denver user must see the same relative gain either way."""
+        quiet_pipeline.setattr(server_module, "air_conditions", DENVER)
+        quiet_pipeline.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+        quiet_pipeline.setattr(server_module, "ballistics_enabled", True)
+
+        server_computed = _shot()
+        on_shot_detected(server_computed)
+
+        monitor_supplied = _shot(carry_spin_adjusted=265.0, mode="rolling-buffer")
+        on_shot_detected(monitor_supplied)
+
+        assert (
+            monitor_supplied.carry_actual_yards / monitor_supplied.carry_spin_adjusted
+        ) == pytest.approx(
+            server_computed.carry_actual_yards / server_computed.carry_spin_adjusted,
+            abs=0.01,
+        )
+
+    def test_mock_shots_are_still_skipped(self, quiet_pipeline):
+        quiet_pipeline.setattr(server_module, "air_conditions", DENVER)
+        quiet_pipeline.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+
+        shot = _shot(carry_spin_adjusted=265.0, mode="mock")
+        on_shot_detected(shot)
+        assert shot.carry_actual_yards is None
+
+    def test_standard_air_still_emits_nothing(self, quiet_pipeline):
+        quiet_pipeline.setattr(server_module, "air_conditions", AirConditions.standard())
+        quiet_pipeline.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+
+        shot = _shot(carry_spin_adjusted=265.0, mode="rolling-buffer")
+        on_shot_detected(shot)
+        assert shot.carry_actual_yards is None
+        assert shot.air_conditions_source is None
+
+
+class TestAirStatusEmit:
+    """The socket wiring behind the diagnostics Air tab."""
+
+    def test_emit_publishes_the_payload_under_air_status(self, monkeypatch):
+        emitted = []
+        monkeypatch.setattr(server_module, "air_conditions", DENVER)
+        monkeypatch.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+        monkeypatch.setattr(server_module, "barometer_service", None)
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+
+        server_module._emit_air_status()
+
+        assert len(emitted) == 1
+        event, payload = emitted[0]
+        assert event == "air_status"
+        assert payload["source"] == "config"
+
+    def test_each_barometer_reading_triggers_an_emit(self, monkeypatch):
+        emitted = []
+        monkeypatch.setattr(server_module, "air_conditions", AirConditions.standard())
+        monkeypatch.setattr(server_module, "carry_normalization_density", AIR_DENSITY_STD)
+        monkeypatch.setattr(
+            server_module, "barometer_service", _loaded_barometer(83400.0, 20.0)
+        )
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda *args, **kwargs: emitted.append(args)
+        )
+
+        server_module._on_barometer_reading(None)
+
+        assert [event for event, _ in emitted] == ["air_status"]
+        assert emitted[0][1]["source"] == "sensor"
+
+    def test_payload_is_json_serialisable(self, monkeypatch):
+        """It crosses a socket, so anything non-serialisable breaks the tab."""
+        monkeypatch.setattr(
+            server_module, "barometer_service", _loaded_barometer(83400.0, 20.0)
+        )
+        monkeypatch.setattr(server_module, "air_conditions", DENVER)
+        json.dumps(server_module._air_status_payload())
+
+    def test_payload_reuses_the_air_conditions_serialisation(self, monkeypatch):
+        """Guards the DRY fix: the value type owns its own field formatting."""
+        monkeypatch.setattr(server_module, "air_conditions", DENVER)
+        monkeypatch.setattr(server_module, "barometer_service", None)
+
+        payload = server_module._air_status_payload()
+        for key, value in DENVER.to_dict().items():
+            assert payload[key] == value
+
+
+class TestShotPayloadZeroHandling:
+    def test_a_zero_actual_carry_is_reported_rather_than_dropped(self):
+        # Truthiness would turn a real zero into "no correction applied".
+        payload = shot_to_dict(_shot(carry_spin_adjusted=260.5, carry_actual_yards=0.0))
+        assert payload["carry_actual_yards"] == 0

@@ -214,7 +214,9 @@ const AIR_SOURCE_DETAIL: Record<string, string> = {
 };
 
 function signed(value: number, digits = 1): string {
-  return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}`;
+  // Round first, so a value that displays as zero is never shown as "-0.0".
+  const rounded = Number(value.toFixed(digits)) || 0;
+  return `${rounded >= 0 ? '+' : ''}${rounded.toFixed(digits)}`;
 }
 
 export function AirConditionsCard({ air }: { air: AirStatus }) {
@@ -313,7 +315,7 @@ export function AirSensorCard({ air }: { air: AirStatus }) {
             </span>
           </div>
         )}
-        {reading?.raw_temperature_c != null && (
+        {reading?.raw_temperature_c != null && reading.temperature_c != null && (
           <div className="system-status__item">
             <span className="system-status__label">Temperature</span>
             <span className="system-status__value">

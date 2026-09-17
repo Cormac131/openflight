@@ -7,7 +7,9 @@ const air = (overrides: Partial<AirStatus> = {}): AirStatus => ({
   source: 'sensor',
   density_kg_m3: 0.9911,
   pressure_hpa: 834.3,
+  pressure_pa: 83430.0,
   temperature_c: 20.0,
+  relative_humidity_pct: null,
   elevation_ft: null,
   normalization_density_kg_m3: 1.225,
   density_delta_pct: -19.09,
@@ -134,5 +136,38 @@ describe('AirSensorCard', () => {
       <AirSensorCard air={air({ sensor: { enabled: false, error: 'CHIP_ID expected one of 0x50, 0x51' } })} />
     );
     expect(html).toContain('CHIP_ID');
+  });
+});
+
+describe('AirConditionsCard edge cases', () => {
+  it('never renders a negative zero carry', () => {
+    // -0.04 yd rounds to zero; showing "-0.0 yd" reads as a loss that is not there.
+    const html = renderToString(
+      <AirConditionsCard air={air({ driver_carry_delta_yards: -0.04, density_delta_pct: -0.004 })} />
+    );
+    expect(html).not.toContain('-0.0');
+    expect(html).toContain('+0.0');
+  });
+});
+
+describe('AirSensorCard edge cases', () => {
+  it('omits the temperature row rather than printing undefined', () => {
+    // A raw reading without a corrected one should not render "undefined °C used".
+    const html = renderToString(
+      <AirSensorCard
+        air={air({
+          reading: { applied: true, status: 'ok', age_s: 1, raw_temperature_c: 26.2 },
+        })}
+      />
+    );
+    expect(html).not.toContain('undefined');
+  });
+
+  it('omits the pressure row when the reading has no pressure', () => {
+    const html = renderToString(
+      <AirSensorCard air={air({ reading: { applied: false, status: 'no_reading', age_s: null } })} />
+    );
+    expect(html).not.toContain('undefined');
+    expect(html).toContain('no_reading');
   });
 });

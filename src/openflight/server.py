@@ -235,6 +235,62 @@ def _carry_effect_yards(density_kg_m3: float, normalization_kg_m3: float) -> flo
     return reference_carry * (ratio - 1.0)
 
 
+def _apply_actual_conditions_carry(
+    shot: Shot,
+    launch: Optional[LaunchConditions] = None,
+    spin_rpm: Optional[float] = None,
+) -> None:
+    """
+    Add the actual-conditions carry to any shot that has a headline carry.
+
+    Runs for every shot regardless of which stage produced
+    `carry_spin_adjusted`. That matters because rolling buffer is the default
+    production mode and its monitor sets the carry directly whenever spin is
+    reliable — so gating this on the server computing carry meant the density
+    correction silently did nothing for exactly the shots with the best data.
+
+    `launch` is passed only when the server itself integrated the headline
+    carry. Then the actual carry is a second integration of the same launch,
+    which is exact. Otherwise the headline is scaled by the ratio the model
+    predicts for a club-typical flight, because mixing a table headline with a
+    simulated actual would put the two numbers on different scales and could
+    show a *shorter* carry in thinner air.
+    """
+    if shot.mode == "mock" or shot.carry_spin_adjusted is None:
+        return
+
+    air = current_air_conditions()
+    if not _air_differs_from_normalization(air):
+        return
+
+    if launch is not None:
+        shot.carry_actual_yards = simulate(
+            launch, air_density=air.density_kg_m3
+        ).carry_yards
+    else:
+        spin = spin_rpm or shot.spin_rpm
+        if not spin or spin <= 0:
+            spin = get_optimal_spin_for_ball_speed(shot.ball_speed_mph, shot.club)
+        shot.carry_actual_yards = shot.carry_spin_adjusted * density_carry_ratio(
+            shot.ball_speed_mph,
+            shot.club,
+            spin,
+            actual_density=air.density_kg_m3,
+            reference_density=carry_normalization_density,
+        )
+
+    shot.air_density_kg_m3 = air.density_kg_m3
+    shot.air_conditions_source = air.source
+    logger.info(
+        "[SERVER] Actual-conditions carry: %.0f yds (rho %.4f kg/m3 from %s, "
+        "normalized at %.4f)",
+        shot.carry_actual_yards,
+        air.density_kg_m3,
+        air.source,
+        carry_normalization_density,
+    )
+
+
 def _air_status_payload() -> dict:
     """
     Everything the diagnostics Air tab needs, sensor fitted or not.
@@ -248,13 +304,9 @@ def _air_status_payload() -> dict:
     density = round(conditions.density_kg_m3, 4)
     normalization = round(carry_normalization_density, 4)
     payload = {
-        "source": conditions.source,
-        "density_kg_m3": density,
-        "pressure_hpa": round(conditions.pressure_pa / 100.0, 2),
-        "temperature_c": round(conditions.temperature_c, 2),
-        "elevation_ft": (
-            None if conditions.elevation_ft is None else round(conditions.elevation_ft, 0)
-        ),
+        # AirConditions owns its own serialisation; only the comparison against
+        # the normalization air is added here.
+        **conditions.to_dict(),
         "normalization_density_kg_m3": normalization,
         "density_delta_pct": round((density / normalization - 1.0) * 100.0, 2),
         "driver_carry_delta_yards": round(_carry_effect_yards(density, normalization), 1),
@@ -1139,9 +1191,9 @@ def shot_to_dict(shot: Shot) -> dict:
         "carry_spin_adjusted": round(shot.carry_spin_adjusted)
         if shot.carry_spin_adjusted
         else None,
-        "carry_actual_yards": round(shot.carry_actual_yards)
-        if shot.carry_actual_yards
-        else None,
+        "carry_actual_yards": (
+            round(shot.carry_actual_yards) if shot.carry_actual_yards is not None else None
+        ),
         "air_density_kg_m3": (
             round(shot.air_density_kg_m3, 4) if shot.air_density_kg_m3 is not None else None
         ),
@@ -3598,13 +3650,14 @@ def on_shot_detected(shot: Shot):
     # back to the table estimator otherwise (either ballistics disabled or
     # angle missing → resolve_launch returns None).
     _MIN_RELIABLE_SPIN_CONF = 0.6
+    # Carried out of the block below so the density correction can run for
+    # every shot, including ones that arrive with a carry already set.
+    launch_for_carry = None
+    spin_for_carry = None
     if shot.carry_spin_adjusted is None and shot.mode != "mock":
-        # Resolved once so both carry paths, the provenance stamp, and the log
-        # line all describe the same air.
-        shot_air = current_air_conditions()
-        air_differs = _air_differs_from_normalization(shot_air)
         conditions = resolve_launch(shot) if ballistics_enabled else None
         if conditions is not None:
+            launch_for_carry = conditions
             trajectory = simulate(conditions, air_density=carry_normalization_density)
             shot.carry_spin_adjusted = trajectory.carry_yards
             logger.info(
@@ -3613,10 +3666,6 @@ def on_shot_detected(shot: Shot):
                 conditions.spin_rpm,
                 conditions.spin_source,
             )
-            if air_differs:
-                shot.carry_actual_yards = simulate(
-                    conditions, air_density=shot_air.density_kg_m3
-                ).carry_yards
         else:
             has_reliable_spin = (
                 shot.spin_rpm
@@ -3635,17 +3684,6 @@ def on_shot_detected(shot: Shot):
                 shot.club,
                 club_speed_mph=shot.club_speed_mph,
             )
-            if air_differs:
-                # The table estimator has no launch angle to simulate, so scale
-                # it by the ratio the RK4 model predicts for a club-typical
-                # flight. Keeps both carry paths consistent under the same air.
-                shot.carry_actual_yards = shot.carry_spin_adjusted * density_carry_ratio(
-                    shot.ball_speed_mph,
-                    shot.club,
-                    spin_for_carry,
-                    actual_density=shot_air.density_kg_m3,
-                    reference_density=carry_normalization_density,
-                )
             reason = "ballistics disabled" if not ballistics_enabled else "no launch angle"
             logger.info(
                 "[SERVER] Table carry (%s): %.0f yds (spin: %.0f rpm%s)",
@@ -3655,17 +3693,7 @@ def on_shot_detected(shot: Shot):
                 "" if shot.spin_rpm and shot.spin_rpm > 0 else " avg",
             )
 
-        if shot.carry_actual_yards is not None:
-            shot.air_density_kg_m3 = shot_air.density_kg_m3
-            shot.air_conditions_source = shot_air.source
-            logger.info(
-                "[SERVER] Actual-conditions carry: %.0f yds (rho %.4f kg/m3 from %s, "
-                "normalized at %.4f)",
-                shot.carry_actual_yards,
-                shot_air.density_kg_m3,
-                shot_air.source,
-                carry_normalization_density,
-            )
+    _apply_actual_conditions_carry(shot, launch_for_carry, spin_for_carry)
     if shot.spin_rejection_reason:
         logger.info(
             "[SERVER] Spin unavailable: %s (snr=%s, candidate=%s rpm)",

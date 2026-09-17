@@ -95,7 +95,9 @@ export interface AirStatus {
   source: AirConditionsSource;
   density_kg_m3: number;
   pressure_hpa: number;
+  pressure_pa: number;
   temperature_c: number;
+  relative_humidity_pct: number | null;
   elevation_ft: number | null;
   normalization_density_kg_m3: number;
   density_delta_pct: number;
