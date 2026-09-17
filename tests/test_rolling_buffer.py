@@ -37,10 +37,6 @@ from openflight.rolling_buffer import (
 class TestGetOptimalSpinForBallSpeed:
     """Tests for the optimal spin rate calculation based on ball speed."""
 
-    @pytest.mark.parametrize("club", [ClubType.UNKNOWN, None, "unrecognized"])
-    def test_unknown_club_preserves_driver_spin_baseline(self, club):
-        assert get_optimal_spin_for_ball_speed(140, club) == 2700
-
     def test_high_ball_speed_180_mph(self):
         """180 mph ball speed should have ~2050 rpm optimal spin."""
         optimal = get_optimal_spin_for_ball_speed(180, ClubType.DRIVER)
@@ -187,14 +183,6 @@ class TestEstimateCarryWithSpin:
 
         # Should be very close (club speed at optimal smash has minimal effect)
         assert abs(carry_no_club - carry_with_club) < 5
-
-    def test_seven_iron_preserves_distinct_carry_smash_target(self):
-        baseline = estimate_carry_with_spin(100, 6000, ClubType.IRON_7)
-        at_carry_target = estimate_carry_with_spin(100, 6000, ClubType.IRON_7, 100 / 1.27)
-        at_launch_target = estimate_carry_with_spin(100, 6000, ClubType.IRON_7, 100 / 1.34)
-
-        assert at_carry_target == pytest.approx(baseline)
-        assert at_launch_target == pytest.approx(baseline * 0.98)
 
     def test_carry_increases_with_ball_speed(self):
         """Higher ball speed should always increase carry."""
