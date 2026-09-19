@@ -31,6 +31,58 @@ def _script() -> str:
     return SCRIPT.read_text(encoding="utf-8")
 
 
+def _run_ui_preparation(
+    tmp_path: Path,
+    *,
+    has_bundle: bool,
+    has_node_modules: bool = False,
+    npm_exit_code: int = 1,
+) -> tuple[subprocess.CompletedProcess, Path]:
+    ui_dir = tmp_path / "ui"
+    ui_dir.mkdir()
+    if has_node_modules:
+        (ui_dir / "node_modules").mkdir()
+    if has_bundle:
+        dist_dir = ui_dir / "dist"
+        dist_dir.mkdir()
+        (dist_dir / "index.html").write_text("existing bundle", encoding="utf-8")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    npm_invocations = tmp_path / "npm-invocations"
+    npm = fake_bin / "npm"
+    npm.write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$*" >> "$NPM_INVOCATIONS"\nexit "$NPM_EXIT_CODE"\n',
+        encoding="utf-8",
+    )
+    npm.chmod(0o755)
+
+    script = _script()
+    start = script.index("if [ ! -d ui/node_modules ]")
+    end = script.index("\n\nstart_alloy", start)
+    preparation = script[start:end]
+    harness = f"""\
+set -eo pipefail
+warn() {{ printf 'warning: %s\\n' "$1"; }}
+show_startup_failure() {{ printf 'hard-failure\\n'; exit 23; }}
+{preparation}
+printf 'prepared\\n'
+"""
+    result = subprocess.run(
+        ["bash", "-c", harness],
+        cwd=tmp_path,
+        env={
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "NPM_EXIT_CODE": str(npm_exit_code),
+            "NPM_INVOCATIONS": str(npm_invocations),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result, npm_invocations
+
+
 def test_default_command_is_minimal():
     assert _dry_run() == ["openflight-server", "--web-port", "8080"]
 
@@ -184,15 +236,33 @@ def test_startup_applies_kld7_latency_setup_before_server_start():
     assert 'sudo -n "$setup_script" --latency 1' in script
 
 
-def test_ui_bundle_is_rebuilt_on_every_start():
-    script = _script()
-    dependency_start = script.index("if [ ! -d ui/node_modules ]")
-    dependency_end = script.index("\nfi\n", dependency_start) + len("\nfi\n")
-    dependency_check = script[dependency_start:dependency_end]
+def test_ui_bundle_is_rebuilt_when_dependencies_are_available(tmp_path):
+    result, npm_invocations = _run_ui_preparation(
+        tmp_path,
+        has_bundle=True,
+        has_node_modules=True,
+        npm_exit_code=0,
+    )
 
-    assert "npm --prefix ui install" in dependency_check
-    assert "npm --prefix ui run build" not in dependency_check
-    assert script.index("npm --prefix ui run build") >= dependency_end
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert npm_invocations.read_text(encoding="utf-8").splitlines() == ["--prefix ui run build"]
+
+
+def test_existing_ui_bundle_allows_offline_startup_without_npm(tmp_path):
+    result, npm_invocations = _run_ui_preparation(tmp_path, has_bundle=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "prepared" in result.stdout
+    assert "existing UI bundle" in result.stdout
+    assert not npm_invocations.exists()
+
+
+def test_missing_ui_bundle_still_fails_when_npm_install_is_unavailable(tmp_path):
+    result, npm_invocations = _run_ui_preparation(tmp_path, has_bundle=False)
+
+    assert result.returncode == 23
+    assert "hard-failure" in result.stdout
+    assert npm_invocations.read_text(encoding="utf-8").splitlines() == ["--prefix ui install"]
 
 
 def test_missing_optional_alloy_service_does_not_abort_startup():
