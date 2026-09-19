@@ -361,17 +361,21 @@ uv sync "${UV_SYNC_ARGS[@]}" || show_startup_failure \
 
 configure_kld7_latency
 
-if [ ! -d ui/node_modules ]; then
-    warn "UI dependencies not installed; installing now"
-    npm --prefix ui install || show_startup_failure \
+if [ ! -d ui/node_modules ] && [ -f ui/dist/index.html ]; then
+    warn "UI dependencies not installed; using existing UI bundle"
+else
+    if [ ! -d ui/node_modules ]; then
+        warn "UI dependencies not installed; installing now"
+        npm --prefix ui install || show_startup_failure \
+            server \
+            "OpenFlight interface build failed" \
+            "Check the terminal log or network connection, then relaunch OpenFlight."
+    fi
+    npm --prefix ui run build || show_startup_failure \
         server \
         "OpenFlight interface build failed" \
         "Check the terminal log or network connection, then relaunch OpenFlight."
 fi
-npm --prefix ui run build || show_startup_failure \
-    server \
-    "OpenFlight interface build failed" \
-    "Check the terminal log or network connection, then relaunch OpenFlight."
 
 start_alloy
 log "Starting OpenFlight server on port $WEB_PORT"
