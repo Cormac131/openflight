@@ -23,7 +23,7 @@ Hardware components for building the OpenFlight golf launch monitor.
 
 The sound trigger detects club impact to precisely time radar captures. Essential for spin detection via rolling buffer mode.
 
-> **Optional path, not merged yet:** [PR #221](https://github.com/open-flight/openflight/pull/221) adds an opt-in `--trigger hardware` mode in which the OPS243 fires the rolling-buffer dump from its own internal speed trigger, with no SEN-14262 in the loop. It requires OPS243-A firmware 1.3.2. If it lands and your OPS243 can be updated to that firmware, the parts in this section become optional. Until then the sound trigger is the supported trigger and stays in the totals.
+> **Optional path, not merged yet:** [PR #221](https://github.com/open-flight/openflight/pull/221) adds an opt-in `--trigger hardware` mode in which the OPS243 fires the rolling-buffer dump from its own internal speed trigger, with no SEN-14262 in the loop. It needs OPS243-A firmware 1.3.2, which every OPS243-A can run; whether getting there costs you anything depends on the firmware your radar arrived with, see [Internal Trigger Instead](#internal-trigger-instead-pr-221) below. Until the PR lands the sound trigger is the supported trigger and stays in the totals.
 
 | Part | Description | Link | ~Price |
 |------|-------------|------|--------|
@@ -48,6 +48,19 @@ SEN-14262               Raspberry Pi           OPS243
 ```
 
 See [sound-trigger-wiring.md](../build/sound-trigger.md) for detailed instructions and troubleshooting.
+
+### Internal Trigger Instead (PR #221)
+
+[PR #221](https://github.com/open-flight/openflight/pull/221) lets the OPS243-A start the rolling-buffer capture from its own speed trigger, so the sound detector, its resistor and its wiring are not needed. The firmware that adds that trigger is OPS243-A 1.3.2, and any OPS243-A can be brought to it. What that costs you depends on what your radar arrived with, so check before buying anything: plug the radar into USB, open a serial terminal, send `?V`, and read the version it prints back.
+
+- **It reports 1.3.2 or later.** Nothing to buy. OmniPreSense [told the project on 2026-09-10](https://github.com/open-flight/openflight/pull/221#issuecomment-5619646576) that 1.3.2 went onto the sensors shipping from that build on (1.3.1 had gone to some earlier customers with a late bug), so a new order should arrive like this. Once the PR lands, skip the Sound Trigger table above.
+- **It reports 1.3.1 or older.** You flash it yourself, which is where the debugger cost comes in. OmniPreSense's [AN-013 code-update note](https://omnipresense.com/wp-content/uploads/2019/06/AN-013-D_OPS241-Code-Update.pdf) is the procedure: a SEGGER J-Link on the radar's keyed `J2` JTAG header (a 10-pin 1.27 mm Cortex debug header, not the `J3` UART header OpenFlight wires to), Infineon's free XMCFlasher in Serial Wire Debug mode with the XMC4500-1024 target selected, and the 1.3.2 hex file, which is not a public download: email customerservice@omnipresense.com for it, and they will also confirm which J-Link model to get. Send `?P` first and pick the XMC4700 in XMCFlasher instead if the board reports that part ([note on the PR](https://github.com/open-flight/openflight/pull/221#issuecomment-5463503457)). Do not press Erase in XMCFlasher: it clears the factory settings some sensors carry and anything you saved to persistent memory. On Windows run the J-Link driver installer as administrator and tick the legacy J-Link USB driver, or XMCFlasher will not find the probe ([upgrade report](https://github.com/open-flight/openflight/pull/221#issuecomment-5756563718)).
+
+| Part | Description | Link | ~Price |
+|------|-------------|------|--------|
+| **SEGGER J-Link EDU Mini (Adafruit 3571)** | Only if you go the internal-trigger route and your OPS243-A reports firmware older than 1.3.2. This is the low-cost programmer AN-013 points at; the 9-pin 0.05" (1.27 mm) Cortex target cable that fits `J2` and a USB-C cable are in the box, so nothing else is needed. Licensed for non-commercial use only. In the shared Mouser project | [Mouser](https://www.mouser.se/en/ProductDetail/Adafruit/3571?qs=YCa%2FAAYMW03SrXLinBpZFw%3D%3D) / [Amazon](https://www.amazon.com/dp/B0758XRMTF) / [Adafruit](https://www.adafruit.com/product/3571) | $76 |
+
+That is about four times the sound trigger's $18, and it is a one-off tool rather than a part of the monitor, so it is a trade you make for the wiring and the R17 soldering the internal trigger removes, not for the price.
 
 ## Angle Radar (TI IWR6843) — CURRENT
 
@@ -257,12 +270,6 @@ until that lands, buy what the enclosure page says for the parts you print.
 | **Complete build with the X1206 instead** | **~$753** |
 | Angle Radar (2× K-LD7 + FTDI adapters) — **deprecated** | $140 |
 
-The complete-build line uses the X1202 as the UPS (not the X1206), estimates its
-four flat-top 18650 cells at ~$6 each ($24; a Samsung 35E, Molicel P28A, or LG
-MJ1 each sells for about that), and leaves out the deprecated K-LD7 path, the 12V DC adapter, which
-replaces the 27W USB-C supply already counted rather than adding to it, and
-the DC-route jack, Wagos and XH lead (~$10) that go with that adapter.
-
 <details markdown="1">
 <summary>How the filament estimate was made</summary>
 
@@ -301,8 +308,11 @@ four 21700 holders on the board, uses the same power-button header, and takes
 the same 12V adapter.
 
 If the [PR #221](https://github.com/open-flight/openflight/pull/221) internal
-trigger lands and your OPS243 firmware can be updated, the Sound Trigger line
-($18) becomes optional and drops out of every total above.
+trigger lands, the Sound Trigger line ($18) becomes optional and drops out of
+every total above for a radar that already reports firmware 1.3.2. For one that
+arrived with 1.3.1 or older, the swap instead costs the ~$76 J-Link EDU Mini
+listed under [Internal Trigger Instead](#internal-trigger-instead-pr-221), a
+one-off tool that flashes the 1.3.2 firmware.
 
 OpenFlight works without any angle radar: you get ball speed, club speed, smash
 factor, spin rate, and estimated carry. The angle radar adds measured launch
