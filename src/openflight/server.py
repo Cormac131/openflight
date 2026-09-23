@@ -991,6 +991,7 @@ def init_camera_capture(
     lateral_offset_m: float,
     horizontal_offset_deg: float,
     use_gpio_trigger: bool,
+    ball_forward_m: float | None = None,
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
@@ -1057,6 +1058,7 @@ def init_camera_capture(
             "mount_height_m": mount_height_m,
             "lateral_offset_m": lateral_offset_m,
             "horizontal_offset_deg": horizontal_offset_deg,
+            "ball_forward_m": ball_forward_m,
             "alignment_x_pct": 50.0,
             "alignment_y_pct": 50.0,
         }
@@ -2691,6 +2693,41 @@ def _fuse_camera_club_delivery(
         )
 
 
+def _camera_ball_geometry():
+    """Build ball-flight geometry from the IWR6843 tee calibration or a tape measure.
+
+    Returns a ``CameraBallGeometry``, or the rejection status string to report
+    when neither the radar calibration nor a measured ball distance
+    (``--camera-capture-ball-distance-m``) is available.
+    """
+    from openflight.camera.ball_flight import CameraBallGeometry  # noqa: PLC0415
+
+    camera_fields = {
+        "camera_height_m": float(camera_capture_config["mount_height_m"]),
+        "camera_lateral_offset_m": float(camera_capture_config.get("lateral_offset_m", 0.0)),
+        "horizontal_offset_deg": float(camera_capture_config.get("horizontal_offset_deg", 0.0)),
+        "roll_correction_deg": float(camera_capture_config.get("roll_correction_deg", 0.0)),
+        "horizontal_pixel_sign": -1.0 if camera_capture_config.get("mirror_horizontal") else 1.0,
+        "image_width_px": int(camera_capture_config["width"]),
+        "image_height_px": int(camera_capture_config["height"]),
+    }
+    calibration = iwr6843_runtime.calibration if iwr6843_runtime is not None else None
+    if calibration is not None and calibration.tee_range_m is not None:
+        return CameraBallGeometry(
+            radar_height_m=calibration.radar_height_m,
+            tee_range_m=float(calibration.tee_range_m),
+            ball_height_m=calibration.tee_ball_height_m,
+            **camera_fields,
+        )
+    ball_forward_m = camera_capture_config.get("ball_forward_m")
+    if ball_forward_m is not None:
+        return CameraBallGeometry.from_camera_measurements(
+            ball_forward_m=float(ball_forward_m),
+            **camera_fields,
+        )
+    return "rejected_missing_tee_geometry" if calibration is not None else "rejected_no_iwr_runtime"
+
+
 def _fuse_camera_ball_flight(
     shot: Shot,
     camera_capture,
@@ -2700,7 +2737,6 @@ def _fuse_camera_ball_flight(
     try:
         from openflight.camera.ball_flight import (  # noqa: PLC0415
             CameraBallEstimate,
-            CameraBallGeometry,
             estimate_camera_ball_flight,
             select_camera_assisted_horizontal,
         )
@@ -2708,53 +2744,31 @@ def _fuse_camera_ball_flight(
         estimate = CameraBallEstimate(status="rejected_no_camera_capture")
         if camera_capture is not None and camera_capture.valid and camera_capture.path:
             frames_path = Path(camera_capture.path) / "frames.npz"
-            if not frames_path.exists():
+            geometry = _camera_ball_geometry() if frames_path.exists() else None
+            if geometry is None:
                 estimate = CameraBallEstimate(status="rejected_missing_camera_frames")
-            elif iwr6843_runtime is None:
-                estimate = CameraBallEstimate(status="rejected_no_iwr_runtime")
+            elif isinstance(geometry, str):
+                estimate = CameraBallEstimate(status=geometry)
             else:
-                calibration = iwr6843_runtime.calibration
-                if calibration.tee_range_m is None:
-                    estimate = CameraBallEstimate(status="rejected_missing_tee_geometry")
+                archive = (
+                    _load_camera_capture_archive(camera_capture)
+                    if camera_archive is _CAMERA_ARCHIVE_UNSET
+                    else camera_archive
+                )
+                if archive is None:
+                    estimate = CameraBallEstimate(status="rejected_missing_camera_frames")
                 else:
-                    archive = (
-                        _load_camera_capture_archive(camera_capture)
-                        if camera_archive is _CAMERA_ARCHIVE_UNSET
-                        else camera_archive
+                    trigger_ns = int(archive["trigger_host_timestamp_ns"])
+                    estimate = estimate_camera_ball_flight(
+                        archive["frames"],
+                        archive["host_timestamp_ns"],
+                        trigger_ns=trigger_ns,
+                        range_evidence=shot.iwr6843_ball_range_evidence,
+                        geometry=geometry,
+                        ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
+                        iwr_vertical_deg=shot.launch_angle_vertical,
+                        ball_tracker=camera_ball_flight_reference_tracker,
                     )
-                    if archive is None:
-                        estimate = CameraBallEstimate(status="rejected_missing_camera_frames")
-                    else:
-                        trigger_ns = int(archive["trigger_host_timestamp_ns"])
-                        estimate = estimate_camera_ball_flight(
-                            archive["frames"],
-                            archive["host_timestamp_ns"],
-                            trigger_ns=trigger_ns,
-                            range_evidence=shot.iwr6843_ball_range_evidence,
-                            geometry=CameraBallGeometry(
-                                camera_height_m=float(camera_capture_config["mount_height_m"]),
-                                radar_height_m=calibration.radar_height_m,
-                                tee_range_m=float(calibration.tee_range_m),
-                                ball_height_m=calibration.tee_ball_height_m,
-                                camera_lateral_offset_m=float(
-                                    camera_capture_config.get("lateral_offset_m", 0.0)
-                                ),
-                                horizontal_offset_deg=float(
-                                    camera_capture_config.get("horizontal_offset_deg", 0.0)
-                                ),
-                                roll_correction_deg=float(
-                                    camera_capture_config.get("roll_correction_deg", 0.0)
-                                ),
-                                horizontal_pixel_sign=(
-                                    -1.0 if camera_capture_config.get("mirror_horizontal") else 1.0
-                                ),
-                                image_width_px=int(camera_capture_config["width"]),
-                                image_height_px=int(camera_capture_config["height"]),
-                            ),
-                            ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
-                            iwr_vertical_deg=shot.launch_angle_vertical,
-                            ball_tracker=camera_ball_flight_reference_tracker,
-                        )
 
         decision = select_camera_assisted_horizontal(
             estimate,
@@ -4322,6 +4336,16 @@ def main():
         ),
     )
     parser.add_argument(
+        "--camera-capture-ball-distance-m",
+        type=float,
+        default=None,
+        help=(
+            "Measured horizontal distance from the camera to the ball at address in meters. "
+            "Lets the camera ball tracker derive its geometry without an IWR6843 tee "
+            "calibration (camera-only horizontal launch, putting)."
+        ),
+    )
+    parser.add_argument(
         "--camera-capture-roll-deg",
         type=float,
         default=0.0,
@@ -4690,6 +4714,8 @@ def main():
         or args.camera_capture_mount_height_m <= 0
     ):
         parser.error("--camera-capture dimensions, timing, exposure, and gain must be positive")
+    if args.camera_capture_ball_distance_m is not None and args.camera_capture_ball_distance_m <= 0:
+        parser.error("--camera-capture-ball-distance-m must be positive")
     camera_capture_scaler_crop = None
     if args.camera_capture_scaler_crop:
         try:
@@ -4816,6 +4842,7 @@ def main():
             mount_height_m=args.camera_capture_mount_height_m,
             lateral_offset_m=args.camera_capture_lateral_offset_m,
             horizontal_offset_deg=args.camera_capture_horizontal_offset_deg,
+            ball_forward_m=args.camera_capture_ball_distance_m,
             roll_correction_deg=args.camera_capture_roll_deg,
             stream=args.camera_capture_stream,
             rotate_180=args.camera_capture_rotate_180,

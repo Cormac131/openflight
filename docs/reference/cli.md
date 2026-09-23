@@ -147,6 +147,7 @@ Optional rolling-buffer capture and replay. See [camera setup](../camera/README.
 | `--camera-capture-mount-height-m` | float; default `0.20955` | Camera optical-center height above the hitting surface |
 | `--camera-capture-horizontal-offset-deg` | float; default `0` | Target-line correction added to horizontal launch angles |
 | `--camera-capture-lateral-offset-m` | float; default `0` | Camera position relative to radar center; positive is target-right |
+| `--camera-capture-ball-distance-m` | float; optional | Measured horizontal camera-to-ball distance at address; lets the camera ball tracker build its geometry without an IWR6843 tee calibration (camera-only horizontal launch, putting) |
 | `--camera-capture-roll-deg` | float; default `0` | Clockwise image-roll correction for preview and geometry |
 | `--camera-capture-stream` | `raw` or `main-y`; default `raw` | Camera stream to persist |
 | `--camera-capture-scaler-crop` | `X,Y,W,H` | Optional Picamera2 scaler crop |

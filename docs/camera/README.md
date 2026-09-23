@@ -320,6 +320,35 @@ scripts/start-kiosk.sh \
 When capture is enabled, OpenFlight keeps a rolling pre-trigger frame buffer and freezes it
 from the same sound-trigger event used by the radar pipeline.
 
+## Putting (Camera Only)
+
+The ball tracker in `openflight.camera.ball_flight` has a putting search
+profile (`PUTT_SEARCH`) that needs no OPS243 speed and no IWR6843 tee
+calibration. It follows the ball rolling along the ground for about 400 ms
+after the trigger, takes depth from the apparent ball size, and reports ball
+speed and the horizontal start line. It is experimental and has only been
+exercised on synthetic captures so far.
+
+A putting capture needs a longer post-trigger window than the 50 ms default,
+for example `--camera-capture-post-ms 400`. Geometry comes from a tape measure:
+the camera height (`--camera-capture-mount-height-m`) and the horizontal
+distance from the lens to the ball at address (`--camera-capture-ball-distance-m`).
+The same distance also lets the live full-swing horizontal launch run in
+camera-only mode when no IWR6843 is fitted.
+
+Replay saved captures offline with:
+
+```bash
+uv run python scripts/analysis/analyze_camera_putt.py \
+  ~/openflight_sessions/home/camera/camera_*/ \
+  --ball-distance-m 1.5 \
+  --camera-height-m 0.20955
+```
+
+Each capture prints its status, confidence tier, ball speed in mph, start line
+in degrees (positive is target-right), and the frames the fit used. Pass
+`--json` for one JSON object per capture.
+
 ## Shot Replay
 
 A shot with a matched high-speed camera capture exposes **Replay** in the Live
@@ -420,6 +449,7 @@ processes. Reboot rather than hot-unloading the camera kernel module.
 - The `320x200` crop has only been evaluated with 7-iron and 9-iron TrackMan shots.
 - Camera pose is not yet a complete metric calibration.
 - Camera-assisted club path and attack angle remain experimental.
+- Camera-only putting (ball speed and start line) is experimental and untested on real putts.
 - A kernel update requires rebuilding the custom module.
 - The tested down-the-line view cannot independently measure downrange speed;
   OPS remains necessary for converting image-plane motion into delivery angles.
