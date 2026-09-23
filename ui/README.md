@@ -9,7 +9,7 @@ and how the whole system fits together, see the [root README](../README.md).
 
 ## Quick start
 
-You need Node 20+.
+You need Node 22.12 or newer (`electron@44` will not install cleanly on Node 20).
 
 ### Frontend-only (recommended for UI work)
 
@@ -138,6 +138,9 @@ The pin is stored in
 `openflight.onboarding.completed:v1`. Live view mode is
 `openflight.live-view:v1` (`tiles` | `timed` | `sticky`, duration 5/10/15s).
 Change those later in the footer menu. Shut down is the header power button.
+Those keys live in the **current browser profile**. Electron does not share
+Chromium's profile; see
+[Electron Kiosk Shell](../docs/electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
 
 **Display mode** lives at `/display`: a compact, fullscreen-friendly dashboard
 for mounted screens and TVs. The [root README](../README.md#tv-display-mode)
