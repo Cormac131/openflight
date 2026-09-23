@@ -137,6 +137,8 @@ uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 scripts/start-kiosk.sh              # Default: rolling buffer + sound trigger
 scripts/start-kiosk.sh --mock       # Development mode without hardware
 scripts/start-kiosk.sh --kld7                          # With K-LD7 angle radars (deprecated; auto-detects horizontal)
+scripts/start-kiosk.sh --trigger camera                # Camera ball-at-address trigger (no sound sensor, experimental)
+scripts/start-kiosk.sh --camera-trigger-shadow         # Sound trigger + camera trigger logged side by side
 ```
 
 ### Sound Trigger Testing
@@ -154,7 +156,8 @@ uv run python scripts/hardware-test/test_sound_trigger_hardware.py
 ```
 React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ──► OPS243Radar
                               │                │
-                              │                └── SoundTrigger (SEN-14262 → HOST_INT)
+                              │                ├── SoundTrigger (SEN-14262 → HOST_INT)
+                              │                └── CameraTrigger (camera sees ball leave → S!)
                               │
                               ├── IWR6843Runtime (optional, 60 GHz → launch angle & club path)
                               ├── KLD7Tracker (vertical/horizontal, deprecated)
@@ -186,7 +189,9 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
 - `inclinometer.py` - LIS3DH accelerometer tilt compensation service
 - `sim/` - Simulator connectors (OpenGolfSim, GSPro, E6 Connect, Garmin) and network transports
 - `cloud/` - Telemetry, cloud configuration, session upload, and push error handling
-- `rolling_buffer/` - Trigger strategies, I/Q processor, spin detection
+- `rolling_buffer/` - Trigger strategies (sound, camera, speed), I/Q processor, spin detection
+- `camera/address_trigger.py` - Ball-at-address state machine for the camera trigger (pure numpy)
+- `camera/address_monitor.py` - Camera frame observer, ball acquisition worker, trigger events
 - `kld7/` - K-LD7 angle radar (deprecated hardware): RADC streaming, phase interferometry, dual-radar support
 - `kld7/radc.py` - FFT, CFAR detection, per-bin angle extraction from raw ADC
 - `server.py` - Flask server, AppState runtime management, staged shot processing pipeline
@@ -237,3 +242,4 @@ See [docs/sound-trigger-wiring.md](docs/build/sound-trigger.md) for full instruc
 |---------|---------|-------------|
 | `sound` | ~10μs | Hardware: SEN-14262 GATE → HOST_INT |
 | `speed` | ~5-6ms | Radar speed detection triggers capture |
+| `camera` | ~30ms after impact | Camera sees the ball leave address, sends S! (uses S#28 pre-heavy buffer) |

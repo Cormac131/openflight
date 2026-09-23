@@ -14,6 +14,11 @@ it is done and verified.
     Solder R17, wire `GATE` → `HOST_INT`. Everything downstream depends on this
     trigger path.
 
+- :material-camera-outline: **[Camera trigger](camera-trigger.md)**
+
+    *Experimental.* Replace the sound trigger with the internal camera: it
+    fires when the ball leaves address. Validate in shadow mode first.
+
 - :material-numeric-2-circle-outline: **[OPS243 → GPIO UART](ops243-uart.md)**
 
     Move the OPS243 off USB. Required before the IWR6843, which needs the bus.

@@ -1635,9 +1635,18 @@ class RollingBufferProcessor:
         If the timeline has a clean jump from a club-like outbound speed to the
         first ball-like outbound speed, use the midpoint of those frame centers.
         If that jump is under the configured delta threshold, or either side of
-        the transition is missing, fall back to the hardware sound trigger.
+        the transition is missing, fall back to the trigger: the camera-observed
+        impact for camera triggers (which fire after impact), otherwise the
+        hardware sound trigger (which fires at impact).
         """
-        sound_trigger_ms = capture.trigger_offset_ms if capture is not None else None
+        fallback_ms: Optional[float] = None
+        fallback_source = "unavailable"
+        if capture is not None:
+            camera_ms = capture.camera_impact_offset_ms
+            if camera_ms is not None:
+                fallback_ms, fallback_source = camera_ms, "camera_trigger"
+            else:
+                fallback_ms, fallback_source = capture.trigger_offset_ms, "sound_trigger"
 
         def fallback(
             reason: str,
@@ -1654,8 +1663,8 @@ class RollingBufferProcessor:
                 self._reading_center_ms(last_club) if last_club is not None else None
             )
             return ImpactEstimate(
-                timestamp_ms=sound_trigger_ms,
-                source=("sound_trigger" if sound_trigger_ms is not None else "unavailable"),
+                timestamp_ms=fallback_ms,
+                source=fallback_source,
                 reason=reason,
                 speed_delta_mph=speed_delta_mph,
                 transition_gap_ms=transition_gap_ms,

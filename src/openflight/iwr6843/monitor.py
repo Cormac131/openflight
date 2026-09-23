@@ -77,8 +77,17 @@ class IWR6843CaptureMonitor:
         match_tolerance_s: float = 0.75,
         save_dumps: bool = False,
         trigger_observers: list[Callable[[float], None]] | None = None,
+        use_gpio_trigger: bool = True,
     ):
+        """
+        Args:
+            use_gpio_trigger: Listen for the sound-trigger edge on ``gpio_pin``.
+                False when another trigger (the camera) calls ``notify_trigger``
+                directly: without a sound sensor the pin floats and would
+                produce spurious captures.
+        """
         self.config_path = Path(config_path)
+        self.use_gpio_trigger = use_gpio_trigger
         self.output_dir = Path(output_dir).expanduser()
         self.gpio_pin = gpio_pin
         self.match_tolerance_s = match_tolerance_s
@@ -115,18 +124,21 @@ class IWR6843CaptureMonitor:
             self.radar.send_config(str(self.config_path))
             configured = True
 
-            button_factory = self._button_factory
-            if button_factory is None:
-                # Must precede the first gpiozero device: on a Pi 5 gpiozero's
-                # own auto-detection fails outright. See gpio_factory.
-                ensure_lgpio_pin_factory()
+            if self.use_gpio_trigger:
+                button_factory = self._button_factory
+                if button_factory is None:
+                    # Must precede the first gpiozero device: on a Pi 5 gpiozero's
+                    # own auto-detection fails outright. See gpio_factory.
+                    ensure_lgpio_pin_factory()
 
-                from gpiozero import Button  # pylint: disable=import-error,import-outside-toplevel
+                    from gpiozero import (  # pylint: disable=import-error,import-outside-toplevel
+                        Button,
+                    )
 
-                button_factory = Button
-            # No gpiozero debounce: lgpio delays delivery by the debounce interval,
-            # which previously cost the first 50 ms of ball flight.
-            self._button = button_factory(self.gpio_pin, pull_up=False, bounce_time=None)
+                    button_factory = Button
+                # No gpiozero debounce: lgpio delays delivery by the debounce
+                # interval, which previously cost the first 50 ms of ball flight.
+                self._button = button_factory(self.gpio_pin, pull_up=False, bounce_time=None)
             self._running = True
             self._worker = threading.Thread(
                 target=self._capture_loop,
@@ -159,6 +171,11 @@ class IWR6843CaptureMonitor:
         if not self._running:
             raise RuntimeError("cannot arm an IWR6843 monitor that is not running")
         if self._armed:
+            return
+        if self._button is None:
+            # Software-triggered (camera): notify_trigger is called directly.
+            self._armed = True
+            logger.info("[IWR6843] Armed for software triggers (GPIO edge disabled)")
             return
         # Attach while logically disarmed so a line already high from OPS
         # startup cannot synchronously create a false capture.

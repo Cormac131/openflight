@@ -223,6 +223,8 @@ class OPS243Radar:
         self._magnitude_enabled = False
         self._speed_read_buffer = ""
         self.last_hardware_trigger_first_byte_timestamp: Optional[float] = None
+        self.last_software_trigger_write_timestamp: Optional[float] = None
+        self.last_software_trigger_first_byte_timestamp: Optional[float] = None
         # Most recent OPS-clock -> host-epoch sync (see read_clock_sync).
         self.last_clock_sync: Optional[dict] = None
 
@@ -1377,7 +1379,11 @@ class OPS243Radar:
             sample_rate_ksps,
         )
 
-    def trigger_capture(self, timeout: Optional[float] = None) -> str:
+    def trigger_capture(
+        self,
+        timeout: Optional[float] = None,
+        on_first_byte: Optional[Callable[[], None]] = None,
+    ) -> str:
         """
         Trigger buffer capture and return raw I/Q data.
 
@@ -1395,6 +1401,12 @@ class OPS243Radar:
         Args:
             timeout: Minimum time to wait for the response (default 10s).
                 Scaled up when the current baud needs longer.
+            on_first_byte: Called once when the first response byte arrives.
+
+        Side effects:
+            Records ``last_software_trigger_write_timestamp`` (host epoch just
+            after S! was flushed) and ``last_software_trigger_first_byte_timestamp``
+            (host epoch of the first response byte) for trigger timing.
 
         Returns:
             Raw response string containing JSON lines
@@ -1408,8 +1420,10 @@ class OPS243Radar:
         self.serial.reset_input_buffer()
 
         # Send trigger command
+        self.last_software_trigger_first_byte_timestamp = None
         self.serial.write(b"S!\r")
         self.serial.flush()
+        self.last_software_trigger_write_timestamp = time.time()
 
         response_lines = []
         start_time = time.time()
@@ -1420,6 +1434,13 @@ class OPS243Radar:
         while (time.time() - start_time) < timeout:
             if self.serial.in_waiting:
                 chunk = self.serial.read(self.serial.in_waiting)
+                if bytes_received == 0 and chunk:
+                    self.last_software_trigger_first_byte_timestamp = time.time()
+                    if on_first_byte is not None:
+                        try:
+                            on_first_byte()
+                        except Exception:  # pylint: disable=broad-except
+                            logger.warning("[OPS] First-byte callback failed", exc_info=True)
                 response_lines.append(chunk.decode("ascii", errors="ignore"))
                 bytes_received += len(chunk)
                 last_data_time = time.time()

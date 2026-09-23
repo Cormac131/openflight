@@ -506,8 +506,13 @@ class SessionLogger:
         spin_rpm: Optional[float] = None,
         carry_yards: Optional[float] = None,
         latency_ms: Optional[float] = None,
+        camera: Optional[Dict[str, Any]] = None,
     ):
-        """Log the single enriched event for one physical trigger."""
+        """Log the single enriched event for one physical trigger.
+
+        ``camera`` carries camera-trigger timing (impact epoch, impact→S!
+        latency, pre-trigger window) and is omitted for other triggers.
+        """
         if not self.enabled:
             return
 
@@ -541,8 +546,18 @@ class SessionLogger:
                 "spin_rpm": spin_rpm,
                 "carry_yards": carry_yards,
                 "latency_ms": latency_ms,
+                **({"camera": camera} if camera is not None else {}),
             },
         )
+
+    def log_camera_trigger_shadow(self, entry: Dict[str, Any]):
+        """Log one shadow-mode camera-vs-sound trigger outcome."""
+        if not self.enabled:
+            return
+        outcome = entry.get("outcome", "unknown")
+        key = f"camera_shadow_{outcome}"
+        self._stats[key] = self._stats.get(key, 0) + 1
+        self._write_entry("camera_trigger_shadow", dict(entry))
 
     def log_rolling_buffer_capture(
         self,

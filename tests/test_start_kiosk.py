@@ -177,7 +177,8 @@ def test_startup_splash_reports_enabled_hardware_components():
         _script().index("start_startup_splash() {") : _script().index("show_startup_failure() {")
     ]
 
-    for option in ("--camera-capture", "--iwr6843", "--inclinometer", "--kld7"):
+    assert "uses_camera && status_options+=(--camera)" in splash
+    for option in ("--iwr6843", "--inclinometer", "--kld7"):
         assert f"has_server_arg {option}" in splash
 
 
@@ -221,6 +222,7 @@ def test_camera_capture_uses_system_python_for_sync_and_server_start():
         script.index("UV_SYNC_ARGS=(--quiet)") : script.index("\nconfigure_kld7_latency\n")
     ]
 
+    assert "if uses_camera; then" in camera_branch
     assert "export UV_PYTHON=/usr/bin/python3" in camera_branch
     assert "uv venv --clear --system-site-packages --python /usr/bin/python3" in camera_branch
     assert "UV_SYNC_ARGS+=(--extra camera)" in camera_branch
@@ -294,3 +296,43 @@ def test_start_kiosk_script_has_valid_shell_syntax():
         capture_output=True,
         text=True,
     )
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        (["--camera-capture"], True),
+        (["--camera-trigger-shadow"], True),
+        (["--trigger", "camera"], True),
+        (["--trigger=camera"], True),
+        (["--trigger", "sound"], False),
+        (["--trigger=speed"], False),
+        (["--session-location", "camera"], False),
+        ([], False),
+    ],
+)
+def test_uses_camera_detects_camera_trigger_modes(arguments, expected):
+    script = _script()
+    helpers = script[
+        script.index("has_server_arg() {") : script.index("normalize_mock_swing_speed() {")
+    ]
+    quoted = " ".join(shlex.quote(argument) for argument in arguments)
+    result = subprocess.run(
+        ["bash", "-c", f"{helpers}\nSERVER_ARGS=({quoted})\nuses_camera"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode == 0) is expected
+
+
+def test_camera_trigger_passes_through_to_server():
+    assert _dry_run("--trigger", "camera", "--camera-trigger-gone-frames", "6") == [
+        "openflight-server",
+        "--web-port",
+        "8080",
+        "--trigger",
+        "camera",
+        "--camera-trigger-gone-frames",
+        "6",
+    ]

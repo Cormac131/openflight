@@ -160,6 +160,7 @@ class CameraCaptureRuntime:
         self._camera = None
         self._button = None
         self._ring = TriggeredFrameBuffer(self.settings.pre_frames, self.settings.post_frames)
+        self._frame_observers: list[Callable[[CameraFrame], None]] = []
         self._running = False
         self._sequence = 0
         self._worker: threading.Thread | None = None
@@ -687,20 +688,36 @@ class CameraCaptureRuntime:
                     self.settings.rotate_180,
                     self.settings.mirror_horizontal,
                 )
-            self._ring.add_frame(
-                CameraFrame(
-                    image=image,
-                    sensor_timestamp_ns=int(metadata["SensorTimestamp"]),
-                    host_timestamp_ns=time.monotonic_ns(),
-                    exposure_us=int(metadata.get("ExposureTime", 0)),
-                    analogue_gain=float(metadata.get("AnalogueGain", 0.0)),
-                )
+            frame = CameraFrame(
+                image=image,
+                sensor_timestamp_ns=int(metadata["SensorTimestamp"]),
+                host_timestamp_ns=time.monotonic_ns(),
+                exposure_us=int(metadata.get("ExposureTime", 0)),
+                analogue_gain=float(metadata.get("AnalogueGain", 0.0)),
             )
+            self._ring.add_frame(frame)
             capture = self._ring.pop_capture()
             if capture is not None:
                 self._ready.put(capture)
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("[CAMERA] Frame callback failed: %s", exc, exc_info=True)
+            return
+        self._notify_frame_observers(frame)
+
+    def add_frame_observer(self, observer: Callable[[CameraFrame], None]) -> None:
+        """Call ``observer(frame)`` for every frame on the camera callback thread.
+
+        Observers must be cheap (the frame budget at 300 fps is 3.3 ms) and must
+        treat ``frame.image`` as read-only: the same array is held by the ring.
+        """
+        self._frame_observers.append(observer)
+
+    def _notify_frame_observers(self, frame: CameraFrame) -> None:
+        for observer in self._frame_observers:
+            try:
+                observer(frame)
+            except Exception:  # pylint: disable=broad-except
+                logger.warning("[CAMERA] Frame observer failed", exc_info=True)
 
     def _save_loop(self) -> None:
         while self._running:

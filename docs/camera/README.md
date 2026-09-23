@@ -5,6 +5,9 @@ camera does not replace the OPS243 or IWR6843: OPS anchors speed and trigger
 timing, the IWR6843 measures radar angles, and the camera provides a visual
 record of the clubhead and early ball flight.
 
+The camera can also replace the sound trigger. It fires the OPS243 when the
+ball leaves address. See [Camera trigger](../build/camera-trigger.md).
+
 Camera capture is experimental. Camera-assisted horizontal launch, club path,
 and attack angle must remain quality-gated until they are validated against a
 launch-monitor source of truth.

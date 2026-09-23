@@ -135,6 +135,10 @@ camera_capture_config: dict = {"enabled": False}
 camera_replay_manager = None
 camera_reference_ball_tracker = None
 camera_ball_flight_reference_tracker = None
+# Ball-at-address camera trigger (replaces the sound trigger, or shadows it).
+camera_address_monitor = None
+camera_trigger_config: dict = {"enabled": False}
+camera_shadow_comparator = None
 
 # Optional LIS3DH enclosure orientation used to compensate TI mount tilt.
 inclinometer_service = None
@@ -418,6 +422,12 @@ def _cleanup_hardware_for_shutdown() -> bool:
         _run_shutdown_step("IWR6843 stop", iwr6843_runtime.stop)
     if power_monitor:
         _run_shutdown_step("battery monitor stop", power_monitor.stop)
+    if camera_shadow_comparator:
+        _run_shutdown_step(
+            "camera shadow flush", lambda: camera_shadow_comparator.flush(final=True)
+        )
+    if camera_address_monitor:
+        _run_shutdown_step("camera address monitor stop", camera_address_monitor.stop)
     if camera_capture_runtime:
         _run_shutdown_step("camera capture stop", camera_capture_runtime.stop)
 
@@ -991,8 +1001,13 @@ def init_camera_capture(
     lateral_offset_m: float,
     horizontal_offset_deg: float,
     use_gpio_trigger: bool,
+    trigger_source: str | None = None,
 ) -> bool:
-    """Initialize passive high-speed camera capture for offline alignment."""
+    """Initialize passive high-speed camera capture for offline alignment.
+
+    ``trigger_source`` labels who freezes the clip ring when the GPIO edge is
+    not used ("iwr6843_fanout" by default, "camera_trigger" for camera mode).
+    """
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
     global camera_replay_manager  # pylint: disable=global-statement
     global camera_reference_ball_tracker  # pylint: disable=global-statement
@@ -1038,7 +1053,9 @@ def init_camera_capture(
             "enabled": True,
             "output_dir": str(Path(output_dir).expanduser()),
             "gpio_pin_bcm": gpio_pin,
-            "trigger_source": "gpio" if use_gpio_trigger else "iwr6843_fanout",
+            "trigger_source": (
+                "gpio" if use_gpio_trigger else (trigger_source or "iwr6843_fanout")
+            ),
             "width": settings.width,
             "height": settings.height,
             "fps": settings.fps,
@@ -1078,6 +1095,87 @@ def init_camera_capture(
         return False
 
 
+def init_camera_address_trigger(
+    *,
+    config,
+    shadow: bool,
+    acquire_fn=None,
+) -> bool:
+    """Attach the ball-at-address detector to the running camera runtime.
+
+    Args:
+        config: ``AddressTriggerConfig`` tuning.
+        shadow: Run alongside the sound trigger, logging agreement only.
+        acquire_fn: Ball acquisition override (defaults to the Hough detector).
+
+    Returns:
+        True when the detector is attached and running.
+    """
+    global camera_address_monitor, camera_trigger_config  # pylint: disable=global-statement
+    global camera_shadow_comparator  # pylint: disable=global-statement
+    try:
+        if camera_capture_runtime is None:
+            raise RuntimeError("high-speed camera is not running")
+        from .camera.address_monitor import (  # pylint: disable=import-outside-toplevel
+            CameraAddressMonitor,
+            ball_detector_acquirer,
+        )
+
+        address_monitor = CameraAddressMonitor(
+            config,
+            acquire_fn=acquire_fn or ball_detector_acquirer(),
+            auto_rearm=shadow,
+        )
+        if shadow:
+            from .camera.shadow import (  # pylint: disable=import-outside-toplevel
+                ShadowTriggerComparator,
+            )
+
+            def log_shadow(entry: dict) -> None:
+                session_logger = get_session_logger()
+                if session_logger:
+                    session_logger.log_camera_trigger_shadow(entry)
+
+            camera_shadow_comparator = ShadowTriggerComparator(log_shadow)
+            address_monitor.add_listener(camera_shadow_comparator.on_camera_trigger)
+        camera_capture_runtime.add_frame_observer(address_monitor.on_frame)
+        address_monitor.start()
+        camera_address_monitor = address_monitor
+        camera_trigger_config = {
+            "enabled": True,
+            "mode": "shadow" if shadow else "active",
+            "gone_frames": config.gone_frames,
+            "max_departure_ms": config.max_departure_ms,
+            "require_address": config.require_address,
+        }
+        logger.info("[SERVER] Camera address trigger initialized: %s", camera_trigger_config)
+        return True
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.error("[SERVER] Camera address trigger failed: %s", error, exc_info=True)
+        log_session_error(
+            "Camera address trigger initialization failed",
+            component="camera_trigger",
+            exc=error,
+        )
+        camera_address_monitor = None
+        camera_shadow_comparator = None
+        camera_trigger_config = {"enabled": False, "error": str(error)}
+        return False
+
+
+def camera_trigger_observers() -> list:
+    """Sensors the camera trigger must notify with the impact epoch.
+
+    IWR6843 fans out to the camera clip ring itself; without it, the clip ring
+    is notified directly.
+    """
+    if iwr6843_runtime is not None:
+        return [iwr6843_runtime.capture_monitor.notify_trigger]
+    if camera_capture_runtime is not None:
+        return [camera_capture_runtime.notify_trigger]
+    return []
+
+
 def init_iwr6843(
     *,
     port: str | None,
@@ -1095,8 +1193,13 @@ def init_iwr6843(
     azimuth_offset_deg: float = 0.0,
     horizontal_phase_reference_rad: float | None = None,
     save_dumps: bool = False,
+    use_gpio_trigger: bool = True,
 ) -> bool:
-    """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator."""
+    """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator.
+
+    ``use_gpio_trigger=False`` is for the camera trigger, which calls
+    ``notify_trigger`` directly (no sound sensor on the shared pin).
+    """
     global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
     try:
         from .iwr6843 import Calibration
@@ -1125,6 +1228,7 @@ def init_iwr6843(
             port=port,
             gpio_pin=trigger_pin,
             save_dumps=save_dumps,
+            use_gpio_trigger=use_gpio_trigger,
             trigger_observers=(
                 [camera_capture_runtime.notify_trigger]
                 if camera_capture_runtime is not None
@@ -1646,6 +1750,19 @@ def _get_trigger_status() -> dict:
         "triggers_total": stats.get("triggers_total", 0),
         "triggers_accepted": stats.get("triggers_accepted", 0),
         "triggers_rejected": stats.get("triggers_rejected", 0),
+        "camera_trigger": (
+            {
+                **camera_address_monitor.status(),
+                "mode": camera_trigger_config.get("mode"),
+                **(
+                    {"shadow": camera_shadow_comparator.summary()}
+                    if camera_shadow_comparator is not None
+                    else {}
+                ),
+            }
+            if camera_address_monitor is not None
+            else None
+        ),
     }
 
 
@@ -3517,9 +3634,20 @@ def on_shot_detected(shot: Shot) -> None:
         _handle_shot_detected(shot)
 
 
+def _notify_camera_shadow(shot: Shot) -> None:
+    """In shadow mode, pair this sound-triggered shot with a camera departure."""
+    if camera_shadow_comparator is None:
+        return
+    try:
+        camera_shadow_comparator.on_sound_shot(shot.impact_timestamp)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Camera shadow comparison failed", exc_info=True)
+
+
 def _handle_shot_detected(shot: Shot) -> None:
     """Publish OPS metrics promptly, then enrich optional hardware data."""
     _assign_shot_number(shot)
+    _notify_camera_shadow(shot)
     active_profile = get_profile_store().get_active()
     shot.profile_id = active_profile.id
     shot.profile_name = active_profile.name
@@ -4237,6 +4365,48 @@ def _apply_kld7_device_defaults(args, dev_root: Path = Path("/dev")) -> None:
         args.kld7_horizontal_port = str(horizontal)
 
 
+def _camera_trigger_arg_error(args) -> Optional[str]:
+    """Return a CLI error for invalid camera-trigger combinations, else None."""
+    camera_trigger = args.trigger == "camera"
+    if (camera_trigger or args.camera_trigger_shadow) and (args.mock or args.swing_speed):
+        return "the camera trigger cannot be used with --mock or --swing-speed"
+    if camera_trigger and args.camera_trigger_shadow:
+        return "--camera-trigger-shadow compares against --trigger sound; drop one"
+    if args.camera_trigger_shadow and args.trigger != "sound":
+        return "--camera-trigger-shadow requires --trigger sound"
+    if args.camera_trigger_gone_frames < 1:
+        return "--camera-trigger-gone-frames must be at least 1"
+    if args.camera_trigger_departure_ms <= 0:
+        return "--camera-trigger-departure-ms must be positive"
+    if args.sound_pre_trigger is not None and not 0 <= args.sound_pre_trigger <= 32:
+        return "--sound-pre-trigger must be between 0 and 32"
+    return None
+
+
+def _resolve_pre_trigger_segments(args) -> int:
+    """S#n for the chosen trigger: explicit flag wins, else a per-trigger default."""
+    if args.sound_pre_trigger is not None:
+        return args.sound_pre_trigger
+    if args.trigger == "camera":
+        from .rolling_buffer.trigger import CameraTrigger  # pylint: disable=import-outside-toplevel
+
+        return CameraTrigger.DEFAULT_PRE_TRIGGER_SEGMENTS
+    return 16
+
+
+def _camera_trigger_config_from_args(args):
+    """Build the address state-machine config from CLI flags."""
+    from .camera.address_trigger import (  # pylint: disable=import-outside-toplevel
+        AddressTriggerConfig,
+    )
+
+    return AddressTriggerConfig(
+        gone_frames=args.camera_trigger_gone_frames,
+        max_departure_ms=args.camera_trigger_departure_ms,
+        require_address=not args.camera_trigger_no_require_address,
+    )
+
+
 def main():
     """Run the server."""
     import argparse  # pylint: disable=import-outside-toplevel
@@ -4379,9 +4549,40 @@ def main():
     _add_ballistics_arguments(parser)
     parser.add_argument(
         "--trigger",
-        choices=["sound", "speed"],
+        choices=["sound", "speed", "camera"],
         default="sound",
-        help="Trigger strategy (default: sound)",
+        help=(
+            "Trigger strategy (default: sound). 'camera' fires when the "
+            "down-the-line camera sees the ball leave address (no sound sensor)."
+        ),
+    )
+    parser.add_argument(
+        "--camera-trigger-shadow",
+        action="store_true",
+        help=(
+            "Run the camera ball-at-address trigger alongside the sound trigger "
+            "without firing it; logs camera_trigger_shadow agreement entries."
+        ),
+    )
+    parser.add_argument(
+        "--camera-trigger-gone-frames",
+        type=int,
+        default=9,
+        help="Consecutive bare-mat frames confirming the ball left (default: 9 = 30ms at 300fps)",
+    )
+    parser.add_argument(
+        "--camera-trigger-departure-ms",
+        type=float,
+        default=20.0,
+        help=(
+            "Max time from the last ball-present frame to bare mat for a departure to "
+            "count as a shot; slower removal (a hand) is ignored (default: 20)"
+        ),
+    )
+    parser.add_argument(
+        "--camera-trigger-no-require-address",
+        action="store_true",
+        help="Trigger even if the club was never seen at address beside the ball",
     )
     parser.add_argument(
         "--swing-speed",
@@ -4439,10 +4640,10 @@ def main():
     parser.add_argument(
         "--sound-pre-trigger",
         type=int,
-        default=16,
+        default=None,
         help=(
-            "Pre-trigger segments S#n, 0-32 "
-            "(default: 16 = 50/50 split, each segment ~4.27ms at 30ksps)"
+            "Pre-trigger segments S#n, 0-32, each ~4.27ms at 30ksps "
+            "(default: 16 = 50/50 split; 28 for --trigger camera, which fires after impact)"
         ),
     )
     parser.add_argument(
@@ -4677,9 +4878,12 @@ def main():
         parser.error("--iwr6843 cannot be used with --mock")
     if args.camera_capture and args.mock:
         parser.error("--camera-capture cannot be used with --mock")
+    camera_trigger_error = _camera_trigger_arg_error(args)
+    if camera_trigger_error:
+        parser.error(camera_trigger_error)
     if args.iwr6843 and (args.iwr6843_tee_m <= 0 or args.iwr6843_net_m <= 0):
         parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
-    if args.camera_capture and (
+    if (args.camera_capture or args.trigger == "camera" or args.camera_trigger_shadow) and (
         args.camera_capture_width <= 0
         or args.camera_capture_height <= 0
         or args.camera_capture_fps <= 0
@@ -4727,7 +4931,7 @@ def main():
         args.startup_status_file,
         configured_startup_components(
             mock=args.mock,
-            camera=args.camera_capture,
+            camera=args.camera_capture or args.trigger == "camera" or args.camera_trigger_shadow,
             iwr6843=args.iwr6843,
             inclinometer=args.inclinometer,
             kld7=args.kld7,
@@ -4785,7 +4989,9 @@ def main():
 
     # Start the monitor
     # Build trigger-specific kwargs (pre_trigger_segments always passed)
-    trigger_kwargs = {"pre_trigger_segments": args.sound_pre_trigger}
+    trigger_kwargs = {"pre_trigger_segments": _resolve_pre_trigger_segments(args)}
+    camera_trigger = args.trigger == "camera"
+    camera_needed = args.camera_capture or camera_trigger or args.camera_trigger_shadow
     swing_speed_kwargs = {
         "trigger_threshold_mph": args.swing_speed_threshold,
         "max_speed_mph": None if args.swing_speed_max <= 0 else args.swing_speed_max,
@@ -4797,7 +5003,7 @@ def main():
         "rejected_cooldown_ms": args.swing_speed_rejected_cooldown_ms,
     }
 
-    if args.camera_capture:
+    if camera_needed:
         startup_status.start("camera", "Connecting high-speed camera")
         camera_capture_base = (
             Path(args.log_dir).expanduser() if args.log_dir else Path.home() / "openflight_sessions"
@@ -4821,13 +5027,47 @@ def main():
             rotate_180=args.camera_capture_rotate_180,
             mirror_horizontal=args.camera_capture_mirror_horizontal,
             scaler_crop=camera_capture_scaler_crop,
-            use_gpio_trigger=not args.iwr6843,
+            # No sound sensor in camera mode: the clip ring is frozen by the
+            # camera trigger (directly, or via the IWR6843 fan-out).
+            use_gpio_trigger=not args.iwr6843 and not camera_trigger,
+            trigger_source="camera_trigger" if camera_trigger else None,
         ):
+            if camera_trigger:
+                startup_status.error(
+                    "camera",
+                    "High-speed camera failed to initialize",
+                    "The camera trigger needs the camera. Check the camera ribbon cable, "
+                    "then relaunch OpenFlight.",
+                )
+                print("ERROR: --trigger camera requested but the camera failed. Exiting.")
+                _cleanup_hardware_for_shutdown()
+                sys.exit(1)
             print("Camera capture unavailable - running without high-speed camera capture")
             startup_status.skip("camera", "High-speed camera unavailable; continuing")
         else:
             print(f"Camera capture enabled: {camera_capture_output_dir}")
             startup_status.ready("camera", "High-speed camera connected")
+
+        if camera_capture_runtime is not None and (camera_trigger or args.camera_trigger_shadow):
+            if init_camera_address_trigger(
+                config=_camera_trigger_config_from_args(args),
+                shadow=args.camera_trigger_shadow,
+            ):
+                print(
+                    "Camera ball-at-address trigger enabled"
+                    + (" (shadow mode)" if args.camera_trigger_shadow else "")
+                )
+            elif camera_trigger:
+                startup_status.error(
+                    "camera",
+                    "Camera trigger failed to initialize",
+                    "Check the terminal log (OpenCV must be installed), then relaunch OpenFlight.",
+                )
+                print("ERROR: camera trigger failed to initialize. Exiting.")
+                _cleanup_hardware_for_shutdown()
+                sys.exit(1)
+            else:
+                print("WARNING: camera trigger shadow mode unavailable; continuing")
 
     if args.iwr6843:
         startup_status.start("ti", "Connecting TI radar")
@@ -4857,6 +5097,7 @@ def main():
             azimuth_offset_deg=args.iwr6843_azimuth_offset_deg,
             horizontal_phase_reference_rad=args.iwr6843_horizontal_phase_reference_rad,
             save_dumps=args.debug,
+            use_gpio_trigger=not camera_trigger,
         ):
             calibration = iwr6843_runtime.calibration
             ball_speed_correction_distance_ft = args.iwr6843_tee_m * 3.28084
@@ -4939,6 +5180,14 @@ def main():
             print("ERROR: K-LD7 horizontal requested but failed to connect. Exiting.")
             _cleanup_hardware_for_shutdown()
             sys.exit(1)
+
+    if camera_trigger:
+        # Observers are resolved after IWR6843 init so its fan-out is used.
+        trigger_kwargs.update(
+            address_monitor=camera_address_monitor,
+            trigger_observers=camera_trigger_observers(),
+            sample_rate_hz=args.sample_rate * 1000.0,
+        )
 
     monitor_component = "monitor" if args.mock else "ops"
     monitor_label = "shot simulator" if args.mock else "OPS radar"

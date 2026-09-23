@@ -101,6 +101,26 @@ has_server_arg() {
     return 1
 }
 
+server_trigger_is() {
+    local wanted="$1"
+    local previous=""
+    local argument
+    for argument in "${SERVER_ARGS[@]}"; do
+        [ "$argument" = "--trigger=$wanted" ] && return 0
+        [ "$previous" = "--trigger" ] && [ "$argument" = "$wanted" ] && return 0
+        previous="$argument"
+    done
+    return 1
+}
+
+# The camera trigger and its shadow mode run on the high-speed camera, so they
+# need the same system-Python/picamera2 environment as --camera-capture.
+uses_camera() {
+    has_server_arg --camera-capture \
+        || has_server_arg --camera-trigger-shadow \
+        || server_trigger_is camera
+}
+
 normalize_mock_swing_speed() {
     has_server_arg --mock && has_server_arg --swing-speed || return 0
 
@@ -244,7 +264,7 @@ start_startup_splash() {
     if has_server_arg --mock || has_server_arg --mock-swing-speed; then
         status_options+=(--mock)
     fi
-    has_server_arg --camera-capture && status_options+=(--camera)
+    uses_camera && status_options+=(--camera)
     has_server_arg --iwr6843 && status_options+=(--iwr6843)
     has_server_arg --inclinometer && status_options+=(--inclinometer)
     has_server_arg --kld7 && status_options+=(--kld7)
@@ -344,7 +364,7 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 UV_SYNC_ARGS=(--quiet)
-if has_server_arg --camera-capture; then
+if uses_camera; then
     export UV_PYTHON=/usr/bin/python3
     if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c 'import picamera2' >/dev/null 2>&1; then
         uv venv --clear --system-site-packages --python /usr/bin/python3 || show_startup_failure \

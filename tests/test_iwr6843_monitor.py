@@ -350,3 +350,30 @@ def test_capture_monitor_closes_serial_when_gpio_setup_fails(tmp_path):
         raise AssertionError("expected GPIO setup to fail")
     assert radar.shutdown_events == ["sensorStop", "close"]
     assert radar.closed
+
+
+def test_capture_monitor_software_trigger_mode_never_opens_gpio(tmp_path):
+    """Camera-triggered builds have no sound sensor: BCM17 floats, so never listen."""
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+
+    def forbidden_button(*_args, **_kwargs):
+        raise AssertionError("GPIO must not be opened in software-trigger mode")
+
+    observed = []
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=FakeRadar(_raw_dump()),
+        button_factory=forbidden_button,
+        trigger_observers=[observed.append],
+        use_gpio_trigger=False,
+    )
+    monitor.start(armed=False)
+    edge = time.time()
+    assert not monitor.notify_trigger(edge), "must stay disarmed until the OPS path is up"
+    monitor.arm()
+    assert monitor.notify_trigger(edge)
+    assert observed == [edge]
+    assert monitor.capture_for_shot(edge, timeout_s=1.0) is not None
+    monitor.stop()

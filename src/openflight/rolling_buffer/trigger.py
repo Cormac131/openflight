@@ -9,7 +9,7 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Callable, List, Optional
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Type
 
 from .processor import RollingBufferProcessor
 from .types import IQCapture
@@ -31,6 +31,13 @@ class TriggerStrategy(ABC):
     """
 
     MIN_VALID_OUTBOUND_MPH = 15.0
+
+    #: wait_for_trigger() accepts ``cancel_event`` so shutdown can interrupt an idle wait.
+    supports_cancel: bool = False
+    #: wait_for_trigger() accepts ``capture_started_callback``, fired when a dump begins.
+    emits_capture_started: bool = False
+    #: Relies on the rolling-buffer mode persisted in radar flash (configured at connect).
+    uses_persisted_rolling_buffer: bool = True
 
     def __init__(self, pre_trigger_segments: int = 12):
         self._diagnostics: List[dict] = []
@@ -61,6 +68,7 @@ class TriggerStrategy(ABC):
         peak_outbound_magnitude: float = 0.0,
         peak_inbound_magnitude: float = 0.0,
         trigger_latency_ms: Optional[float] = None,
+        extra: Optional[dict] = None,
     ):
         """Append a diagnostic entry for the current trigger event."""
         entry = {
@@ -80,6 +88,8 @@ class TriggerStrategy(ABC):
         }
         if trigger_latency_ms is not None:
             entry["trigger_latency_ms"] = trigger_latency_ms
+        if extra:
+            entry.update(extra)
         self._diagnostics.append(entry)
 
     def _summarize_capture_activity(
@@ -121,6 +131,7 @@ class TriggerStrategy(ABC):
         reason: str,
         response_bytes: int,
         trigger_latency_ms: Optional[float] = None,
+        extra: Optional[dict] = None,
     ):
         """Append a diagnostic entry using capture-activity summary fields."""
         self._append_diagnostic(
@@ -137,6 +148,7 @@ class TriggerStrategy(ABC):
             peak_outbound_magnitude=summary["peak_outbound_magnitude"],
             peak_inbound_magnitude=summary["peak_inbound_magnitude"],
             trigger_latency_ms=trigger_latency_ms,
+            extra=extra,
         )
 
     @abstractmethod
@@ -185,6 +197,8 @@ class SpeedTriggeredCapture(TriggerStrategy):
     capture with the Rolling Buffer. But assuming the club speed detected to
     ball impact is around 20-40ms, that should be ok."
     """
+
+    uses_persisted_rolling_buffer = False
 
     def __init__(
         self,
@@ -319,43 +333,20 @@ class SpeedTriggeredCapture(TriggerStrategy):
         return self._last_trigger_speed
 
 
-class SoundTrigger(TriggerStrategy):
+class RollingBufferDumpTrigger(TriggerStrategy):
     """
-    Hardware sound trigger using SparkFun SEN-14262.
+    Shared handling for triggers whose radar dumps the persisted rolling buffer.
 
-    IMPORTANT: Rolling buffer mode must be configured BEFORE using this trigger.
-    Call radar.configure_for_rolling_buffer() or radar.enter_rolling_buffer_mode()
-    before calling wait_for_trigger().
-
-    Wiring: SEN-14262 GATE → OPS243-A J3 Pin 3 (HOST_INT)
-    The GATE output goes HIGH on loud sound (club impact).
-    OPS243-A uses rising edge detection on HOST_INT as trigger.
-
-    No software trigger (S!) needed — the radar triggers itself
-    via hardware. We just need to wait for data to appear on serial.
-
+    Both the hardware sound trigger (HOST_INT) and the camera trigger (S!)
+    end the same way: parse the dump, reject captures with no real swing,
+    sync the OPS clock while the radar is idle, and re-arm LAST. That ordering
+    is subtle (see ``_finalize_dump``) so it lives in exactly one place.
     """
 
     CLOCK_SYNC_SAMPLES = 36
     CLOCK_SYNC_MAX_ROLLOVER_UNCERTAINTY_MS = 40.0
     CLOCK_SYNC_MAX_TIMEOUT_READ_MS = 50.0
     CLOCK_SYNC_MAX_FALLBACK_AGE_S = 60.0
-
-    def __init__(
-        self,
-        pre_trigger_segments: int = 12,
-    ):
-        """
-        Initialize sound trigger.
-
-        Args:
-            pre_trigger_segments: Number of pre-trigger segments for S# command.
-                Each segment = 128 samples = ~4.27ms at 30ksps.
-                Default 12 gives ~51ms pre-trigger, ~85ms post-trigger.
-                NOTE: This is passed to enter_rolling_buffer_mode() by the caller.
-                The trigger does NOT configure rolling buffer mode itself.
-        """
-        super().__init__(pre_trigger_segments=pre_trigger_segments)
 
     @staticmethod
     def _clock_sync_last_read_host_time(clock_sync: dict) -> Optional[float]:
@@ -556,6 +547,170 @@ class SoundTrigger(TriggerStrategy):
 
         return selection_log
 
+    def _finalize_dump(
+        self,
+        radar: "OPS243Radar",
+        processor: RollingBufferProcessor,
+        response: str,
+        *,
+        first_byte_timestamp: Optional[float],
+        label: str,
+        camera_impact_epoch: Optional[float] = None,
+        extra_diagnostic: Optional[dict] = None,
+        trigger_latency_ms: Optional[float] = None,
+    ) -> Optional[IQCapture]:
+        """Parse, validate, clock-sync and re-arm after a rolling-buffer dump.
+
+        Args:
+            radar: Radar that produced ``response``; re-armed before returning.
+            processor: Parser/validator for the capture.
+            response: Raw dump text.
+            first_byte_timestamp: Host epoch when the dump's first byte arrived.
+            label: Human-readable trigger name for logs ("Sound", "Camera").
+            camera_impact_epoch: Host epoch of the camera-observed impact, if any.
+            extra_diagnostic: Extra fields merged into the diagnostic entry.
+            trigger_latency_ms: Trigger-specific latency for the diagnostic.
+
+        Returns:
+            The accepted capture, or None when parsing or validation failed.
+        """
+        response_len = len(response)
+
+        # ORDERING MATTERS: after its dump the radar sits idle, where
+        # HOST_INT pulses are harmless. A real shot produces a second loud
+        # sound ~1s later (ball hitting the net); if we re-arm first, that
+        # sound starts a new dump exactly when the clock-sync exchange
+        # writes to the port — a two-way serial deadlock observed in the
+        # field (capture thread wedged in serial.write, radar frozen
+        # mid-dump). So: do all wire-talk (clock sync) while idle, and
+        # re-arm LAST, when we are about to go back to reading.
+
+        capture = processor.parse_capture(
+            response,
+            first_byte_timestamp=first_byte_timestamp,
+        )
+
+        if not capture:
+            radar.rearm_rolling_buffer(self.pre_trigger_segments)
+            logger.warning(
+                "[TRIGGER] %s trigger parse failed (%d bytes received)", label, response_len
+            )
+            self._append_diagnostic(
+                accepted=False,
+                reason="parse_failed",
+                response_bytes=response_len,
+                trigger_latency_ms=trigger_latency_ms,
+                extra=extra_diagnostic,
+            )
+            return None
+
+        if first_byte_timestamp is not None and capture.first_byte_timestamp is None:
+            capture.first_byte_timestamp = float(first_byte_timestamp)
+        if camera_impact_epoch is not None:
+            capture.camera_impact_epoch = float(camera_impact_epoch)
+
+        # Quick validation: does the capture contain any real swing data?
+        # At a driving range, a nearby player's impact sound can trip the
+        # trigger even though nothing was moving in front of our radar (and
+        # a kicked ball can trip the camera). Discard these false triggers
+        # immediately so we re-arm fast.
+        summary = self._summarize_capture_activity(processor, capture)
+
+        if not summary["valid_outbound_count"]:
+            # False trigger: re-arm immediately (no clock sync) so the
+            # next real swing isn't missed.
+            radar.rearm_rolling_buffer(self.pre_trigger_segments)
+            logger.info(
+                "[TRIGGER] %s trigger rejected — no outbound speed >= %.0f mph "
+                "(peak=%.1f mph, %d readings)",
+                label,
+                self.MIN_VALID_OUTBOUND_MPH,
+                summary["peak_outbound_mph"],
+                summary["total_readings"],
+            )
+            self._append_activity_diagnostic(
+                summary,
+                accepted=False,
+                reason="no_outbound_speed",
+                response_bytes=response_len,
+                trigger_latency_ms=trigger_latency_ms,
+                extra=extra_diagnostic,
+            )
+            return None
+
+        # Accepted: talk on the wire while the radar is still idle, then
+        # re-arm as the last serial action before returning to the reader.
+        self._select_clock_sync_for_capture(radar, capture)
+        radar.rearm_rolling_buffer(self.pre_trigger_segments)
+
+        if capture.first_byte_timestamp is not None and capture.trigger_timestamp is None:
+            capture.apply_trigger_timestamp_from_first_byte()
+
+        if capture.trigger_timestamp is not None and capture.first_byte_timestamp is not None:
+            logger.info(
+                "[TRIGGER] %s trigger wall time %.3f "
+                "(source=%s, first byte %.3f, post-trigger %.1fms)",
+                label,
+                capture.trigger_timestamp,
+                capture.trigger_timestamp_source or "unknown",
+                capture.first_byte_timestamp,
+                capture.post_trigger_duration_ms,
+            )
+
+        logger.info(
+            "[TRIGGER] %s trigger accepted — peak %.1f mph, %d outbound readings",
+            label,
+            summary["valid_peak_outbound_mph"],
+            summary["valid_outbound_count"],
+        )
+        self._append_activity_diagnostic(
+            summary,
+            accepted=True,
+            reason="accepted",
+            response_bytes=response_len,
+            trigger_latency_ms=trigger_latency_ms,
+            extra=extra_diagnostic,
+        )
+
+        return capture
+
+
+class SoundTrigger(RollingBufferDumpTrigger):
+    """
+    Hardware sound trigger using SparkFun SEN-14262.
+
+    IMPORTANT: Rolling buffer mode must be configured BEFORE using this trigger.
+    Call radar.configure_for_rolling_buffer() or radar.enter_rolling_buffer_mode()
+    before calling wait_for_trigger().
+
+    Wiring: SEN-14262 GATE → OPS243-A J3 Pin 3 (HOST_INT)
+    The GATE output goes HIGH on loud sound (club impact).
+    OPS243-A uses rising edge detection on HOST_INT as trigger.
+
+    No software trigger (S!) needed — the radar triggers itself
+    via hardware. We just need to wait for data to appear on serial.
+
+    """
+
+    supports_cancel = True
+    emits_capture_started = True
+
+    def __init__(
+        self,
+        pre_trigger_segments: int = 12,
+    ):
+        """
+        Initialize sound trigger.
+
+        Args:
+            pre_trigger_segments: Number of pre-trigger segments for S# command.
+                Each segment = 128 samples = ~4.27ms at 30ksps.
+                Default 12 gives ~51ms pre-trigger, ~85ms post-trigger.
+                NOTE: This is passed to enter_rolling_buffer_mode() by the caller.
+                The trigger does NOT configure rolling buffer mode itself.
+        """
+        super().__init__(pre_trigger_segments=pre_trigger_segments)
+
     def wait_for_trigger(
         self,
         radar: "OPS243Radar",
@@ -587,101 +742,196 @@ class SoundTrigger(TriggerStrategy):
             logger.info("[TRIGGER] Sound trigger timeout — no hardware trigger received")
             return None
 
-        response_len = len(response)
-        logger.info("[TRIGGER] Sound trigger fired, %d bytes received", response_len)
-        first_byte_timestamp = getattr(
+        logger.info("[TRIGGER] Sound trigger fired, %d bytes received", len(response))
+        return self._finalize_dump(
             radar,
-            "last_hardware_trigger_first_byte_timestamp",
-            None,
-        )
-
-        # ORDERING MATTERS: after its dump the radar sits idle, where
-        # HOST_INT pulses are harmless. A real shot produces a second loud
-        # sound ~1s later (ball hitting the net); if we re-arm first, that
-        # sound starts a new dump exactly when the clock-sync exchange
-        # writes to the port — a two-way serial deadlock observed in the
-        # field (capture thread wedged in serial.write, radar frozen
-        # mid-dump). So: do all wire-talk (clock sync) while idle, and
-        # re-arm LAST, when we are about to go back to reading.
-
-        capture = processor.parse_capture(
+            processor,
             response,
-            first_byte_timestamp=first_byte_timestamp,
+            first_byte_timestamp=getattr(
+                radar,
+                "last_hardware_trigger_first_byte_timestamp",
+                None,
+            ),
+            label="Sound",
         )
-
-        if not capture:
-            radar.rearm_rolling_buffer(self.pre_trigger_segments)
-            logger.warning("[TRIGGER] Sound trigger parse failed (%d bytes received)", response_len)
-            self._append_diagnostic(
-                accepted=False,
-                reason="parse_failed",
-                response_bytes=response_len,
-            )
-            return None
-
-        if first_byte_timestamp is not None and capture.first_byte_timestamp is None:
-            capture.first_byte_timestamp = float(first_byte_timestamp)
-
-        # Quick validation: does the capture contain any real swing data?
-        # At a driving range, a nearby player's impact sound can trip the
-        # trigger even though nothing was moving in front of our radar.
-        # Discard these false triggers immediately so we re-arm fast.
-        summary = self._summarize_capture_activity(processor, capture)
-
-        if not summary["valid_outbound_count"]:
-            # False trigger: re-arm immediately (no clock sync) so the
-            # next real swing isn't missed.
-            radar.rearm_rolling_buffer(self.pre_trigger_segments)
-            logger.info(
-                "[TRIGGER] Sound trigger rejected — no outbound speed >= %.0f mph "
-                "(peak=%.1f mph, %d readings)",
-                self.MIN_VALID_OUTBOUND_MPH,
-                summary["peak_outbound_mph"],
-                summary["total_readings"],
-            )
-            self._append_activity_diagnostic(
-                summary,
-                accepted=False,
-                reason="no_outbound_speed",
-                response_bytes=response_len,
-            )
-            return None
-
-        # Accepted: talk on the wire while the radar is still idle, then
-        # re-arm as the last serial action before returning to the reader.
-        self._select_clock_sync_for_capture(radar, capture)
-        radar.rearm_rolling_buffer(self.pre_trigger_segments)
-
-        if capture.first_byte_timestamp is not None and capture.trigger_timestamp is None:
-            capture.apply_trigger_timestamp_from_first_byte()
-
-        if capture.trigger_timestamp is not None and capture.first_byte_timestamp is not None:
-            logger.info(
-                "[TRIGGER] Sound trigger wall time %.3f "
-                "(source=%s, first byte %.3f, post-trigger %.1fms)",
-                capture.trigger_timestamp,
-                capture.trigger_timestamp_source or "unknown",
-                capture.first_byte_timestamp,
-                capture.post_trigger_duration_ms,
-            )
-
-        logger.info(
-            "[TRIGGER] Sound trigger accepted — peak %.1f mph, %d outbound readings",
-            summary["valid_peak_outbound_mph"],
-            summary["valid_outbound_count"],
-        )
-        self._append_activity_diagnostic(
-            summary,
-            accepted=True,
-            reason="accepted",
-            response_bytes=response_len,
-        )
-
-        return capture
 
     def reset(self):
         """Reset trigger state."""
         pass  # No state to reset
+
+
+class CameraTrigger(RollingBufferDumpTrigger):
+    """
+    Camera trigger: the ball leaving its address position fires S!.
+
+    A ``CameraAddressMonitor`` watches the ball at address (down-the-line
+    camera inside the unit) and confirms a departure a few frames after
+    impact. This strategy then sends ``S!`` so the OPS243 dumps its rolling
+    buffer, fans the camera-observed impact time out to other sensors
+    (IWR6843, camera clip ring), and hands off to the shared dump pipeline.
+
+    Because the trigger fires *after* impact, the buffer should be weighted
+    towards pre-trigger history (default ``S#28`` ≈ 120 ms before, 17 ms after)
+    and the capture carries ``camera_impact_epoch`` for impact estimation.
+
+    Only the capture thread writes to the serial port; the camera callback
+    thread merely sets an event (see ``CameraAddressMonitor``).
+    """
+
+    supports_cancel = True
+    emits_capture_started = True
+
+    DEFAULT_PRE_TRIGGER_SEGMENTS = 28
+    SEGMENT_SAMPLES = 128
+    #: Warn when impact→S! latency uses more than this share of the pre-trigger window.
+    LATENCY_WARNING_FRACTION = 0.7
+
+    def __init__(
+        self,
+        pre_trigger_segments: int = DEFAULT_PRE_TRIGGER_SEGMENTS,
+        address_monitor=None,
+        trigger_observers: Optional[List[Callable[[float], object]]] = None,
+        sample_rate_hz: float = 30_000.0,
+    ):
+        """
+        Args:
+            pre_trigger_segments: S# pre-trigger blocks (128 samples each).
+            address_monitor: ``CameraAddressMonitor`` supplying departures.
+                May be attached later with ``attach_address_monitor``.
+            trigger_observers: Callables receiving the impact epoch just
+                before S! (e.g. IWR6843 / camera-clip ``notify_trigger``).
+            sample_rate_hz: OPS sample rate, used for the latency budget.
+        """
+        super().__init__(pre_trigger_segments=pre_trigger_segments)
+        self.address_monitor = address_monitor
+        self._trigger_observers: List[Callable[[float], object]] = list(trigger_observers or [])
+        self.sample_rate_hz = sample_rate_hz
+
+    def attach_address_monitor(self, address_monitor) -> None:
+        """Attach the camera address monitor (server wiring happens after construction)."""
+        self.address_monitor = address_monitor
+
+    def add_trigger_observer(self, observer: Callable[[float], object]) -> None:
+        """Notify ``observer(impact_epoch)`` on every camera trigger."""
+        self._trigger_observers.append(observer)
+
+    @property
+    def pre_trigger_window_ms(self) -> float:
+        """Pre-trigger history held in the OPS buffer."""
+        return self.pre_trigger_segments * self.SEGMENT_SAMPLES / self.sample_rate_hz * 1000.0
+
+    def wait_for_trigger(
+        self,
+        radar: "OPS243Radar",
+        processor: RollingBufferProcessor,
+        timeout: float = 30.0,
+        cancel_event: Optional[threading.Event] = None,
+        capture_started_callback: Optional[Callable[[], None]] = None,
+    ) -> Optional[IQCapture]:
+        """Wait for a camera-confirmed departure, then dump the rolling buffer."""
+        monitor = self.address_monitor
+        if monitor is None:
+            raise RuntimeError("CameraTrigger has no camera address monitor attached")
+
+        event = monitor.wait_for_trigger(timeout, cancel_event=cancel_event)
+        if event is None:
+            return None
+
+        try:
+            return self._capture_for_event(radar, processor, event, capture_started_callback)
+        finally:
+            # A *new* ball must be placed before the next trigger, whatever
+            # happened to this one.
+            monitor.rearm()
+
+    def _capture_for_event(
+        self,
+        radar: "OPS243Radar",
+        processor: RollingBufferProcessor,
+        event,
+        capture_started_callback: Optional[Callable[[], None]],
+    ) -> Optional[IQCapture]:
+        now = time.time()
+        impact_age_ms = (now - event.impact_epoch) * 1000.0
+        camera_detail = event.to_dict()
+
+        if impact_age_ms >= self.pre_trigger_window_ms:
+            # The capture thread was busy (processing the previous shot) when
+            # this departure was confirmed; the impact has already scrolled out
+            # of the radar buffer. Dumping now would only blind us.
+            logger.warning(
+                "[TRIGGER] Camera trigger stale — impact %.0fms ago exceeds %.0fms "
+                "pre-trigger window",
+                impact_age_ms,
+                self.pre_trigger_window_ms,
+            )
+            self._append_diagnostic(
+                accepted=False,
+                reason="stale_camera_trigger",
+                trigger_latency_ms=impact_age_ms,
+                extra={"camera": {**camera_detail, "impact_to_s_bang_ms": impact_age_ms}},
+            )
+            return None
+
+        for observer in list(self._trigger_observers):
+            try:
+                observer(event.impact_epoch)
+            except Exception:  # pylint: disable=broad-except
+                logger.warning("[TRIGGER] Camera trigger observer failed", exc_info=True)
+
+        response = radar.trigger_capture(on_first_byte=capture_started_callback)
+        s_bang_epoch = getattr(radar, "last_software_trigger_write_timestamp", None)
+        if not isinstance(s_bang_epoch, (int, float)):
+            s_bang_epoch = now
+        impact_to_s_bang_ms = (s_bang_epoch - event.impact_epoch) * 1000.0
+        camera_detail.update(
+            {
+                "impact_to_s_bang_ms": round(impact_to_s_bang_ms, 3),
+                "confirm_to_s_bang_ms": round((s_bang_epoch - event.confirmed_epoch) * 1000.0, 3),
+                "pre_trigger_window_ms": round(self.pre_trigger_window_ms, 3),
+            }
+        )
+        if impact_to_s_bang_ms > self.pre_trigger_window_ms * self.LATENCY_WARNING_FRACTION:
+            logger.warning(
+                "[TRIGGER] Camera trigger latency %.1fms uses >%.0f%% of the %.0fms "
+                "pre-trigger window",
+                impact_to_s_bang_ms,
+                self.LATENCY_WARNING_FRACTION * 100,
+                self.pre_trigger_window_ms,
+            )
+        logger.info(
+            "[TRIGGER] Camera trigger fired %.1fms after impact, %d bytes received",
+            impact_to_s_bang_ms,
+            len(response),
+        )
+
+        return self._finalize_dump(
+            radar,
+            processor,
+            response,
+            first_byte_timestamp=getattr(
+                radar,
+                "last_software_trigger_first_byte_timestamp",
+                None,
+            ),
+            label="Camera",
+            camera_impact_epoch=event.impact_epoch,
+            extra_diagnostic={"camera": camera_detail},
+            trigger_latency_ms=impact_to_s_bang_ms,
+        )
+
+    def reset(self):
+        """Drop any pending departure; require a new ball."""
+        if self.address_monitor is not None:
+            self.address_monitor.rearm()
+
+
+#: Registered trigger strategies by CLI name.
+TRIGGER_TYPES: Dict[str, Type[TriggerStrategy]] = {
+    "speed": SpeedTriggeredCapture,
+    "sound": SoundTrigger,
+    "camera": CameraTrigger,
+}
 
 
 def create_trigger(trigger_type: str = "sound", **kwargs) -> TriggerStrategy:
@@ -689,7 +939,7 @@ def create_trigger(trigger_type: str = "sound", **kwargs) -> TriggerStrategy:
     Factory function to create trigger strategy.
 
     Args:
-        trigger_type: "sound" (production) or "speed" (fallback)
+        trigger_type: "sound" (production), "camera", or "speed" (fallback)
         **kwargs: Arguments passed to trigger constructor
 
     Returns:
@@ -700,15 +950,12 @@ def create_trigger(trigger_type: str = "sound", **kwargs) -> TriggerStrategy:
                    Requires GATE voltage to reach 3.3V threshold.
         - "speed": Fast speed detection triggers rolling buffer capture.
                    Recommended fallback by OmniPreSense. ~5-6ms response time.
+        - "camera": Down-the-line camera sees the ball leave address and
+                   sends S! (~30ms after impact; needs a pre-heavy S#).
     """
-    triggers = {
-        "speed": SpeedTriggeredCapture,
-        "sound": SoundTrigger,
-    }
-
-    if trigger_type not in triggers:
+    if trigger_type not in TRIGGER_TYPES:
         raise ValueError(
-            f"Unknown trigger type: {trigger_type}. Available: {list(triggers.keys())}"
+            f"Unknown trigger type: {trigger_type}. Available: {list(TRIGGER_TYPES.keys())}"
         )
 
-    return triggers[trigger_type](**kwargs)
+    return TRIGGER_TYPES[trigger_type](**kwargs)

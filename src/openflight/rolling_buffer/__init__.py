@@ -27,6 +27,8 @@ from .monitor import (
 )
 from .processor import RollingBufferProcessor
 from .trigger import (
+    CameraTrigger,
+    RollingBufferDumpTrigger,
     SoundTrigger,
     SpeedTriggeredCapture,
     TriggerStrategy,
@@ -55,6 +57,8 @@ __all__ = [
     "RollingBufferProcessor",
     # Triggers
     "TriggerStrategy",
+    "CameraTrigger",
+    "RollingBufferDumpTrigger",
     "SoundTrigger",
     "SpeedTriggeredCapture",
     "create_trigger",

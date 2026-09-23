@@ -28,6 +28,10 @@ class IQCapture:
             hardware-triggered capture arrived from the radar.
         trigger_timestamp: Host epoch timestamp when the hardware trigger fired,
             derived from first_byte_timestamp and the post-trigger buffer span.
+        camera_impact_epoch: Host epoch of the impact observed by the camera
+            trigger (the ball leaving its address position). Camera triggers
+            fire tens of milliseconds *after* impact, so this — not the
+            trigger time — is the impact fallback for camera captures.
     """
 
     sample_time: float
@@ -39,6 +43,7 @@ class IQCapture:
     trigger_timestamp: Optional[float] = None
     trigger_timestamp_source: Optional[str] = None
     clock_sync_offset_s: Optional[float] = None
+    camera_impact_epoch: Optional[float] = None
 
     def __post_init__(self) -> None:
         """Infer the hardware trigger epoch when first-byte timing is available."""
@@ -81,6 +86,17 @@ class IQCapture:
             self.trigger_timestamp = inferred
             self.trigger_timestamp_source = "first_byte"
         return inferred
+
+    @property
+    def camera_impact_offset_ms(self) -> Optional[float]:
+        """Camera-observed impact as an offset from buffer start (ms), if known.
+
+        Requires both the camera impact epoch and a host-clock trigger epoch
+        to place the camera observation on the radar's sample timeline.
+        """
+        if self.camera_impact_epoch is None or self.trigger_timestamp is None:
+            return None
+        return self.trigger_offset_ms + (self.camera_impact_epoch - self.trigger_timestamp) * 1000.0
 
     def infer_trigger_timestamp_from_clock_sync(self, clock_offset_s: float) -> float:
         """Return hardware trigger epoch from OPS radar clock and host offset."""

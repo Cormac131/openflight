@@ -17,7 +17,7 @@ from ..launch_monitor import Shot, estimate_carry_distance, summarize_shots
 from ..ops243 import OPS243Radar, SpeedReading
 from ..session_logger import get_session_logger, log_session_error
 from .processor import RollingBufferProcessor
-from .trigger import create_trigger
+from .trigger import TRIGGER_TYPES, create_trigger
 from .types import ProcessedCapture, SpeedTimeline
 
 logger = logging.getLogger("openflight.rolling_buffer.monitor")
@@ -200,6 +200,7 @@ class RollingBufferMonitor:
                 is nominal.
             trigger_type: Trigger strategy:
                 - "sound" (default): Persistent hardware-triggered buffer
+                - "camera": Camera sees the ball leave address, sends S!
                 - "speed": Fast speed trigger fallback per manufacturer
             **trigger_kwargs: Arguments for trigger strategy
         """
@@ -234,7 +235,7 @@ class RollingBufferMonitor:
         self.radar.connect()
 
         # Speed trigger handles its own configuration (starts in speed mode).
-        if self.trigger_type != "speed":
+        if self._trigger_capability("uses_persisted_rolling_buffer"):
             pre_trigger_segments = getattr(self.trigger, "pre_trigger_segments", 12)
             self.radar.prepare_persisted_rolling_buffer(
                 pre_trigger_segments=pre_trigger_segments,
@@ -249,6 +250,16 @@ class RollingBufferMonitor:
             logger.info("[MONITOR] Using speed trigger — configuration deferred to trigger")
 
         return True
+
+    def _trigger_capability(self, name: str) -> bool:
+        """Read a TriggerStrategy capability flag.
+
+        Falls back to the registered class for ``trigger_type`` when the
+        installed trigger is duck-typed (tests, replay harnesses).
+        """
+        if hasattr(self.trigger, name):
+            return bool(getattr(self.trigger, name))
+        return bool(getattr(TRIGGER_TYPES.get(self.trigger_type), name, False))
 
     def disconnect(self):
         """Disconnect from radar.
@@ -370,6 +381,7 @@ class RollingBufferMonitor:
                     spin_rpm=event.get("spin_rpm"),
                     carry_yards=event.get("carry_yards"),
                     latency_ms=event.get("latency_ms"),
+                    camera=event.get("camera"),
                 )
         except Exception:
             logger.warning("[MONITOR] Trigger event logging failed", exc_info=True)
@@ -444,8 +456,9 @@ class RollingBufferMonitor:
                     capture_started = True
                     self._notify_processing("capturing")
 
-                if self.trigger_type == "sound":
+                if self._trigger_capability("supports_cancel"):
                     trigger_kwargs["cancel_event"] = self._stop_event
+                if self._trigger_capability("emits_capture_started"):
                     trigger_kwargs["capture_started_callback"] = on_capture_started
                 capture = self.trigger.wait_for_trigger(**trigger_kwargs)
 
@@ -810,7 +823,13 @@ class RollingBufferMonitor:
                 if capture.trigger_timestamp is not None
                 else capture.first_byte_timestamp
             )
-            impact_timestamp = trigger_epoch
+            # Camera triggers fire after impact and observe the impact
+            # itself; the sound trigger fires at impact.
+            impact_timestamp = (
+                capture.camera_impact_epoch
+                if capture.camera_impact_epoch is not None
+                else trigger_epoch
+            )
 
             impact_timestamp_kld7 = self._impact_epoch_from_processed(processed)
             if impact_timestamp_kld7 is None:

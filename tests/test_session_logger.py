@@ -716,3 +716,30 @@ def test_power_status_writes_structured_session_entry(tmp_path):
     assert entry["state"] == "on_battery"
     assert entry["battery_percent"] == 42.5
     assert entry["external_power"] is False
+
+
+def test_trigger_event_includes_camera_timing_only_when_present(tmp_path):
+    import json  # pylint: disable=import-outside-toplevel
+
+    from openflight.session_logger import SessionLogger  # pylint: disable=import-outside-toplevel
+
+    logger = SessionLogger(log_dir=tmp_path, enabled=True)
+    logger.start_session()
+    logger.log_trigger_event(trigger_type="sound", accepted=True, reason="accepted")
+    logger.log_trigger_event(
+        trigger_type="camera",
+        accepted=True,
+        reason="accepted",
+        camera={"impact_to_s_bang_ms": 31.2},
+    )
+    logger.end_session()
+    entries = [
+        json.loads(line)
+        for path in tmp_path.rglob("*.jsonl")
+        for line in path.read_text().splitlines()
+        if line.strip()
+    ]
+    triggers = [e for e in entries if e.get("type") == "trigger_event"]
+    assert len(triggers) == 2
+    assert "camera" not in triggers[0]
+    assert triggers[1]["camera"] == {"impact_to_s_bang_ms": 31.2}
