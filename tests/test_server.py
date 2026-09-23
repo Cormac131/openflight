@@ -4560,18 +4560,17 @@ class TestBallisticCarryPrecedence:
         assert 0 < shot.carry_spin_adjusted < 200
 
     @pytest.mark.parametrize(
-        ("confidence", "uses_measured_spin"),
-        [
-            (server_module.SPIN_CONFIDENCE_RELIABLE, True),
-            (server_module.SPIN_CONFIDENCE_RELIABLE - 0.01, False),
-        ],
+        ("offset_from_floor", "uses_measured_spin"),
+        [(0.0, True), (-0.01, False)],
     )
     def test_table_fallback_spin_gate_matches_monitor_reliability(
-        self, monkeypatch, confidence, uses_measured_spin
+        self, monkeypatch, offset_from_floor, uses_measured_spin
     ):
         """The fallback trusts measured spin on the same floor SpinResult.is_reliable uses."""
+        from openflight.launch_monitor import SPIN_CONFIDENCE_RELIABLE
         from openflight.rolling_buffer.types import SpinResult
 
+        confidence = SPIN_CONFIDENCE_RELIABLE + offset_from_floor
         assert (
             SpinResult(spin_rpm=5164, confidence=confidence, snr=10.0, quality="medium").is_reliable
             is uses_measured_spin
