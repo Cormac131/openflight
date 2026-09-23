@@ -52,5 +52,10 @@ ensure_kiosk_ui() {
         return 0
     fi
 
+    if [ ! -d "$PROJECT_DIR/ui/node_modules" ] && [ -f "$dist_dir/index.html" ]; then
+        warn "UI dependencies not installed; using existing UI bundle"
+        return 0
+    fi
+
     _try_install_electron_shell
 }

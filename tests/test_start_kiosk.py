@@ -340,6 +340,7 @@ def _run_ensure_kiosk_ui(
     node_version: str,
     has_dist: bool,
     npm_exit: int,
+    has_node_modules: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     repo_scripts = REPO_ROOT / "scripts"
     scripts_dir = tmp_path / "scripts"
@@ -353,6 +354,8 @@ def _run_ensure_kiosk_ui(
     if has_dist:
         (ui_dir / "dist").mkdir()
         (ui_dir / "dist" / "index.html").write_text("<html></html>\n", encoding="utf-8")
+    if has_node_modules:
+        (ui_dir / "node_modules").mkdir()
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -421,6 +424,7 @@ def test_existing_ui_continues_when_node_is_too_old_to_install_electron(tmp_path
         tmp_path,
         node_version="20.19.0",
         has_dist=True,
+        has_node_modules=True,
         npm_exit=1,
     )
 
@@ -431,8 +435,8 @@ def test_existing_ui_continues_when_node_is_too_old_to_install_electron(tmp_path
     assert not (tmp_path / "npm-called").exists()
 
 
-def test_existing_ui_continues_when_electron_npm_install_fails(tmp_path):
-    """Offline or failed Electron install must not block a unit that already has ui/dist."""
+def test_existing_ui_bundle_skips_npm_when_dependencies_are_missing(tmp_path):
+    """A built UI with no node_modules must start offline instead of calling npm."""
     result = _run_ensure_kiosk_ui(
         tmp_path,
         node_version="22.12.0",
@@ -443,7 +447,40 @@ def test_existing_ui_continues_when_electron_npm_install_fails(tmp_path):
     combined = result.stdout + result.stderr
     assert result.returncode == 0, combined
     assert "CONTINUED" in result.stdout
+    assert "existing UI bundle" in result.stdout
     assert "FAILURE" not in combined
+    assert not (tmp_path / "npm-called").exists()
+
+
+def test_existing_ui_continues_when_electron_npm_install_fails(tmp_path):
+    """A failed Electron install must not block a unit that already has ui/dist."""
+    result = _run_ensure_kiosk_ui(
+        tmp_path,
+        node_version="22.12.0",
+        has_dist=True,
+        has_node_modules=True,
+        npm_exit=1,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, combined
+    assert "CONTINUED" in result.stdout
+    assert "FAILURE" not in combined
+    assert (tmp_path / "npm-called").exists()
+
+
+def test_missing_ui_still_fails_when_npm_install_is_unavailable(tmp_path):
+    result = _run_ensure_kiosk_ui(
+        tmp_path,
+        node_version="22.12.0",
+        has_dist=False,
+        npm_exit=1,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode == 42, combined
+    assert "FAILURE" in combined
+    assert "CONTINUED" not in result.stdout
     assert (tmp_path / "npm-called").exists()
 
 
