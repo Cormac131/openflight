@@ -35,6 +35,8 @@ export const CLUBS_BY_TYPE: Record<string, Club[]> = {
     { id: '5-wood', label: '5W', name: '5 Wood' },
     { id: '7-wood', label: '7W', name: '7 Wood' },
   ],
+  // Selecting the putter switches the server to camera-only putt detection.
+  Putter: [{ id: 'putter', label: 'PT', name: 'Putter' }],
 };
 
 export const ALL_CLUBS: Club[] = Object.values(CLUBS_BY_TYPE).flat();

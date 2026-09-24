@@ -68,6 +68,8 @@ def parse_club(value: str | None) -> ClubType:
         "sw": ClubType.SW,
         "sand-wedge": ClubType.SW,
         "lw": ClubType.LW,
+        "pt": ClubType.PUTTER,
+        "putter": ClubType.PUTTER,
         "unknown": ClubType.UNKNOWN,
     }
     try:

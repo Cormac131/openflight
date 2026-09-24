@@ -336,6 +336,24 @@ distance from the lens to the ball at address (`--camera-capture-ball-distance-m
 The same distance also lets the live full-swing horizontal launch run in
 camera-only mode when no IWR6843 is fitted.
 
+### Live putting
+
+Pick **Putter** (the `PT` tile, in its own picker tab) in the kiosk to enable
+live putt detection. Putts roll far below the OPS243's 15 mph floor, so the
+radar rejects every putt trigger; with the putter selected the server hands
+each rejected trigger to the camera instead. The trigger's hardware timestamp
+matches the camera clip, the putt estimator measures ball speed and start line,
+and the result is published as a normal shot with club `putter`: no radial
+cosine correction, launch-angle estimate, spin model, or carry simulation is
+applied, and the start line is reported as `camera_only_experimental` with the
+same confidence as a camera-only full-swing horizontal. Session logs record
+these shots with `mode: camera-putt`.
+
+A putt is dropped, and the kiosk shows the processing failure, when no camera
+clip matches the trigger, the ball distance is not configured, or the tracker
+cannot find a stable rolling path. The server log names the reason. Selecting
+any other club returns the radar to normal full-swing detection.
+
 Replay saved captures offline with:
 
 ```bash

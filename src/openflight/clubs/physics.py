@@ -98,6 +98,9 @@ CLUB_PHYSICS: Mapping[ClubType, ClubPhysics] = MappingProxyType(
         ClubType.GW: ClubPhysics(50.0, 30.0, 76, 0.30, 9500, 1.23, 4.1, 1.19),
         ClubType.SW: ClubPhysics(54.0, 32.0, 73, 0.30, 10000, 1.22, 4.3, 1.18),
         ClubType.LW: ClubPhysics(58.0, 35.0, 70, 0.30, 10500, 1.20, 4.6, 1.17),
+        # Putts roll rather than fly: a few degrees of loft, near-zero launch,
+        # and a token spin so every positive-value invariant still holds.
+        ClubType.PUTTER: ClubPhysics(3.0, 1.0, 8, 0.05, 50, 1.55, 0.05, 1.55),
         ClubType.UNKNOWN: ClubPhysics(34.0, 18.0, 120, 0.25, 5000, 1.35, 1.0, 1.35),
     }
 )
@@ -124,6 +127,7 @@ CLUB_SIMULATION_PROFILES: Mapping[ClubType, ClubSimulationProfile] = MappingProx
         ClubType.GW: ClubSimulationProfile(5, 1.20, 9200, 900, 3.5),
         ClubType.SW: ClubSimulationProfile(5, 1.19, 9800, 1000, 4.0),
         ClubType.LW: ClubSimulationProfile(5, 1.18, 10200, 1000, 4.0),
+        ClubType.PUTTER: ClubSimulationProfile(2, 1.55, 50, 20, 0.5),
         ClubType.UNKNOWN: ClubSimulationProfile(15, 1.35, 5000, 800, 3.0),
     }
 )

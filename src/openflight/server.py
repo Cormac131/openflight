@@ -3152,19 +3152,8 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     )
 
 
-def _finalize_shot_detected(
-    shot: Shot,
-    *,
-    emit_event: str,
-    initial_ui_ms: float | None = None,
-    enrichment: _ShotEnrichmentResult | None = None,
-) -> None:
-    """Apply required fallbacks, persist once, and publish the final shot."""
-    enrichment = enrichment or _ShotEnrichmentResult()
-    iwr6843_ms = enrichment.iwr6843_ms
-    kld7_ms = enrichment.kld7_ms
-    camera_capture_ms = enrichment.camera_capture_ms
-
+def _apply_flight_physics(shot: Shot) -> None:
+    """Fill launch-angle, ball-speed, spin, and carry fallbacks for an airborne shot."""
     # Always emit user-facing launch angles. Radar/camera measurements win;
     # rejected or missing axes fall back to conservative estimates.
     _ensure_user_facing_launch_angles(shot)
@@ -3235,6 +3224,34 @@ def _finalize_shot_detected(
                 spin_for_carry,
                 "" if shot.spin_rpm and shot.spin_rpm > 0 else " avg",
             )
+
+
+def _finalize_shot_detected(
+    shot: Shot,
+    *,
+    emit_event: str,
+    initial_ui_ms: float | None = None,
+    enrichment: _ShotEnrichmentResult | None = None,
+) -> None:
+    """Apply required fallbacks, persist once, and publish the final shot."""
+    enrichment = enrichment or _ShotEnrichmentResult()
+    iwr6843_ms = enrichment.iwr6843_ms
+    kld7_ms = enrichment.kld7_ms
+    camera_capture_ms = enrichment.camera_capture_ms
+
+    if _is_camera_putt(shot):
+        # A putt rolls: the camera measured its speed and start line directly,
+        # so no radial-speed correction, launch estimate, spin, or carry apply.
+        logger.info(
+            "[SERVER] Camera putt: %.1f mph, start line %s",
+            shot.ball_speed_mph,
+            "%.1f°" % shot.launch_angle_horizontal
+            if shot.launch_angle_horizontal is not None
+            else "N/A",
+        )
+    else:
+        _apply_flight_physics(shot)
+
     if shot.spin_rejection_reason:
         logger.info(
             "[SERVER] Spin unavailable: %s (snr=%s, candidate=%s rpm)",
@@ -3333,7 +3350,8 @@ def _finish_shot_detected(
     enriched_shot = replace(shot) if _has_slow_shot_enrichment(shot) else shot
     enrichment = _ShotEnrichmentResult()
     try:
-        enrichment = _enrich_shot_from_optional_hardware(enriched_shot)
+        if not _is_camera_putt(shot):
+            enrichment = _enrich_shot_from_optional_hardware(enriched_shot)
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.error("[SERVER] Deferred shot enrichment failed: %s", error, exc_info=True)
         log_session_error(
@@ -3460,6 +3478,9 @@ def _emit_ops_enrichment_skipped(shot: Shot, *, reason: str) -> None:
 
 def _has_slow_shot_enrichment(shot: Shot) -> bool:
     """Whether optional hardware can add seconds to this shot callback."""
+    if _is_camera_putt(shot):
+        # The camera already measured the putt; nothing slower is pending.
+        return False
     return shot.mode != "mock" and (
         iwr6843_runtime is not None or camera_capture_runtime is not None
     )
@@ -3597,6 +3618,148 @@ def _handle_shot_detected(shot: Shot) -> None:
             emit_event=final_event,
             initial_ui_ms=initial_ui_ms,
         )
+
+
+PUTT_SHOT_MODE = "camera-putt"
+_PUTT_CAMERA_CAPTURE_TIMEOUT_S = 2.0
+# Camera-only start line carries the same confidence the flight fusion assigns
+# to a camera-only horizontal (select_camera_assisted_horizontal).
+_PUTT_START_LINE_CONFIDENCE = 0.30
+_putt_processing_lock = threading.Lock()
+
+
+def _is_camera_putt(shot: Shot) -> bool:
+    """Whether a shot was measured by the camera putt estimator."""
+    return shot.mode == PUTT_SHOT_MODE
+
+
+def on_rejected_trigger(rejected) -> None:
+    """Run the camera putt estimator when a putter is selected and the radar saw no shot.
+
+    The OPS243 masks everything under 15 mph, so every putt reaches the server
+    as a rejected trigger. Analysis runs off the capture thread so the radar
+    re-arms for the next stroke.
+    """
+    if rejected.club is not ClubType.PUTTER:
+        return
+    if camera_capture_runtime is None:
+        logger.info("[SERVER] Putter selected but camera capture is not running; trigger ignored")
+        return
+    if rejected.trigger_timestamp is None:
+        logger.warning("[SERVER] Putt trigger has no hardware timestamp; cannot match camera")
+        return
+    socketio.start_background_task(_process_putt_trigger, rejected)
+
+
+def _process_putt_trigger(rejected) -> None:
+    """Measure one putt from its camera clip and publish it through the shot pipeline."""
+    with _putt_processing_lock:
+        shot = None
+        try:
+            on_shot_processing("calculating")
+            shot = _measure_putt(rejected)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.warning("[SERVER] Camera putt processing error: %s", error, exc_info=True)
+            log_session_error(
+                "Camera putt processing failed",
+                component="camera_capture",
+                context={"stage": "putt", "trigger_timestamp": rejected.trigger_timestamp},
+                exc=error,
+            )
+        if shot is None:
+            on_shot_processing("failed")
+            return
+        on_shot_detected(shot)
+
+
+def _measure_putt(rejected) -> Shot | None:
+    """Match the camera clip for a putt trigger and estimate speed and start line."""
+    from openflight.camera.ball_flight import estimate_camera_putt  # noqa: PLC0415
+
+    camera_capture = camera_capture_runtime.capture_for_shot(
+        rejected.trigger_timestamp,
+        timeout_s=_PUTT_CAMERA_CAPTURE_TIMEOUT_S,
+    )
+    if camera_capture is None:
+        logger.warning("[SERVER] No camera capture matched the putt trigger")
+        return None
+    if not camera_capture.valid:
+        logger.warning(
+            "[SERVER] Camera capture #%d failed: %s", camera_capture.sequence, camera_capture.error
+        )
+        return None
+    geometry = _camera_ball_geometry()
+    if isinstance(geometry, str):
+        logger.warning(
+            "[SERVER] Putt rejected (%s): pass --camera-capture-ball-distance-m or calibrate the tee",
+            geometry,
+        )
+        return None
+    archive = _load_camera_capture_archive(camera_capture)
+    if archive is None:
+        logger.warning("[SERVER] Putt rejected: camera frames missing from %s", camera_capture.path)
+        return None
+
+    estimate = estimate_camera_putt(
+        archive["frames"],
+        archive["host_timestamp_ns"],
+        trigger_ns=int(archive["trigger_host_timestamp_ns"]),
+        geometry=geometry,
+        ball_tracker=camera_ball_flight_reference_tracker,
+    )
+    if estimate.confidence_tier == "withheld" or estimate.speed_mph is None:
+        logger.warning(
+            "[SERVER] Putt rejected: %s (support %d/27, points %d)",
+            estimate.status,
+            estimate.support,
+            estimate.n_points,
+        )
+        return None
+
+    shot = _build_putt_shot(estimate, rejected.trigger_timestamp)
+    if monitor is not None and hasattr(monitor, "record_external_shot"):
+        monitor.record_external_shot(shot)
+    _attach_camera_replay(shot, camera_capture)
+    session_log = get_session_logger()
+    if session_log:
+        session_log.log_camera_capture(
+            shot_number=_shot_number_for_log(shot, session_log),
+            shot_timestamp=rejected.trigger_timestamp,
+            trigger_timestamp=camera_capture.trigger_timestamp,
+            capture_path=str(camera_capture.path) if camera_capture.path else None,
+            metadata=camera_capture.metadata,
+            capture_error=camera_capture.error,
+        )
+    logger.info(
+        "[SERVER] Camera putt measured: %.1f mph, start line %.1f° (%s, support %d/27)",
+        estimate.speed_mph,
+        estimate.horizontal_deg if estimate.horizontal_deg is not None else float("nan"),
+        estimate.confidence_tier,
+        estimate.support,
+    )
+    return shot
+
+
+def _build_putt_shot(estimate, trigger_timestamp: float) -> Shot:
+    """Turn a camera putt estimate into the shot the UI, sims, and log consume."""
+    return Shot(
+        ball_speed_mph=float(estimate.speed_mph),
+        timestamp=datetime.fromtimestamp(trigger_timestamp),
+        impact_timestamp=trigger_timestamp,
+        club=ClubType.PUTTER,
+        # A putt rolls off the face; there is no vertical launch to estimate.
+        launch_angle_vertical=0.0,
+        launch_angle_vertical_source="assumed",
+        launch_angle_horizontal=estimate.horizontal_deg,
+        launch_angle_horizontal_confidence=_PUTT_START_LINE_CONFIDENCE,
+        launch_angle_horizontal_source="camera_only_experimental",
+        angle_source="camera",
+        experimental_camera_horizontal_deg=estimate.horizontal_deg,
+        experimental_camera_horizontal_confidence=_PUTT_START_LINE_CONFIDENCE,
+        experimental_camera_horizontal_status="camera_only_experimental",
+        carry_spin_adjusted=0.0,
+        mode=PUTT_SHOT_MODE,
+    )
 
 
 def swing_speed_to_dict(event: SwingSpeedEvent) -> dict:
@@ -3837,6 +4000,7 @@ def start_monitor(
             live_callback=on_live_reading,
             diagnostic_callback=on_trigger_diagnostic,
             processing_callback=on_shot_processing,
+            rejected_trigger_callback=on_rejected_trigger,
         )
         if iwr6843_runtime is not None:
             iwr6843_runtime.capture_monitor.arm()

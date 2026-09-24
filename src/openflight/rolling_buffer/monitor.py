@@ -8,6 +8,7 @@ and post-processing for higher resolution speed data and spin detection.
 import logging
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, List, Optional
 
@@ -19,6 +20,26 @@ from ..session_logger import get_session_logger, log_session_error
 from .processor import RollingBufferProcessor
 from .trigger import create_trigger
 from .types import ProcessedCapture, SpeedTimeline
+
+
+@dataclass(frozen=True)
+class RejectedTrigger:
+    """A physical trigger whose radar capture did not yield a shot.
+
+    Attributes:
+        reason: Trigger-event reason (``processing_failed`` or
+            ``shot_validation_failed``).
+        trigger_timestamp: Host epoch when the hardware trigger fired, the
+            key other sensors (camera) use to match their own captures.
+        ball_speed_mph: Radar ball speed when one was extracted, else None.
+        club: Club selected when the trigger fired.
+    """
+
+    reason: str
+    trigger_timestamp: Optional[float]
+    ball_speed_mph: Optional[float]
+    club: ClubType
+
 
 logger = logging.getLogger("openflight.rolling_buffer.monitor")
 
@@ -217,8 +238,10 @@ class RollingBufferMonitor:
         self._live_callback: Optional[Callable[[SpeedReading], None]] = None
         self._diagnostic_callback: Optional[Callable[[dict], None]] = None
         self._processing_callback: Optional[Callable[[str], None]] = None
+        self._rejected_trigger_callback: Optional[Callable[[RejectedTrigger], None]] = None
         self._shots: List[Shot] = []
         self._shot_sequence_number = 0
+        self._shot_sequence_lock = threading.Lock()
         self._current_club: ClubType = ClubType.DRIVER
 
     def connect(self) -> bool:
@@ -288,6 +311,7 @@ class RollingBufferMonitor:
         live_callback: Optional[Callable[[SpeedReading], None]] = None,
         diagnostic_callback: Optional[Callable[[dict], None]] = None,
         processing_callback: Optional[Callable[[str], None]] = None,
+        rejected_trigger_callback: Optional[Callable[[RejectedTrigger], None]] = None,
     ):
         """
         Start monitoring for shots.
@@ -297,11 +321,15 @@ class RollingBufferMonitor:
             live_callback: Called for live readings (limited in rolling buffer mode)
             diagnostic_callback: Called with trigger diagnostic data for UI display
             processing_callback: Called with "started" or "failed" around shot processing
+            rejected_trigger_callback: Called when a physical trigger produced a
+                capture but no radar shot (too slow for the radar, or nothing to
+                extract), so slower sensors can still analyze the same trigger
         """
         self._shot_callback = shot_callback
         self._live_callback = live_callback
         self._diagnostic_callback = diagnostic_callback
         self._processing_callback = processing_callback
+        self._rejected_trigger_callback = rejected_trigger_callback
         self._stop_event.clear()
         self._running = True
 
@@ -337,6 +365,26 @@ class RollingBufferMonitor:
             self._processing_callback(state)
         except Exception:
             logger.warning("[MONITOR] Processing status callback failed", exc_info=True)
+
+    def _notify_rejected_trigger(
+        self,
+        reason: str,
+        capture,
+        ball_speed_mph: Optional[float],
+    ) -> None:
+        """Hand a shot-less physical trigger to other sensors without breaking capture."""
+        if not self._rejected_trigger_callback:
+            return
+        rejected = RejectedTrigger(
+            reason=reason,
+            trigger_timestamp=capture.trigger_timestamp,
+            ball_speed_mph=ball_speed_mph,
+            club=self._current_club,
+        )
+        try:
+            self._rejected_trigger_callback(rejected)
+        except Exception:
+            logger.warning("[MONITOR] Rejected-trigger callback failed", exc_info=True)
 
     def _record_trigger_event(self, diagnostic: dict, *, accepted: bool, reason: str, **updates):
         """Persist and publish one complete outcome for a physical trigger."""
@@ -489,6 +537,7 @@ class RollingBufferMonitor:
                         latency_ms=trigger_latency_ms,
                     )
                     trigger_event_recorded = True
+                    self._notify_rejected_trigger("processing_failed", capture, None)
                     continue
 
                 # For speed trigger, use the trigger speed as club speed if not found in capture
@@ -514,9 +563,7 @@ class RollingBufferMonitor:
                 shot = self._create_shot(processed)
 
                 if shot:
-                    self._shot_sequence_number += 1
-                    shot.shot_number = self._shot_sequence_number
-                    self._shots.append(shot)
+                    self._record_shot(shot)
                     logger.info(
                         "[MONITOR] Shot detected: ball=%.1f mph, club=%s, spin=%s",
                         shot.ball_speed_mph,
@@ -696,6 +743,9 @@ class RollingBufferMonitor:
                         ball_speed_mph=processed.ball_speed_mph,
                     )
                     trigger_event_recorded = True
+                    self._notify_rejected_trigger(
+                        "shot_validation_failed", capture, processed.ball_speed_mph
+                    )
 
                 # Reset trigger for next capture
                 self.trigger.reset()
@@ -934,6 +984,22 @@ class RollingBufferMonitor:
         self._shot_callback = original_callback
 
         return shot_detected[0] if shot_detected else None
+
+    def _record_shot(self, shot: Shot) -> None:
+        """Give a shot the next session number and keep it for stats."""
+        with self._shot_sequence_lock:
+            self._shot_sequence_number += 1
+            shot.shot_number = self._shot_sequence_number
+            self._shots.append(shot)
+
+    def record_external_shot(self, shot: Shot) -> Shot:
+        """Number and retain a shot measured by another sensor.
+
+        Shots that never crossed the radar (camera-measured putts) share the
+        session sequence so later radar shots cannot reuse their number.
+        """
+        self._record_shot(shot)
+        return shot
 
     def get_session_stats(self) -> dict:
         """Get statistics for the current session."""

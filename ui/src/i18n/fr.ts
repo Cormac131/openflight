@@ -163,6 +163,7 @@ export const fr: Messages = {
   'clubGroup.Irons': 'Fers',
   'clubGroup.Hybrids': 'Hybrides',
   'clubGroup.Woods': 'Bois',
+  'clubGroup.Putter': 'Putter',
   'clubGroup.General': 'Général',
 
   'shutdown.pendingAria': 'Arrêt d’OpenFlight',

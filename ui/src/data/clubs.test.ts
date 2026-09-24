@@ -15,6 +15,11 @@ describe('clubs data', () => {
     expect(driver?.name).toBe('Driver');
   });
 
+  it('offers the putter as its own section so putting can be selected', () => {
+    expect(CLUBS_BY_TYPE.Putter).toEqual([{ id: 'putter', label: 'PT', name: 'Putter' }]);
+    expect(Object.keys(CLUBS_BY_TYPE)).toEqual(['Irons', 'Hybrids', 'Woods', 'Putter']);
+  });
+
   it('has unique club ids', () => {
     const ids = ALL_CLUBS.map((c) => c.id);
     expect(new Set(ids).size).toBe(ids.length);
