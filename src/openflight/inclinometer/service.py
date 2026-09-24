@@ -10,7 +10,7 @@ import time
 from collections import deque
 from typing import Protocol
 
-from .models import AccelerationSample, OrientationSnapshot, SnapshotSelection
+from .models import AccelerationSample, OrientationSnapshot, SnapshotSelection, StillnessState
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ class InclinometerService:
         self.sample_hz = sample_hz
         self.window_samples = window_samples
         self.max_snapshot_age_s = max_snapshot_age_s
+        self.history_seconds = history_seconds
         self.max_pitch_std_deg = max_pitch_std_deg
         self.gravity_range_g = gravity_range_g
         self._samples: deque[AccelerationSample] = deque(maxlen=window_samples)
@@ -161,6 +162,34 @@ class InclinometerService:
         if age_s > self.max_snapshot_age_s:
             return SnapshotSelection(snapshot=None, status="stale", age_s=age_s)
         return SnapshotSelection(snapshot=snapshot, status="stable", age_s=age_s)
+
+    def stillness(self, now: float | None = None) -> StillnessState:
+        """Report how long stable snapshots have arrived without interruption.
+
+        Motion, out-of-range gravity, sensor errors, and gaps longer than the
+        snapshot age limit all restart the stationary period.
+        """
+        now = time.time() if now is None else now
+        with self._lock:
+            history = list(self._history)
+            last_motion = self._last_unstable_timestamp
+            error_timestamp = self._last_error_timestamp
+        interruptions = [item for item in (last_motion, error_timestamp) if item is not None]
+        interrupted_at = max(interruptions, default=None)
+        if not history or now - history[-1].timestamp > self.max_snapshot_age_s:
+            return StillnessState(None, 0.0, last_motion)
+        latest = history[-1]
+        if interrupted_at is not None and interrupted_at >= latest.timestamp:
+            return StillnessState(None, 0.0, last_motion)
+
+        settled_at = latest.timestamp
+        for earlier in reversed(history[:-1]):
+            if interrupted_at is not None and earlier.timestamp <= interrupted_at:
+                break
+            if settled_at - earlier.timestamp > self.max_snapshot_age_s:
+                break
+            settled_at = earlier.timestamp
+        return StillnessState(latest, max(0.0, now - settled_at), last_motion)
 
     def wait_for_stable(self, timeout_s: float = 2.0) -> SnapshotSelection:
         """Wait briefly for a startup orientation diagnostic."""

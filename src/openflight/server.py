@@ -139,6 +139,8 @@ camera_ball_flight_reference_tracker = None
 # Optional LIS3DH enclosure orientation used to compensate TI mount tilt.
 inclinometer_service = None
 inclinometer_runtime_config: dict = {"enabled": False}
+# Re-runs camera exposure once the enclosure is put down after being handled.
+placement_monitor = None
 
 # Ballistic model toggle. Shot carry comes from the physics simulator whenever
 # a vertical launch angle is available. Operators can explicitly disable it;
@@ -412,6 +414,8 @@ def _cleanup_hardware_for_shutdown() -> bool:
         _run_shutdown_step("K-LD7 vertical stop", kld7_vertical.stop)
     if kld7_horizontal:
         _run_shutdown_step("K-LD7 horizontal stop", kld7_horizontal.stop)
+    if placement_monitor:
+        _run_shutdown_step("placement monitor stop", placement_monitor.stop)
     if inclinometer_service:
         _run_shutdown_step("inclinometer stop", inclinometer_service.stop)
     if iwr6843_runtime:
@@ -1194,6 +1198,51 @@ def _iwr6843_startup_recovery(error: object) -> str:
     if "press reset and retry" in normalized_error or "firmware may be wedged" in normalized_error:
         return "Press RESET on the TI radar, then relaunch OpenFlight."
     return "Check the TI radar USB and power connections, then relaunch OpenFlight."
+
+
+def init_camera_placement_recalibration(*, settle_s: float) -> bool:
+    """Re-run camera exposure once the inclinometer sees the unit settle.
+
+    Operators often hold the unit while it boots, so the startup exposure can
+    be calibrated against the wrong view. Requires both the camera (with auto
+    exposure) and the inclinometer; otherwise this is a no-op.
+    """
+    global placement_monitor  # pylint: disable=global-statement
+
+    if settle_s <= 0 or inclinometer_service is None or camera_capture_runtime is None:
+        return False
+    if not camera_capture_runtime.settings.auto_exposure:
+        return False
+    if settle_s >= inclinometer_service.history_seconds:
+        logger.warning(
+            "[SERVER] Camera placement re-calibration disabled: %.1fs settle exceeds the "
+            "%.1fs inclinometer history",
+            settle_s,
+            inclinometer_service.history_seconds,
+        )
+        return False
+    from .inclinometer import PlacementMonitor
+
+    runtime = camera_capture_runtime
+
+    def recalibrate(reason: str) -> None:
+        status = runtime.recalibrate_exposure(reason=f"placement_{reason}")
+        logger.info(
+            "[SERVER] Camera exposure re-calibrated after placement (%s): %s, %dus gain %.1f",
+            reason,
+            status.get("status"),
+            status.get("exposure_us"),
+            status.get("gain"),
+        )
+
+    placement_monitor = PlacementMonitor(inclinometer_service, recalibrate, settle_s=settle_s)
+    placement_monitor.start()
+    camera_capture_config["placement_recalibration_settle_s"] = settle_s
+    logger.info(
+        "[SERVER] Camera exposure will re-calibrate after %.1fs of stillness",
+        settle_s,
+    )
+    return True
 
 
 def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: int = 0x18) -> bool:
@@ -4301,6 +4350,16 @@ def main():
         help="Analogue-gain seed used by the one-time startup calibration.",
     )
     parser.add_argument(
+        "--camera-recalibrate-settle-s",
+        type=float,
+        default=5.0,
+        help=(
+            "With --inclinometer, re-run camera exposure calibration once the unit "
+            "has been still this many seconds after startup or after being moved "
+            "(default: 5; 0 disables)."
+        ),
+    )
+    parser.add_argument(
         "--camera-capture-mount-height-m",
         type=float,
         default=0.20955,
@@ -4887,6 +4946,13 @@ def main():
             startup_status.skip("inclinometer", "Inclinometer unavailable; continuing")
         else:
             startup_status.ready("inclinometer", "Inclinometer connected")
+            if init_camera_placement_recalibration(
+                settle_s=args.camera_recalibrate_settle_s,
+            ):
+                print(
+                    "Camera exposure will re-calibrate once the unit is still for "
+                    f"{args.camera_recalibrate_settle_s:g}s"
+                )
 
     # Initialize K-LD7 angle radars (if enabled)
     if args.kld7:

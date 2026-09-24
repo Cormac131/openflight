@@ -58,3 +58,12 @@ class SnapshotSelection:
         if self.snapshot is not None:
             data.update(self.snapshot.to_dict())
         return data
+
+
+@dataclass(frozen=True)
+class StillnessState:
+    """How long the enclosure has been continuously stationary."""
+
+    snapshot: OrientationSnapshot | None
+    stationary_s: float
+    last_motion_timestamp: float | None

@@ -240,6 +240,23 @@ For each shot, OpenFlight:
    mutated.
 5. Continues with the configured IWR tilt if correction cannot be applied.
 
+### Camera Exposure After Placement
+
+The high-speed camera calibrates exposure once at startup. If you hold the unit
+while it boots, that calibration sees your hand or the floor instead of the
+hitting area. With `--camera-capture` and `--inclinometer` both enabled,
+OpenFlight re-runs the camera exposure calibration once the unit has been
+still for 5 seconds:
+
+- once after startup, so a unit that was held while booting is corrected; and
+- again whenever the inclinometer detects movement (being picked up or bumped)
+  or a pitch change of more than 2 degrees, once the unit is left still.
+
+If the current exposure is already acceptable the re-calibration locks it
+immediately without changing the camera. Shot capture stays armed throughout;
+a shot taken while the controls are changing is marked ineligible for camera
+analysis. Change the delay with `--camera-recalibrate-settle-s` (0 disables).
+
 ## Session Logging
 
 The `session_start` entry records:

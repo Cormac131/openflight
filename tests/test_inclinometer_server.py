@@ -163,3 +163,115 @@ def test_session_log_records_orientation_used_for_shot(tmp_path):
     assert entry["type"] == "shot_detected"
     assert entry["inclinometer"] == orientation
     logger.end_session()
+
+
+class FakePlacementCamera:
+    def __init__(self, *, auto_exposure=True):
+        self.settings = SimpleNamespace(auto_exposure=auto_exposure)
+        self.reasons = []
+
+    def recalibrate_exposure(self, reason):
+        self.reasons.append(reason)
+        return {"status": "ready", "exposure_us": 500, "gain": 12.0}
+
+
+def _patch_placement(monkeypatch, *, camera, service):
+    started = []
+
+    class FakeMonitor:
+        def __init__(self, source, on_settled, *, settle_s):
+            self.source = source
+            self.on_settled = on_settled
+            self.settle_s = settle_s
+
+        def start(self):
+            started.append(self)
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr("openflight.inclinometer.PlacementMonitor", FakeMonitor)
+    monkeypatch.setattr(server, "camera_capture_runtime", camera)
+    monkeypatch.setattr(server, "inclinometer_service", service)
+    monkeypatch.setattr(server, "camera_capture_config", {"enabled": True})
+    monkeypatch.setattr(server, "placement_monitor", None)
+    return started
+
+
+def test_placement_recalibration_wires_inclinometer_to_camera(monkeypatch):
+    camera = FakePlacementCamera()
+    service = SimpleNamespace(history_seconds=15.0)
+    started = _patch_placement(monkeypatch, camera=camera, service=service)
+
+    assert server.init_camera_placement_recalibration(settle_s=5.0) is True
+
+    (monitor,) = started
+    assert monitor.source is service
+    assert monitor.settle_s == 5.0
+    assert server.placement_monitor is monitor
+    assert server.camera_capture_config["placement_recalibration_settle_s"] == 5.0
+    monitor.on_settled("startup")
+    monitor.on_settled("moved")
+    assert camera.reasons == ["placement_startup", "placement_moved"]
+
+
+@pytest.mark.parametrize(
+    ("camera", "service", "settle_s"),
+    [
+        (FakePlacementCamera(), SimpleNamespace(history_seconds=15.0), 0.0),
+        (FakePlacementCamera(), SimpleNamespace(history_seconds=15.0), -1.0),
+        (None, SimpleNamespace(history_seconds=15.0), 5.0),
+        (FakePlacementCamera(), None, 5.0),
+        (FakePlacementCamera(auto_exposure=False), SimpleNamespace(history_seconds=15.0), 5.0),
+        (FakePlacementCamera(), SimpleNamespace(history_seconds=15.0), 15.0),
+    ],
+    ids=["disabled", "negative", "no-camera", "no-inclinometer", "manual-exposure", "too-long"],
+)
+def test_placement_recalibration_is_skipped_when_not_applicable(
+    monkeypatch, camera, service, settle_s
+):
+    started = _patch_placement(monkeypatch, camera=camera, service=service)
+
+    assert server.init_camera_placement_recalibration(settle_s=settle_s) is False
+
+    assert started == []
+    assert server.placement_monitor is None
+
+
+def test_camera_recalibrate_settle_defaults_to_five_seconds(monkeypatch):
+    captured = {}
+
+    def stop_after_parse(self, args=None, namespace=None):
+        parsed = original(self, args, namespace)
+        captured["args"] = parsed
+        raise SystemExit(0)
+
+    import argparse
+
+    original = argparse.ArgumentParser.parse_args
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", stop_after_parse)
+    monkeypatch.setattr(sys, "argv", ["openflight-server"])
+
+    with pytest.raises(SystemExit):
+        server.main()
+
+    assert captured["args"].camera_recalibrate_settle_s == 5.0
+
+
+def test_shutdown_stops_placement_monitor_before_inclinometer(monkeypatch):
+    order = []
+    monkeypatch.setattr(server, "shutdown_cleanup_started", False)
+    monkeypatch.setattr(
+        server, "placement_monitor", SimpleNamespace(stop=lambda: order.append("placement"))
+    )
+    monkeypatch.setattr(
+        server, "inclinometer_service", SimpleNamespace(stop=lambda: order.append("inclinometer"))
+    )
+    for name in ("kld7_vertical", "kld7_horizontal", "iwr6843_runtime", "power_monitor"):
+        monkeypatch.setattr(server, name, None)
+    monkeypatch.setattr(server, "camera_capture_runtime", None)
+    monkeypatch.setattr(server, "stop_monitor", lambda: None)
+
+    server._cleanup_hardware_for_shutdown()
+
+    assert order[:2] == ["placement", "inclinometer"]

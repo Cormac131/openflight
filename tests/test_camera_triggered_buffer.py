@@ -707,3 +707,114 @@ def test_vertical_crop_update_rejects_unsafe_or_unaligned_offsets(tmp_path, offs
 
     with pytest.raises(ValueError, match="vertical crop"):
         runtime.update_vertical_crop(offset)
+
+
+class RecordingCamera:
+    def __init__(self):
+        self.controls = []
+
+    def set_controls(self, controls):
+        self.controls.append(controls)
+
+
+def make_exposure_frame(image: np.ndarray, sequence: int = 1) -> CameraFrame:
+    return CameraFrame(
+        image=image,
+        sensor_timestamp_ns=sequence,
+        host_timestamp_ns=sequence + 1,
+        exposure_us=500,
+        analogue_gain=12.0,
+    )
+
+
+def make_running_runtime(tmp_path, **settings) -> CameraCaptureRuntime:
+    options = {"fps": 488.0, "exposure_us": 500, "gain": 12.0}
+    options.update(settings)
+    runtime = CameraCaptureRuntime(
+        output_dir=tmp_path,
+        settings=CameraCaptureSettings(**options),
+    )
+    runtime._camera = RecordingCamera()
+    runtime._running = True
+    return runtime
+
+
+def test_recalibrate_exposure_relocks_good_view_without_changing_controls(tmp_path):
+    runtime = make_running_runtime(tmp_path)
+    runtime._ring.add_frame(make_exposure_frame(make_good_exposure_image()))
+    ring = runtime._ring
+
+    status = runtime.recalibrate_exposure(reason="placement_startup")
+
+    assert status["status"] == "ready"
+    assert status["analysis_eligible"] is True
+    assert status["last_recalibration_reason"] == "placement_startup"
+    assert status["last_recalibration_timestamp"] is not None
+    assert runtime._camera.controls == []
+    # Recalibration happens while armed: the live ring must not be swapped out.
+    assert runtime._ring is ring
+
+
+def test_recalibrate_exposure_unlocks_a_setting_locked_while_held(tmp_path, monkeypatch):
+    """Startup locked on a bright view (e.g. pointed at a window while held)."""
+    monkeypatch.setattr(capture_runtime, "AUTO_EXPOSURE_STARTUP_SETTLE_S", 0.0)
+    runtime = make_running_runtime(tmp_path)
+    runtime._ring.add_frame(make_exposure_frame(make_good_exposure_image()))
+    startup = runtime._run_auto_exposure_cycle()
+    assert startup is not None and startup.status == "ready"
+
+    # Set down facing a darker hitting area: the locked decision would ignore it.
+    runtime._ring.add_frame(make_exposure_frame(np.full((200, 320), 18, dtype=np.uint8), 2))
+    assert runtime._run_auto_exposure_cycle() == startup
+
+    status = runtime.recalibrate_exposure(reason="placement_moved")
+
+    assert runtime._camera.controls
+    assert runtime.settings.exposure_us * runtime.settings.gain > 500 * 12.0
+    # Frames never brighten in this fake, so the policy gives up after its limit.
+    assert status["status"] == "lighting_required"
+    assert status["analysis_eligible"] is False
+    assert status["last_recalibration_reason"] == "placement_moved"
+
+
+def test_recalibrate_exposure_requires_auto_exposure(tmp_path):
+    runtime = make_running_runtime(tmp_path, auto_exposure=False)
+
+    with pytest.raises(RuntimeError, match="automatic exposure is disabled"):
+        runtime.recalibrate_exposure()
+
+
+def test_recalibrate_exposure_requires_running_camera(tmp_path):
+    runtime = CameraCaptureRuntime(output_dir=tmp_path)
+
+    with pytest.raises(RuntimeError, match="not running"):
+        runtime.recalibrate_exposure()
+
+
+def test_recalibrate_exposure_waits_for_in_progress_reconfigure(tmp_path, monkeypatch):
+    runtime = make_running_runtime(tmp_path)
+    runtime._ring.add_frame(make_exposure_frame(make_good_exposure_image()))
+    calibrated = threading.Event()
+    monkeypatch.setattr(runtime, "_start_auto_exposure", calibrated.set)
+
+    with runtime._reconfigure_lock:
+        worker = threading.Thread(target=runtime.recalibrate_exposure)
+        worker.start()
+        blocked = not calibrated.wait(timeout=0.05)
+    worker.join(timeout=1.0)
+
+    assert blocked
+    assert calibrated.is_set()
+
+
+def test_trigger_during_recalibration_adjustment_is_marked_ineligible(tmp_path):
+    runtime = make_running_runtime(tmp_path, fps=100.0, pre_ms=20.0, post_ms=10.0)
+    runtime._ring.add_frame(make_exposure_frame(np.full((200, 320), 18, dtype=np.uint8), 1))
+    runtime._ring.add_frame(make_exposure_frame(np.full((200, 320), 18, dtype=np.uint8), 2))
+    runtime._auto_exposure_policy.reset()
+
+    runtime._run_auto_exposure_cycle()
+    accepted = runtime.notify_trigger(timestamp=123.0)
+
+    assert accepted
+    assert runtime._trigger_auto_exposure.get_nowait()["analysis_eligible"] is False

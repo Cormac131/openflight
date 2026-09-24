@@ -189,6 +189,8 @@ class CameraCaptureRuntime:
         self._auto_exposure_last_check_epoch: float | None = None
         self._auto_exposure_last_adjustment_epoch: float | None = None
         self._auto_exposure_capture_deferred = False
+        self._auto_exposure_recalibration_reason: str | None = None
+        self._auto_exposure_recalibration_epoch: float | None = None
 
     def start(self) -> None:
         """Start the camera and, optionally, the GPIO edge listener."""
@@ -327,6 +329,8 @@ class CameraCaptureRuntime:
                     "capture_deferred": self._auto_exposure_capture_deferred,
                     "last_check_timestamp": self._auto_exposure_last_check_epoch,
                     "last_adjustment_timestamp": self._auto_exposure_last_adjustment_epoch,
+                    "last_recalibration_reason": self._auto_exposure_recalibration_reason,
+                    "last_recalibration_timestamp": self._auto_exposure_recalibration_epoch,
                 }
             )
         payload["exposure_us"] = self.settings.exposure_us
@@ -367,6 +371,32 @@ class CameraCaptureRuntime:
             gain,
         )
         return {"exposure_us": exposure_us, "gain": gain}
+
+    def recalibrate_exposure(self, reason: str = "manual") -> dict:
+        """Re-run startup exposure calibration without disarming capture.
+
+        Used when the unit is set down after being held during startup, so
+        exposure matches the final view. Triggers stay armed throughout;
+        captures taken while controls are changing are marked ineligible for
+        camera analysis by the per-trigger exposure status.
+        """
+        if not self.settings.auto_exposure:
+            raise RuntimeError("automatic exposure is disabled")
+        with self._reconfigure_lock:
+            if not self._running or self._camera is None:
+                raise RuntimeError("camera capture is not running")
+            previous = (self.settings.exposure_us, self.settings.gain)
+            logger.info(
+                "[CAMERA] Re-running exposure calibration (%s) from %dus gain %.1f",
+                reason,
+                previous[0],
+                previous[1],
+            )
+            with self._auto_exposure_lock:
+                self._auto_exposure_recalibration_reason = reason
+                self._auto_exposure_recalibration_epoch = time.time()
+            self._start_auto_exposure()
+        return self.auto_exposure_status()
 
     def vertical_crop_status(self) -> dict:
         """Describe the live sensor-window adjustment available to the UI."""
