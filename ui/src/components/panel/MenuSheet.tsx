@@ -10,6 +10,8 @@ import { SimStatus } from '../SimStatus';
 interface MenuSheetProps {
   onClose: () => void;
   onShutdown: () => void;
+  /** Present only on the kiosk itself (the server refuses other devices). */
+  onOpenConnections?: () => void;
 }
 
 /**
@@ -20,7 +22,7 @@ interface MenuSheetProps {
  * state had nowhere else to go. Battery lives in the footer.
  * Socket connection lives on the panel header LED.
  */
-export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
+export function MenuSheet({ onClose, onShutdown, onOpenConnections }: MenuSheetProps) {
   const simStatuses = useSystemStore((state) => state.simStatuses);
   const { t } = useI18n();
   const { unitSystem, setUnitSystem } = useUnitPreference();
@@ -75,6 +77,11 @@ export function MenuSheet({ onClose, onShutdown }: MenuSheetProps) {
 
         <section className="menu-sheet__section">
           <span className="menu-sheet__section-title">{t('menu.system')}</span>
+          {onOpenConnections ? (
+            <button type="button" className="menu-sheet__select menu-sheet__connections" onClick={onOpenConnections}>
+              {t('menu.connections')}
+            </button>
+          ) : null}
           {Object.keys(simStatuses).length > 0 ? (
             <div className="menu-sheet__status-row">
               <span className="menu-sheet__status-label">{t('menu.simulators')}</span>

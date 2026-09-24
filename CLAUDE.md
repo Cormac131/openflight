@@ -136,6 +136,7 @@ uv run python scripts/hardware-test/test_rolling_buffer_persist.py --test
 ```bash
 scripts/start-kiosk.sh              # Default: rolling buffer + sound trigger
 scripts/start-kiosk.sh --mock       # Development mode without hardware
+uv run openflight-server --mock --connectivity mock  # Also simulate Wi-Fi/Bluetooth for UI work
 scripts/start-kiosk.sh --kld7                          # With K-LD7 angle radars (deprecated; auto-detects horizontal)
 ```
 
@@ -161,6 +162,7 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
                               ├── Ballistics Simulator (RK4 trajectory & carry)
                               ├── SimConnectors (OpenGolfSim, GSPro, E6, etc.)
                               ├── CloudSync (optional telemetry & session backup)
+                              ├── ConnectivityService (kiosk Wi-Fi/Bluetooth via NetworkManager/BlueZ D-Bus)
                               │
                               └── SessionLogger (JSONL files)
 ```
@@ -186,6 +188,7 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
 - `inclinometer.py` - LIS3DH accelerometer tilt compensation service
 - `sim/` - Simulator connectors (OpenGolfSim, GSPro, E6 Connect, Garmin) and network transports
 - `cloud/` - Telemetry, cloud configuration, session upload, and push error handling
+- `connectivity/` - Kiosk Wi-Fi (NetworkManager) and Bluetooth (BlueZ) over D-Bus, local-device-only `/api/system` routes, Show desktop control (see `docs/using/connections.md`)
 - `rolling_buffer/` - Trigger strategies, I/Q processor, spin detection
 - `kld7/` - K-LD7 angle radar (deprecated hardware): RADC streaming, phase interferometry, dual-radar support
 - `kld7/radc.py` - FFT, CFAR detection, per-bin angle extraction from raw ADC

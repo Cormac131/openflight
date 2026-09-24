@@ -20,6 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full horizontal speed, overstating attack angle on any shot with club path.
 
 ### Added
+- **Wi-Fi and Bluetooth from the kiosk.** Header icons (also on the launch
+  club picker) open a touch Connections panel: scan and join Wi-Fi with an
+  on-screen password keyboard, disconnect or forget networks, and see local
+  network and internet status separately. Bluetooth can be powered on or off,
+  and devices can be discovered, paired (with passkey/PIN prompts), connected,
+  disconnected and forgotten. Uses NetworkManager and BlueZ over D-Bus. The
+  endpoints only answer the Pi's own browser. Run
+  `sudo scripts/setup/setup_connectivity.sh --user $USER` once for the polkit
+  and group permissions. See [Wi-Fi, Bluetooth and Desktop Access](using/connections.md).
+- **Show desktop / Return to OpenFlight.** An Advanced action closes the kiosk
+  browser while the server keeps running. A **Return to OpenFlight** desktop
+  launcher, installed by `install_desktop_launcher.sh`, brings it back.
 - **PAR-TEE connector.** `"type": "partee"` in `config/sim.json` streams shots
   to the [PAR-TEE](https://playpartee.com) iPhone app over OpenConnect V1 on the
   phone's Wi-Fi address (port 921 by default). Same shared codec as GSPro and

@@ -13,10 +13,12 @@ runtime_dir="${XDG_RUNTIME_DIR:-/tmp}"
 log_dir="${OPENFLIGHT_LOG_DIR:-$HOME/openflight_sessions/terminal_logs}"
 lock_file="$runtime_dir/openflight-launch.lock"
 
-# Ignore repeated taps while this launcher owns the hardware.
+# While this launcher owns the hardware, a repeated tap brings the kiosk back
+# (e.g. after Show desktop) instead of starting a second copy.
 mkdir -p "$runtime_dir" "$log_dir"
 exec 9>"$lock_file"
 if ! flock -n 9; then
+    "$project_dir/scripts/return-to-openflight.sh" --no-start >/dev/null 2>&1 || true
     exit 0
 fi
 

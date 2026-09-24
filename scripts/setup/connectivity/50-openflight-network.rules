@@ -1,0 +1,24 @@
+// OpenFlight kiosk: let members of the openflight-network group manage Wi-Fi
+// through NetworkManager without a password prompt, even when OpenFlight runs
+// as a systemd service outside a desktop session.
+//
+// Only the actions the Connections panel uses are granted:
+//   network-control          activate / deactivate connections
+//   wifi.scan                request a scan
+//   enable-disable-wifi      turn the Wi-Fi radio on or off
+//   settings.modify.system   save, update and forget Wi-Fi networks
+// Hostname, sleep, sharing, checkpoints and global networking stay default.
+// Installed by scripts/setup/setup_connectivity.sh.
+
+polkit.addRule(function (action, subject) {
+    var allowed = [
+        "org.freedesktop.NetworkManager.network-control",
+        "org.freedesktop.NetworkManager.wifi.scan",
+        "org.freedesktop.NetworkManager.enable-disable-wifi",
+        "org.freedesktop.NetworkManager.settings.modify.system"
+    ];
+    if (allowed.indexOf(action.id) >= 0 && subject.isInGroup("openflight-network")) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

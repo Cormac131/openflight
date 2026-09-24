@@ -7,6 +7,7 @@
 #   - OPS243-A rolling buffer flash config
 #   - K-LD7 device naming + FTDI low-latency rules
 #   - Optional battery-provider telemetry
+#   - Wi-Fi/Bluetooth permissions for the kiosk Connections panel
 #   - Auto-start on boot (systemd service)
 #   - Desktop shortcut
 #
@@ -269,6 +270,14 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
         info "    ./scripts/battery/geekworm/setup.sh --verify"
     else
         info "Skipped. Run later with: ./scripts/battery/geekworm/setup.sh"
+    fi
+
+    # --- Wi-Fi / Bluetooth management from the kiosk ---
+    echo ""
+    if confirm "Allow the kiosk Connections panel to manage Wi-Fi and Bluetooth?" "Y"; then
+        sudo "$SCRIPT_DIR/setup_connectivity.sh" --user "$USER"
+    else
+        info "Skipped. Run later with: sudo ./scripts/setup/setup_connectivity.sh --user $USER"
     fi
 
     # --- Auto-start service ---

@@ -39,6 +39,8 @@ import { getClubName } from './data/clubs';
 import { getTrainingImplementLabel } from './data/trainingImplements';
 import { unlockAudioCue } from './utils/audioCue';
 import { useLaunchDaddy, LaunchDaddyOverlay, LaunchDaddyBrand } from './components/LaunchDaddy';
+import { ConnectionsPanel, ConnectivityIndicators, PairingPrompt } from './components/connectivity';
+import { useConnectivityStore } from './stores/useConnectivityStore';
 
 import { useI18n } from './i18n/useI18n';
 import './components/panel/panel.css';
@@ -115,6 +117,16 @@ function AppContent() {
   const [profileDialog, setProfileDialog] = useState<{ mode: 'add' | 'rename'; target: Profile | null } | null>(null);
   const [profileDialogName, setProfileDialogName] = useState('');
   const [clearSessionOpen, setClearSessionOpen] = useState(false);
+  const { connectivityAvailable, pairingRequest, connectionsTab, openConnections, closeConnections } =
+    useConnectivityStore(
+      useShallow((state) => ({
+        connectivityAvailable: state.availability === 'available',
+        pairingRequest: state.pairing[0] ?? null,
+        connectionsTab: state.panelTab,
+        openConnections: state.openPanel,
+        closeConnections: state.closePanel,
+      }))
+    );
   const { activeReplay, openReplay, closeReplay, reportPlaybackError } = useCameraReplayController();
 
   // Reflect a server-pushed club change (e.g. the club changed in the connected
@@ -393,6 +405,14 @@ function AppContent() {
       {menuOpen ? (
         <MenuSheet
           onClose={() => setMenuOpen(false)}
+          onOpenConnections={
+            connectivityAvailable
+              ? () => {
+                  setMenuOpen(false);
+                  openConnections('wifi');
+                }
+              : undefined
+          }
           onShutdown={() => {
             setMenuOpen(false);
             setShutdownState('confirm');
@@ -427,8 +447,13 @@ function AppContent() {
           onSelect={handlePickerSelect}
           onClose={() => setPickerOpen(false)}
           wide={isSwingSpeedMode}
+          headerExtra={<ConnectivityIndicators />}
         />
       ) : null}
+
+      {connectionsTab ? <ConnectionsPanel initialTab={connectionsTab} onClose={closeConnections} /> : null}
+
+      {pairingRequest ? <PairingPrompt key={pairingRequest.id} request={pairingRequest} /> : null}
 
       <PanelFooter
         currentView={currentView}

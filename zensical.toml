@@ -68,6 +68,7 @@ nav = [
     ] },
     "using/cloud-sync.md",
     "using/battery.md",
+    "using/connections.md",
     "using/observability.md",
   ] },
 

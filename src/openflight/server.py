@@ -31,6 +31,13 @@ from .clubs.physics import (
     get_club_physics,
     get_club_simulation_profile,
 )
+from .connectivity.routes import (
+    LOCAL_ROOM as CONNECTIVITY_ROOM,
+    ConnectivityRuntime,
+    create_blueprint as create_connectivity_blueprint,
+    join_local_room,
+)
+from .connectivity.service import MODES as CONNECTIVITY_MODES
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot, summarize_shots
 from .ops243 import (
     UART_BAUD_COMMANDS,
@@ -139,6 +146,12 @@ camera_ball_flight_reference_tracker = None
 # Optional LIS3DH enclosure orientation used to compensate TI mount tilt.
 inclinometer_service = None
 inclinometer_runtime_config: dict = {"enabled": False}
+
+# Kiosk Wi-Fi/Bluetooth management (NetworkManager + BlueZ over D-Bus). Routes
+# are mounted once here; main() picks the backend and the service starts on
+# the kiosk browser's first request.
+connectivity_runtime = ConnectivityRuntime()
+app.register_blueprint(create_connectivity_blueprint(connectivity_runtime))
 
 # Ballistic model toggle. Shot carry comes from the physics simulator whenever
 # a vertical launch angle is available. Operators can explicitly disable it;
@@ -420,6 +433,7 @@ def _cleanup_hardware_for_shutdown() -> bool:
         _run_shutdown_step("battery monitor stop", power_monitor.stop)
     if camera_capture_runtime:
         _run_shutdown_step("camera capture stop", camera_capture_runtime.stop)
+    _run_shutdown_step("connectivity stop", connectivity_runtime.stop)
 
     _run_shutdown_step("launch monitor stop", stop_monitor)
 
@@ -1778,6 +1792,9 @@ def start_power_monitor(provider: str) -> None:
 def handle_connect():
     """Handle client connection."""
     print("Client connected")
+    # Only the kiosk's own browser receives Wi-Fi/Bluetooth events.
+    if join_local_room():
+        connectivity_runtime.ensure_started()
     _emit_sim_snapshot()
     _emit_profiles()
     if power_monitor and power_monitor.status:
@@ -4265,6 +4282,15 @@ def main():
         "--web-port", type=int, default=8080, help="Web server port (default: 8080)"
     )
     parser.add_argument(
+        "--connectivity",
+        choices=CONNECTIVITY_MODES,
+        default="auto",
+        help=(
+            "Kiosk Wi-Fi/Bluetooth management: auto (NetworkManager + BlueZ when "
+            "available), mock (simulated networks for UI development), or off"
+        ),
+    )
+    parser.add_argument(
         "--startup-status-file",
         default=None,
         help="Write structured initialization progress for the optional kiosk splash",
@@ -4999,6 +5025,12 @@ def main():
         print("Simulate shots via WebSocket or API")
     if args.swing_speed:
         print("Running in SWING SPEED mode - no ball impact trigger required")
+
+    connectivity_runtime.configure_mode(
+        args.connectivity,
+        lambda event, data: socketio.emit(event, data, to=CONNECTIVITY_ROOM),
+    )
+    print(f"Connectivity management: {args.connectivity}")
 
     print(f"Server starting at http://{args.host}:{args.web_port}")
     print()

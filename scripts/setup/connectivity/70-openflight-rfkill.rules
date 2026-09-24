@@ -1,0 +1,5 @@
+# OpenFlight kiosk: allow the openflight-network group to soft-unblock radios
+# so "Turn Bluetooth on" works when Bluetooth was rfkill-blocked. An ACL is
+# added instead of changing the node's owner/group so other tools keep access.
+# Installed by scripts/setup/setup_connectivity.sh.
+KERNEL=="rfkill", SUBSYSTEM=="misc", RUN+="/usr/bin/setfacl -m g:openflight-network:rw /dev/rfkill"

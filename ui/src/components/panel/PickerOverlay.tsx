@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import { clubGroupLabel } from '../../i18n';
 import { useI18n } from '../../i18n/useI18n';
 import { PanelAction } from './PanelAction';
@@ -12,6 +12,11 @@ interface PickerOverlayProps {
   onClose: () => void;
   /** Word-length labels (training implements) use a slightly smaller type size. */
   wide?: boolean;
+  /**
+   * Extra header controls. The picker is the first screen after launch, so
+   * the Wi-Fi/Bluetooth indicators ride here too.
+   */
+  headerExtra?: ReactNode;
 }
 
 /**
@@ -19,7 +24,15 @@ interface PickerOverlayProps {
  * hairline-bordered option buttons grouped by tab. Four columns span the
  * overlay; row height is capped so irons stay on screen.
  */
-export function PickerOverlay({ title, selectedId, sections, onSelect, onClose, wide = false }: PickerOverlayProps) {
+export function PickerOverlay({
+  title,
+  selectedId,
+  sections,
+  onSelect,
+  onClose,
+  wide = false,
+  headerExtra,
+}: PickerOverlayProps) {
   const { t } = useI18n();
   const [sectionName, setSectionName] = useState(() => initialPickerSection(sections, selectedId));
   const activeSection = sections.find((section) => section.name === sectionName) ?? sections[0];
@@ -35,6 +48,7 @@ export function PickerOverlay({ title, selectedId, sections, onSelect, onClose, 
     >
       <div className="picker-overlay__header">
         <span className="picker-overlay__title">{title}</span>
+        {headerExtra ? <div className="picker-overlay__header-extra">{headerExtra}</div> : null}
         <button
           type="button"
           className="picker-overlay__close"

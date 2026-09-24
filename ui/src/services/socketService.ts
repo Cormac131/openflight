@@ -18,6 +18,8 @@ import { ingestSessionClub } from './sessionClubSync';
 import { remainingShotsAfterClear } from './sessionClear';
 import { useProfileStore } from '../stores/useProfileStore';
 import type { ProfilesSnapshot } from '../types/profile';
+import { useConnectivityStore } from '../stores/useConnectivityStore';
+import type { ConnectivityOperation, ConnectivitySnapshot, PairingRequest } from '../types/connectivity';
 
 const SOCKET_URL = getServerOrigin();
 
@@ -53,6 +55,8 @@ class SocketService {
       this.socket?.emit('get_radar_config');
       this.socket?.emit('get_camera_capture_settings');
       this.socket?.emit('get_profiles');
+      // Also decides whether this browser may see the Connections controls.
+      void useConnectivityStore.getState().load();
     });
 
     this.socket.on('disconnect', () => {
@@ -90,6 +94,23 @@ class SocketService {
 
     this.socket.on('power_status', (data: PowerStatus) => {
       useSystemStore.getState().setPowerStatus(data);
+    });
+
+    // Only sockets from the kiosk itself are in the server's system room.
+    this.socket.on('connectivity_status', (data: ConnectivitySnapshot) => {
+      useConnectivityStore.getState().applySnapshot(data);
+    });
+
+    this.socket.on('connectivity_operation', (data: ConnectivityOperation) => {
+      useConnectivityStore.getState().applyOperation(data);
+    });
+
+    this.socket.on('bluetooth_pairing_request', (data: PairingRequest) => {
+      useConnectivityStore.getState().addPairing(data);
+    });
+
+    this.socket.on('bluetooth_pairing_closed', (data: { id: string }) => {
+      useConnectivityStore.getState().removePairing(data.id);
     });
 
     this.socket.on('sim_shot', (data: SimShotInfo) => {

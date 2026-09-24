@@ -1389,7 +1389,7 @@
   border-color: var(--color-border);
 }
 
-.profile-name-modal__keyboard {
+.osk {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -1398,7 +1398,7 @@
   padding: 12px 12px 8px;
 }
 
-.profile-name-modal__key-row {
+.osk__row {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -1406,7 +1406,7 @@
   justify-content: center;
 }
 
-.profile-name-modal__key {
+.osk__key {
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -1421,17 +1421,17 @@
   cursor: pointer;
 }
 
-.profile-name-modal__key--wide {
+.osk__key--wide {
   flex: 4;
 }
 
-.profile-name-modal__key--mod {
+.osk__key--mod {
   flex: 1.4;
   font-size: clamp(0.75rem, 2.6vh, 1rem);
   letter-spacing: 0.04em;
 }
 
-.profile-name-modal__key--active {
+.osk__key--active {
   background: var(--color-accent-block);
   border-color: var(--color-accent-block);
   color: var(--color-accent-fg);
@@ -1625,12 +1625,12 @@
     font-size: 1.125rem;
   }
 
-  .profile-name-modal__keyboard {
+  .osk {
     gap: 5px;
     padding: 8px 10px 6px;
   }
 
-  .profile-name-modal__key-row {
+  .osk__row {
     gap: 5px;
   }
 

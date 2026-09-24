@@ -4,6 +4,7 @@ import { useLaunchDaddyStore } from '../../stores/useLaunchDaddyStore';
 import { useSystemStore } from '../../stores/useSystemStore';
 import { useI18n } from '../../i18n/useI18n';
 import { StatusMenu } from './StatusMenu';
+import { ConnectivityIndicators } from '../connectivity/ConnectivityIndicators';
 
 interface PanelHeaderProps {
   /** Uppercase panel name, e.g. "Live". */
@@ -91,7 +92,11 @@ export function PanelHeader({
         {subtitle ? <IdentityPart className="panel-header__subtitle">{subtitle}</IdentityPart> : null}
         {club ? <IdentityPart className="panel-header__club">{club}</IdentityPart> : null}
       </div>
-      {actions ? <div className="panel-header__actions">{actions}</div> : null}
+      <div className="panel-header__actions">
+        {/* Kiosk-only Wi-Fi/Bluetooth status; renders nothing for remote viewers. */}
+        <ConnectivityIndicators />
+        {actions}
+      </div>
       {menuOpen ? (
         <StatusMenu
           connected={connected}

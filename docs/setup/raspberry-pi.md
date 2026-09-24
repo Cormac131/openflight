@@ -180,6 +180,19 @@ and calibration remain outside Git. See the
 [Startup Splash Screen](splash-screen.md) guide for configuration, screenshots,
 error recovery, updating existing launchers, and rollback.
 
+### Wi-Fi and Bluetooth From the Kiosk
+
+The setup script offers to grant the narrow NetworkManager and BlueZ
+permissions the touchscreen **Connections** panel needs, and installs a
+**Return to OpenFlight** desktop icon for the panel's *Show desktop* action.
+To run that step on its own:
+
+```bash
+sudo ./scripts/setup/setup_connectivity.sh --user "$USER"
+```
+
+See [Wi-Fi, Bluetooth and Desktop Access](../using/connections.md).
+
 ### Auto-Start on Boot
 
 The setup script installs and enables a systemd service configured for your

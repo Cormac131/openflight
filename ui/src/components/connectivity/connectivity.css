@@ -1,0 +1,492 @@
+/* Kiosk Connections panel. Touch-first: 44px targets, drag-to-scroll lists. */
+
+.conn-icon {
+  width: 1.1rem;
+  height: 1.1rem;
+  flex-shrink: 0;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vertical-align: -0.2em;
+}
+
+.conn-icon--small {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.conn-icon__dim {
+  opacity: 0.3;
+}
+
+/* ------------------------------------------------------------ indicators -- */
+
+.conn-indicators {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.conn-indicator {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 0.4rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.conn-indicator--connected,
+.conn-indicator--active {
+  color: var(--color-text);
+}
+
+.conn-indicator--connecting .conn-icon {
+  animation: conn-pulse 1.2s ease-in-out infinite;
+}
+
+.conn-indicator--warn {
+  color: var(--color-warning);
+}
+
+.conn-indicator--off,
+.conn-indicator--off .conn-icon {
+  color: var(--color-text-faint);
+}
+
+.conn-indicator__badge,
+.conn-indicator__count {
+  font-size: 0.625rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.conn-indicator__badge {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+}
+
+@keyframes conn-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conn-indicator--connecting .conn-icon {
+    animation: none;
+  }
+}
+
+/* In the panel header the indicators match the other header controls. */
+.panel-header__actions .conn-indicator {
+  height: var(--panel-control-height, 32px);
+}
+
+.picker-overlay__header-extra {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  margin-right: 10px;
+}
+
+/* ----------------------------------------------------------------- panel -- */
+
+.conn-panel {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+}
+
+.conn-panel__header {
+  gap: 12px;
+}
+
+.conn-panel__tabs {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.conn-panel__tabs .panel-action {
+  flex: 0 1 9rem;
+  justify-content: center;
+  min-width: 0;
+}
+
+.conn-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+  padding: 10px 26px 0;
+  font-size: 0.8125rem;
+  color: var(--color-text);
+}
+
+.conn-summary__item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-weight: 700;
+}
+
+.conn-summary__item--ok {
+  color: var(--color-success);
+}
+
+.conn-summary__item--warn {
+  color: var(--color-warning);
+}
+
+.conn-summary__item--off,
+.conn-summary__item--muted {
+  color: var(--color-text-muted);
+}
+
+.conn-summary__label {
+  font-weight: 600;
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.conn-summary__hint {
+  color: var(--color-text-faint);
+  font-size: 0.75rem;
+}
+
+.conn-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 26px 0;
+  padding: 0 0 0 14px;
+  border: 1px solid var(--color-border);
+  border-left-width: 4px;
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  color: var(--color-text);
+}
+
+.conn-notice--success {
+  border-left-color: var(--color-success);
+}
+
+.conn-notice--error {
+  border-left-color: var(--color-danger);
+}
+
+.conn-notice__dismiss {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.conn-panel__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 26px 18px;
+}
+
+.conn-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.conn-section__empty {
+  margin: 0;
+  padding: 12px 0;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  list-style: none;
+}
+
+.conn-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.conn-row--current {
+  padding: 10px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.conn-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.conn-row__eyebrow {
+  display: block;
+  font-weight: 600;
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.conn-row__title {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conn-row__detail {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.conn-row__actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+/* Lists scroll by dragging (ui/AGENTS.md): touch-action none on the scroller
+ * and its tappable children, and pointer capture only after the threshold. */
+.conn-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+.conn-list button,
+.conn-list .panel-action {
+  touch-action: none;
+}
+
+.conn-sublist {
+  margin: 4px 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.conn-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--color-border-soft);
+}
+
+.conn-item__main {
+  flex: 1;
+  min-width: 0;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.conn-item__main:disabled {
+  color: var(--color-text-faint);
+  cursor: default;
+}
+
+.conn-item__main--static {
+  cursor: default;
+}
+
+.conn-item__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+.conn-item__meta {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.conn-item__actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.conn-desktop__detail {
+  margin: 0;
+  max-width: 44rem;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.conn-desktop .panel-action {
+  align-self: flex-start;
+}
+
+.conn-desktop__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ---------------------------------------------------------- dialogs -- */
+
+.conn-dialog {
+  z-index: 50;
+}
+
+.conn-dialog__field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 18px;
+}
+
+.conn-dialog__field .profile-name-modal__input {
+  flex: 1;
+}
+
+.conn-dialog__hint {
+  padding: 4px 18px 0;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.conn-pairing {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--color-bg) 78%, transparent);
+}
+
+.conn-pairing__dialog {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(40rem, calc(100% - 32px));
+  max-height: calc(100% - 24px);
+  padding: 1.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.conn-pairing__title {
+  margin: 0;
+  font-size: 1.125rem;
+  color: var(--color-text);
+}
+
+.conn-pairing__message {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.9375rem;
+}
+
+.conn-pairing__code {
+  font-size: 2.25rem;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+.conn-pairing .profile-name-modal__input {
+  width: 100%;
+  margin: 0;
+  text-align: center;
+  letter-spacing: 0.2em;
+}
+
+.conn-pairing .osk {
+  min-height: 12rem;
+  padding: 0;
+}
+
+.conn-pairing__keypad {
+  min-height: 3.25rem !important;
+}
+
+.conn-pairing__buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.conn-pairing__buttons .panel-action {
+  flex: 1;
+  justify-content: center;
+}
+
+@media (max-height: 500px), (max-width: 860px) {
+  .conn-summary,
+  .conn-panel__body {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .conn-notice {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+
+  .conn-row--current {
+    flex-wrap: wrap;
+  }
+
+  .conn-pairing .osk {
+    min-height: 9rem;
+  }
+}

@@ -5,6 +5,8 @@ set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=scripts/kiosk-control.sh
+. "$SCRIPT_DIR/kiosk-control.sh"
 HOST="localhost"
 WEB_PORT="8080"
 DRY_RUN=false
@@ -18,6 +20,7 @@ SERVER_PID=""
 SPLASH_PID=""
 BROWSER_PID=""
 BROWSER_LAUNCHED=false
+KIOSK_CONTROL_DIR=""
 SERVER_ARGS=()
 
 log() { printf '[OpenFlight] %s\n' "$1"; }
@@ -179,14 +182,22 @@ stop_startup_splash_server() {
     fi
 }
 
+close_kiosk_browser() {
+    [ -z "$BROWSER_PID" ] || kill "$BROWSER_PID" 2>/dev/null || true
+    pkill -f 'chromium.*--kiosk' 2>/dev/null || true
+    pkill -f 'chrome.*--kiosk' 2>/dev/null || true
+    pkill -f 'firefox.*--kiosk' 2>/dev/null || true
+    BROWSER_PID=""
+    BROWSER_LAUNCHED=false
+}
+
 cleanup() {
     local exit_code="${1:-$?}"
     trap - EXIT SIGINT SIGTERM
     shutdown_server
     stop_startup_splash_server
-    [ -z "$BROWSER_PID" ] || kill "$BROWSER_PID" 2>/dev/null || true
-    pkill -f 'chromium.*--kiosk' 2>/dev/null || true
-    pkill -f 'chrome.*--kiosk' 2>/dev/null || true
+    close_kiosk_browser
+    kiosk_control_cleanup "$KIOSK_CONTROL_DIR"
     exit "$exit_code"
 }
 
@@ -322,6 +333,60 @@ configure_kld7_latency() {
     fi
 }
 
+# "Show desktop" support. Only offered when a graphical session exists; the
+# server reads OPENFLIGHT_KIOSK_CONTROL_DIR and checks this script is alive.
+prepare_kiosk_control() {
+    desktop_session_available || return 0
+    local dir
+    dir="$(kiosk_control_dir "$WEB_PORT")"
+    if kiosk_control_prepare "$dir" "$$"; then
+        KIOSK_CONTROL_DIR="$dir"
+        export OPENFLIGHT_KIOSK_CONTROL_DIR="$dir"
+    else
+        warn "Kiosk control directory $dir is unsafe; Show desktop is disabled"
+    fi
+}
+
+show_desktop() {
+    log "Showing the desktop; OpenFlight keeps running. Use 'Return to OpenFlight' to come back."
+    close_kiosk_browser
+    kiosk_control_set_mode "$KIOSK_CONTROL_DIR" desktop
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send "OpenFlight is still running" \
+            "Open 'Return to OpenFlight' on the desktop to go back." 2>/dev/null || true
+    fi
+}
+
+return_to_kiosk() {
+    if [ "$(kiosk_control_mode "$KIOSK_CONTROL_DIR")" = kiosk ] && \
+        [ -n "$BROWSER_PID" ] && kill -0 "$BROWSER_PID" 2>/dev/null; then
+        return 0
+    fi
+    log "Returning to OpenFlight"
+    launch_kiosk_browser "http://$HOST:$WEB_PORT" || true
+    kiosk_control_set_mode "$KIOSK_CONTROL_DIR" kiosk
+}
+
+handle_kiosk_requests() {
+    [ -n "$KIOSK_CONTROL_DIR" ] || return 0
+    if kiosk_control_take_request "$KIOSK_CONTROL_DIR" show-desktop; then
+        show_desktop
+    fi
+    if kiosk_control_take_request "$KIOSK_CONTROL_DIR" return; then
+        return_to_kiosk
+    fi
+}
+
+# Replaces a bare `wait` so desktop requests are served while the server runs.
+# Nothing here relaunches the browser on its own: after Show desktop the
+# desktop stays put until the user asks to return.
+supervise_kiosk() {
+    while kill -0 "$SERVER_PID" 2>/dev/null; do
+        handle_kiosk_requests
+        sleep 0.5
+    done
+}
+
 start_alloy() {
     command -v systemctl >/dev/null 2>&1 || return 0
     systemctl is-enabled alloy >/dev/null 2>&1 || return 0
@@ -378,6 +443,7 @@ else
 fi
 
 start_alloy
+prepare_kiosk_control
 log "Starting OpenFlight server on port $WEB_PORT"
 UV_RUN_ARGS=()
 if [ -n "${OPENFLIGHT_UV_RUN_ARGS:-}" ]; then
@@ -421,5 +487,11 @@ if [ "$BROWSER_LAUNCHED" != true ]; then
 else
     log "Startup splash will continue to OpenFlight"
 fi
+if [ "$BROWSER_LAUNCHED" != true ] && [ -n "$KIOSK_CONTROL_DIR" ]; then
+    # No kiosk browser covers the desktop, so there is nothing to hide.
+    kiosk_control_cleanup "$KIOSK_CONTROL_DIR"
+    KIOSK_CONTROL_DIR=""
+fi
 log "OpenFlight is running. Press Ctrl+C to stop."
+supervise_kiosk
 wait "$SERVER_PID"
