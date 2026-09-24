@@ -3167,3 +3167,154 @@ class TestSpinDriverDeadZone:
         assert result.spin_rpm == 0 or result.quality == "low", (
             f"Decay ramp faked spin: {result.spin_rpm} RPM quality={result.quality}"
         )
+
+
+class TestRejectedTriggerCallback:
+    """Physical triggers that yield no radar shot are handed to other sensors."""
+
+    @staticmethod
+    def _capture():
+        return IQCapture(
+            sample_time=0.0,
+            trigger_time=0.068,
+            i_samples=[2048] * 16,
+            q_samples=[2048] * 16,
+            trigger_timestamp=1_700_000_000.25,
+            trigger_timestamp_source="first_byte",
+        )
+
+    @staticmethod
+    def _one_capture_trigger(monitor, capture):
+        class OneCaptureTrigger:
+            calls = 0
+
+            def wait_for_trigger(self, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return capture
+                monitor._running = False
+                return None
+
+            @staticmethod
+            def drain_diagnostics():
+                return [{"accepted": True, "reason": "accepted"}]
+
+            @staticmethod
+            def reset():
+                return None
+
+        return OneCaptureTrigger()
+
+    @staticmethod
+    def _slow_processed(capture, ball_speed_mph):
+        readings = [
+            SpeedReading(
+                speed_mph=ball_speed_mph, timestamp_ms=70.0, magnitude=100, direction="outbound"
+            ),
+        ]
+        return ProcessedCapture(
+            timeline=SpeedTimeline(readings=readings, sample_rate_hz=937.5),
+            ball_speed_mph=ball_speed_mph,
+            ball_timestamp_ms=70.0,
+            capture=capture,
+        )
+
+    def _run_loop(self, monkeypatch, *, processed, club=ClubType.PUTTER, callback=None):
+        from openflight.rolling_buffer import RollingBufferMonitor, monitor as monitor_module
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+        capture = self._capture()
+        monitor.trigger = self._one_capture_trigger(monitor, capture)
+
+        class Processor:
+            @staticmethod
+            def process_capture(*_args, **_kwargs):
+                return processed(capture) if callable(processed) else processed
+
+        monitor.processor = Processor()
+        monitor.set_club(club)
+        rejected = []
+        monitor._rejected_trigger_callback = callback or rejected.append
+        monitor._running = True
+        monkeypatch.setattr(monitor_module, "get_session_logger", lambda: None)
+
+        monitor._capture_loop()
+        return monitor, capture, rejected
+
+    def test_processing_failure_reports_the_trigger_with_its_hardware_timestamp(
+        self, monkeypatch
+    ):
+        from openflight.rolling_buffer.monitor import RejectedTrigger
+
+        _monitor, capture, rejected = self._run_loop(monkeypatch, processed=None)
+
+        assert rejected == [
+            RejectedTrigger(
+                reason="processing_failed",
+                trigger_timestamp=capture.trigger_timestamp,
+                ball_speed_mph=None,
+                club=ClubType.PUTTER,
+            )
+        ]
+
+    def test_slow_ball_reports_the_trigger_with_the_radar_speed(self, monkeypatch):
+        _monitor, capture, rejected = self._run_loop(
+            monkeypatch,
+            processed=lambda capture: self._slow_processed(capture, 6.5),
+            club=ClubType.IRON_7,
+        )
+
+        assert len(rejected) == 1
+        assert rejected[0].reason == "shot_validation_failed"
+        assert rejected[0].trigger_timestamp == capture.trigger_timestamp
+        assert rejected[0].ball_speed_mph == 6.5
+        assert rejected[0].club is ClubType.IRON_7
+
+    def test_accepted_shot_does_not_report_a_rejection(self, monkeypatch):
+        _monitor, _capture, rejected = self._run_loop(
+            monkeypatch,
+            processed=lambda capture: self._slow_processed(capture, 120.0),
+        )
+
+        assert rejected == []
+
+    def test_callback_errors_do_not_stop_the_capture_loop(self, monkeypatch):
+        calls = []
+
+        def broken(rejected):
+            calls.append(rejected)
+            raise RuntimeError("camera offline")
+
+        monitor, _capture, _rejected = self._run_loop(
+            monkeypatch, processed=None, callback=broken
+        )
+
+        assert len(calls) == 1
+        assert monitor.trigger.calls == 2, "the loop must keep waiting for the next trigger"
+
+    def test_start_accepts_the_rejected_trigger_callback(self, monkeypatch):
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+        monkeypatch.setattr(monitor, "_capture_loop", lambda: None)
+        callback = object()
+
+        monitor.start(rejected_trigger_callback=callback)
+        monitor.stop()
+
+        assert monitor._rejected_trigger_callback is callback
+
+    def test_external_shots_share_the_session_sequence(self):
+        from openflight.rolling_buffer import RollingBufferMonitor
+
+        monitor = RollingBufferMonitor(port=None, trigger_type="sound")
+        radar_shot = Shot(ball_speed_mph=120.0, timestamp=datetime.now())
+        putt = Shot(ball_speed_mph=6.0, timestamp=datetime.now(), club=ClubType.PUTTER)
+        later_radar_shot = Shot(ball_speed_mph=121.0, timestamp=datetime.now())
+
+        monitor._record_shot(radar_shot)
+        assert monitor.record_external_shot(putt) is putt
+        monitor._record_shot(later_radar_shot)
+
+        assert [shot.shot_number for shot in monitor.get_shots()] == [1, 2, 3]
+        assert monitor.get_session_stats()["shot_count"] == 3

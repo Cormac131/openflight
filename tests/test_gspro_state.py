@@ -16,8 +16,8 @@ def test_unknown_code_maps_to_unknown():
     assert gspro_code_to_club("XX") is ClubType.UNKNOWN
 
 
-def test_putter_out_of_scope_maps_to_unknown():
-    assert gspro_code_to_club("PT") is ClubType.UNKNOWN
+def test_putter_code_maps_to_the_putter():
+    assert gspro_code_to_club("PT") is ClubType.PUTTER
 
 
 def test_all_openconnect_codes_from_ogs_clubsync_map_to_real_clubs():

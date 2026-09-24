@@ -1411,6 +1411,157 @@ class TestShotToDict:
         assert estimate_call["geometry"].horizontal_pixel_sign == -1.0
         assert estimate_call["ball_tracker"] is ball_flight_tracker
 
+    @pytest.fixture
+    def camera_only_config(self, monkeypatch):
+        config = {
+            "mount_height_m": 0.20955,
+            "lateral_offset_m": 0.0762,
+            "horizontal_offset_deg": -0.45,
+            "roll_correction_deg": 2.8,
+            "mirror_horizontal": True,
+            "width": 640,
+            "height": 400,
+            "ball_forward_m": 1.5,
+        }
+        monkeypatch.setattr(server_module, "camera_capture_config", config)
+        return config
+
+    def test_camera_ball_geometry_prefers_iwr_tee_calibration(
+        self, monkeypatch, camera_only_config
+    ):
+        monkeypatch.setattr(
+            server_module,
+            "iwr6843_runtime",
+            SimpleNamespace(
+                calibration=SimpleNamespace(
+                    tee_range_m=1.524, radar_height_m=0.15875, tee_ball_height_m=0.04
+                )
+            ),
+        )
+
+        geometry = server_module._camera_ball_geometry()
+
+        assert geometry.tee_range_m == 1.524
+        assert geometry.radar_height_m == 0.15875
+        assert geometry.ball_height_m == 0.04
+        assert geometry.camera_lateral_offset_m == 0.0762
+        assert geometry.horizontal_pixel_sign == -1.0
+
+    def test_camera_ball_geometry_uses_measured_ball_distance_without_iwr(
+        self, monkeypatch, camera_only_config
+    ):
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+
+        geometry = server_module._camera_ball_geometry()
+
+        assert geometry.ball_forward_m == pytest.approx(1.5)
+        assert geometry.radar_height_m == pytest.approx(0.20955)
+        assert geometry.camera_height_m == pytest.approx(0.20955)
+        assert geometry.camera_lateral_offset_m == 0.0762
+        assert geometry.horizontal_offset_deg == -0.45
+        assert geometry.roll_correction_deg == 2.8
+        assert geometry.horizontal_pixel_sign == -1.0
+        assert (geometry.image_width_px, geometry.image_height_px) == (640, 400)
+
+    def test_camera_ball_geometry_uses_measured_ball_distance_when_tee_is_uncalibrated(
+        self, monkeypatch, camera_only_config
+    ):
+        monkeypatch.setattr(
+            server_module,
+            "iwr6843_runtime",
+            SimpleNamespace(
+                calibration=SimpleNamespace(
+                    tee_range_m=None, radar_height_m=0.15875, tee_ball_height_m=0.04
+                )
+            ),
+        )
+
+        assert server_module._camera_ball_geometry().ball_forward_m == pytest.approx(1.5)
+
+    @pytest.mark.parametrize(
+        ("runtime", "expected"),
+        [
+            (None, "rejected_no_iwr_runtime"),
+            (
+                SimpleNamespace(
+                    calibration=SimpleNamespace(
+                        tee_range_m=None, radar_height_m=0.15875, tee_ball_height_m=0.04
+                    )
+                ),
+                "rejected_missing_tee_geometry",
+            ),
+        ],
+    )
+    def test_camera_ball_geometry_reports_why_it_is_missing(
+        self, monkeypatch, camera_only_config, runtime, expected
+    ):
+        camera_only_config["ball_forward_m"] = None
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+
+        assert server_module._camera_ball_geometry() == expected
+
+    def test_live_fusion_runs_camera_only_geometry_without_iwr(
+        self, monkeypatch, tmp_path, camera_only_config
+    ):
+        from openflight.camera import ball_flight
+
+        estimate_call = {}
+
+        def fake_estimate(*_args, **kwargs):
+            estimate_call.update(kwargs)
+            return ball_flight.CameraBallEstimate(
+                status="accepted_camera_only",
+                confidence_tier="experimental",
+                horizontal_deg=1.5,
+                support=12,
+                depth_source="camera_size",
+            )
+
+        np.savez(
+            tmp_path / "frames.npz",
+            frames=np.zeros((8, 4, 4), dtype=np.uint8),
+            host_timestamp_ns=np.arange(8, dtype=np.int64),
+            trigger_host_timestamp_ns=np.int64(3),
+        )
+        monkeypatch.setattr(ball_flight, "estimate_camera_ball_flight", fake_estimate)
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        shot = Shot(ball_speed_mph=110.0, timestamp=datetime.now())
+
+        server_module._fuse_camera_ball_flight(shot, SimpleNamespace(valid=True, path=tmp_path))
+
+        assert estimate_call["geometry"].ball_forward_m == pytest.approx(1.5)
+        assert estimate_call["ops_ball_speed_mph"] == 110.0
+        assert shot.launch_angle_horizontal == 1.5
+        assert shot.launch_angle_horizontal_source == "camera_only_experimental"
+        assert shot.experimental_camera_horizontal_status == "camera_only_experimental"
+
+    def test_live_fusion_without_iwr_or_ball_distance_is_still_rejected(
+        self, monkeypatch, tmp_path, camera_only_config
+    ):
+        camera_only_config["ball_forward_m"] = None
+        np.savez(
+            tmp_path / "frames.npz",
+            frames=np.zeros((8, 4, 4), dtype=np.uint8),
+            host_timestamp_ns=np.arange(8, dtype=np.int64),
+            trigger_host_timestamp_ns=np.int64(3),
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", None)
+        shot = Shot(
+            ball_speed_mph=110.0,
+            timestamp=datetime.now(),
+            launch_angle_horizontal=-2.0,
+            launch_angle_horizontal_source="radar",
+            iwr6843_horizontal_deg=-2.0,
+            iwr6843_horizontal_confidence=0.7,
+        )
+
+        server_module._fuse_camera_ball_flight(shot, SimpleNamespace(valid=True, path=tmp_path))
+
+        assert shot.launch_angle_horizontal == -2.0
+        assert shot.experimental_camera_horizontal_status == (
+            "camera_withheld_fallback_iwr:rejected_no_iwr_runtime"
+        )
+
     def test_live_fusion_without_camera_preserves_radar_horizontal(self):
         shot = Shot(
             ball_speed_mph=110.0,
@@ -4179,6 +4330,23 @@ class TestBallisticsConfiguration:
 
     def test_runtime_default_enables_ballistics(self):
         assert server_module.ballistics_enabled is True
+
+
+class TestCameraBallDistanceArgument:
+    """A measured camera-to-ball distance is optional and must be positive."""
+
+    def test_non_positive_ball_distance_is_refused_at_the_cli(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["openflight-server", "--camera-capture", "--camera-capture-ball-distance-m", "0"],
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            server_module.main()
+
+        assert exc_info.value.code == 2
+        assert "--camera-capture-ball-distance-m must be positive" in capsys.readouterr().err
 
 
 class TestBatteryConfiguration:

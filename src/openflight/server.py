@@ -991,6 +991,7 @@ def init_camera_capture(
     lateral_offset_m: float,
     horizontal_offset_deg: float,
     use_gpio_trigger: bool,
+    ball_forward_m: float | None = None,
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
@@ -1057,6 +1058,7 @@ def init_camera_capture(
             "mount_height_m": mount_height_m,
             "lateral_offset_m": lateral_offset_m,
             "horizontal_offset_deg": horizontal_offset_deg,
+            "ball_forward_m": ball_forward_m,
             "alignment_x_pct": 50.0,
             "alignment_y_pct": 50.0,
         }
@@ -2691,6 +2693,41 @@ def _fuse_camera_club_delivery(
         )
 
 
+def _camera_ball_geometry():
+    """Build ball-flight geometry from the IWR6843 tee calibration or a tape measure.
+
+    Returns a ``CameraBallGeometry``, or the rejection status string to report
+    when neither the radar calibration nor a measured ball distance
+    (``--camera-capture-ball-distance-m``) is available.
+    """
+    from openflight.camera.ball_flight import CameraBallGeometry  # noqa: PLC0415
+
+    camera_fields = {
+        "camera_height_m": float(camera_capture_config["mount_height_m"]),
+        "camera_lateral_offset_m": float(camera_capture_config.get("lateral_offset_m", 0.0)),
+        "horizontal_offset_deg": float(camera_capture_config.get("horizontal_offset_deg", 0.0)),
+        "roll_correction_deg": float(camera_capture_config.get("roll_correction_deg", 0.0)),
+        "horizontal_pixel_sign": -1.0 if camera_capture_config.get("mirror_horizontal") else 1.0,
+        "image_width_px": int(camera_capture_config["width"]),
+        "image_height_px": int(camera_capture_config["height"]),
+    }
+    calibration = iwr6843_runtime.calibration if iwr6843_runtime is not None else None
+    if calibration is not None and calibration.tee_range_m is not None:
+        return CameraBallGeometry(
+            radar_height_m=calibration.radar_height_m,
+            tee_range_m=float(calibration.tee_range_m),
+            ball_height_m=calibration.tee_ball_height_m,
+            **camera_fields,
+        )
+    ball_forward_m = camera_capture_config.get("ball_forward_m")
+    if ball_forward_m is not None:
+        return CameraBallGeometry.from_camera_measurements(
+            ball_forward_m=float(ball_forward_m),
+            **camera_fields,
+        )
+    return "rejected_missing_tee_geometry" if calibration is not None else "rejected_no_iwr_runtime"
+
+
 def _fuse_camera_ball_flight(
     shot: Shot,
     camera_capture,
@@ -2700,7 +2737,6 @@ def _fuse_camera_ball_flight(
     try:
         from openflight.camera.ball_flight import (  # noqa: PLC0415
             CameraBallEstimate,
-            CameraBallGeometry,
             estimate_camera_ball_flight,
             select_camera_assisted_horizontal,
         )
@@ -2708,53 +2744,31 @@ def _fuse_camera_ball_flight(
         estimate = CameraBallEstimate(status="rejected_no_camera_capture")
         if camera_capture is not None and camera_capture.valid and camera_capture.path:
             frames_path = Path(camera_capture.path) / "frames.npz"
-            if not frames_path.exists():
+            geometry = _camera_ball_geometry() if frames_path.exists() else None
+            if geometry is None:
                 estimate = CameraBallEstimate(status="rejected_missing_camera_frames")
-            elif iwr6843_runtime is None:
-                estimate = CameraBallEstimate(status="rejected_no_iwr_runtime")
+            elif isinstance(geometry, str):
+                estimate = CameraBallEstimate(status=geometry)
             else:
-                calibration = iwr6843_runtime.calibration
-                if calibration.tee_range_m is None:
-                    estimate = CameraBallEstimate(status="rejected_missing_tee_geometry")
+                archive = (
+                    _load_camera_capture_archive(camera_capture)
+                    if camera_archive is _CAMERA_ARCHIVE_UNSET
+                    else camera_archive
+                )
+                if archive is None:
+                    estimate = CameraBallEstimate(status="rejected_missing_camera_frames")
                 else:
-                    archive = (
-                        _load_camera_capture_archive(camera_capture)
-                        if camera_archive is _CAMERA_ARCHIVE_UNSET
-                        else camera_archive
+                    trigger_ns = int(archive["trigger_host_timestamp_ns"])
+                    estimate = estimate_camera_ball_flight(
+                        archive["frames"],
+                        archive["host_timestamp_ns"],
+                        trigger_ns=trigger_ns,
+                        range_evidence=shot.iwr6843_ball_range_evidence,
+                        geometry=geometry,
+                        ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
+                        iwr_vertical_deg=shot.launch_angle_vertical,
+                        ball_tracker=camera_ball_flight_reference_tracker,
                     )
-                    if archive is None:
-                        estimate = CameraBallEstimate(status="rejected_missing_camera_frames")
-                    else:
-                        trigger_ns = int(archive["trigger_host_timestamp_ns"])
-                        estimate = estimate_camera_ball_flight(
-                            archive["frames"],
-                            archive["host_timestamp_ns"],
-                            trigger_ns=trigger_ns,
-                            range_evidence=shot.iwr6843_ball_range_evidence,
-                            geometry=CameraBallGeometry(
-                                camera_height_m=float(camera_capture_config["mount_height_m"]),
-                                radar_height_m=calibration.radar_height_m,
-                                tee_range_m=float(calibration.tee_range_m),
-                                ball_height_m=calibration.tee_ball_height_m,
-                                camera_lateral_offset_m=float(
-                                    camera_capture_config.get("lateral_offset_m", 0.0)
-                                ),
-                                horizontal_offset_deg=float(
-                                    camera_capture_config.get("horizontal_offset_deg", 0.0)
-                                ),
-                                roll_correction_deg=float(
-                                    camera_capture_config.get("roll_correction_deg", 0.0)
-                                ),
-                                horizontal_pixel_sign=(
-                                    -1.0 if camera_capture_config.get("mirror_horizontal") else 1.0
-                                ),
-                                image_width_px=int(camera_capture_config["width"]),
-                                image_height_px=int(camera_capture_config["height"]),
-                            ),
-                            ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
-                            iwr_vertical_deg=shot.launch_angle_vertical,
-                            ball_tracker=camera_ball_flight_reference_tracker,
-                        )
 
         decision = select_camera_assisted_horizontal(
             estimate,
@@ -3138,19 +3152,8 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     )
 
 
-def _finalize_shot_detected(
-    shot: Shot,
-    *,
-    emit_event: str,
-    initial_ui_ms: float | None = None,
-    enrichment: _ShotEnrichmentResult | None = None,
-) -> None:
-    """Apply required fallbacks, persist once, and publish the final shot."""
-    enrichment = enrichment or _ShotEnrichmentResult()
-    iwr6843_ms = enrichment.iwr6843_ms
-    kld7_ms = enrichment.kld7_ms
-    camera_capture_ms = enrichment.camera_capture_ms
-
+def _apply_flight_physics(shot: Shot) -> None:
+    """Fill launch-angle, ball-speed, spin, and carry fallbacks for an airborne shot."""
     # Always emit user-facing launch angles. Radar/camera measurements win;
     # rejected or missing axes fall back to conservative estimates.
     _ensure_user_facing_launch_angles(shot)
@@ -3221,6 +3224,34 @@ def _finalize_shot_detected(
                 spin_for_carry,
                 "" if shot.spin_rpm and shot.spin_rpm > 0 else " avg",
             )
+
+
+def _finalize_shot_detected(
+    shot: Shot,
+    *,
+    emit_event: str,
+    initial_ui_ms: float | None = None,
+    enrichment: _ShotEnrichmentResult | None = None,
+) -> None:
+    """Apply required fallbacks, persist once, and publish the final shot."""
+    enrichment = enrichment or _ShotEnrichmentResult()
+    iwr6843_ms = enrichment.iwr6843_ms
+    kld7_ms = enrichment.kld7_ms
+    camera_capture_ms = enrichment.camera_capture_ms
+
+    if _is_camera_putt(shot):
+        # A putt rolls: the camera measured its speed and start line directly,
+        # so no radial-speed correction, launch estimate, spin, or carry apply.
+        logger.info(
+            "[SERVER] Camera putt: %.1f mph, start line %s",
+            shot.ball_speed_mph,
+            "%.1f°" % shot.launch_angle_horizontal
+            if shot.launch_angle_horizontal is not None
+            else "N/A",
+        )
+    else:
+        _apply_flight_physics(shot)
+
     if shot.spin_rejection_reason:
         logger.info(
             "[SERVER] Spin unavailable: %s (snr=%s, candidate=%s rpm)",
@@ -3319,7 +3350,8 @@ def _finish_shot_detected(
     enriched_shot = replace(shot) if _has_slow_shot_enrichment(shot) else shot
     enrichment = _ShotEnrichmentResult()
     try:
-        enrichment = _enrich_shot_from_optional_hardware(enriched_shot)
+        if not _is_camera_putt(shot):
+            enrichment = _enrich_shot_from_optional_hardware(enriched_shot)
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.error("[SERVER] Deferred shot enrichment failed: %s", error, exc_info=True)
         log_session_error(
@@ -3446,6 +3478,9 @@ def _emit_ops_enrichment_skipped(shot: Shot, *, reason: str) -> None:
 
 def _has_slow_shot_enrichment(shot: Shot) -> bool:
     """Whether optional hardware can add seconds to this shot callback."""
+    if _is_camera_putt(shot):
+        # The camera already measured the putt; nothing slower is pending.
+        return False
     return shot.mode != "mock" and (
         iwr6843_runtime is not None or camera_capture_runtime is not None
     )
@@ -3583,6 +3618,148 @@ def _handle_shot_detected(shot: Shot) -> None:
             emit_event=final_event,
             initial_ui_ms=initial_ui_ms,
         )
+
+
+PUTT_SHOT_MODE = "camera-putt"
+_PUTT_CAMERA_CAPTURE_TIMEOUT_S = 2.0
+# Camera-only start line carries the same confidence the flight fusion assigns
+# to a camera-only horizontal (select_camera_assisted_horizontal).
+_PUTT_START_LINE_CONFIDENCE = 0.30
+_putt_processing_lock = threading.Lock()
+
+
+def _is_camera_putt(shot: Shot) -> bool:
+    """Whether a shot was measured by the camera putt estimator."""
+    return shot.mode == PUTT_SHOT_MODE
+
+
+def on_rejected_trigger(rejected) -> None:
+    """Run the camera putt estimator when a putter is selected and the radar saw no shot.
+
+    The OPS243 masks everything under 15 mph, so every putt reaches the server
+    as a rejected trigger. Analysis runs off the capture thread so the radar
+    re-arms for the next stroke.
+    """
+    if rejected.club is not ClubType.PUTTER:
+        return
+    if camera_capture_runtime is None:
+        logger.info("[SERVER] Putter selected but camera capture is not running; trigger ignored")
+        return
+    if rejected.trigger_timestamp is None:
+        logger.warning("[SERVER] Putt trigger has no hardware timestamp; cannot match camera")
+        return
+    socketio.start_background_task(_process_putt_trigger, rejected)
+
+
+def _process_putt_trigger(rejected) -> None:
+    """Measure one putt from its camera clip and publish it through the shot pipeline."""
+    with _putt_processing_lock:
+        shot = None
+        try:
+            on_shot_processing("calculating")
+            shot = _measure_putt(rejected)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.warning("[SERVER] Camera putt processing error: %s", error, exc_info=True)
+            log_session_error(
+                "Camera putt processing failed",
+                component="camera_capture",
+                context={"stage": "putt", "trigger_timestamp": rejected.trigger_timestamp},
+                exc=error,
+            )
+        if shot is None:
+            on_shot_processing("failed")
+            return
+        on_shot_detected(shot)
+
+
+def _measure_putt(rejected) -> Shot | None:
+    """Match the camera clip for a putt trigger and estimate speed and start line."""
+    from openflight.camera.ball_flight import estimate_camera_putt  # noqa: PLC0415
+
+    camera_capture = camera_capture_runtime.capture_for_shot(
+        rejected.trigger_timestamp,
+        timeout_s=_PUTT_CAMERA_CAPTURE_TIMEOUT_S,
+    )
+    if camera_capture is None:
+        logger.warning("[SERVER] No camera capture matched the putt trigger")
+        return None
+    if not camera_capture.valid:
+        logger.warning(
+            "[SERVER] Camera capture #%d failed: %s", camera_capture.sequence, camera_capture.error
+        )
+        return None
+    geometry = _camera_ball_geometry()
+    if isinstance(geometry, str):
+        logger.warning(
+            "[SERVER] Putt rejected (%s): pass --camera-capture-ball-distance-m or calibrate the tee",
+            geometry,
+        )
+        return None
+    archive = _load_camera_capture_archive(camera_capture)
+    if archive is None:
+        logger.warning("[SERVER] Putt rejected: camera frames missing from %s", camera_capture.path)
+        return None
+
+    estimate = estimate_camera_putt(
+        archive["frames"],
+        archive["host_timestamp_ns"],
+        trigger_ns=int(archive["trigger_host_timestamp_ns"]),
+        geometry=geometry,
+        ball_tracker=camera_ball_flight_reference_tracker,
+    )
+    if estimate.confidence_tier == "withheld" or estimate.speed_mph is None:
+        logger.warning(
+            "[SERVER] Putt rejected: %s (support %d/27, points %d)",
+            estimate.status,
+            estimate.support,
+            estimate.n_points,
+        )
+        return None
+
+    shot = _build_putt_shot(estimate, rejected.trigger_timestamp)
+    if monitor is not None and hasattr(monitor, "record_external_shot"):
+        monitor.record_external_shot(shot)
+    _attach_camera_replay(shot, camera_capture)
+    session_log = get_session_logger()
+    if session_log:
+        session_log.log_camera_capture(
+            shot_number=_shot_number_for_log(shot, session_log),
+            shot_timestamp=rejected.trigger_timestamp,
+            trigger_timestamp=camera_capture.trigger_timestamp,
+            capture_path=str(camera_capture.path) if camera_capture.path else None,
+            metadata=camera_capture.metadata,
+            capture_error=camera_capture.error,
+        )
+    logger.info(
+        "[SERVER] Camera putt measured: %.1f mph, start line %.1f° (%s, support %d/27)",
+        estimate.speed_mph,
+        estimate.horizontal_deg if estimate.horizontal_deg is not None else float("nan"),
+        estimate.confidence_tier,
+        estimate.support,
+    )
+    return shot
+
+
+def _build_putt_shot(estimate, trigger_timestamp: float) -> Shot:
+    """Turn a camera putt estimate into the shot the UI, sims, and log consume."""
+    return Shot(
+        ball_speed_mph=float(estimate.speed_mph),
+        timestamp=datetime.fromtimestamp(trigger_timestamp),
+        impact_timestamp=trigger_timestamp,
+        club=ClubType.PUTTER,
+        # A putt rolls off the face; there is no vertical launch to estimate.
+        launch_angle_vertical=0.0,
+        launch_angle_vertical_source="assumed",
+        launch_angle_horizontal=estimate.horizontal_deg,
+        launch_angle_horizontal_confidence=_PUTT_START_LINE_CONFIDENCE,
+        launch_angle_horizontal_source="camera_only_experimental",
+        angle_source="camera",
+        experimental_camera_horizontal_deg=estimate.horizontal_deg,
+        experimental_camera_horizontal_confidence=_PUTT_START_LINE_CONFIDENCE,
+        experimental_camera_horizontal_status="camera_only_experimental",
+        carry_spin_adjusted=0.0,
+        mode=PUTT_SHOT_MODE,
+    )
 
 
 def swing_speed_to_dict(event: SwingSpeedEvent) -> dict:
@@ -3823,6 +4000,7 @@ def start_monitor(
             live_callback=on_live_reading,
             diagnostic_callback=on_trigger_diagnostic,
             processing_callback=on_shot_processing,
+            rejected_trigger_callback=on_rejected_trigger,
         )
         if iwr6843_runtime is not None:
             iwr6843_runtime.capture_monitor.arm()
@@ -4322,6 +4500,16 @@ def main():
         ),
     )
     parser.add_argument(
+        "--camera-capture-ball-distance-m",
+        type=float,
+        default=None,
+        help=(
+            "Measured horizontal distance from the camera to the ball at address in meters. "
+            "Lets the camera ball tracker derive its geometry without an IWR6843 tee "
+            "calibration (camera-only horizontal launch, putting)."
+        ),
+    )
+    parser.add_argument(
         "--camera-capture-roll-deg",
         type=float,
         default=0.0,
@@ -4690,6 +4878,8 @@ def main():
         or args.camera_capture_mount_height_m <= 0
     ):
         parser.error("--camera-capture dimensions, timing, exposure, and gain must be positive")
+    if args.camera_capture_ball_distance_m is not None and args.camera_capture_ball_distance_m <= 0:
+        parser.error("--camera-capture-ball-distance-m must be positive")
     camera_capture_scaler_crop = None
     if args.camera_capture_scaler_crop:
         try:
@@ -4816,6 +5006,7 @@ def main():
             mount_height_m=args.camera_capture_mount_height_m,
             lateral_offset_m=args.camera_capture_lateral_offset_m,
             horizontal_offset_deg=args.camera_capture_horizontal_offset_deg,
+            ball_forward_m=args.camera_capture_ball_distance_m,
             roll_correction_deg=args.camera_capture_roll_deg,
             stream=args.camera_capture_stream,
             rotate_180=args.camera_capture_rotate_180,

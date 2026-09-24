@@ -320,6 +320,53 @@ scripts/start-kiosk.sh \
 When capture is enabled, OpenFlight keeps a rolling pre-trigger frame buffer and freezes it
 from the same sound-trigger event used by the radar pipeline.
 
+## Putting (Camera Only)
+
+The ball tracker in `openflight.camera.ball_flight` has a putting search
+profile (`PUTT_SEARCH`) that needs no OPS243 speed and no IWR6843 tee
+calibration. It follows the ball rolling along the ground for about 400 ms
+after the trigger, takes depth from the apparent ball size, and reports ball
+speed and the horizontal start line. It is experimental and has only been
+exercised on synthetic captures so far.
+
+A putting capture needs a longer post-trigger window than the 50 ms default,
+for example `--camera-capture-post-ms 400`. Geometry comes from a tape measure:
+the camera height (`--camera-capture-mount-height-m`) and the horizontal
+distance from the lens to the ball at address (`--camera-capture-ball-distance-m`).
+The same distance also lets the live full-swing horizontal launch run in
+camera-only mode when no IWR6843 is fitted.
+
+### Live putting
+
+Pick **Putter** (the `PT` tile, in its own picker tab) in the kiosk to enable
+live putt detection. Putts roll far below the OPS243's 15 mph floor, so the
+radar rejects every putt trigger; with the putter selected the server hands
+each rejected trigger to the camera instead. The trigger's hardware timestamp
+matches the camera clip, the putt estimator measures ball speed and start line,
+and the result is published as a normal shot with club `putter`: no radial
+cosine correction, launch-angle estimate, spin model, or carry simulation is
+applied, and the start line is reported as `camera_only_experimental` with the
+same confidence as a camera-only full-swing horizontal. Session logs record
+these shots with `mode: camera-putt`.
+
+A putt is dropped, and the kiosk shows the processing failure, when no camera
+clip matches the trigger, the ball distance is not configured, or the tracker
+cannot find a stable rolling path. The server log names the reason. Selecting
+any other club returns the radar to normal full-swing detection.
+
+Replay saved captures offline with:
+
+```bash
+uv run python scripts/analysis/analyze_camera_putt.py \
+  ~/openflight_sessions/home/camera/camera_*/ \
+  --ball-distance-m 1.5 \
+  --camera-height-m 0.20955
+```
+
+Each capture prints its status, confidence tier, ball speed in mph, start line
+in degrees (positive is target-right), and the frames the fit used. Pass
+`--json` for one JSON object per capture.
+
 ## Shot Replay
 
 A shot with a matched high-speed camera capture exposes **Replay** in the Live
@@ -420,6 +467,7 @@ processes. Reboot rather than hot-unloading the camera kernel module.
 - The `320x200` crop has only been evaluated with 7-iron and 9-iron TrackMan shots.
 - Camera pose is not yet a complete metric calibration.
 - Camera-assisted club path and attack angle remain experimental.
+- Camera-only putting (ball speed and start line) is experimental and untested on real putts.
 - A kernel update requires rebuilding the custom module.
 - The tested down-the-line view cannot independently measure downrange speed;
   OPS remains necessary for converting image-plane motion into delivery angles.
