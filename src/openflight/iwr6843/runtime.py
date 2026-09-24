@@ -244,6 +244,43 @@ class IWR6843Runtime:
             return replace(baseline, status="accepted_track_speed_warning")
         return baseline
 
+    def plan_sparse_cells(self, summary):
+        """Name the range cells whose complex samples LCMF and club path need."""
+        from openflight.iwr6843.club import (  # pylint: disable=import-outside-toplevel
+            CLUB_APPROACH_DEPTH_M,
+            CLUB_GATE_TEE_MARGIN_M,
+        )
+        from openflight.iwr6843.sparse import track_cells
+        from openflight.iwr6843.tracking import (  # pylint: disable=import-outside-toplevel
+            detection_peaks,
+            find_ball_from_power,
+        )
+
+        geometry = summary.geometry
+        max_range = (self.net_range_m - 0.25) if self.net_range_m else None
+        track = find_ball_from_power(summary.power, geometry, max_range_m=max_range)
+        cells = track_cells(track, geometry) if track is not None else []
+        tee = self.calibration.tee_range_m
+        if tee:
+            gate = (
+                max(0.35, tee - CLUB_APPROACH_DEPTH_M),
+                tee + CLUB_GATE_TEE_MARGIN_M,
+            )
+            rows, bins = detection_peaks(summary.power, geometry, gates_m=(gate,))
+            seen = set(cells)
+            for row, absolute in zip(rows, bins):
+                frame = int(row) // summary.n_loops
+                center = int(round(float(absolute)))
+                for offset in (-1, 0, 1):
+                    bin_index = center + offset
+                    if not geometry.contains_bin(bin_index, frame=frame):
+                        continue
+                    key = (frame, geometry.local_bin(bin_index, frame))
+                    if key not in seen:
+                        seen.add(key)
+                        cells.append(key)
+        return cells
+
     def process_shot(  # pylint: disable=too-many-arguments
         self,
         *,
@@ -264,6 +301,8 @@ class IWR6843Runtime:
         if tilt_deg is not None:
             shot_calibration = replace(self.calibration, tilt_rad=math.radians(tilt_deg))
         prepared = prepare_lcmf_capture(capture.raw)
+        if capture.noise_power:
+            prepared.vertical.set_noise_power(capture.noise_power)
         measurement = estimate_lcmf_v1(
             capture.raw,
             shot_calibration,

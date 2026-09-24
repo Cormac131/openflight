@@ -1095,6 +1095,7 @@ def init_iwr6843(
     azimuth_offset_deg: float = 0.0,
     horizontal_phase_reference_rad: float | None = None,
     save_dumps: bool = False,
+    self_trigger: tuple[int, float, int] | None = None,
 ) -> bool:
     """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator."""
     global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
@@ -1134,6 +1135,20 @@ def init_iwr6843(
         # OPS initialization can pulse the shared sound gate. Configure TI now,
         # but do not accept edges until the OPS trigger path is fully running.
         capture_monitor.start(armed=False)
+        if self_trigger is not None:
+            bin_index, level, hits = self_trigger
+            reply = capture_monitor.radar.cmd(
+                f"triggerCfg {bin_index} {level} {hits}",
+                2.0,
+            )
+            if "Error" in reply or "Done" not in reply:
+                raise RuntimeError(f"IWR6843 self-trigger rejected: {reply.strip()}")
+            logger.info(
+                "[IWR6843] Self-trigger armed: local bin %d, level %s, %d hits",
+                bin_index,
+                level,
+                hits,
+            )
         iwr6843_runtime = IWR6843Runtime(
             capture_monitor=capture_monitor,
             calibration=calibration,
@@ -1147,6 +1162,7 @@ def init_iwr6843(
             # in multipath and collapse the eight-element vertical channel.
             tdm_sign_policy="positive",
         )
+        capture_monitor.slice_planner = iwr6843_runtime.plan_sparse_cells
         iwr6843_runtime_config = {
             "enabled": True,
             "estimator": "lcmf_v1",
@@ -4485,6 +4501,25 @@ def main():
         help="TI complex array/range calibration JSON",
     )
     parser.add_argument(
+        "--iwr6843-self-trigger-bin",
+        type=int,
+        default=None,
+        help="Local range bin of the tee. With --iwr6843-self-trigger-level, "
+        "the ring freezes when the ball leaves after the club comes in and goes back",
+    )
+    parser.add_argument(
+        "--iwr6843-self-trigger-level",
+        type=float,
+        default=None,
+        help="Residual-power threshold for the IWR self-trigger",
+    )
+    parser.add_argument(
+        "--iwr6843-self-trigger-hits",
+        type=int,
+        default=2,
+        help="Consecutive frames the tee bin must be occupied before it is ready (default: 2)",
+    )
+    parser.add_argument(
         "--iwr6843-trigger-pin",
         type=int,
         default=17,
@@ -4857,6 +4892,13 @@ def main():
             azimuth_offset_deg=args.iwr6843_azimuth_offset_deg,
             horizontal_phase_reference_rad=args.iwr6843_horizontal_phase_reference_rad,
             save_dumps=args.debug,
+            self_trigger=(
+                (args.iwr6843_self_trigger_bin, args.iwr6843_self_trigger_level,
+                 args.iwr6843_self_trigger_hits)
+                if args.iwr6843_self_trigger_bin is not None
+                and args.iwr6843_self_trigger_level is not None
+                else None
+            ),
         ):
             calibration = iwr6843_runtime.calibration
             ball_speed_correction_distance_ft = args.iwr6843_tee_m * 3.28084

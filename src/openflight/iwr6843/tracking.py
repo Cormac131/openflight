@@ -304,7 +304,43 @@ def find_ball(
     restrict the search to pre-impact frames — otherwise this fitter will
     happily lock onto the ball instead of the club.
     """
-    power = loop_power(mti)
+    return find_ball_from_power(
+        loop_power(mti),
+        geo,
+        iterations=iterations,
+        seed=seed,
+        max_range_m=max_range_m,
+        min_ball_ms=min_ball_ms,
+        gates_m=gates_m,
+        speed_bounds_ms=speed_bounds_ms,
+        time_window_s=time_window_s,
+    )
+
+
+def detection_peaks(
+    power: np.ndarray,
+    geo: Geometry,
+    *,
+    max_range_m: float | None = None,
+    gates_m: tuple[tuple[float, float], ...] = BALL_GATES_M,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-loop peak bins inside ``gates_m``. Rows are ``frame * loops + loop``."""
+    return _detections(power, geo, max_range_m=max_range_m, gates_m=gates_m)
+
+
+def find_ball_from_power(
+    power: np.ndarray,
+    geo: Geometry,
+    *,
+    iterations: int = 2500,
+    seed: int = 1,
+    max_range_m: float | None = None,
+    min_ball_ms: float = FAST_TRACK_MS,
+    gates_m: tuple[tuple[float, float], ...] = BALL_GATES_M,
+    speed_bounds_ms: tuple[float, float] = SPEED_BOUNDS_MS,
+    time_window_s: tuple[float, float] | None = None,
+) -> BallTrack | None:
+    """RANSAC a range walk from residual power ``[frames * loops, bins]``."""
     loops_idx, bins = _detections(power, geo, max_range_m=max_range_m, gates_m=gates_m)
     if loops_idx.size < 8:
         return None

@@ -50,6 +50,7 @@ class IWR6843Capture:
     path: Path | None
     error: str | None = None
     temperature_report: dict[str, int] | None = None
+    noise_power: float | None = None
 
     @property
     def valid(self) -> bool:
@@ -77,6 +78,7 @@ class IWR6843CaptureMonitor:
         match_tolerance_s: float = 0.75,
         save_dumps: bool = False,
         trigger_observers: list[Callable[[float], None]] | None = None,
+        slice_planner: Callable | None = None,
     ):
         self.config_path = Path(config_path)
         self.output_dir = Path(output_dir).expanduser()
@@ -96,6 +98,7 @@ class IWR6843CaptureMonitor:
         self._condition = threading.Condition()
         self._worker: threading.Thread | None = None
         self._trigger_observers = list(trigger_observers or [])
+        self.slice_planner = slice_planner
 
     @property
     def port(self) -> str:
@@ -218,12 +221,18 @@ class IWR6843CaptureMonitor:
             path = None
             error = None
             metadata = None
+            noise_power = None
             try:
                 logger.info(
-                    "[IWR6843] Trigger #%d: dumping firmware-frozen L3 ring",
+                    "[IWR6843] Trigger #%d: reading track samples",
                     sequence,
                 )
-                raw = self.radar.read_dump()
+                if self.slice_planner is not None:
+                    sparse = self.radar.read_sparse(self.slice_planner)
+                    if sparse is not None:
+                        raw, noise_power = sparse
+                if raw is None:
+                    raw = self.radar.read_dump()
                 metadata = self._validate_dump(raw)
                 if self.save_dumps:
                     path = self._capture_path(sequence, edge_timestamp)
@@ -244,6 +253,7 @@ class IWR6843CaptureMonitor:
                 temperature_report=(
                     metadata.get("temperature_report") if metadata is not None else None
                 ),
+                noise_power=noise_power,
             )
             with self._condition:
                 self._capture_active = False

@@ -385,6 +385,16 @@ static volatile uint8_t  gHwaOutputSeen;
 static volatile uint8_t  gHwaRearmPending;
 static volatile uint8_t  gHwaRearmBusy;
 static volatile uint8_t  gHwaFreezeRequested;
+static volatile uint8_t  gTriggerEnabled;
+static volatile uint8_t  gSelfTriggerLatched;
+static volatile uint32_t gTriggerBin;
+static volatile float    gTriggerPower;
+static volatile uint32_t gTriggerHits;
+static volatile uint32_t gTriggerRun;
+static volatile uint8_t  gTriggerReady;
+static volatile uint8_t  gTriggerToward;
+static volatile uint8_t  gTriggerAway;
+static volatile uint32_t gTriggerPeakBin;
 static volatile uint8_t  gHwaShutdownRequested;
 static volatile uint32_t gHwaFreezeRequestFrame;
 static volatile uint32_t gHwaFreezeTargetFrame;
@@ -425,6 +435,7 @@ static MMWave_CtrlCfg gCtrlCfg;
 
 /* Forward declarations. */
 int32_t l3_cli_dump(int32_t argc, char *argv[]);
+int32_t l3_cli_sparse(int32_t argc, char *argv[]);
 static int32_t l3_cli_sensorStart(int32_t argc, char *argv[]);
 static int32_t l3_cli_sensorStop(int32_t argc, char *argv[]);
 static int32_t l3_cli_stats(int32_t argc, char *argv[]);
@@ -449,6 +460,7 @@ static void l3_snapshotTask(UArg arg0, UArg arg1);
 #endif
 #ifdef HWA_CHAINED_SNAPSHOT_RING
 static void l3_hwaRearmTask(UArg arg0, UArg arg1);
+static void l3_considerSelfTrigger(void);
 #endif
 
 #ifdef CONFIGURABLE_CAPTURE
@@ -2163,6 +2175,9 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
             errCode = l3_restartCompletedHwaFrame();
             if (errCode == 0) {
                 gHwaRearms++;
+#ifdef CONFIGURABLE_CAPTURE
+                l3_considerSelfTrigger();
+#endif
             } else {
                 gHwaRearmErrors++;
             }
@@ -2631,6 +2646,418 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
     if (dumpCancelled) {
         UART_writePolling(gDataUart, L3_DUMP_CANCEL_ACK, L3_DUMP_CANCEL_ACK_BYTES);
     }
+    return 0;
+}
+
+/* CLI "l3sparse": freeze, stream vertical residual power, then the complex
+ * cells the host names. The host falls back to l3dump when this command
+ * returns an error before the freeze. */
+static void l3_writeU16(uint16_t value)
+{
+    uint8_t bytes[2];
+
+    bytes[0] = (uint8_t)(value & 0xFFU);
+    bytes[1] = (uint8_t)(value >> 8U);
+    UART_writePolling(gDataUart, bytes, sizeof(bytes));
+}
+
+static void l3_writeF32(float value)
+{
+    uint32_t bits;
+    uint8_t bytes[4];
+
+    memcpy(&bits, &value, sizeof(bits));
+    bytes[0] = (uint8_t)(bits & 0xFFU);
+    bytes[1] = (uint8_t)((bits >> 8U) & 0xFFU);
+    bytes[2] = (uint8_t)((bits >> 16U) & 0xFFU);
+    bytes[3] = (uint8_t)((bits >> 24U) & 0xFFU);
+    UART_writePolling(gDataUart, bytes, sizeof(bytes));
+}
+
+static int32_t l3_readLine(char *buf, uint32_t cap)
+{
+    uint32_t used = 0U;
+    uint32_t spins = 0U;
+
+    while (used + 1U < cap && spins < 2000U) {
+        uint8_t value = 0U;
+        UART_Config *uartConfig = (UART_Config *)gCliUart;
+        UartSci_HwCfg *hwCfg;
+
+        if (uartConfig == NULL || uartConfig->hwAttrs == NULL) {
+            return -1;
+        }
+        hwCfg = (UartSci_HwCfg *)uartConfig->hwAttrs;
+        if (CSL_FEXTR(hwCfg->ptrSCIRegs->SCIFLR, 9U, 9U) == 0U) {
+            Task_sleep(1);
+            spins++;
+            continue;
+        }
+        value = (uint8_t)CSL_FEXTR(hwCfg->ptrSCIRegs->SCIRD, 7U, 0U);
+        if (value == (uint8_t)'\n' || value == (uint8_t)'\r') {
+            break;
+        }
+        buf[used++] = (char)value;
+    }
+    buf[used] = '\0';
+    return (used > 0U) ? 0 : -1;
+}
+
+#ifdef CONFIGURABLE_CAPTURE
+static const int16_t *l3_iq16Sample(
+    uint32_t slot, uint32_t chirp, uint32_t rx, uint32_t localBin)
+{
+    const int16_t *frame = (const int16_t *)&g_ring[gFrameOffset[slot]];
+    uint32_t binCount = gFrameBinCount[slot];
+    uint32_t index = ((chirp * N_RX) + rx) * binCount + localBin;
+
+    return &frame[index * 2U];
+}
+
+static float l3_verticalPowerAt(uint32_t slot, uint32_t loop, uint32_t localBin)
+{
+    uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
+    uint32_t txCount = 0U;
+    uint32_t tx;
+    float sum = 0.0F;
+
+    for (tx = 0U; tx < ntx; tx++) {
+        uint32_t rx;
+        if (ntx == 3U && tx == 1U) {
+            continue;
+        }
+        for (rx = 0U; rx < N_RX; rx++) {
+            float meanIm = 0.0F;
+            float meanRe = 0.0F;
+            float im;
+            float re;
+            uint32_t meanLoop;
+            const int16_t *sample;
+            uint32_t chirp = loop * ntx + tx;
+
+            for (meanLoop = 0U; meanLoop < gCapturePlan.loops; meanLoop++) {
+                sample = l3_iq16Sample(slot, meanLoop * ntx + tx, rx, localBin);
+                meanIm += (float)sample[0];
+                meanRe += (float)sample[1];
+            }
+            meanIm /= (float)gCapturePlan.loops;
+            meanRe /= (float)gCapturePlan.loops;
+            sample = l3_iq16Sample(slot, chirp, rx, localBin);
+            im = (float)sample[0] - meanIm;
+            re = (float)sample[1] - meanRe;
+            sum += im * im + re * re;
+            txCount++;
+        }
+    }
+    (void)txCount;
+    return sum;
+}
+
+/* Clubhead is short of the ball. Twelve bins is about 0.6 m at the wide profile. */
+#define L3_TRIGGER_APPROACH_BINS 12U
+
+static void l3_clearTriggerMotion(void)
+{
+    gTriggerReady = 0U;
+    gTriggerToward = 0U;
+    gTriggerAway = 0U;
+    gTriggerRun = 0U;
+    gTriggerPeakBin = 0U;
+}
+
+static void l3_considerSelfTrigger(void)
+{
+    uint32_t slot;
+    uint32_t bin;
+    uint32_t first;
+    uint32_t peakBin = 0U;
+    float peak = 0.0F;
+    float tee;
+    uintptr_t key;
+    uint8_t havePeak = 0U;
+
+    if (!gTriggerEnabled || gSelfTriggerLatched || gHwaFreezeRequested || gPostCaptureStarted) {
+        return;
+    }
+    if (gPreFramesCaptured == 0U || gCapturePlan.preFrames == 0U || gCapturePlan.loops == 0U) {
+        return;
+    }
+    if (gTriggerBin >= gFrameBinCount[0] && gTriggerBin >= gCapturePlan.preBins) {
+        return;
+    }
+    slot = (gPreFramesCaptured - 1U) % gCapturePlan.preFrames;
+    if (gTriggerBin >= gFrameBinCount[slot]) {
+        return;
+    }
+    tee = l3_verticalPowerAt(slot, 0U, gTriggerBin);
+    if (tee < gTriggerPower) {
+        if (gTriggerReady && gTriggerToward && gTriggerAway) {
+            key = Hwi_disable();
+            gHwaFreezeRequested = 1U;
+            gPostCaptureStarted = 0U;
+            gPostFramesCaptured = 0U;
+            gPostFramesObserved = 0U;
+            gActiveFrameShouldKeep = 1U;
+            gSelfTriggerLatched = 1U;
+            gHwaFreezeRequests++;
+            Hwi_restore(key);
+            l3_clearTriggerMotion();
+            return;
+        }
+        l3_clearTriggerMotion();
+        return;
+    }
+    gTriggerRun++;
+    if (!gTriggerReady) {
+        if (gTriggerRun >= gTriggerHits) {
+            gTriggerReady = 1U;
+        }
+        return;
+    }
+    first = (gTriggerBin > L3_TRIGGER_APPROACH_BINS) ? (gTriggerBin - L3_TRIGGER_APPROACH_BINS) : 0U;
+    for (bin = first; bin < gTriggerBin; bin++) {
+        float power;
+        if (bin >= gFrameBinCount[slot]) {
+            break;
+        }
+        power = l3_verticalPowerAt(slot, 0U, bin);
+        if (power >= gTriggerPower && (!havePeak || power > peak)) {
+            peak = power;
+            peakBin = bin;
+            havePeak = 1U;
+        }
+    }
+    if (!havePeak) {
+        return;
+    }
+    if (gTriggerPeakBin != 0U && peakBin > gTriggerPeakBin) {
+        gTriggerToward = 1U;
+    } else if (gTriggerToward && gTriggerPeakBin != 0U && peakBin < gTriggerPeakBin) {
+        gTriggerAway = 1U;
+    }
+    gTriggerPeakBin = peakBin;
+}
+#endif
+
+int32_t l3_cli_sparse(int32_t argc, char *argv[])
+{
+#ifdef CONFIGURABLE_CAPTURE
+    uint32_t slots[L3_MAX_CAPTURE_FRAMES];
+    uint8_t starts[L3_MAX_CAPTURE_FRAMES];
+    uint8_t counts[L3_MAX_CAPTURE_FRAMES];
+    uint32_t nFrames = 0U;
+    uint32_t maxBins = 0U;
+    uint32_t frame;
+    uint32_t actualPre;
+    uint32_t actualPost;
+    uint32_t oldestPre;
+    char request[768];
+    char *cursor;
+    int32_t cellCount;
+    int32_t cell;
+#else
+    (void)argc;
+    (void)argv;
+    CLI_write("Error: sparse dump requires configurable capture\n");
+    return -1;
+#endif
+    (void)argc;
+    (void)argv;
+#ifndef CONFIGURABLE_CAPTURE
+    return -1;
+#else
+#ifdef L3_RING_IQ8
+    if (l3_captureUsesIq8()) {
+        CLI_write("Error: sparse dump requires IQ16 storage\n");
+        return -1;
+    }
+#endif
+    if (!gCaptureActive && !gSelfTriggerLatched) {
+        return -1;
+    }
+    if (gSelfTriggerLatched) {
+        if (gCaptureActive && gHwaFreezeSemaphore != NULL &&
+            !Semaphore_pend(gHwaFreezeSemaphore, 250U)) {
+            CLI_write("Error: self-trigger freeze timed out\n");
+            gSelfTriggerLatched = 0U;
+            return -1;
+        }
+        gSelfTriggerLatched = 0U;
+    } else if (l3_stopCaptureAtBoundary() != 0) {
+        return -1;
+    }
+    actualPre = (gPreFramesCaptured < gCapturePlan.preFrames)
+                    ? gPreFramesCaptured : gCapturePlan.preFrames;
+    actualPost = (gPostFramesCaptured < gCapturePlan.postFrames)
+                     ? gPostFramesCaptured : gCapturePlan.postFrames;
+    oldestPre = (gPreFramesCaptured >= gCapturePlan.preFrames)
+                    ? (gPreFramesCaptured % gCapturePlan.preFrames) : 0U;
+    for (frame = 0U; frame < actualPre && nFrames < L3_MAX_CAPTURE_FRAMES; frame++) {
+        slots[nFrames] = (oldestPre + frame) % gCapturePlan.preFrames;
+        nFrames++;
+    }
+    for (frame = 0U; frame < actualPost && nFrames < L3_MAX_CAPTURE_FRAMES; frame++) {
+        slots[nFrames] = gCapturePlan.preFrames + frame;
+        nFrames++;
+    }
+    for (frame = 0U; frame < nFrames; frame++) {
+        starts[frame] = gFrameBinStart[slots[frame]];
+        counts[frame] = gFrameBinCount[slots[frame]];
+        if (counts[frame] > maxBins) {
+            maxBins = counts[frame];
+        }
+    }
+    UART_writePolling(gDataUart, (uint8_t *)"ILP1", 4U);
+    l3_writeU16((uint16_t)nFrames);
+    l3_writeU16((uint16_t)gCapturePlan.loops);
+    l3_writeU16((uint16_t)maxBins);
+    l3_writeU16((uint16_t)(gCapturePlan.chirpsPerFrame / gCapturePlan.loops));
+    l3_writeU16((uint16_t)N_RX);
+    l3_writeU16(nFrames ? starts[0] : 0U);
+    l3_writeU16(gFramePeriodUs);
+    /* Zero tells the host to keep its own noise floor. A summed-power median
+     * is not the per-sample floor LCMF divides by. */
+    l3_writeF32(0.0F);
+    for (frame = 0U; frame < nFrames; frame++) {
+        uint8_t pair[2];
+        pair[0] = starts[frame];
+        pair[1] = counts[frame];
+        UART_writePolling(gDataUart, pair, sizeof(pair));
+    }
+    for (frame = 0U; frame < nFrames; frame++) {
+        uint32_t loop;
+        uint32_t bin;
+        for (loop = 0U; loop < gCapturePlan.loops; loop++) {
+            for (bin = 0U; bin < maxBins; bin++) {
+                float power = 0.0F;
+                if (bin < counts[frame]) {
+                    power = l3_verticalPowerAt(slots[frame], loop, bin);
+                }
+                l3_writeF32(power);
+            }
+        }
+    }
+    if (l3_readLine(request, sizeof(request)) != 0) {
+        CLI_write("Error: sparse cell request missing\n");
+        goto rearm;
+    }
+    cursor = request;
+    while (*cursor != '\0' && *cursor != ' ') {
+        cursor++;
+    }
+    cellCount = 0;
+    if (*cursor == ' ') {
+        cursor++;
+        cellCount = (int32_t)strtol(cursor, &cursor, 10);
+    }
+    if (cellCount < 0) {
+        cellCount = 0;
+    }
+    UART_writePolling(gDataUart, (uint8_t *)"ILS1", 4U);
+    l3_writeU16((uint16_t)cellCount);
+    for (cell = 0; cell < cellCount; cell++) {
+        uint32_t frameIndex;
+        uint32_t localBin;
+        uint32_t chirp;
+        uint32_t rx;
+        long frameValue;
+        long binValue;
+
+        frameValue = strtol(cursor, &cursor, 10);
+        binValue = strtol(cursor, &cursor, 10);
+        frameIndex = (frameValue < 0) ? 0U : (uint32_t)frameValue;
+        localBin = (binValue < 0) ? 0U : (uint32_t)binValue;
+        l3_writeU16((uint16_t)frameIndex);
+        l3_writeU16((uint16_t)localBin);
+        {
+            uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
+            uint32_t verticalChirps = gCapturePlan.loops * ((ntx == 3U) ? 2U : ntx);
+            uint32_t vertical;
+
+            for (vertical = 0U; vertical < verticalChirps; vertical++) {
+                uint32_t loop = vertical / ((ntx == 3U) ? 2U : ntx);
+                uint32_t which = vertical % ((ntx == 3U) ? 2U : ntx);
+                uint32_t tx = (ntx == 3U && which == 1U) ? 2U : which;
+                chirp = loop * ntx + tx;
+                for (rx = 0U; rx < N_RX; rx++) {
+                    if (frameIndex >= nFrames || localBin >= counts[frameIndex]) {
+                        l3_writeU16(0U);
+                        l3_writeU16(0U);
+                    } else {
+                        const int16_t *sample = l3_iq16Sample(
+                            slots[frameIndex], chirp, rx, localBin);
+                        l3_writeU16((uint16_t)sample[0]);
+                        l3_writeU16((uint16_t)sample[1]);
+                    }
+                }
+            }
+        }
+    }
+rearm:
+    gRingFrame = 0U;
+    gHwaFreezeRequestFrame = 0U;
+    gHwaFreezeTargetFrame = 0U;
+    gPreFramesCaptured = 0U;
+    gPostFramesCaptured = 0U;
+    gPostFramesObserved = 0U;
+    gPostCaptureStarted = 0U;
+    gActiveFrameIsPost = 0U;
+    gActiveFrameShouldKeep = 1U;
+    if (l3_restartCompletedHwaFrame() < 0) {
+        CLI_write("Error: completed HWA frame restart failed\n");
+        gCaptureActive = 0U;
+        return -1;
+    }
+    gCaptureActive = 1U;
+    if (l3_startFrontEnd() < 0) {
+        CLI_write("Error: RF restart failed\n");
+        gCaptureActive = 0U;
+        return -1;
+    }
+    return 0;
+#endif
+}
+
+/* CLI "triggerCfg <localBin> <power> <hits>": arm contact detection.
+ * The tee bin must stay occupied for <hits> frames. A second return must then
+ * walk toward that bin and back away, and the tee return must leave. hits of
+ * 0 disables it. */
+static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
+{
+    unsigned long bin;
+    unsigned long hits;
+    float power;
+    char *end;
+
+    if (argc != 4) {
+        CLI_write("Error: triggerCfg <localBin> <power> <hits>\n");
+        return -1;
+    }
+    bin = strtoul(argv[1], &end, 10);
+    if (*end != '\0') {
+        CLI_write("Error: trigger bin\n");
+        return -1;
+    }
+    power = strtof(argv[2], &end);
+    if (*end != '\0' || power < 0.0F) {
+        CLI_write("Error: trigger power\n");
+        return -1;
+    }
+    hits = strtoul(argv[3], &end, 10);
+    if (*end != '\0') {
+        CLI_write("Error: trigger hits\n");
+        return -1;
+    }
+    gTriggerBin = (uint32_t)bin;
+    gTriggerPower = power;
+    gTriggerHits = (uint32_t)hits;
+    gTriggerRun = 0U;
+    gTriggerReady = 0U;
+    gTriggerToward = 0U;
+    gTriggerAway = 0U;
+    gTriggerPeakBin = 0U;
+    gTriggerEnabled = (hits > 0U) ? 1U : 0U;
+    CLI_write("Done\n");
     return 0;
 }
 
@@ -3490,6 +3917,12 @@ static void l3_initTask(UArg arg0, UArg arg1)
 #endif
 #endif
 #endif
+    cliCfg.tableEntry[11].cmd           = "l3sparse";
+    cliCfg.tableEntry[11].helpString    = "Freeze, send residual power, then requested cells";
+    cliCfg.tableEntry[11].cmdHandlerFxn = l3_cli_sparse;
+    cliCfg.tableEntry[12].cmd           = "triggerCfg";
+    cliCfg.tableEntry[12].helpString    = "triggerCfg <localBin> <power> <hits>";
+    cliCfg.tableEntry[12].cmdHandlerFxn = l3_cli_triggerCfg;
     CLI_open(&cliCfg);
 }
 

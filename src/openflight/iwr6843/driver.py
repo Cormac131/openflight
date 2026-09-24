@@ -21,6 +21,15 @@ import time
 import serial
 
 from openflight.iwr6843.dump import HEADER, MAGIC, parse_header, payload_nbytes
+from openflight.iwr6843.sparse import (
+    POWER_MAGIC,
+    SLICE_MAGIC,
+    assemble_dump,
+    format_cell_request,
+    parse_power,
+    power_packet_size,
+    slice_stride,
+)
 
 BAUD = 1_041_667
 _PORT_GLOBS = ("/dev/ttyUSB*", "/dev/tty.SLAB_USBtoUART*")
@@ -215,6 +224,68 @@ class IWR6843Radar:
                     f"{trailer.decode(errors='replace').strip()}"
                 )
         return payload
+
+    def read_sparse(self, planner, timeout_s: float = 8.0):
+        """Freeze, read residual power, then the complex cells ``planner`` names.
+
+        Returns the assembled range-snapshot dump, or None when this firmware
+        has no ``l3sparse`` command so the caller can fall back to ``l3dump``.
+        """
+        self.ser.reset_input_buffer()
+        self.ser.write(b"l3sparse\n")
+        packet = self._read_magic(POWER_MAGIC, power_packet_size(b""), timeout_s)
+        if packet is None:
+            return None
+        total = power_packet_size(packet)
+        if len(packet) < total:
+            rest = self._read_exact(total - len(packet), timeout_s)
+            if rest is None:
+                return None
+            packet += rest
+        summary = parse_power(packet[:total])
+        cells = list(planner(summary))
+        self.ser.write(format_cell_request(cells))
+        slice_packet = self._read_magic(SLICE_MAGIC, 6, timeout_s)
+        if slice_packet is None:
+            return None
+        count = int.from_bytes(slice_packet[4:6], "little")
+        slice_total = 6 + count * slice_stride(summary)
+        if len(slice_packet) < slice_total:
+            rest = self._read_exact(slice_total - len(slice_packet), timeout_s)
+            if rest is None:
+                return None
+            slice_packet += rest
+        return assemble_dump(summary, slice_packet[:slice_total]), summary.noise_power
+
+    def _read_magic(self, magic: bytes, minimum: int, timeout_s: float) -> bytes | None:
+        """Read until ``magic``. A CLI error before it means this command is absent."""
+        buf = bytearray()
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            waiting = self.ser.in_waiting
+            chunk = self.ser.read(waiting if waiting else 1)
+            if not chunk:
+                continue
+            buf.extend(chunk)
+            if b"Error" in buf or b"not recognized" in buf:
+                return None
+            idx = buf.find(magic)
+            if idx >= 0 and len(buf) - idx >= minimum:
+                return bytes(buf[idx:])
+        return None
+
+    def _read_exact(self, count: int, timeout_s: float) -> bytes | None:
+        """Read ``count`` more bytes, or None on timeout."""
+        buf = bytearray()
+        deadline = time.monotonic() + timeout_s
+        while len(buf) < count and time.monotonic() < deadline:
+            waiting = self.ser.in_waiting
+            chunk = self.ser.read(min(waiting if waiting else 1, count - len(buf)))
+            if chunk:
+                buf.extend(chunk)
+        if len(buf) != count:
+            return None
+        return bytes(buf)
 
     def _wait_for_dump_cli_ready(self, initial: bytes, *, timeout_s: float) -> bytes:
         """Consume the dump handler's trailing response before reusing the CLI."""

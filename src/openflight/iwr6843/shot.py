@@ -272,6 +272,11 @@ class PreparedShotDump:
             self._noise_by_scope[scope] = float(noise)
         return self._noise_by_scope[scope]
 
+    def set_noise_power(self, noise: float) -> None:
+        """Use a noise floor measured on the full ring, not a sparse cube."""
+        self._noise_by_scope["burst"] = float(noise)
+        self._noise_by_scope["window"] = float(noise)
+
 
 def geometry_from_header(meta: dict, *, loop_period_s: float = tracking.LOOP_PRI_S) -> Geometry:
     """Dump-header dict -> Geometry (period falls back for pre-v3 dumps)."""
