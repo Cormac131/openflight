@@ -61,6 +61,15 @@ scratch to `DATA_RAM` (TCMB), which has 119,687 B unused
 Frame allocation at 51 frames: 8 pre + 10 impact + 33 ball. The ball phase
 grows from 27 to 33 frames, i.e. 54 ms to 66 ms.
 
+## Related Work
+
+`2026-09-25-iwr6843-onchip-solve-design.md` moves the launch-angle and
+club-path solve onto the C674x DSP. If it lands, the readback constraints
+below stop binding, because normal play transfers results rather than cells.
+The L3 capacity work in this document survives either way: movie length still
+bounds how long a record can be analysed. The two projects contend for the
+same L3, which is why Phase 0 probes the DSS memory question.
+
 ## Readback Model
 
 Readback is three-tier (`monitor.py:485-516`), and the full ring dump is the
@@ -128,10 +137,17 @@ Phase 0 is a gate. Its outcome can invalidate the rest of the plan.
    `MEMORY CONFIGURATION` block. Determines whether extra L3 exists.
 2. TCMB spike: build with the scratch relocated, run the soak, read
    `hwa_missed` / `iq8_overrun` / `iq8_waits` (`l3_dump.c:3569`).
+3. DSS memory probe: determine whether the on-chip solve project
+   (`2026-09-25-iwr6843-onchip-solve-design.md`) needs an L3 working buffer,
+   or whether the C674x L2 holds its ~70 KB cell working set. Both projects
+   contend for the same 786,432 B, so this must be answered before the
+   memory layout is fixed in Phase 2.
 
 *Gate:* if EDMA-to-TCM contention breaks the 380 us budget, the scratch stays
 in L3, the gain drops from +6 frames to +2.4 (right-sizing only), and the
-target movie length must be revised before proceeding.
+target movie length must be revised before proceeding. If the DSS needs L3,
+the capture arena must be sized around its reservation rather than claiming
+all 786,432 B.
 
 **Phase 1 - Behaviour-preserving refactors** (each build-verified, own commit)
 
