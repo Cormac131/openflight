@@ -395,6 +395,7 @@ static volatile uint8_t  gTriggerReady;
 static volatile uint8_t  gTriggerToward;
 static volatile uint8_t  gTriggerAway;
 static volatile uint32_t gTriggerPeakBin;
+static volatile uint8_t  gTriggerHavePeak;
 static volatile uint8_t  gHwaShutdownRequested;
 static volatile uint32_t gHwaFreezeRequestFrame;
 static volatile uint32_t gHwaFreezeTargetFrame;
@@ -2674,12 +2675,20 @@ static void l3_writeF32(float value)
     UART_writePolling(gDataUart, bytes, sizeof(bytes));
 }
 
+/* Read one CLI line into buf. Returns 0 on a line, -1 on timeout or an empty
+ * line, and -2 when the line does not fit: the rest of it is then read and
+ * discarded so none of it reaches the CLI parser as a command. */
+#define L3_READLINE_OVERFLOW (-2)
+
 static int32_t l3_readLine(char *buf, uint32_t cap)
 {
     uint32_t used = 0U;
     uint32_t spins = 0U;
+    uint32_t seen = 0U;
+    uint8_t overflow = 0U;
 
-    while (used + 1U < cap && spins < 2000U) {
+    /* spins bounds an idle line; seen bounds one that never ends. */
+    while (spins < L3_SPARSE_REQUEST_TIMEOUT_MS && seen < 4U * cap) {
         uint8_t value = 0U;
         UART_Config *uartConfig = (UART_Config *)gCliUart;
         UartSci_HwCfg *hwCfg;
@@ -2694,13 +2703,22 @@ static int32_t l3_readLine(char *buf, uint32_t cap)
             continue;
         }
         value = (uint8_t)CSL_FEXTR(hwCfg->ptrSCIRegs->SCIRD, 7U, 0U);
+        seen++;
         if (value == (uint8_t)'\n' || value == (uint8_t)'\r') {
-            break;
+            buf[used] = '\0';
+            if (overflow) {
+                return L3_READLINE_OVERFLOW;
+            }
+            return (used > 0U) ? 0 : -1;
         }
-        buf[used++] = (char)value;
+        if (used + 1U < cap) {
+            buf[used++] = (char)value;
+        } else {
+            overflow = 1U;
+        }
     }
     buf[used] = '\0';
-    return (used > 0U) ? 0 : -1;
+    return overflow ? L3_READLINE_OVERFLOW : -1;
 }
 
 #ifdef CONFIGURABLE_CAPTURE
@@ -2714,13 +2732,20 @@ static const int16_t *l3_iq16Sample(
     return &frame[index * 2U];
 }
 
-static float l3_verticalPowerAt(uint32_t slot, uint32_t loop, uint32_t localBin)
+/* Burst-MTI residual power of one bin for every loop of a frame, summed over
+ * the vertical TX pair (TX0 and TX2 of three) and all RX. Each (tx, rx) loop
+ * mean is computed once, so a bin costs O(loops), not O(loops^2).
+ * out[] must hold gCapturePlan.loops values. */
+static void l3_verticalPowerLoops(uint32_t slot, uint32_t localBin, float *out)
 {
     uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
-    uint32_t txCount = 0U;
+    uint32_t loops = gCapturePlan.loops;
     uint32_t tx;
-    float sum = 0.0F;
+    uint32_t loop;
 
+    for (loop = 0U; loop < loops; loop++) {
+        out[loop] = 0.0F;
+    }
     for (tx = 0U; tx < ntx; tx++) {
         uint32_t rx;
         if (ntx == 3U && tx == 1U) {
@@ -2729,28 +2754,34 @@ static float l3_verticalPowerAt(uint32_t slot, uint32_t loop, uint32_t localBin)
         for (rx = 0U; rx < N_RX; rx++) {
             float meanIm = 0.0F;
             float meanRe = 0.0F;
-            float im;
-            float re;
-            uint32_t meanLoop;
             const int16_t *sample;
-            uint32_t chirp = loop * ntx + tx;
 
-            for (meanLoop = 0U; meanLoop < gCapturePlan.loops; meanLoop++) {
-                sample = l3_iq16Sample(slot, meanLoop * ntx + tx, rx, localBin);
+            for (loop = 0U; loop < loops; loop++) {
+                sample = l3_iq16Sample(slot, loop * ntx + tx, rx, localBin);
                 meanIm += (float)sample[0];
                 meanRe += (float)sample[1];
             }
-            meanIm /= (float)gCapturePlan.loops;
-            meanRe /= (float)gCapturePlan.loops;
-            sample = l3_iq16Sample(slot, chirp, rx, localBin);
-            im = (float)sample[0] - meanIm;
-            re = (float)sample[1] - meanRe;
-            sum += im * im + re * re;
-            txCount++;
+            meanIm /= (float)loops;
+            meanRe /= (float)loops;
+            for (loop = 0U; loop < loops; loop++) {
+                float im;
+                float re;
+                sample = l3_iq16Sample(slot, loop * ntx + tx, rx, localBin);
+                im = (float)sample[0] - meanIm;
+                re = (float)sample[1] - meanRe;
+                out[loop] += im * im + re * re;
+            }
         }
     }
-    (void)txCount;
-    return sum;
+}
+
+/* Loop-0 residual power of one bin; the self-trigger's per-frame probe. */
+static float l3_verticalPowerAt(uint32_t slot, uint32_t localBin)
+{
+    float perLoop[L3_MAX_LOOPS];
+
+    l3_verticalPowerLoops(slot, localBin, perLoop);
+    return perLoop[0];
 }
 
 /* Clubhead is short of the ball. Twelve bins is about 0.6 m at the wide profile. */
@@ -2763,6 +2794,7 @@ static void l3_clearTriggerMotion(void)
     gTriggerAway = 0U;
     gTriggerRun = 0U;
     gTriggerPeakBin = 0U;
+    gTriggerHavePeak = 0U;
 }
 
 static void l3_considerSelfTrigger(void)
@@ -2789,7 +2821,7 @@ static void l3_considerSelfTrigger(void)
     if (gTriggerBin >= gFrameBinCount[slot]) {
         return;
     }
-    tee = l3_verticalPowerAt(slot, 0U, gTriggerBin);
+    tee = l3_verticalPowerAt(slot, gTriggerBin);
     if (tee < gTriggerPower) {
         if (gTriggerReady && gTriggerToward && gTriggerAway) {
             key = Hwi_disable();
@@ -2821,7 +2853,7 @@ static void l3_considerSelfTrigger(void)
         if (bin >= gFrameBinCount[slot]) {
             break;
         }
-        power = l3_verticalPowerAt(slot, 0U, bin);
+        power = l3_verticalPowerAt(slot, bin);
         if (power >= gTriggerPower && (!havePeak || power > peak)) {
             peak = power;
             peakBin = bin;
@@ -2831,12 +2863,14 @@ static void l3_considerSelfTrigger(void)
     if (!havePeak) {
         return;
     }
-    if (gTriggerPeakBin != 0U && peakBin > gTriggerPeakBin) {
+    /* gTriggerHavePeak, not gTriggerPeakBin != 0: bin 0 is a real bin. */
+    if (gTriggerHavePeak && peakBin > gTriggerPeakBin) {
         gTriggerToward = 1U;
-    } else if (gTriggerToward && gTriggerPeakBin != 0U && peakBin < gTriggerPeakBin) {
+    } else if (gTriggerToward && gTriggerHavePeak && peakBin < gTriggerPeakBin) {
         gTriggerAway = 1U;
     }
     gTriggerPeakBin = peakBin;
+    gTriggerHavePeak = 1U;
 }
 #endif
 
@@ -2852,8 +2886,15 @@ int32_t l3_cli_sparse(int32_t argc, char *argv[])
     uint32_t actualPre;
     uint32_t actualPost;
     uint32_t oldestPre;
-    char request[768];
+    char request[L3_SPARSE_REQUEST_MAX];
+    /* Static, not on the CLI task's small stack; the CLI runs one command at
+     * a time. Each cell needs at least 4 request characters ("f b "). */
+    static uint16_t cellFrames[L3_SPARSE_REQUEST_MAX / 4U];
+    static uint16_t cellBins[L3_SPARSE_REQUEST_MAX / 4U];
+    static float powerRow[L3_MAX_LOOPS * L3_RING_MAX_BINS];
     char *cursor;
+    char *next;
+    int32_t lineStatus;
     int32_t cellCount;
     int32_t cell;
 #else
@@ -2925,49 +2966,70 @@ int32_t l3_cli_sparse(int32_t argc, char *argv[])
         pair[1] = counts[frame];
         UART_writePolling(gDataUart, pair, sizeof(pair));
     }
+    /* One row buffer per frame: compute [loop][bin] (loop means once per
+     * bin), then send each loop's row in a single UART write. The R4F is
+     * little-endian, matching the "<f4" layout the host reads. */
     for (frame = 0U; frame < nFrames; frame++) {
         uint32_t loop;
         uint32_t bin;
-        for (loop = 0U; loop < gCapturePlan.loops; loop++) {
-            for (bin = 0U; bin < maxBins; bin++) {
-                float power = 0.0F;
-                if (bin < counts[frame]) {
-                    power = l3_verticalPowerAt(slots[frame], loop, bin);
-                }
-                l3_writeF32(power);
+        float perLoop[L3_MAX_LOOPS];
+        for (bin = 0U; bin < maxBins; bin++) {
+            if (bin < counts[frame]) {
+                l3_verticalPowerLoops(slots[frame], bin, perLoop);
+            }
+            for (loop = 0U; loop < gCapturePlan.loops; loop++) {
+                powerRow[loop * maxBins + bin] = (bin < counts[frame]) ? perLoop[loop] : 0.0F;
             }
         }
+        for (loop = 0U; loop < gCapturePlan.loops; loop++) {
+            UART_writePolling(gDataUart, (uint8_t *)&powerRow[loop * maxBins],
+                              maxBins * sizeof(float));
+        }
     }
-    if (l3_readLine(request, sizeof(request)) != 0) {
+    lineStatus = l3_readLine(request, sizeof(request));
+    if (lineStatus == L3_READLINE_OVERFLOW) {
+        CLI_write("Error: sparse cell request longer than L3_SPARSE_REQUEST_MAX\n");
+        goto rearm;
+    }
+    if (lineStatus != 0) {
         CLI_write("Error: sparse cell request missing\n");
         goto rearm;
     }
+    /* Parse every pair first, so the ILS1 count is the number actually sent
+     * rather than whatever the host claimed. */
     cursor = request;
     while (*cursor != '\0' && *cursor != ' ') {
         cursor++;
     }
     cellCount = 0;
     if (*cursor == ' ') {
-        cursor++;
-        cellCount = (int32_t)strtol(cursor, &cursor, 10);
-    }
-    if (cellCount < 0) {
-        cellCount = 0;
+        long claimed = strtol(cursor, &cursor, 10);
+        while (claimed > 0 && cellCount < (int32_t)(sizeof(cellFrames) / sizeof(cellFrames[0]))) {
+            long frameValue = strtol(cursor, &next, 10);
+            long binValue;
+            if (next == cursor) {
+                break;
+            }
+            cursor = next;
+            binValue = strtol(cursor, &next, 10);
+            if (next == cursor) {
+                break;
+            }
+            cursor = next;
+            cellFrames[cellCount] = (uint16_t)((frameValue < 0) ? 0 : frameValue);
+            cellBins[cellCount] = (uint16_t)((binValue < 0) ? 0 : binValue);
+            cellCount++;
+            claimed--;
+        }
     }
     UART_writePolling(gDataUart, (uint8_t *)"ILS1", 4U);
     l3_writeU16((uint16_t)cellCount);
     for (cell = 0; cell < cellCount; cell++) {
-        uint32_t frameIndex;
-        uint32_t localBin;
+        uint32_t frameIndex = cellFrames[cell];
+        uint32_t localBin = cellBins[cell];
         uint32_t chirp;
         uint32_t rx;
-        long frameValue;
-        long binValue;
 
-        frameValue = strtol(cursor, &cursor, 10);
-        binValue = strtol(cursor, &cursor, 10);
-        frameIndex = (frameValue < 0) ? 0U : (uint32_t)frameValue;
-        localBin = (binValue < 0) ? 0U : (uint32_t)binValue;
         l3_writeU16((uint16_t)frameIndex);
         l3_writeU16((uint16_t)localBin);
         {
@@ -3057,6 +3119,7 @@ static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
     gTriggerToward = 0U;
     gTriggerAway = 0U;
     gTriggerPeakBin = 0U;
+    gTriggerHavePeak = 0U;
     gTriggerEnabled = (hits > 0U) ? 1U : 0U;
     CLI_write("Done\n");
     return 0;
