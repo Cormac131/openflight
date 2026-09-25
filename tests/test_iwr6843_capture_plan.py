@@ -234,3 +234,81 @@ def test_no_valid_plan_overlaps_or_overflows(lib, pre_frames, ball_frames):
         cursor += store["bytes"][i]
     assert cursor == plan.usedBytes
     assert plan.usedBytes <= 786_432
+
+
+def _non_phased_plan(post_frames=16):
+    plan = Plan()
+    plan.preStart, plan.preBins = 20, 53
+    plan.postStart, plan.postBins, plan.lateStart = 47, 53, 64
+    plan.postFrames = post_frames
+    plan.postStride = 1
+    plan.phased = 0
+    return plan
+
+
+def test_phased_binStart_and_binCount_routing(lib):
+    """Behavioural coverage of the bin-start/bin-count routing tables: the
+    only other place this arithmetic was checked was a source-text grep in
+    test_iwr6843_firmware_rearm.py, which cannot see whether the C actually
+    puts the right value in the right slot."""
+    plan = _dense_plan()
+    rc, store, err = _build(lib, plan, 786_432)
+    assert rc == 0, err
+    assert plan.preFrames == 8
+    assert plan.impactFrames == 10
+    assert plan.ballFrames == 33
+
+    for i in range(0, 8):
+        assert store["binStart"][i] == 20
+        assert store["binCount"][i] == 53
+    for i in range(8, 18):
+        assert store["binStart"][i] == 32
+        assert store["binCount"][i] == 53
+    for i in range(18, 34):
+        assert store["binStart"][i] == 47
+        assert store["binCount"][i] == 53
+    for i in range(34, 51):
+        assert store["binStart"][i] == 64
+        assert store["binCount"][i] == 53
+
+
+@pytest.mark.parametrize("ball_frames", (6, 7, 20, 21))
+def test_early_late_split_boundary_is_exact_for_phased_plan(lib, ball_frames):
+    plan = _dense_plan()
+    plan.ballFrames = ball_frames
+    plan.postFrames = plan.impactFrames + ball_frames
+    rc, store, err = _build(lib, plan, 786_432)
+    assert rc == 0, err
+
+    boundary = plan.preFrames + plan.impactFrames + (ball_frames // 2) - 1
+    assert store["binStart"][boundary] == 47
+    assert store["binStart"][boundary + 1] == 64
+
+
+def test_non_phased_binStart_and_binCount_routing(lib):
+    plan = _non_phased_plan()
+    rc, store, err = _build(lib, plan, 786_432)
+    assert rc == 0, err
+    assert plan.preFrames == 35
+    assert plan.totalFrames == 51
+
+    for i in range(0, 35):
+        assert store["binStart"][i] == 20
+        assert store["binCount"][i] == 53
+    for i in range(35, 43):
+        assert store["binStart"][i] == 47
+        assert store["binCount"][i] == 53
+    for i in range(43, 51):
+        assert store["binStart"][i] == 64
+        assert store["binCount"][i] == 53
+
+
+@pytest.mark.parametrize("post_frames", (6, 7, 20, 21))
+def test_early_late_split_boundary_is_exact_for_non_phased_plan(lib, post_frames):
+    plan = _non_phased_plan(post_frames=post_frames)
+    rc, store, err = _build(lib, plan, 786_432)
+    assert rc == 0, err
+
+    boundary = plan.preFrames + (post_frames // 2) - 1
+    assert store["binStart"][boundary] == 47
+    assert store["binStart"][boundary + 1] == 64
