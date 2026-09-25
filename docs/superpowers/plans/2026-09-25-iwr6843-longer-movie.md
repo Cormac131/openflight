@@ -15,7 +15,31 @@
 - All Python commands run through `uv run`. Never bare `python`, `pip`, `pytest`.
 - Lint gate: `uv run pylint src/openflight/ --fail-under=9` must hold.
 - Format gate: `uv run ruff check src/openflight/` and `uv run ruff format --check src/openflight/`.
-- Firmware builds only via the container: `make -C firmware docker-build`. `TI_ROOT` is unset on the dev host; Docker 28.5.1 is present.
+- **`make` is NOT installed on this dev host.** Every step below that says
+  `make -C firmware docker-build` must instead be run as the raw equivalent,
+  from the repo root in Git Bash:
+
+  ```bash
+  MSYS_NO_PATHCONV=1 docker run --rm --platform linux/amd64 \
+    -v "$(pwd -W):/work" -w /work openflight-iwr-sdk:latest \
+    make -C firmware build-native \
+    RELEASE_NAME="l3_dump_configurable_capture_20260818.bin"
+  ```
+
+  `MSYS_NO_PATHCONV=1` is required: without it Git Bash rewrites `-w /work`
+  into a Windows path and Docker rejects it. The `openflight-iwr-sdk:latest`
+  image already exists and its layers are cached, so no TI download occurs.
+- **Rebuilding overwrites `firmware/releases/l3_dump_configurable_capture_20260818.bin`.**
+  That committed binary predates the current source, so a rebuild produces a
+  different file. Unless a task explicitly ships a new release binary,
+  `git checkout -- firmware/releases/` after building.
+- **Test baseline is 28 failed / 1798 passed / 47 skipped**, not a green suite.
+  Tasks that say "Expected: PASS" mean *no new failures against that baseline*
+  plus the task's own new tests passing. 25 of the 28 are Linux/Pi-specific
+  (file modes, bash syntax, udev, `.desktop` entries) failing on Windows; 3 are
+  pre-existing in-flight work in `tests/test_server.py::TestIWR6843OnboardTracking`
+  (`FakeCaptureMonitor` lacks a `self_trigger` attribute). **Do not fix these** —
+  they are outside this plan's scope.
 - Production firmware defines, from `firmware/Makefile:148`, must not change in this project: `N_TX=3 ENABLE_HWA_SMOKE=1 SNAPSHOT_DUMP=1 HWA_CHAINED_SNAPSHOT_RING=1 CONFIGURABLE_CAPTURE=1 HYBRID_CADENCE_CAPTURE=1 L3_RING_IQ8=1 L3_IQ8_EDMA_PACK=1`.
 - Inter-frame budget: 380 us. No change may exceed it.
 - Selective `l3track` readback must stay under 1.0 s.
@@ -84,7 +108,9 @@ cp firmware/iwr6843/l3_dump_mss.map firmware/iwr6843/baseline/l3_dump_mss.map.ba
 sed -n '8,20p' firmware/iwr6843/baseline/l3_dump_mss.map.baseline
 ```
 
-Expected output must show `L3_RAM ... 000c0000 000c0000 00000000` (region fully used) and `DATA_RAM ... 00030000 00012c79 0001d387`.
+Expected output must show `L3_RAM ... 000c0000 000c0000 00000000` (region fully
+used) and `DATA_RAM ... 00030000 00012e31 0001d1cf` — that is 119,247 B of
+DATA_RAM free, which is the figure every later task's margin arithmetic uses.
 
 - [ ] **Step 4: Run the existing test suite as a baseline**
 
@@ -888,7 +914,9 @@ make -C firmware docker-build
 sed -n '8,20p' firmware/iwr6843/l3_dump_mss.map
 ```
 
-Expected: `L3_RAM` still shows `000c0000` used with 0 unused, and `DATA_RAM` used rises by 98,304 B to roughly `0002ac79` with about `00005387` free.
+Expected: `L3_RAM` still shows `000c0000` used with 0 unused, and `DATA_RAM`
+used rises by 98,304 B from `00012e31` to `0002ae31`, leaving `000051cf`
+(20,943 B) free — comfortably above the 16,384 B floor the test asserts.
 
 **If the link fails on DATA_RAM overflow**, stop. The spec's fallback is to keep the scratch in L3 with a plan-derived offset, which yields 2.4 frames instead of 6.4. Record the failure in the spec and raise it before continuing.
 
