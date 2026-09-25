@@ -12,9 +12,14 @@ from openflight.iwr6843.dump import SAMPLE_RANGE_FFT_IQ16, pack_dump
 from openflight.iwr6843.self_trigger import (
     DEFAULT_HITS,
     DEFAULT_LEVEL,
+    FLOOR_MARGIN,
+    FLOOR_MIN_SAMPLES,
+    FLOOR_PERCENTILE,
     BallLeaveDetector,
     iter_dump_files,
+    level_above_floor,
     replay_dump,
+    tee_power_from_stats,
 )
 
 DUMP_DIRS = (
@@ -38,6 +43,30 @@ def _trace(observations) -> str:
         f"approach={step.approach:.0f} peak={step.peak_bin} have={int(step.have_peak)}"
         for step in observations
     )
+
+
+def test_stats_line_yields_the_tee_residual():
+    text = "frames=4 active=1\ntrig phase=tee-low tee=201000 latched=0 enabled=1\nDone\n"
+
+    assert tee_power_from_stats(text) == 201000.0
+    assert tee_power_from_stats("frames=0\nDone\n") is None
+    assert tee_power_from_stats("trig phase=no-frame tee=0 latched=0 enabled=1") == 0.0
+
+
+def test_level_above_floor_is_the_sample_p95_times_margin():
+    samples = [100_000.0] * 19 + [200_000.0]
+
+    floor, level = level_above_floor(samples)
+
+    assert floor == pytest.approx(float(np.percentile(samples, FLOOR_PERCENTILE)))
+    assert level == pytest.approx(floor * FLOOR_MARGIN)
+
+
+def test_level_above_floor_ignores_zeros_and_requires_a_full_sample():
+    with pytest.raises(ValueError, match="background samples"):
+        level_above_floor([0.0] * 20)
+    with pytest.raises(ValueError, match="background samples"):
+        level_above_floor([180_000.0] * (FLOOR_MIN_SAMPLES - 1))
 
 
 def test_toward_then_away_then_a_quiet_tee_fires():
@@ -177,7 +206,5 @@ def test_saved_dumps_fire_when_the_ball_leaves():
             continue
         visible = [step for step in steps if step.phase != "bin-outside"]
         last = visible[-1] if visible else steps[-1]
-        failures.append(
-            f"{path.name}: last {last.phase} at frame {last.frame}, tee={last.tee:.0f}"
-        )
+        failures.append(f"{path.name}: last {last.phase} at frame {last.frame}, tee={last.tee:.0f}")
     assert not failures, f"{len(failures)}/{len(dumps)} never fired\n" + "\n".join(failures)

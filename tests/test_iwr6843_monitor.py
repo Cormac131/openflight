@@ -8,15 +8,18 @@ import time
 import numpy as np
 import pytest
 
+import openflight.iwr6843.monitor as iwr_monitor
 from openflight.iwr6843.dump import pack_dump
 from openflight.iwr6843.monitor import (
     SELF_TRIGGER_OFF_COMMAND,
     IWR6843CaptureMonitor,
     SelfTriggerConfig,
+    measure_trigger_level,
     read_capture_config,
     tee_local_bin,
     tx_order_from_config,
 )
+from openflight.iwr6843.self_trigger import FLOOR_PROBE_LEVEL
 from openflight.iwr6843.sparse import SparseCapture
 
 
@@ -444,6 +447,137 @@ def test_self_trigger_config_is_sent_before_the_worker_owns_the_port(tmp_path):
     monitor.stop()
 
     assert radar.commands[0] == ("triggerCfg 12 1000.0 2", threading.current_thread().name)
+
+
+class _FloorRadar(SelfTriggerRadar):
+    """Stats replies with a fixed empty-lane tee residual."""
+
+    def __init__(self, raw: bytes, *, tee: str = "200000", latched: str = "0"):
+        super().__init__(raw)
+        self.tee = tee
+        self.latched = latched
+
+    def stats(self) -> str:
+        self.commands.append(("stats", threading.current_thread().name))
+        return (
+            "frames=10 active=1\n"
+            f"trig phase=tee-low tee={self.tee} latched={self.latched} enabled=1\n"
+            "Done\n"
+        )
+
+
+def _instant_sample_clock(monkeypatch) -> None:
+    """Advance the startup sample without waiting on the wall clock."""
+    clock = {"t": 0.0}
+
+    def monotonic() -> float:
+        return clock["t"]
+
+    def pause(seconds: float) -> None:
+        clock["t"] += seconds
+
+    monkeypatch.setattr(iwr_monitor, "_monotonic", monotonic)
+    monkeypatch.setattr(iwr_monitor, "_pause", pause)
+
+
+def _measured_monitor(tmp_path, radar) -> IWR6843CaptureMonitor:
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    return IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=radar,
+        button_factory=FakeButton,
+        self_trigger=SelfTriggerConfig(local_bin=12, level=1000.0, hits=2, measure_floor=True),
+    )
+
+
+def test_startup_samples_the_empty_lane_and_arms_above_it(tmp_path, monkeypatch):
+    _instant_sample_clock(monkeypatch)
+    radar = _FloorRadar(_raw_dump())
+    monitor = _measured_monitor(tmp_path, radar)
+    monitor.start(armed=False)
+    done = threading.Event()
+
+    def job(_radar):
+        try:
+            monitor.run_on_other_profile(lambda _other: None)
+        finally:
+            done.set()
+
+    monitor.submit("late-window", job)
+    assert done.wait(1.0)
+    monitor.stop()
+
+    lines = [line for line, _thread in radar.commands]
+    probe = f"triggerCfg 12 {FLOOR_PROBE_LEVEL:.0f} 2"
+    measured = monitor.self_trigger.command
+    assert lines[0] == probe
+    assert lines.count(probe) == 1
+    assert set(lines[1 : lines.index(measured)]) == {"stats"}
+    assert len(lines[1 : lines.index(measured)]) >= 8
+    assert lines[-3:] == [measured, SELF_TRIGGER_OFF_COMMAND, measured]
+    assert monitor.self_trigger.measure_floor is False
+    assert monitor.self_trigger.level == pytest.approx(300000.0)
+    assert radar.commands[0][1] == threading.current_thread().name
+
+
+def test_startup_refuses_to_arm_when_the_lane_never_reports_power(tmp_path, monkeypatch):
+    _instant_sample_clock(monkeypatch)
+    radar = _FloorRadar(_raw_dump(), tee="0")
+    monitor = _measured_monitor(tmp_path, radar)
+
+    with pytest.raises(RuntimeError, match="background sample failed"):
+        monitor.start(armed=False)
+
+    assert radar.closed
+    assert "sensorStop" in radar.shutdown_events
+
+
+def test_startup_refuses_to_arm_when_the_sample_latches(tmp_path, monkeypatch):
+    _instant_sample_clock(monkeypatch)
+    radar = _FloorRadar(_raw_dump(), latched="1")
+    monitor = _measured_monitor(tmp_path, radar)
+
+    with pytest.raises(RuntimeError, match="latched the trigger"):
+        monitor.start(armed=False)
+
+    assert radar.closed
+
+
+def test_measure_trigger_level_reads_p95_and_stops_if_the_probe_is_rejected():
+    class _Radar:
+        def __init__(self, reply: str):
+            self.reply = reply
+            self.commands: list[str] = []
+
+        def cmd(self, line: str, window: float = 1.5) -> str:
+            del window
+            self.commands.append(line)
+            if line == "stats":
+                return "trig phase=tee-low tee=200000 latched=0 enabled=1\nDone\n"
+            return self.reply
+
+        def stats(self) -> str:
+            return self.cmd("stats")
+
+    clock = {"t": 0.0}
+    radar = _Radar("Done\n")
+    floor, level = measure_trigger_level(
+        radar,
+        14,
+        2,
+        clock=lambda: clock["t"],
+        pause=lambda seconds: clock.__setitem__("t", clock["t"] + seconds),
+    )
+
+    assert radar.commands[0] == f"triggerCfg 14 {FLOOR_PROBE_LEVEL:.0f} 2"
+    assert floor == pytest.approx(200000.0)
+    assert level == pytest.approx(300000.0)
+
+    rejected = _Radar("Error: trigger power\n")
+    with pytest.raises(RuntimeError, match="background probe rejected"):
+        measure_trigger_level(rejected, 14, 2, clock=lambda: 0.0, pause=lambda _seconds: None)
 
 
 def test_rejected_self_trigger_config_fails_start_and_releases_the_radar(tmp_path):

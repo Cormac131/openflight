@@ -39,7 +39,7 @@ openflight_args=(
     # this installation before uncommenting.
     # --iwr6843
     # --iwr6843-port /dev/serial/by-id/REPLACE_WITH_TI_SERIAL_ID
-    # --iwr6843-config config/iwr6843_l3dump_dense_36f2ms_53bin_iq8.cfg
+    # --iwr6843-config config/iwr6843_l3dump_dense_45f2ms_53bin_iq8.cfg
     # --iwr6843-tee-m 1.372
     # --iwr6843-net-m 4.064
     # --iwr6843-tilt-deg 5.5

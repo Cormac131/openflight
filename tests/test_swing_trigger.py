@@ -96,6 +96,17 @@ def test_replay_uses_loop0_and_reports_the_fire_frame():
     assert "toward" in text
 
 
+def test_fire_frame_names_the_loud_bins():
+    row = _row({TEE_BIN: LEVEL, 8: LEVEL * 3, TEE_BIN + 4: LEVEL * 5})
+
+    text = swing_trigger.format_hotspot(row, TEE_BIN, LEVEL)
+
+    assert f"tee bin {TEE_BIN}={LEVEL:.0f}" in text
+    assert "approach bin 8=" in text
+    assert f"past bin {TEE_BIN + 4}=" in text
+    assert "bins >=" in text
+
+
 def test_quiet_tee_does_not_pass():
     power = np.stack([_row({TEE_BIN: LEVEL}) for _frame in range(4)])
 
@@ -103,3 +114,43 @@ def test_quiet_tee_does_not_pass():
 
     assert not any(obs.fired for obs in observations)
     assert "FAIL" in swing_trigger.format_swing(observations)
+
+
+class _ArmRadar:
+    def __init__(self):
+        self.commands: list[str] = []
+
+    def send_config(self, path: str) -> None:
+        self.commands.append(path)
+
+    def cmd(self, line: str, window: float = 1.5) -> str:
+        del window
+        self.commands.append(line)
+        return "Done\n"
+
+
+def test_omitted_level_samples_the_lane_and_arms_above_it(monkeypatch):
+    def measure(_radar, tee_bin, hits):
+        assert (tee_bin, hits) == (TEE_BIN, 2)
+        return 200000.0, 300000.0
+
+    monkeypatch.setattr(swing_trigger, "measure_trigger_level", measure)
+    radar = _ArmRadar()
+
+    level = swing_trigger._arm(radar, "cfg", TEE_BIN, None, 2)
+
+    assert level == 300000.0
+    assert radar.commands[-1] == "triggerCfg 14 300000 2"
+
+
+def test_explicit_level_is_armed_without_sampling(monkeypatch):
+    def measure(*_args, **_kwargs):
+        raise AssertionError("explicit level must not sample the lane")
+
+    monkeypatch.setattr(swing_trigger, "measure_trigger_level", measure)
+    radar = _ArmRadar()
+
+    level = swing_trigger._arm(radar, "cfg", TEE_BIN, 250.0, 2)
+
+    assert level == 250.0
+    assert radar.commands[-1] == "triggerCfg 14 250 2"

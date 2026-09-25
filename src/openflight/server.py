@@ -1081,8 +1081,8 @@ def init_camera_capture(
         return False
 
 
-# Residual power at the tee bin that counts as "ball present" on the wide
-# 53-bin IQ16 profile. Tune with --iwr6843-self-trigger-level.
+# Positive stand-in until startup replaces it with the measured floor.
+# --iwr6843-self-trigger-level arms that value and skips the sample.
 _SELF_TRIGGER_DEFAULT_LEVEL = 1000.0
 # Consecutive frames the tee bin must stay occupied before the trigger arms.
 _SELF_TRIGGER_DEFAULT_HITS = 2
@@ -1125,6 +1125,7 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
         local_bin=bin_index,
         level=_SELF_TRIGGER_DEFAULT_LEVEL if level is None else level,
         hits=_SELF_TRIGGER_DEFAULT_HITS if hits is None else hits,
+        measure_floor=level is None,
     )
 
 
@@ -1253,7 +1254,11 @@ def init_iwr6843(
             "tee_slant_range_m": tee_range_m,
             "net_range_m": net_range_m,
             "flight": flight,
-            "self_trigger": self_trigger.command if self_trigger is not None else None,
+            "self_trigger": (
+                capture_monitor.self_trigger.command
+                if capture_monitor.self_trigger is not None
+                else None
+            ),
             "tx_order": resolved_order,
             "tdm_sign_policy": iwr6843_runtime.tdm_sign_policy,
             "tilt_deg": math.degrees(calibration.tilt_rad),
@@ -4726,7 +4731,8 @@ def main():
         "--iwr6843-self-trigger-level",
         type=float,
         default=None,
-        help="Residual-power threshold (default: 1000). Requires --iwr6843-self-trigger",
+        help="Residual-power threshold. Omit to sample the empty lane at startup "
+        "and arm above that floor. Requires --iwr6843-self-trigger",
     )
     parser.add_argument(
         "--iwr6843-self-trigger-hits",

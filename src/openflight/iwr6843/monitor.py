@@ -8,7 +8,7 @@ import queue
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -16,6 +16,13 @@ from typing import Callable
 from openflight.gpio_factory import ensure_lgpio_pin_factory
 from openflight.iwr6843.driver import IWR6843Radar, UnsupportedCommand
 from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
+from openflight.iwr6843.self_trigger import (
+    FLOOR_PAUSE_S,
+    FLOOR_PROBE_LEVEL,
+    FLOOR_SAMPLE_S,
+    level_above_floor,
+    tee_power_from_stats,
+)
 from openflight.iwr6843.sparse import OnboardTrack, SlicePlanner
 from openflight.iwr6843.tracking import RANGE_SPAN_M
 
@@ -87,13 +94,28 @@ def tee_local_bin(tee_range_m: float, config_path: str | Path, fft_size: int = 1
     return local
 
 
+def _monotonic() -> float:
+    """Clock for the startup sample. Tests replace this so startup does not sleep."""
+    return time.monotonic()
+
+
+def _pause(seconds: float) -> None:
+    """Wait between background samples. Tests replace this so startup does not sleep."""
+    time.sleep(seconds)
+
+
 @dataclass(frozen=True)
 class SelfTriggerConfig:
-    """Firmware ``triggerCfg``: freeze when the ball leaves the tee bin."""
+    """Firmware ``triggerCfg``: freeze when the ball leaves the tee bin.
+
+    ``measure_floor`` samples the empty lane once at startup and replaces
+    ``level``. A later profile restore sends that measured level again.
+    """
 
     local_bin: int
     level: float
     hits: int
+    measure_floor: bool = False
 
     def __post_init__(self) -> None:
         if self.local_bin < 0:
@@ -113,6 +135,44 @@ class SelfTriggerConfig:
 
 # hits=0 disables the firmware trigger (see l3_cli_triggerCfg).
 SELF_TRIGGER_OFF_COMMAND = "triggerCfg 0 0 0"
+
+
+def measure_trigger_level(
+    radar: IWR6843Radar,
+    local_bin: int,
+    hits: int,
+    *,
+    clock: Callable[[], float] | None = None,
+    pause: Callable[[float], None] | None = None,
+) -> tuple[float, float]:
+    """Sample the empty-lane tee and return ``(p95 floor, armed level)``.
+
+    The probe level sits above any recorded residual, so the detector stays
+    below the threshold and still reports tee power. The lane must stay empty:
+    a latch during the sample is a failed startup, not a floor.
+    """
+    now = _monotonic if clock is None else clock
+    wait = _pause if pause is None else pause
+    probe = f"triggerCfg {local_bin} {FLOOR_PROBE_LEVEL:.0f} {hits}"
+    reply = radar.cmd(probe, 2.0)
+    if "Error" in reply or "Done" not in reply:
+        raise RuntimeError(f"IWR6843 background probe rejected: {reply.strip()}")
+    samples: list[float] = []
+    deadline = now() + FLOOR_SAMPLE_S
+    while now() < deadline:
+        health = radar.stats()
+        if "latched=1" in health:
+            raise RuntimeError(
+                "background sample latched the trigger; keep the lane empty and retry"
+            )
+        tee = tee_power_from_stats(health)
+        if tee is not None and tee > 0.0:
+            samples.append(tee)
+        wait(FLOOR_PAUSE_S)
+    try:
+        return level_above_floor(samples)
+    except ValueError as exc:
+        raise RuntimeError(f"IWR6843 background sample failed: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -272,6 +332,18 @@ class IWR6843CaptureMonitor:
         """Send ``triggerCfg`` for the configured self-trigger, if any."""
         if self.self_trigger is None:
             return
+        if self.self_trigger.measure_floor:
+            floor, level = measure_trigger_level(
+                self.radar,
+                self.self_trigger.local_bin,
+                self.self_trigger.hits,
+            )
+            logger.info(
+                "[IWR6843] Empty-lane tee p95 %.0f; arming trigger at %.0f",
+                floor,
+                level,
+            )
+            self.self_trigger = replace(self.self_trigger, level=level, measure_floor=False)
         reply = self.radar.cmd(self.self_trigger.command, 2.0)
         if "Error" in reply or "Done" not in reply:
             raise RuntimeError(f"IWR6843 self-trigger rejected: {reply.strip()}")
@@ -621,6 +693,7 @@ __all__ = [
     "IWR6843Capture",
     "IWR6843CaptureMonitor",
     "SelfTriggerConfig",
+    "measure_trigger_level",
     "read_capture_config",
     "tee_local_bin",
     "tx_order_from_config",

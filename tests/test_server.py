@@ -4736,6 +4736,7 @@ class TestIWR6843OnboardTracking:
         assert server_module.iwr6843_runtime_config["onboard_tracking"] is False
         server_module.iwr6843_runtime = None
 
+
 def _self_trigger_args(**overrides):
     values = {
         "iwr6843_self_trigger": False,
@@ -4771,8 +4772,9 @@ class TestSelfTriggerCli:
     def test_switch_alone_takes_the_bin_from_the_tee_and_the_defaults(self):
         config = server_module._self_trigger_config(_self_trigger_args(iwr6843_self_trigger=True))
 
-        assert (config.local_bin, config.level, config.hits) == (14, 1000.0, 2)
-        assert config.command == "triggerCfg 14 1000.0 2"
+        assert config.local_bin == 14
+        assert config.hits == 2
+        assert config.measure_floor is True
 
     def test_explicit_tuning_wins(self):
         config = server_module._self_trigger_config(
@@ -4785,6 +4787,8 @@ class TestSelfTriggerCli:
         )
 
         assert (config.local_bin, config.level, config.hits) == (9, 250.0, 4)
+        assert config.measure_floor is False
+        assert config.command == "triggerCfg 9 250.0 4"
 
     def test_zero_hits_is_refused_instead_of_silently_disabling_capture(self):
         with pytest.raises(ValueError, match="hits must be >= 1"):

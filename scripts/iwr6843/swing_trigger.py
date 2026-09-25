@@ -4,6 +4,9 @@
 Stop the kiosk first. It owns this UART, so a swing there cannot show up
 here, and this script cannot show up there.
 
+With no ``--level``, it samples the empty lane for 2s and arms above that
+floor. Pass ``--level`` to skip the sample.
+
 The script arms ``triggerCfg``, prints each detector phase as it changes,
 and polls ``stats`` while the phase sits still so tee power stays visible.
 On ``Triggered`` (or ``latched=1``) it reads the frozen ring, replays the
@@ -23,7 +26,7 @@ import numpy as np
 
 from openflight.iwr6843.calibration import DEFAULT_TEE_RANGE_M
 from openflight.iwr6843.driver import IWR6843Radar
-from openflight.iwr6843.monitor import tee_local_bin
+from openflight.iwr6843.monitor import measure_trigger_level, tee_local_bin
 from openflight.iwr6843.self_trigger import BallLeaveDetector, TriggerObservation, replay_dump
 from openflight.iwr6843.sparse import SparsePlan
 
@@ -112,6 +115,32 @@ def replay_loop0(
     return observations
 
 
+def format_hotspot(row: np.ndarray, tee_bin: int, level: float, approach_bins: int = 12) -> str:
+    """Where the fire frame was loud: tee, closer bins, and bins just past the tee."""
+    power = np.asarray(row, dtype=float)
+    count = len(power)
+    if not 0 <= tee_bin < count:
+        return f"  fire frame: tee bin {tee_bin} is outside 0..{count - 1}"
+    first = max(0, tee_bin - approach_bins)
+    past_end = min(count, tee_bin + 1 + approach_bins)
+    approach = power[first:tee_bin]
+    past = power[tee_bin + 1 : past_end]
+    hot = int(np.count_nonzero(power >= level))
+
+    def loudest(segment: np.ndarray, offset: int) -> str:
+        if segment.size == 0:
+            return "none"
+        index = int(np.argmax(segment))
+        return f"bin {offset + index}={segment[index]:.0f}"
+
+    return (
+        f"  fire frame: tee bin {tee_bin}={power[tee_bin]:.0f}  "
+        f"approach {loudest(approach, first)}  "
+        f"past {loudest(past, tee_bin + 1)}  "
+        f"{hot}/{count} bins >= {level:g}"
+    )
+
+
 def format_swing(observations: list[TriggerObservation]) -> str:
     """Phase changes, then whether the replay latched."""
     if not observations:
@@ -158,16 +187,32 @@ def _read_power(radar: IWR6843Radar):
     return held.get("summary")
 
 
+def _fire_hotspot(summary, tee_bin: int, level: float, observations) -> str | None:
+    fired = next((obs for obs in observations if obs.fired), None)
+    if fired is None:
+        return None
+    power = np.asarray(summary.power)
+    rows, bins = power.shape
+    if summary.n_loops < 1 or rows % summary.n_loops:
+        return None
+    loop0 = power.reshape(rows // summary.n_loops, summary.n_loops, bins)[:, 0, :]
+    if fired.frame >= len(loop0):
+        return None
+    count = summary.geometry.frame_bin_count(fired.frame)
+    return format_hotspot(loop0[fired.frame, :count], tee_bin, level)
+
+
 def _read_swing(radar: IWR6843Radar, tee_bin: int, tee_m: float, level: float, hits: int):
     summary = _read_power(radar)
     if summary is not None:
         counts = [
             summary.geometry.frame_bin_count(frame) for frame in range(summary.geometry.n_frames)
         ]
-        return replay_loop0(summary.power, summary.n_loops, tee_bin, level, hits, counts)
+        observations = replay_loop0(summary.power, summary.n_loops, tee_bin, level, hits, counts)
+        return observations, _fire_hotspot(summary, tee_bin, level, observations)
     print("  sparse read unavailable, reading the full ring...", flush=True)
     raw = radar.read_dump()
-    return replay_dump(raw, tee_range_m=tee_m, level=level, hits=hits)
+    return replay_dump(raw, tee_range_m=tee_m, level=level, hits=hits), None
 
 
 def _validate_swing(
@@ -180,11 +225,13 @@ def _validate_swing(
 ) -> bool:
     print(f"\nswing {swing}: reading frozen ring...", flush=True)
     try:
-        observations = _read_swing(radar, tee_bin, tee_m, level, hits)
+        observations, hotspot = _read_swing(radar, tee_bin, tee_m, level, hits)
     except Exception as error:  # pylint: disable=broad-exception-caught
         print(f"  FAIL  {error}", flush=True)
         return False
     print(format_swing(observations), flush=True)
+    if hotspot:
+        print(hotspot, flush=True)
     health = radar.stats()
     for line in health.splitlines():
         fields = parse_trig(line)
@@ -198,14 +245,26 @@ def _validate_swing(
     return any(obs.fired for obs in observations)
 
 
-def _poll_status(radar: IWR6843Radar) -> dict[str, str] | None:
+def _poll_status(radar: IWR6843Radar) -> tuple[dict[str, str] | None, str | None]:
+    """Trigger fields, plus ``active`` from the capture-counter line."""
     health = radar.stats()
     found = None
+    active = None
     for line in health.splitlines():
+        if active is None and "active=" in line:
+            for token in line.split():
+                if token.startswith("active="):
+                    active = token.split("=", 1)[1]
         fields = parse_trig(line)
         if fields is not None:
             found = fields
-    return found
+    return found, active
+
+
+def _status_key(fields: dict[str, str] | None) -> tuple | None:
+    if fields is None:
+        return None
+    return (fields.get("phase"), fields.get("tee"), fields.get("latched"), fields.get("enabled"))
 
 
 def _consume_line(line: str, level: float) -> dict[str, str] | None:
@@ -227,6 +286,8 @@ def watch(
     """Print phase changes until Ctrl+C. Returns (fired, swings)."""
     pending = b""
     last_print = time.monotonic()
+    last_key = None
+    reported_stuck = False
     swings = 0
     fired = 0
     try:
@@ -250,6 +311,8 @@ def watch(
                         if _validate_swing(radar, swings, tee_bin, tee_m, level, hits):
                             fired += 1
                         last_print = time.monotonic()
+                        last_key = None
+                        reported_stuck = False
                         print("\nwatching. swing when ready.", flush=True)
                         break
                     fields = _consume_line(line, level)
@@ -260,6 +323,8 @@ def watch(
                         if _validate_swing(radar, swings, tee_bin, tee_m, level, hits):
                             fired += 1
                         last_print = time.monotonic()
+                        last_key = None
+                        reported_stuck = False
                         print("\nwatching. swing when ready.", flush=True)
                         break
                     if fields is not None:
@@ -267,26 +332,51 @@ def watch(
                 continue
             if pending or now - last_print < _QUIET_POLL_S:
                 continue
-            fields = _poll_status(radar)
+            fields, active = _poll_status(radar)
             last_print = time.monotonic()
             if is_latched(fields):
+                print(format_status(fields, level), flush=True)
                 swings += 1
                 if _validate_swing(radar, swings, tee_bin, tee_m, level, hits):
                     fired += 1
+                last_key = None
+                reported_stuck = False
                 print("\nwatching. swing when ready.", flush=True)
                 continue
-            if fields is not None:
-                print(format_status(fields, level), flush=True)
+            key = _status_key(fields)
+            if fields is None or key == last_key:
+                if (
+                    not reported_stuck
+                    and fields is not None
+                    and fields.get("phase") == "fired"
+                    and fields.get("latched") == "0"
+                ):
+                    reported_stuck = True
+                    sensor = f" active={active}" if active is not None else ""
+                    print(
+                        f"  still fired, latched=0, tee={fields['tee']}{sensor}. "
+                        "That sample is not changing, so the detector is not running.",
+                        flush=True,
+                    )
+                continue
+            reported_stuck = False
+            last_key = key
+            print(format_status(fields, level), flush=True)
     except KeyboardInterrupt:
         print(f"\n{fired}/{swings} swings replayed as fired")
     return fired, swings
 
 
-def _arm(radar: IWR6843Radar, config: str, tee_bin: int, level: float, hits: int) -> None:
+def _arm(radar: IWR6843Radar, config: str, tee_bin: int, level: float | None, hits: int) -> float:
+    """Load the cfg, optionally sample the empty lane, and return the armed level."""
     radar.send_config(config)
     reply = radar.cmd("debugCfg 1")
     if "Done" not in reply:
         raise SystemExit(f"debugCfg rejected: {reply.strip()}")
+    if level is None:
+        print("Measuring the empty lane for 2s. Keep it clear.", flush=True)
+        floor, level = measure_trigger_level(radar, tee_bin, hits)
+        print(f"background p95 {floor:.0f}; arming at {level:.0f}", flush=True)
     for line in reply.splitlines():
         fields = parse_trig(line)
         if fields is not None:
@@ -299,6 +389,7 @@ def _arm(radar: IWR6843Radar, config: str, tee_bin: int, level: float, hits: int
         f"armed {command}. Ball on the tee should read 'ball' / watching. Ctrl+C to stop.",
         flush=True,
     )
+    return level
 
 
 def main() -> None:
@@ -310,7 +401,12 @@ def main() -> None:
     )
     parser.add_argument("--config", default=_DEFAULT_CFG)
     parser.add_argument("--tee-m", type=float, default=DEFAULT_TEE_RANGE_M)
-    parser.add_argument("--level", type=float, default=1000.0)
+    parser.add_argument(
+        "--level",
+        type=float,
+        default=None,
+        help="Residual that counts as a ball. Omit to sample the empty lane for 2s.",
+    )
     parser.add_argument("--hits", type=int, default=2)
     args = parser.parse_args()
 
@@ -321,8 +417,8 @@ def main() -> None:
     radar = IWR6843Radar(port=args.port)
     print(f"IWR6843 on {radar.port}. Stop the kiosk before swinging.", flush=True)
     try:
-        _arm(radar, args.config, tee_bin, args.level, args.hits)
-        watch(radar, tee_bin, args.tee_m, args.level, args.hits)
+        level = _arm(radar, args.config, tee_bin, args.level, args.hits)
+        watch(radar, tee_bin, args.tee_m, level, args.hits)
     finally:
         try:
             radar.cmd("debugCfg 0", window=0.5)

@@ -30,11 +30,11 @@ scripts/start-kiosk.sh --debug \
 For Option B, replace `/dev/ttyAMA0` after `--radar-port` with the OPS USB serial
 device, preferably its stable `/dev/serial/by-id/...` path.
 
-The example uses the recommended wide profile. To test dense impact sampling,
-change only the config argument to:
+The example uses the recommended wide profile. To test the 2 ms profile with
+the 54 ms ball phase, change only the config argument to:
 
 ```text
---iwr6843-config config/iwr6843_l3dump_dense_36f2ms_53bin_iq8.cfg
+--iwr6843-config config/iwr6843_l3dump_dense_45f2ms_53bin_iq8.cfg
 ```
 
 To test dense sampling while retaining the wide profile's late-flight window,

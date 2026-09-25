@@ -64,6 +64,22 @@ def test_slice_count_is_the_number_of_cells_actually_parsed():
     assert parsed < header < count
 
 
+def test_self_trigger_reads_a_finished_slot_beside_capture():
+    """Detection runs after the slot is stored, not inside the HWA rearm task."""
+    rearm = _function("static void l3_hwaRearmTask")
+    detect = _function("static void l3_detectTask")
+    done = _function("static void l3_hwaOutputDoneCB")
+    packed = _function("static void l3_iq8EdmaDoneCB")
+    stats = _function("static int32_t l3_cli_stats")
+
+    assert "l3_considerSelfTrigger" not in rearm
+    assert "l3_considerSelfTrigger(queuedSlot)" in detect
+    assert "l3detect_slot_live" in detect
+    assert "l3_publishDetectFrame" in done
+    assert "l3_publishDetectFrame" in packed
+    assert 'CLI_write("detect dropped=%u stale=%u\\n"' in stats
+
+
 def test_trigger_peak_tracks_bin_zero_with_an_explicit_flag():
     consider = _function("static void l3_considerSelfTrigger(")
 

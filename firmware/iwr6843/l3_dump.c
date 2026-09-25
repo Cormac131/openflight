@@ -14,7 +14,8 @@
  * triggers EDMA copies of selected range bins into the compact L3 ring. The CPU
  * rearms one frame at a time during inter-frame idle time. Completed frames
  * advance through the compact L3 ring so a trigger can preserve deterministic
- * pre-impact history plus a fixed post-impact tail.
+ * pre-impact history plus a fixed post-impact tail. The leave detector runs on
+ * a finished pre-trigger slot while the HWA writes the next one.
  *
  * Chirp order filled == chirp order fired == TDM (chirp c -> tx=c%N_TX,
  * loop=c/N_TX), matching iwr6843_l3dump.
@@ -48,6 +49,7 @@
 #include <ti/utils/cli/cli.h>
 
 #include "dump_format.h"
+#include "detect_queue.h"
 #include "track_select.h"
 
 #if defined(L3_DUMP_IQ8) || defined(L3_RING_IQ8)
@@ -62,6 +64,8 @@
  * lower-priority tasks to run, and a priority-4 snapshot loop starved l3dump
  * so the host only saw the echoed 7-byte "l3dump\n" command. */
 #define L3_SNAPSHOT_TASK_PRIORITY 1
+/* Below rearm, so a slot read runs while the next frame is captured. */
+#define L3_DETECT_TASK_PRIORITY 1
 #define L3_CTRL_TASK_PRIORITY  5
 
 /* ASCII CAN is reserved as an out-of-band dump cancellation byte. The CLI
@@ -349,6 +353,11 @@ static uint8_t       gHwaFftConfigured;
 #ifdef HWA_CHAINED_SNAPSHOT_RING
 static Semaphore_Handle gHwaRearmSemaphore;
 static Semaphore_Handle gHwaFreezeSemaphore;
+#ifdef CONFIGURABLE_CAPTURE
+static Semaphore_Handle gDetectSemaphore;
+static L3DetectQueue gDetectQueue;
+static volatile uint32_t gDetectStale;
+#endif
 #ifdef L3_IQ8_EDMA_PACK
 static Semaphore_Handle gIq8EdmaDoneSemaphore;
 #endif
@@ -420,11 +429,16 @@ static volatile uint8_t  gActiveFrameShouldKeep;
 static volatile uint8_t  gIq8Pending;
 static volatile uint32_t gIq8PendingSlot;
 static volatile uint8_t  gIq8PendingScratch;
+static volatile uint8_t  gIq8PendingDetect;
+static volatile uint32_t gIq8PendingEpoch;
 static volatile uint8_t  gIq8ActiveScratch;
 static volatile uint32_t gIq8PackFrames;
 static volatile uint32_t gIq8PackOverruns;
 static volatile uint32_t gIq8ClippedComponents;
 #ifdef L3_IQ8_EDMA_PACK
+static volatile uint8_t  gIq8PackDetectArm[2];
+static volatile uint16_t gIq8PackDetectSlot[2];
+static volatile uint32_t gIq8PackDetectEpoch[2];
 static volatile uint8_t  gIq8EdmaBusy[2];
 static volatile uint32_t gIq8EdmaDone;
 static volatile uint32_t gIq8EdmaErrors;
@@ -468,7 +482,12 @@ static void l3_snapshotTask(UArg arg0, UArg arg1);
 #endif
 #ifdef HWA_CHAINED_SNAPSHOT_RING
 static void l3_hwaRearmTask(UArg arg0, UArg arg1);
-static void l3_considerSelfTrigger(void);
+#ifdef CONFIGURABLE_CAPTURE
+static void l3_considerSelfTrigger(uint32_t slot);
+static void l3_publishDetectFrame(uint32_t slot, uint32_t epoch);
+static void l3_resetDetectQueue(void);
+static void l3_detectTask(UArg arg0, UArg arg1);
+#endif
 #endif
 
 #ifdef CONFIGURABLE_CAPTURE
@@ -1209,6 +1228,31 @@ static void l3_hwaChainDoneCB(void *arg)
     l3_hwaMaybeQueueRearm();
 }
 
+#if defined(HWA_CHAINED_SNAPSHOT_RING) && defined(CONFIGURABLE_CAPTURE)
+static void l3_publishDetectFrame(uint32_t slot, uint32_t epoch)
+{
+    if (gCapturePlan.preFrames == 0U) {
+        return;
+    }
+    if (l3detect_publish(&gDetectQueue, (uint16_t)slot, epoch) != 0) {
+        return;
+    }
+    if (gDetectSemaphore != NULL) {
+        Semaphore_post(gDetectSemaphore);
+    }
+}
+
+static void l3_resetDetectQueue(void)
+{
+    l3detect_init(&gDetectQueue);
+    gDetectStale = 0U;
+    if (gDetectSemaphore != NULL) {
+        while (Semaphore_pend(gDetectSemaphore, BIOS_NO_WAIT)) {
+        }
+    }
+}
+#endif
+
 static void l3_hwaOutputDoneCB(uintptr_t arg, uint8_t tcCode)
 {
     (void)arg;
@@ -1227,6 +1271,9 @@ static void l3_hwaOutputDoneCB(uintptr_t arg, uint8_t tcCode)
         gIq8PendingSlot = completedSlot;
         gIq8PendingScratch = gIq8ActiveScratch;
         gIq8Pending = 1U;
+        if (gActiveFrameIsPost) {
+            gIq8PendingDetect = 0U;
+        }
     }
 #endif
     if (gActiveFrameIsPost) {
@@ -1235,9 +1282,22 @@ static void l3_hwaOutputDoneCB(uintptr_t arg, uint8_t tcCode)
             gPostFramesCaptured++;
         }
     } else {
+        uint32_t completedPreSlot = gPreFramesCaptured % gCapturePlan.preFrames;
+
         gPreFramesCaptured++;
         if ((gPreFramesCaptured % gCapturePlan.preFrames) == 0U) {
             gNumWrap++;
+        }
+#if defined(L3_RING_IQ8)
+        if (l3_captureUsesIq8()) {
+            if (gActiveFrameShouldKeep) {
+                gIq8PendingEpoch = gPreFramesCaptured;
+                gIq8PendingDetect = 1U;
+            }
+        } else
+#endif
+        {
+            l3_publishDetectFrame(completedPreSlot, gPreFramesCaptured);
         }
     }
 #else
@@ -1630,6 +1690,15 @@ static void l3_iq8EdmaDoneCB(uintptr_t arg, uint8_t tcCode)
         gIq8EdmaBusy[scratch] = 0U;
         gIq8EdmaDone++;
         gIq8PackFrames++;
+#ifdef CONFIGURABLE_CAPTURE
+        if (gIq8PackDetectArm[scratch] != 0U) {
+            uint32_t packedSlot = gIq8PackDetectSlot[scratch];
+            uint32_t packedEpoch = gIq8PackDetectEpoch[scratch];
+
+            gIq8PackDetectArm[scratch] = 0U;
+            l3_publishDetectFrame(packedSlot, packedEpoch);
+        }
+#endif
     } else {
         gIq8EdmaErrors++;
     }
@@ -1701,6 +1770,7 @@ static int32_t l3_startIq8EdmaPack(uint32_t slot, uint8_t scratch)
     }
     if (errCode != EDMA_NO_ERROR) {
         gIq8EdmaBusy[scratch] = 0U;
+        gIq8PackDetectArm[scratch] = 0U;
         gIq8EdmaErrors++;
         return -1;
     }
@@ -2084,8 +2154,10 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
 #ifdef L3_RING_IQ8
             uint8_t hadPending = 0U;
             uint8_t pendingScratch = 0U;
+            uint8_t pendingDetect = 0U;
             uint8_t nextScratch = 0U;
             uint32_t pendingSlot = 0U;
+            uint32_t pendingEpoch = 0U;
 #endif
             int32_t errCode;
 
@@ -2127,7 +2199,15 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
                     hadPending = 1U;
                     pendingSlot = gIq8PendingSlot;
                     pendingScratch = gIq8PendingScratch;
+                    pendingDetect = gIq8PendingDetect;
+                    pendingEpoch = gIq8PendingEpoch;
                     gIq8Pending = 0U;
+                    gIq8PendingDetect = 0U;
+#ifdef L3_IQ8_EDMA_PACK
+                    gIq8PackDetectArm[pendingScratch] = pendingDetect;
+                    gIq8PackDetectSlot[pendingScratch] = (uint16_t)pendingSlot;
+                    gIq8PackDetectEpoch[pendingScratch] = pendingEpoch;
+#endif
                 }
                 if (gHwaShutdownRequested) {
                     gCaptureActive = 0U;
@@ -2183,9 +2263,6 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
             errCode = l3_restartCompletedHwaFrame();
             if (errCode == 0) {
                 gHwaRearms++;
-#ifdef CONFIGURABLE_CAPTURE
-                l3_considerSelfTrigger();
-#endif
             } else {
                 gHwaRearmErrors++;
             }
@@ -2195,6 +2272,12 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
                 (void)l3_startIq8EdmaPack(pendingSlot, pendingScratch);
 #else
                 l3_packIq8CompletedFrame(pendingSlot, pendingScratch);
+#ifdef CONFIGURABLE_CAPTURE
+                if (pendingDetect != 0U &&
+                    pendingSlot < gCapturePlan.preFrames) {
+                    l3_publishDetectFrame(pendingSlot, pendingEpoch);
+                }
+#endif
 #endif
             }
 #endif
@@ -2618,6 +2701,7 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
     gPostCaptureStarted = 0U;
     gActiveFrameIsPost = 0U;
     gActiveFrameShouldKeep = 1U;
+    l3_resetDetectQueue();
 #endif
     if (l3_restartCompletedHwaFrame() < 0) {
         CLI_write("Error: completed HWA frame restart failed\n");
@@ -2868,9 +2952,8 @@ static void l3_latchSelfTrigger(float tee, float approach)
     CLI_write("Triggered\n");
 }
 
-static void l3_considerSelfTrigger(void)
+static void l3_considerSelfTrigger(uint32_t slot)
 {
-    uint32_t slot;
     uint32_t bin;
     uint32_t first;
     uint32_t peakBin = 0U;
@@ -2894,7 +2977,6 @@ static void l3_considerSelfTrigger(void)
         l3_noteTrigger(2U, 0.0F, 0.0F);
         return;
     }
-    slot = (gPreFramesCaptured - 1U) % gCapturePlan.preFrames;
     if (gTriggerBin >= gFrameBinCount[slot]) {
         l3_noteTrigger(2U, 0.0F, 0.0F);
         return;
@@ -2964,6 +3046,28 @@ static void l3_considerSelfTrigger(void)
     }
     l3_noteTrigger(gTriggerToward ? 7U : 5U, tee, peak);
 }
+
+#ifdef HWA_CHAINED_SNAPSHOT_RING
+static void l3_detectTask(UArg arg0, UArg arg1)
+{
+    (void)arg0;
+    (void)arg1;
+    while (1) {
+        uint16_t queuedSlot = 0U;
+        uint32_t epoch = 0U;
+
+        Semaphore_pend(gDetectSemaphore, BIOS_WAIT_FOREVER);
+        if (!l3detect_pop(&gDetectQueue, &queuedSlot, &epoch)) {
+            continue;
+        }
+        if (!l3detect_slot_live(epoch, gPreFramesCaptured, gCapturePlan.preFrames)) {
+            gDetectStale++;
+            continue;
+        }
+        l3_considerSelfTrigger(queuedSlot);
+    }
+}
+#endif
 #endif
 
 #ifdef CONFIGURABLE_CAPTURE
@@ -3101,6 +3205,7 @@ static int32_t l3_sparseRearm(void)
     gPostCaptureStarted = 0U;
     gActiveFrameIsPost = 0U;
     gActiveFrameShouldKeep = 1U;
+    l3_resetDetectQueue();
     if (l3_restartCompletedHwaFrame() < 0) {
         CLI_write("Error: completed HWA frame restart failed\n");
         gCaptureActive = 0U;
@@ -3520,6 +3625,11 @@ static int32_t l3_cli_stats(int32_t argc, char *argv[])
               (unsigned)gTriggerTeePower,
               (unsigned)gSelfTriggerLatched,
               (unsigned)gTriggerEnabled);
+#ifdef HWA_CHAINED_SNAPSHOT_RING
+    CLI_write("detect dropped=%u stale=%u\n",
+              (unsigned)gDetectQueue.dropped,
+              (unsigned)gDetectStale);
+#endif
 #endif
     return 0;
 }
@@ -4015,8 +4125,11 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     gPostCaptureStarted = 0U;
     gActiveFrameIsPost = 0U;
     gActiveFrameShouldKeep = 1U;
+    l3_resetDetectQueue();
 #ifdef L3_RING_IQ8
     gIq8Pending = 0U;
+    gIq8PendingDetect = 0U;
+    gIq8PendingEpoch = 0U;
     gIq8PendingSlot = 0U;
     gIq8PendingScratch = 0U;
     gIq8ActiveScratch = 0U;
@@ -4024,6 +4137,8 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     gIq8PackOverruns = 0U;
     gIq8ClippedComponents = 0U;
 #ifdef L3_IQ8_EDMA_PACK
+    gIq8PackDetectArm[0] = 0U;
+    gIq8PackDetectArm[1] = 0U;
     gIq8EdmaBusy[0] = 0U;
     gIq8EdmaBusy[1] = 0U;
     gIq8EdmaDone = 0U;
@@ -4227,6 +4342,18 @@ static void l3_initTask(UArg arg0, UArg arg1)
     taskParams.priority = L3_HWA_REARM_TASK_PRIORITY;
     taskParams.stackSize = 2U * 1024U;
     Task_create(l3_hwaRearmTask, &taskParams, NULL);
+#ifdef CONFIGURABLE_CAPTURE
+    semaphoreParams.mode = Semaphore_Mode_COUNTING;
+    gDetectSemaphore = Semaphore_create(0, &semaphoreParams, NULL);
+    if (gDetectSemaphore == NULL) {
+        return;
+    }
+    l3detect_init(&gDetectQueue);
+    Task_Params_init(&taskParams);
+    taskParams.priority = L3_DETECT_TASK_PRIORITY;
+    taskParams.stackSize = 3U * 1024U;
+    Task_create(l3_detectTask, &taskParams, NULL);
+#endif
 #endif
 
     /* CLI with the mmWave extension. */

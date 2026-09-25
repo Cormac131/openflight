@@ -7,6 +7,7 @@ so a swing can be checked without the board.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +36,14 @@ PHASES = (
 # Production ``triggerCfg`` defaults used with the wide profile.
 DEFAULT_LEVEL = 1000.0
 DEFAULT_HITS = 2
+# Above any residual in the saved dumps, so a startup sample cannot latch.
+FLOOR_PROBE_LEVEL = 1.0e9
+FLOOR_PERCENTILE = 95.0
+# Empty-lane tee power moves by about this much over a couple of seconds.
+FLOOR_MARGIN = 1.5
+FLOOR_MIN_SAMPLES = 8
+FLOOR_SAMPLE_S = 2.0
+FLOOR_PAUSE_S = 0.05
 
 
 @dataclass(frozen=True)
@@ -140,7 +149,9 @@ class BallLeaveDetector:
         phase = "toward" if self._toward else "watching"
         return self._observe(frame, phase, tee, peak)
 
-    def _departed(self, power: np.ndarray, tee_local: int, valid_bins: int, approach_peak: float) -> bool:
+    def _departed(
+        self, power: np.ndarray, tee_local: int, valid_bins: int, approach_peak: float
+    ) -> bool:
         """Ball energy has moved past the tee while the tee bin is still occupied."""
         if not self._toward:
             return False
@@ -207,6 +218,34 @@ def replay_dump(
         tee_local = local if 0 <= local < count else None
         observations.append(detector.step(time_index, power[slot], tee_local, count))
     return observations
+
+
+def tee_power_from_stats(text: str) -> float | None:
+    """Tee residual from a stats ``trig`` line, or None when that line is absent."""
+    latest: float | None = None
+    for line in text.splitlines():
+        marker = line.find("trig ")
+        if marker < 0:
+            continue
+        for token in line[marker:].split():
+            if not token.startswith("tee="):
+                continue
+            try:
+                latest = float(token.split("=", 1)[1])
+            except ValueError:
+                continue
+    return latest
+
+
+def level_above_floor(samples: list[float]) -> tuple[float, float]:
+    """Return ``(p95 floor, armed level)`` from empty-lane tee samples."""
+    values = [float(sample) for sample in samples if math.isfinite(sample) and sample > 0.0]
+    if len(values) < FLOOR_MIN_SAMPLES:
+        raise ValueError(f"need at least {FLOOR_MIN_SAMPLES} background samples, got {len(values)}")
+    floor = float(np.percentile(values, FLOOR_PERCENTILE))
+    if not math.isfinite(floor) or floor <= 0.0:
+        raise ValueError(f"background floor must be > 0, got {floor}")
+    return floor, floor * FLOOR_MARGIN
 
 
 def iter_dump_files(directory: Path) -> list[Path]:
