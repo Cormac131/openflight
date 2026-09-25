@@ -671,3 +671,35 @@ class TestWaitForHardwareTrigger:
 
         assert response == b"".join(self._DUMP).decode("ascii")
         assert events == ["first-byte"]
+
+
+class _RecordingSerial:
+    def __init__(self, *, is_open: bool = True):
+        self.is_open = is_open
+        self.writes: list[bytes] = []
+        self.flushed = 0
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(data)
+
+    def flush(self) -> None:
+        self.flushed += 1
+
+
+def test_request_capture_sends_s_bang_and_flushes():
+    radar = OPS243Radar.__new__(OPS243Radar)
+    radar.serial = _RecordingSerial()
+
+    radar.request_capture()
+
+    assert radar.serial.writes == [b"S!\r"]
+    assert radar.serial.flushed == 1
+
+
+@pytest.mark.parametrize("serial", [None, _RecordingSerial(is_open=False)])
+def test_request_capture_without_a_link_raises(serial):
+    radar = OPS243Radar.__new__(OPS243Radar)
+    radar.serial = serial
+
+    with pytest.raises(ConnectionError, match="Not connected"):
+        radar.request_capture()

@@ -6,9 +6,18 @@ import threading
 import time
 
 import numpy as np
+import pytest
 
 from openflight.iwr6843.dump import pack_dump
-from openflight.iwr6843.monitor import IWR6843CaptureMonitor
+from openflight.iwr6843.monitor import (
+    SELF_TRIGGER_OFF_COMMAND,
+    IWR6843CaptureMonitor,
+    SelfTriggerConfig,
+    read_capture_config,
+    tee_local_bin,
+    tx_order_from_config,
+)
+from openflight.iwr6843.sparse import SparseCapture
 
 
 class FakeRadar:
@@ -352,38 +361,347 @@ def test_capture_monitor_closes_serial_when_gpio_setup_fails(tmp_path):
     assert radar.closed
 
 
-class _NoticingRadar(FakeRadar):
-    """Fake transport that reports one firmware self-trigger line."""
+class SelfTriggerRadar(FakeRadar):
+    """FakeRadar that also speaks the CLI and reports firmware notices."""
 
-    def __init__(self, raw: bytes):
+    def __init__(self, raw: bytes, *, cmd_reply: str = "Done\n"):
         super().__init__(raw)
-        self._armed_notice = True
+        self.cmd_reply = cmd_reply
+        self.commands: list[tuple[str, str]] = []
+        self.notices: list[bytes] = []
+        self.releases = 0
+        self.sparse = None
+        self.sparse_error: Exception | None = None
 
-    def consume_trigger_notice(self, pending: bytes = b"") -> tuple[bool, bytes]:
-        if self._armed_notice:
-            self._armed_notice = False
+    def cmd(self, line: str, window: float = 1.5) -> str:
+        del window
+        self.commands.append((line, threading.current_thread().name))
+        return self.cmd_reply
+
+    def wait_trigger_notice(self, pending: bytes = b"") -> tuple[bool, bytes]:
+        if not self.notices:
+            time.sleep(0.002)
+            return False, pending
+        pending += self.notices.pop(0)
+        if b"Triggered" in pending:
             return True, b""
         return False, pending
 
+    def release_sparse_freeze(self) -> None:
+        self.releases += 1
 
-def test_self_trigger_notice_starts_the_shot_listeners(tmp_path):
+    def read_sparse(self, planner):
+        del planner
+        if self.sparse_error is not None:
+            raise self.sparse_error
+        return self.sparse
+
+
+def _self_trigger_monitor(tmp_path, radar, **kwargs) -> IWR6843CaptureMonitor:
     config = tmp_path / "radar.cfg"
     config.write_text("sensorStart\n", encoding="utf-8")
-    heard = []
-    monitor = IWR6843CaptureMonitor(
+    return IWR6843CaptureMonitor(
         config_path=config,
         output_dir=tmp_path / "dumps",
-        radar=_NoticingRadar(_raw_dump()),
+        radar=radar,
         button_factory=FakeButton,
-        watch_self_trigger=True,
+        self_trigger=SelfTriggerConfig(local_bin=12, level=1000.0, hits=2),
+        **kwargs,
     )
+
+
+def _wait_until(predicate, timeout_s: float = 1.0) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.002)
+    return predicate()
+
+
+def test_self_trigger_notice_starts_the_shot_listeners(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    heard = []
+    monitor = _self_trigger_monitor(tmp_path, radar)
     monitor.add_trigger_observer(heard.append)
     monitor.start(armed=False)
     monitor.arm()
+    radar.notices.append(b"Triggered\n")
+
+    capture = monitor.capture_for_shot(None, timeout_s=1.0)
 
     assert monitor._button.when_pressed is None  # pylint: disable=protected-access
+    assert capture is not None and capture.valid
+    assert len(heard) == 1
+    assert heard[0] == capture.trigger_timestamp
+    monitor.stop()
+
+
+def test_self_trigger_config_is_sent_before_the_worker_owns_the_port(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    monitor = _self_trigger_monitor(tmp_path, radar)
+    monitor.start(armed=False)
+    monitor.stop()
+
+    assert radar.commands[0] == ("triggerCfg 12 1000.0 2", threading.current_thread().name)
+
+
+def test_rejected_self_trigger_config_fails_start_and_releases_the_radar(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump(), cmd_reply="Error: trigger bin\n")
+    monitor = _self_trigger_monitor(tmp_path, radar)
+
+    with pytest.raises(RuntimeError, match="self-trigger rejected"):
+        monitor.start(armed=False)
+    assert radar.closed
+    assert "sensorStop" in radar.shutdown_events
+
+
+def test_notice_while_disarmed_releases_the_ring_and_never_captures(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    heard = []
+    monitor = _self_trigger_monitor(tmp_path, radar)
+    monitor.add_trigger_observer(heard.append)
+    monitor.start(armed=False)
+    radar.notices.append(b"Triggered\n")
+    assert _wait_until(lambda: radar.releases == 1)
+
+    monitor.arm()
+    capture = monitor.capture_for_shot(None, timeout_s=0.2)
+
+    assert capture is None
+    assert heard == []
+    assert radar.read_started_at is None
+    monitor.stop()
+
+
+def test_notice_split_across_reads_still_triggers(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    monitor = _self_trigger_monitor(tmp_path, radar)
+    monitor.start()
+    radar.notices.extend([b"Trig", b"gered\n"])
+
     capture = monitor.capture_for_shot(None, timeout_s=1.0)
 
     assert capture is not None and capture.valid
-    assert len(heard) == 1
+    monitor.stop()
+
+
+def test_submitted_job_runs_on_the_capture_worker(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    monitor = _self_trigger_monitor(tmp_path, radar)
+    monitor.start()
+    ran = []
+    done = threading.Event()
+
+    def job(job_radar):
+        ran.append((job_radar, threading.current_thread().name))
+        done.set()
+
+    assert monitor.submit("probe", job)
+    assert done.wait(1.0)
+    assert ran == [(radar, "iwr6843-capture")]
+    monitor.stop()
+
+
+def test_submit_is_refused_when_the_monitor_is_not_running(tmp_path):
+    monitor = _self_trigger_monitor(tmp_path, SelfTriggerRadar(_raw_dump()))
+
+    assert monitor.submit("probe", lambda _radar: None) is False
+
+
+def test_other_profile_turns_the_trigger_off_and_back_on_even_on_failure(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    monitor = _self_trigger_monitor(tmp_path, radar)
+    monitor.start()
+    done = threading.Event()
+
+    def job(_radar):
+        try:
+            monitor.run_on_other_profile(lambda _r: (_ for _ in ()).throw(OSError("retune")))
+        finally:
+            done.set()
+
+    monitor.submit("late-window", job)
+    assert done.wait(1.0)
+    monitor.stop()
+
+    lines = [line for line, _thread in radar.commands]
+    assert lines == ["triggerCfg 12 1000.0 2", SELF_TRIGGER_OFF_COMMAND, "triggerCfg 12 1000.0 2"]
+
+
+def test_trigger_during_a_serial_job_is_rejected(tmp_path):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=FakeRadar(_raw_dump()),
+        button_factory=FakeButton,
+    )
+    monitor.start()
+    started = threading.Event()
+    release = threading.Event()
+
+    def job(_radar):
+        started.set()
+        release.wait(1.0)
+
+    monitor.submit("late-window", job)
+    assert started.wait(1.0)
+    try:
+        assert monitor.notify_trigger(time.time()) is False
+    finally:
+        release.set()
+    monitor.stop()
+
+
+def test_job_waits_behind_an_in_flight_capture(tmp_path):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    order = []
+
+    class SlowRadar(FakeRadar):
+        def read_dump(self):
+            time.sleep(0.05)
+            order.append("capture")
+            return super().read_dump()
+
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=SlowRadar(_raw_dump()),
+        button_factory=FakeButton,
+    )
+    monitor.start()
+    done = threading.Event()
+    assert monitor.notify_trigger(time.time())
+    monitor.submit("late-window", lambda _radar: (order.append("job"), done.set()))
+
+    assert done.wait(1.0)
+    assert order == ["capture", "job"]
+    monitor.stop()
+
+
+def test_sparse_capture_carries_its_noise_floor(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    radar.sparse = SparseCapture(
+        raw=_raw_dump(), noise_power=4.5, requested_cells=10, sent_cells=10
+    )
+    monitor = _self_trigger_monitor(tmp_path, radar, slice_planner=lambda _summary: None)
+    monitor.start()
+    radar.notices.append(b"Triggered\n")
+
+    capture = monitor.capture_for_shot(None, timeout_s=1.0)
+
+    assert capture is not None and capture.valid
+    assert capture.noise_power == 4.5
+    assert radar.read_started_at is None
+    monitor.stop()
+
+
+def test_sparse_rejected_before_freeze_falls_back_to_full_dump(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    radar.sparse = None
+    monitor = _self_trigger_monitor(tmp_path, radar, slice_planner=lambda _summary: None)
+    monitor.start()
+    radar.notices.append(b"Triggered\n")
+
+    capture = monitor.capture_for_shot(None, timeout_s=1.0)
+
+    assert capture is not None and capture.valid
+    assert capture.noise_power is None
+    assert radar.read_started_at is not None
+    monitor.stop()
+
+
+def test_sparse_failure_after_freeze_is_a_capture_error_not_a_fallback(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    radar.sparse_error = TimeoutError("ILS1 packet incomplete")
+    monitor = _self_trigger_monitor(tmp_path, radar, slice_planner=lambda _summary: None)
+    monitor.start()
+    radar.notices.append(b"Triggered\n")
+
+    capture = monitor.capture_for_shot(None, timeout_s=1.0)
+
+    assert capture is not None
+    assert not capture.valid
+    assert "ILS1" in capture.error
+    assert radar.read_started_at is None
+    monitor.stop()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"local_bin": -1, "level": 1000.0, "hits": 2}, "bin"),
+        ({"local_bin": 3, "level": 0.0, "hits": 2}, "level"),
+        ({"local_bin": 3, "level": 1000.0, "hits": 0}, "hits"),
+    ],
+)
+def test_self_trigger_config_rejects_values_the_firmware_would_misread(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        SelfTriggerConfig(**kwargs)
+
+
+def _cfg(tmp_path, *lines: str):
+    path = tmp_path / "capture.cfg"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_capture_config_summary_reads_masks_and_first_window(tmp_path):
+    path = _cfg(
+        tmp_path,
+        "chirpCfg 0 0 0 0 0 0 0 1",
+        "chirpCfg 1 1 0 0 0 0 0 4",
+        "phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1",
+    )
+
+    summary = read_capture_config(path)
+
+    assert summary.chirp_tx_masks == ("1", "4")
+    assert summary.first_window_start == 20
+    assert summary.first_window_bins == 53
+    assert tx_order_from_config(path) == "normal"
+
+
+def test_tee_local_bin_is_relative_to_the_first_window(tmp_path):
+    path = _cfg(tmp_path, "phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1")
+
+    # 1.575 m / (6 m / 128) = bin 33.6 -> 34; 34 - 20 = 14.
+    assert tee_local_bin(1.575, path) == 14
+
+
+@pytest.mark.parametrize("tee_m", [0.5, 4.0])
+def test_tee_outside_the_first_window_is_an_error(tmp_path, tee_m):
+    path = _cfg(tmp_path, "phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1")
+
+    with pytest.raises(ValueError, match="outside the first capture window"):
+        tee_local_bin(tee_m, path)
+
+
+def test_tee_bin_needs_a_capture_window(tmp_path):
+    with pytest.raises(ValueError, match="no phaseCaptureCfg"):
+        tee_local_bin(1.5, _cfg(tmp_path, "sensorStart"))
+
+
+def test_listener_serial_error_does_not_kill_the_worker(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    failures = {"left": 1}
+    original = radar.wait_trigger_notice
+
+    def flaky(pending=b""):
+        if failures["left"]:
+            failures["left"] -= 1
+            raise OSError("device reports readiness to read but returned no data")
+        return original(pending)
+
+    radar.wait_trigger_notice = flaky
+    monitor = _self_trigger_monitor(tmp_path, radar)
+    monitor.start()
+    radar.notices.append(b"Triggered\n")
+
+    capture = monitor.capture_for_shot(None, timeout_s=2.0)
+
+    assert capture is not None and capture.valid
     monitor.stop()

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from iwr6843_fakes import FakeIWRRuntime
 
 from openflight import server as server_module
 from openflight.camera.replay import ReplayNotFoundError, ReplayPreparationError
@@ -621,7 +622,7 @@ class TestIWR6843ShotIntegration:
             valid=True,
             sequence=1,
         )
-        runtime = SimpleNamespace(
+        runtime = FakeIWRRuntime(
             process_shot=lambda **kwargs: SimpleNamespace(
                 capture=capture,
                 measurement=measurement,
@@ -697,7 +698,7 @@ class TestIWR6843ShotIntegration:
             valid=True,
             sequence=1,
         )
-        runtime = SimpleNamespace(
+        runtime = FakeIWRRuntime(
             process_shot=lambda **kwargs: SimpleNamespace(
                 capture=capture,
                 measurement=measurement,
@@ -753,7 +754,7 @@ class TestIWR6843ShotIntegration:
             valid=True,
             sequence=1,
         )
-        runtime = SimpleNamespace(
+        runtime = FakeIWRRuntime(
             process_shot=lambda **kwargs: SimpleNamespace(
                 capture=capture,
                 measurement=measurement,
@@ -805,7 +806,7 @@ class TestIWR6843ShotIntegration:
             valid=True,
             sequence=1,
         )
-        runtime = SimpleNamespace(
+        runtime = FakeIWRRuntime(
             process_shot=lambda **kwargs: SimpleNamespace(
                 capture=capture,
                 measurement=measurement,
@@ -859,7 +860,7 @@ class TestIWR6843ShotIntegration:
             valid=True,
             sequence=1,
         )
-        runtime = SimpleNamespace(
+        runtime = FakeIWRRuntime(
             process_shot=lambda **kwargs: SimpleNamespace(
                 capture=capture,
                 measurement=measurement,
@@ -911,7 +912,7 @@ class TestIWR6843ShotIntegration:
             valid=True,
             sequence=1,
         )
-        runtime = SimpleNamespace(
+        runtime = FakeIWRRuntime(
             process_shot=lambda **kwargs: SimpleNamespace(
                 capture=capture,
                 measurement=measurement,
@@ -960,7 +961,7 @@ class TestIWR6843ShotIntegration:
 
     def test_missing_ti_capture_preserves_ops_shot(self, monkeypatch):
         emitted = []
-        runtime = SimpleNamespace(
+        runtime = FakeIWRRuntime(
             process_shot=lambda **kwargs: SimpleNamespace(capture=None, measurement=None)
         )
         monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
@@ -1009,7 +1010,7 @@ class TestIWR6843ShotIntegration:
             valid=True,
             sequence=1,
         )
-        runtime = SimpleNamespace(
+        runtime = FakeIWRRuntime(
             process_shot=lambda **kwargs: SimpleNamespace(
                 capture=capture,
                 measurement=measurement,
@@ -2810,7 +2811,7 @@ class TestOnShotDetected:
         emitted = []
         background_threads = []
 
-        class BlockingRuntime:
+        class BlockingRuntime(FakeIWRRuntime):
             @staticmethod
             def process_shot(**_kwargs):
                 dump_started.set()
@@ -2904,7 +2905,7 @@ class TestOnShotDetected:
         enrichment_queue = self._enrichment_queue()
         monkeypatch.setattr(server_module, "shot_enrichment_queue", enrichment_queue)
         monkeypatch.setattr(server_module, "shot_enrichment_task", None)
-        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(server_module, "iwr6843_runtime", FakeIWRRuntime())
         monkeypatch.setattr(
             server_module.socketio,
             "start_background_task",
@@ -2996,7 +2997,7 @@ class TestOnShotDetected:
         enrichment_queue = self._enrichment_queue()
         monkeypatch.setattr(server_module, "shot_enrichment_queue", enrichment_queue)
         monkeypatch.setattr(server_module, "shot_enrichment_task", None)
-        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(server_module, "iwr6843_runtime", FakeIWRRuntime())
         monkeypatch.setattr(
             server_module.socketio,
             "start_background_task",
@@ -3070,7 +3071,7 @@ class TestOnShotDetected:
         monkeypatch.setattr(server_module, "shot_enrichment_task", None)
         monkeypatch.setattr(server_module, "_shot_sequence_number", 0, raising=False)
 
-        class BlockingIWRRuntime:
+        class BlockingIWRRuntime(FakeIWRRuntime):
             @staticmethod
             def process_shot(**kwargs):
                 if kwargs["impact_timestamp"] == 100.0:
@@ -3196,7 +3197,7 @@ class TestOnShotDetected:
 
         monkeypatch.setattr(server_module, "shot_enrichment_queue", enrichment_queue)
         monkeypatch.setattr(server_module, "shot_enrichment_task", None)
-        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(server_module, "iwr6843_runtime", FakeIWRRuntime())
         monkeypatch.setattr(server_module, "camera_capture_runtime", None)
         monkeypatch.setattr(server_module, "monitor", None)
         monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
@@ -3252,7 +3253,7 @@ class TestOnShotDetected:
 
         monkeypatch.setattr(server_module, "shot_enrichment_queue", enrichment_queue)
         monkeypatch.setattr(server_module, "shot_enrichment_task", None)
-        monkeypatch.setattr(server_module, "iwr6843_runtime", object())
+        monkeypatch.setattr(server_module, "iwr6843_runtime", FakeIWRRuntime())
         monkeypatch.setattr(server_module, "_SHOT_ENRICHMENT_DEADLINE_S", 0.05, raising=False)
         monkeypatch.setattr(server_module, "_SHOT_FINALIZATION_CAPACITY", 4, raising=False)
 
@@ -4616,3 +4617,304 @@ class TestBallisticCarryPrecedence:
         resolved = server_module.resolve_shot(forwarded[0], server_module.SimPlayerState())
         assert resolved.carry_yards == pytest.approx(shot.carry_spin_adjusted)
         assert resolved.carry_yards > 135.0
+
+
+def _self_trigger_args(**overrides):
+    values = {
+        "iwr6843_self_trigger": False,
+        "iwr6843_self_trigger_bin": None,
+        "iwr6843_self_trigger_level": None,
+        "iwr6843_self_trigger_hits": None,
+        "iwr6843_tee_m": 1.575,
+        "iwr6843_config": "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg",
+        "sound_pre_trigger": None,
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+class TestSelfTriggerCli:
+    """--iwr6843-self-trigger is the one switch; the rest only tune it."""
+
+    def test_off_by_default(self):
+        assert server_module._self_trigger_config(_self_trigger_args()) is None
+
+    @pytest.mark.parametrize(
+        ("flag", "value"),
+        [
+            ("iwr6843_self_trigger_bin", 14),
+            ("iwr6843_self_trigger_level", 500.0),
+            ("iwr6843_self_trigger_hits", 3),
+        ],
+    )
+    def test_tuning_without_the_switch_is_refused(self, flag, value):
+        with pytest.raises(ValueError, match="requires --iwr6843-self-trigger"):
+            server_module._self_trigger_config(_self_trigger_args(**{flag: value}))
+
+    def test_switch_alone_takes_the_bin_from_the_tee_and_the_defaults(self):
+        config = server_module._self_trigger_config(_self_trigger_args(iwr6843_self_trigger=True))
+
+        assert (config.local_bin, config.level, config.hits) == (14, 1000.0, 2)
+        assert config.command == "triggerCfg 14 1000.0 2"
+
+    def test_explicit_tuning_wins(self):
+        config = server_module._self_trigger_config(
+            _self_trigger_args(
+                iwr6843_self_trigger=True,
+                iwr6843_self_trigger_bin=9,
+                iwr6843_self_trigger_level=250.0,
+                iwr6843_self_trigger_hits=4,
+            )
+        )
+
+        assert (config.local_bin, config.level, config.hits) == (9, 250.0, 4)
+
+    def test_zero_hits_is_refused_instead_of_silently_disabling_capture(self):
+        with pytest.raises(ValueError, match="hits must be >= 1"):
+            server_module._self_trigger_config(
+                _self_trigger_args(iwr6843_self_trigger=True, iwr6843_self_trigger_hits=0)
+            )
+
+    def test_tee_outside_the_capture_window_is_refused(self):
+        with pytest.raises(ValueError, match="outside the first capture window"):
+            server_module._self_trigger_config(
+                _self_trigger_args(iwr6843_self_trigger=True, iwr6843_tee_m=0.3)
+            )
+
+    @pytest.mark.parametrize(
+        ("overrides", "expected"),
+        [
+            ({}, 16),
+            ({"iwr6843_self_trigger": True}, 24),
+            ({"iwr6843_self_trigger": True, "sound_pre_trigger": 10}, 10),
+            ({"sound_pre_trigger": 20}, 20),
+        ],
+    )
+    def test_ops_pre_trigger_follows_the_trigger_source(self, overrides, expected):
+        assert server_module._ops_pre_trigger_segments(_self_trigger_args(**overrides)) == expected
+
+    @pytest.mark.parametrize(
+        ("argv", "message"),
+        [
+            (["--iwr6843", "--iwr6843-self-trigger-bin", "3"], "requires --iwr6843-self-trigger"),
+            (["--iwr6843-self-trigger"], "requires --iwr6843"),
+            (
+                ["--iwr6843", "--iwr6843-self-trigger", "--trigger", "speed"],
+                "use --trigger sound",
+            ),
+        ],
+    )
+    def test_cli_refuses_ambiguous_trigger_setups(self, monkeypatch, capsys, argv, message):
+        monkeypatch.setattr(sys, "argv", ["openflight-server", *argv])
+
+        with pytest.raises(SystemExit) as exc_info:
+            server_module.main()
+
+        assert exc_info.value.code == 2
+        assert message in capsys.readouterr().err
+
+
+class TestSelfTriggerLatency:
+    def _setup(self, monkeypatch, segments):
+        runtime = FakeIWRRuntime()
+        runtime.self_trigger_enabled = True
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(
+            server_module,
+            "monitor",
+            SimpleNamespace(
+                trigger=SimpleNamespace(pre_trigger_segments=segments), sample_rate_ksps=30
+            ),
+        )
+
+    def test_warns_when_s_bang_lands_after_the_pre_trigger_window(self, monkeypatch, caplog):
+        self._setup(monkeypatch, segments=16)
+        shot = SimpleNamespace(impact_timestamp=100.0)
+
+        with caplog.at_level("INFO"):
+            server_module._check_self_trigger_latency(
+                shot, SimpleNamespace(trigger_timestamp=100.080)
+            )
+
+        record = next(r for r in caplog.records if "impact -> S!" in r.getMessage())
+        assert record.levelname == "WARNING"
+        assert "80.0 ms" in record.getMessage()
+
+    def test_inside_the_window_is_informational(self, monkeypatch, caplog):
+        self._setup(monkeypatch, segments=24)
+        shot = SimpleNamespace(impact_timestamp=100.0)
+
+        with caplog.at_level("INFO"):
+            server_module._check_self_trigger_latency(
+                shot, SimpleNamespace(trigger_timestamp=100.012)
+            )
+
+        record = next(r for r in caplog.records if "impact -> S!" in r.getMessage())
+        assert record.levelname == "INFO"
+
+    def test_sound_gate_mode_logs_nothing(self, monkeypatch, caplog):
+        monkeypatch.setattr(server_module, "iwr6843_runtime", FakeIWRRuntime())
+
+        with caplog.at_level("INFO"):
+            server_module._check_self_trigger_latency(
+                SimpleNamespace(impact_timestamp=1.0), SimpleNamespace(trigger_timestamp=1.5)
+            )
+
+        assert not [r for r in caplog.records if "impact -> S!" in r.getMessage()]
+
+
+class _OpenFlightRuntime(FakeIWRRuntime):
+    """Range mode: plans a real late window."""
+
+    def plan_late_window(self, *, ball_speed_mph, launch_angle_deg, spin_rpm):
+        from openflight.iwr6843.late_window import plan_late_window
+
+        if launch_angle_deg is None:
+            return None
+        return plan_late_window("outdoor", ball_speed_mph, launch_angle_deg, spin_rpm or 0.0)
+
+
+class TestLateWindowPublication:
+    """The late window runs after the shot is out and updates it when done."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate(self, monkeypatch):
+        server_module._reset_shot_sequence()
+        self.emitted = []
+        self.logged = []
+        self.runtime = _OpenFlightRuntime()
+        session = SimpleNamespace(
+            stats={},
+            log_shot=lambda **_kwargs: self.emitted.append(("log_shot", None)),
+            log_late_window=lambda **kwargs: self.logged.append(kwargs),
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", self.runtime)
+        monkeypatch.setattr(server_module, "monitor", None)
+        monkeypatch.setattr(server_module, "kld7_vertical", None)
+        monkeypatch.setattr(server_module, "kld7_horizontal", None)
+        monkeypatch.setattr(server_module, "camera_capture_runtime", None)
+        monkeypatch.setattr(server_module, "ball_speed_correction_enabled", False)
+        monkeypatch.setattr(server_module, "calculated_spin_enabled", False)
+        monkeypatch.setattr(server_module, "ballistics_enabled", True)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        monkeypatch.setattr(server_module, "sim_connectors", [])
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: session)
+        monkeypatch.setattr(
+            server_module,
+            "_forward_shot_to_simulators",
+            lambda _shot: self.emitted.append(("simulators", None)),
+        )
+        monkeypatch.setattr(
+            server_module.socketio,
+            "emit",
+            lambda event, payload: self.emitted.append((event, payload)),
+        )
+        yield
+        _wait_for_shot_finalization_idle()
+
+    @staticmethod
+    def _shot(launch_angle=12.0):
+        return Shot(
+            ball_speed_mph=160.0,
+            club_speed_mph=108.0,
+            timestamp=datetime(2026, 9, 25, 12, 0, 0),
+            impact_timestamp=100.0,
+            club=ClubType.DRIVER,
+            spin_rpm=2500.0,
+            spin_confidence=0.9,
+            launch_angle_vertical=launch_angle,
+            launch_angle_confidence=0.9,
+            mode="rolling-buffer",
+            shot_number=1,
+        )
+
+    def test_shot_is_published_before_the_late_window_is_queued(self):
+        shot = self._shot()
+
+        server_module._finalize_shot_detected(shot, emit_event="shot")
+
+        events = [event for event, _payload in self.emitted]
+        assert events.index("shot") < events.index("simulators")
+        assert len(self.runtime.late_window_requests) == 1
+        published = self.emitted[events.index("shot")][1]["shot"]
+        assert published["late_window"]["status"] == "pending"
+        assert published["landing_angle_source"] == "ballistic"
+        assert published["landing_angle_deg"] is not None
+        assert self.runtime.late_window_requests[0]["impact_timestamp"] == 100.0
+
+    def test_measured_descent_replaces_the_ballistic_landing_angle(self):
+        shot = self._shot()
+        server_module._finalize_shot_detected(shot, emit_event="shot")
+        request = self.runtime.late_window_requests[0]
+
+        request["on_measured"]({"method": "model_assisted", "descent_deg": 38.5})
+
+        event, payload = self.emitted[-1]
+        assert event == "shot_update"
+        assert payload["shot"]["landing_angle_deg"] == 38.5
+        assert payload["shot"]["descent_angle_deg"] == 38.5
+        assert payload["shot"]["landing_angle_source"] == "late_window_model_assisted"
+        assert payload["shot"]["late_window"]["status"] == "measured"
+        assert self.logged[0]["record"]["measured"]["descent_deg"] == 38.5
+
+    def test_missed_window_keeps_the_ballistic_landing_angle(self):
+        shot = self._shot()
+        server_module._finalize_shot_detected(shot, emit_event="shot")
+        ballistic = shot.landing_angle_deg
+
+        self.runtime.late_window_requests[0]["on_measured"](None)
+
+        payload = self.emitted[-1][1]
+        assert payload["shot"]["late_window"]["status"] == "missed"
+        assert payload["shot"]["landing_angle_deg"] == ballistic
+        assert payload["shot"]["landing_angle_source"] == "ballistic"
+        assert shot.descent_angle_deg is None
+
+    def test_measurement_without_a_descent_counts_as_missed(self):
+        shot = self._shot()
+        server_module._finalize_shot_detected(shot, emit_event="shot")
+
+        self.runtime.late_window_requests[0]["on_measured"]({"descent_deg": None, "ranges": []})
+
+        assert shot.late_window["status"] == "missed"
+        assert shot.late_window["measured"] == {"descent_deg": None, "ranges": []}
+
+    def test_unqueued_window_is_reported_missed_immediately(self, monkeypatch):
+        monkeypatch.setattr(self.runtime, "measure_late_window", lambda *_args, **_kwargs: False)
+        shot = self._shot()
+
+        server_module._finalize_shot_detected(shot, emit_event="shot")
+
+        assert shot.late_window["status"] == "missed"
+
+    def test_no_launch_angle_means_no_late_window(self, monkeypatch):
+        monkeypatch.setattr(server_module, "_ensure_user_facing_launch_angles", lambda _shot: None)
+        shot = self._shot(launch_angle=None)
+
+        server_module._finalize_shot_detected(shot, emit_event="shot")
+
+        assert shot.late_window is None
+        assert self.runtime.late_window_requests == []
+
+    def test_net_mode_runtime_plans_nothing(self, monkeypatch):
+        monkeypatch.setattr(server_module, "iwr6843_runtime", FakeIWRRuntime())
+        shot = self._shot()
+
+        server_module._finalize_shot_detected(shot, emit_event="shot")
+
+        assert shot.late_window is None
+
+
+def test_shot_dict_carries_the_late_window_fields():
+    shot = Shot(ball_speed_mph=150.0, timestamp=datetime.now())
+    shot.late_window = {"status": "measured"}
+    shot.descent_angle_deg = 40.0
+    shot.landing_angle_deg = 40.0
+    shot.landing_angle_source = "late_window_model_assisted"
+
+    data = shot.to_dict()
+
+    assert data["late_window"] == {"status": "measured"}
+    assert data["descent_angle_deg"] == 40.0
+    assert data["landing_angle_deg"] == 40.0
+    assert data["landing_angle_source"] == "late_window_model_assisted"

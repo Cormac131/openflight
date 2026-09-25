@@ -18,7 +18,7 @@ from collections import deque
 from dataclasses import dataclass, fields, replace
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
@@ -58,6 +58,9 @@ from .speed_correction import correct_ball_speed
 from .spin_estimate import calculated_spin_rpm
 from .startup_status import StartupStatusReporter, configured_startup_components
 from .swing_speed import SwingSpeedEvent
+
+if TYPE_CHECKING:
+    from .iwr6843.monitor import SelfTriggerConfig
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -1078,28 +1081,60 @@ def init_camera_capture(
         return False
 
 
-_SELF_TRIGGER_LEVEL = 1000.0
+# Residual power at the tee bin that counts as "ball present" on the wide
+# 53-bin IQ16 profile. Tune with --iwr6843-self-trigger-level.
+_SELF_TRIGGER_DEFAULT_LEVEL = 1000.0
+# Consecutive frames the tee bin must stay occupied before the trigger arms.
+_SELF_TRIGGER_DEFAULT_HITS = 2
+# OPS rolling-buffer split (S#n of 32 segments, ~4.27 ms each at 30 ksps).
+# The self-trigger reaches the OPS as S! a few ms to tens of ms after impact,
+# so keep more of the buffer before the request than the sound gate needs.
+_DEFAULT_OPS_PRE_TRIGGER_SEGMENTS = 16
+_SELF_TRIGGER_OPS_PRE_TRIGGER_SEGMENTS = 24
+_OPS_BUFFER_SEGMENTS = 32
+_OPS_BUFFER_SAMPLES = 4096
 
 
-def _self_trigger_args(args) -> tuple[int, float, int] | None:
-    """Bin, power, and hit count for triggerCfg, or None when it stays off."""
-    from .iwr6843.monitor import tee_local_bin
+def _self_trigger_config(args) -> "SelfTriggerConfig | None":
+    """--iwr6843-self-trigger turns the firmware trigger on; the rest only tunes it.
 
-    if not args.iwr6843_self_trigger:
-        if args.iwr6843_self_trigger_bin is None or args.iwr6843_self_trigger_level is None:
-            return None
-        return (
-            args.iwr6843_self_trigger_bin,
-            args.iwr6843_self_trigger_level,
-            args.iwr6843_self_trigger_hits,
+    Raises ValueError for tuning flags without the switch, so a partial
+    command line cannot silently change which trigger drives the shot.
+    """
+    from .iwr6843.monitor import SelfTriggerConfig, tee_local_bin
+
+    tuning = [
+        flag
+        for flag, value in (
+            ("--iwr6843-self-trigger-bin", args.iwr6843_self_trigger_bin),
+            ("--iwr6843-self-trigger-level", args.iwr6843_self_trigger_level),
+            ("--iwr6843-self-trigger-hits", args.iwr6843_self_trigger_hits),
         )
+        if value is not None
+    ]
+    if not args.iwr6843_self_trigger:
+        if tuning:
+            raise ValueError(f"{', '.join(tuning)} requires --iwr6843-self-trigger")
+        return None
     bin_index = args.iwr6843_self_trigger_bin
     if bin_index is None:
         bin_index = tee_local_bin(args.iwr6843_tee_m, args.iwr6843_config)
     level = args.iwr6843_self_trigger_level
-    if level is None:
-        level = _SELF_TRIGGER_LEVEL
-    return (bin_index, level, args.iwr6843_self_trigger_hits)
+    hits = args.iwr6843_self_trigger_hits
+    return SelfTriggerConfig(
+        local_bin=bin_index,
+        level=_SELF_TRIGGER_DEFAULT_LEVEL if level is None else level,
+        hits=_SELF_TRIGGER_DEFAULT_HITS if hits is None else hits,
+    )
+
+
+def _ops_pre_trigger_segments(args) -> int:
+    """Explicit --sound-pre-trigger wins; otherwise the trigger source decides."""
+    if args.sound_pre_trigger is not None:
+        return args.sound_pre_trigger
+    if args.iwr6843_self_trigger:
+        return _SELF_TRIGGER_OPS_PRE_TRIGGER_SEGMENTS
+    return _DEFAULT_OPS_PRE_TRIGGER_SEGMENTS
 
 
 def init_iwr6843(
@@ -1119,7 +1154,7 @@ def init_iwr6843(
     azimuth_offset_deg: float = 0.0,
     horizontal_phase_reference_rad: float | None = None,
     save_dumps: bool = False,
-    self_trigger: tuple[int, float, int] | None = None,
+    self_trigger: "SelfTriggerConfig | None" = None,
     flight: str = "net",
 ) -> bool:
     """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator."""
@@ -1156,24 +1191,15 @@ def init_iwr6843(
                 if camera_capture_runtime is not None
                 else None
             ),
-            watch_self_trigger=self_trigger is not None,
+            self_trigger=self_trigger,
         )
         # OPS initialization can pulse the shared sound gate. Configure TI now,
         # but do not accept edges until the OPS trigger path is fully running.
         capture_monitor.start(armed=False)
         if self_trigger is not None:
-            bin_index, level, hits = self_trigger
-            reply = capture_monitor.radar.cmd(
-                f"triggerCfg {bin_index} {level} {hits}",
-                2.0,
-            )
-            if "Error" in reply or "Done" not in reply:
-                raise RuntimeError(f"IWR6843 self-trigger rejected: {reply.strip()}")
-            logger.info(
-                "[IWR6843] Self-trigger armed: local bin %d, level %s, %d hits",
-                bin_index,
-                level,
-                hits,
+            logger.warning(
+                "[IWR6843] Self-trigger drives the OPS with S!. Disconnect the "
+                "SEN-14262 GATE from OPS HOST_INT, or both will trigger it."
             )
         iwr6843_runtime = IWR6843Runtime(
             capture_monitor=capture_monitor,
@@ -1200,6 +1226,7 @@ def init_iwr6843(
             "tee_slant_range_m": tee_range_m,
             "net_range_m": net_range_m,
             "flight": flight,
+            "self_trigger": self_trigger.command if self_trigger is not None else None,
             "tx_order": resolved_order,
             "tdm_sign_policy": iwr6843_runtime.tdm_sign_policy,
             "tilt_deg": math.degrees(calibration.tilt_rad),
@@ -2423,40 +2450,98 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
     shot.inclinometer = data
 
 
-def _measure_late_window(shot: Shot, record: dict) -> dict | None:
-    """Sample the planned looks when the impact dump finished in time."""
-    from .iwr6843.late_window import LateLook, LateWindowPlan, capture_late_window
+def _check_self_trigger_latency(shot: Shot, capture) -> None:
+    """Warn when the self-trigger S! lands after the OPS pre-trigger window.
 
-    if iwr6843_runtime is None or shot.impact_timestamp is None:
-        return None
-    looks = tuple(
-        LateLook(
-            t_s=look["t_s"],
-            downrange_m=look["downrange_m"],
-            height_m=look["height_m"],
-            slant_range_m=look["slant_range_m"],
-        )
-        for look in record["looks"]
+    In self-trigger mode the capture's trigger time is when the host read
+    the firmware notice and sent S!, so impact -> S! is the OPS budget used.
+    """
+    if (
+        iwr6843_runtime is None
+        or not iwr6843_runtime.self_trigger_enabled
+        or capture is None
+        or shot.impact_timestamp is None
+    ):
+        return
+    segments = getattr(getattr(monitor, "trigger", None), "pre_trigger_segments", None)
+    sample_rate_ksps = getattr(monitor, "sample_rate_ksps", None)
+    latency_ms = (capture.trigger_timestamp - shot.impact_timestamp) * 1000.0
+    if segments is None or not sample_rate_ksps:
+        logger.info("[SERVER] Self-trigger impact -> S!: %.1f ms", latency_ms)
+        return
+    buffer_ms = _OPS_BUFFER_SAMPLES / sample_rate_ksps
+    budget_ms = segments / _OPS_BUFFER_SEGMENTS * buffer_ms
+    log = logger.warning if latency_ms > budget_ms else logger.info
+    log(
+        "[SERVER] Self-trigger impact -> S!: %.1f ms (OPS pre-trigger %.1f ms)",
+        latency_ms,
+        budget_ms,
     )
-    plan = LateWindowPlan(
-        enabled=True,
-        reason=record["reason"],
-        apex_t_s=record["apex_t_s"],
-        looks=looks,
+
+
+def _plan_late_window(shot: Shot):
+    """Late looks for this shot, or None outside open flight."""
+    if iwr6843_runtime is None or shot.mode == "mock" or shot.impact_timestamp is None:
+        return None
+    return iwr6843_runtime.plan_late_window(
+        ball_speed_mph=shot.ball_speed_mph,
+        launch_angle_deg=shot.launch_angle_vertical,
+        spin_rpm=shot.spin_rpm,
+    )
+
+
+def _start_late_window(shot: Shot, plan) -> None:
+    """Queue the late looks after the shot is published; update it when done."""
+
+    def on_measured(measured: dict | None) -> None:
+        _apply_late_window_result(shot, measured)
+
+    queued = iwr6843_runtime.measure_late_window(
+        plan,
+        impact_timestamp=shot.impact_timestamp,
+        on_measured=on_measured,
+    )
+    if not queued:
+        _apply_late_window_result(shot, None)
+
+
+def _apply_late_window_result(shot: Shot, measured: dict | None) -> None:
+    """Record the late looks and publish the measured descent, if any."""
+    record = dict(shot.late_window or {})
+    record["measured"] = measured
+    descent = measured.get("descent_deg") if measured is not None else None
+    record["status"] = "measured" if descent is not None else "missed"
+    shot.late_window = record
+    if descent is not None:
+        shot.descent_angle_deg = descent
+        shot.landing_angle_deg = descent
+        shot.landing_angle_source = "late_window_model_assisted"
+    logger.info(
+        "[SERVER] Late window %s for shot #%s%s",
+        record["status"],
+        shot.shot_number,
+        f": descent {descent:.1f} deg" if descent is not None else "",
     )
     try:
-        return capture_late_window(
-            iwr6843_runtime.capture_monitor.radar,
-            plan,
-            impact_timestamp=shot.impact_timestamp,
-            tee_range_m=iwr6843_runtime.calibration.tee_range_m or 1.5,
-            restore_cfg=iwr6843_runtime_config["config"],
-            now=time.time,
-            sleep=time.sleep,
+        session_log = get_session_logger()
+        if session_log:
+            session_log.log_late_window(
+                shot_number=_shot_number_for_log(shot, session_log),
+                record=record,
+            )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Failed to log late window: %s", error, exc_info=True)
+    try:
+        socketio.emit(
+            "shot_update",
+            {
+                "shot": shot_to_dict(shot),
+                "stats": monitor.get_session_stats() if monitor else {},
+                "pending": {},
+            },
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
-        logger.warning("[SERVER] Late-window measurement failed: %s", error)
-        return None
+        logger.warning("[SERVER] Failed to emit late-window update: %s", error, exc_info=True)
 
 
 def _process_iwr6843_angle(shot: Shot) -> float | None:
@@ -2504,6 +2589,7 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
                 ),
             )
 
+        _check_self_trigger_latency(shot, capture)
         if capture is None:
             logger.warning("[SERVER] IWR6843 capture timed out; preserving OPS shot")
             _emit_iwr6843_trigger_status(
@@ -3264,42 +3350,27 @@ def _finalize_shot_detected(
     # back to the table estimator otherwise (either ballistics disabled or
     # angle missing → resolve_launch returns None). This is the only place
     # that writes carry_spin_adjusted for a live shot.
-    if shot.mode != "mock" and iwr6843_runtime is not None:
-        from .iwr6843.late_window import late_window_record
-
-        record = late_window_record(
-            iwr6843_runtime.flight_mode,
-            ball_speed_mph=shot.ball_speed_mph,
-            launch_angle_deg=shot.launch_angle_vertical,
-            spin_rpm=shot.spin_rpm or 0.0,
-            tee_range_m=iwr6843_runtime.calibration.tee_range_m or 1.5,
+    late_plan = _plan_late_window(shot)
+    if late_plan is not None:
+        shot.late_window = {**late_plan.to_dict(), "status": "pending"}
+        logger.info(
+            "[SERVER] Late window planned: apex %.2fs, looks at %.2fs and %.2fs",
+            late_plan.apex_t_s,
+            late_plan.looks[0].t_s,
+            late_plan.looks[-1].t_s,
         )
-        if record is not None:
-            measured = _measure_late_window(shot, record)
-            if measured is not None:
-                record["measured"] = measured
-                if measured.get("descent_deg") is not None:
-                    shot.descent_angle_deg = measured["descent_deg"]
-            shot.late_window = record
-            logger.info(
-                "[SERVER] Late window: apex %.2fs, looks at %.2fs and %.2fs",
-                record["apex_t_s"],
-                record["looks"][0]["t_s"],
-                record["looks"][1]["t_s"],
-            )
 
     if shot.mode != "mock":
         conditions = resolve_launch(shot) if ballistics_enabled else None
         if conditions is not None:
             trajectory = simulate(conditions)
             shot.carry_spin_adjusted = trajectory.carry_yards
-            shot.landing_angle_deg = (
-                shot.descent_angle_deg
-                if shot.descent_angle_deg is not None
-                else trajectory.landing_angle_deg
-            )
+            # The late window, when it measures one, replaces this afterwards.
+            shot.landing_angle_deg = trajectory.landing_angle_deg
+            shot.landing_angle_source = "ballistic"
             logger.info(
-                "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s, landing: %.1f deg)",
+                "[SERVER] Ballistic carry: %.0f yds "
+                "(spin: %.0f rpm, source: %s, landing: %.1f deg)",
                 shot.carry_spin_adjusted,
                 conditions.spin_rpm,
                 conditions.spin_source,
@@ -3391,6 +3462,10 @@ def _finalize_shot_detected(
 
     # Forward to simulator connectors (optional)
     _forward_shot_to_simulators(shot)
+
+    # Seconds of radar time; runs on the IWR worker after the shot is out.
+    if late_plan is not None:
+        _start_late_window(shot, late_plan)
 
     # Debug logging (optional)
     if debug_mode:
@@ -3936,12 +4011,10 @@ def start_monitor(
         )
         if iwr6843_runtime is not None:
             capture_monitor = iwr6843_runtime.capture_monitor
-            ops_radar = getattr(monitor, "radar", None)
-            if (
-                capture_monitor.watch_self_trigger
-                and ops_radar is not None
-                and hasattr(ops_radar, "request_capture")
-            ):
+            if capture_monitor.watch_self_trigger:
+                ops_radar = getattr(monitor, "radar", None)
+                if ops_radar is None or not hasattr(ops_radar, "request_capture"):
+                    raise RuntimeError("IWR6843 self-trigger needs an OPS radar that accepts S!")
                 capture_monitor.add_trigger_observer(
                     lambda _timestamp, radar=ops_radar: radar.request_capture()
                 )
@@ -4359,7 +4432,10 @@ def _apply_kld7_device_defaults(args, dev_root: Path = Path("/dev")) -> None:
 
 def main():
     """Run the server."""
+    # Lazy: the iwr6843 package pulls in the estimator stack.
     import argparse  # pylint: disable=import-outside-toplevel
+
+    from .iwr6843.calibration import DEFAULT_TEE_RANGE_M  # pylint: disable=import-outside-toplevel
 
     parser = argparse.ArgumentParser(description="OpenFlight UI Server")
     parser.add_argument("--port", "-p", help="Serial port for radar")
@@ -4559,10 +4635,11 @@ def main():
     parser.add_argument(
         "--sound-pre-trigger",
         type=int,
-        default=16,
+        default=None,
         help=(
             "Pre-trigger segments S#n, 0-32 "
-            "(default: 16 = 50/50 split, each segment ~4.27ms at 30ksps)"
+            "(default: 16 = 50/50 split, 24 with --iwr6843-self-trigger; "
+            "each segment ~4.27ms at 30ksps)"
         ),
     )
     parser.add_argument(
@@ -4607,26 +4684,28 @@ def main():
     parser.add_argument(
         "--iwr6843-self-trigger",
         action="store_true",
-        help="Arm the IWR ball-leave trigger. The tee bin comes from --iwr6843-tee-m",
+        help="Freeze the IWR ring when the ball leaves the tee and send S! to the OPS, "
+        "instead of the sound-gate edge. The tee bin comes from --iwr6843-tee-m",
     )
     parser.add_argument(
         "--iwr6843-self-trigger-bin",
         type=int,
         default=None,
-        help="Local range bin of the tee. With --iwr6843-self-trigger-level, "
-        "the ring freezes when the ball leaves after the club comes in and goes back",
+        help="Local range bin of the tee (default: from --iwr6843-tee-m). "
+        "Requires --iwr6843-self-trigger",
     )
     parser.add_argument(
         "--iwr6843-self-trigger-level",
         type=float,
         default=None,
-        help="Residual-power threshold. Defaults to 1000 with --iwr6843-self-trigger",
+        help="Residual-power threshold (default: 1000). Requires --iwr6843-self-trigger",
     )
     parser.add_argument(
         "--iwr6843-self-trigger-hits",
         type=int,
-        default=2,
-        help="Consecutive frames the tee bin must be occupied before it is ready (default: 2)",
+        default=None,
+        help="Consecutive frames the tee bin must be occupied before it is ready "
+        "(default: 2 with --iwr6843-self-trigger)",
     )
     parser.add_argument(
         "--iwr6843-trigger-pin",
@@ -4637,8 +4716,8 @@ def main():
     parser.add_argument(
         "--iwr6843-tee-m",
         type=float,
-        default=1.575,
-        help="Antenna-center to tee slant range in metres (default: 1.575)",
+        default=DEFAULT_TEE_RANGE_M,
+        help=f"Antenna-center to tee slant range in metres (default: {DEFAULT_TEE_RANGE_M})",
     )
     parser.add_argument(
         "--iwr6843-net-m",
@@ -4830,6 +4909,14 @@ def main():
         parser.error("--camera-capture cannot be used with --mock")
     if args.iwr6843 and (args.iwr6843_tee_m <= 0 or args.iwr6843_net_m <= 0):
         parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
+    try:
+        self_trigger_config = _self_trigger_config(args) if args.iwr6843 else None
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
+    if args.iwr6843_self_trigger and not args.iwr6843:
+        parser.error("--iwr6843-self-trigger requires --iwr6843")
+    if self_trigger_config is not None and args.trigger != "sound":
+        parser.error("--iwr6843-self-trigger drives the OPS with S!; use --trigger sound")
     if args.camera_capture and (
         args.camera_capture_width <= 0
         or args.camera_capture_height <= 0
@@ -4936,7 +5023,7 @@ def main():
 
     # Start the monitor
     # Build trigger-specific kwargs (pre_trigger_segments always passed)
-    trigger_kwargs = {"pre_trigger_segments": args.sound_pre_trigger}
+    trigger_kwargs = {"pre_trigger_segments": _ops_pre_trigger_segments(args)}
     swing_speed_kwargs = {
         "trigger_threshold_mph": args.swing_speed_threshold,
         "max_speed_mph": None if args.swing_speed_max <= 0 else args.swing_speed_max,
@@ -5009,7 +5096,7 @@ def main():
             azimuth_offset_deg=args.iwr6843_azimuth_offset_deg,
             horizontal_phase_reference_rad=args.iwr6843_horizontal_phase_reference_rad,
             save_dumps=args.debug,
-            self_trigger=_self_trigger_args(args),
+            self_trigger=self_trigger_config,
         ):
             calibration = iwr6843_runtime.calibration
             ball_speed_correction_distance_ft = args.iwr6843_tee_m * 3.28084

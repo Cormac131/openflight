@@ -12,6 +12,7 @@ import argparse
 import json
 import time
 
+from openflight.iwr6843.calibration import DEFAULT_TEE_RANGE_M
 from openflight.iwr6843.driver import IWR6843Radar
 from openflight.iwr6843.late_window import capture_late_window, plan_late_window
 
@@ -22,7 +23,7 @@ def main() -> None:
     parser.add_argument("--ball-speed-mph", type=float, required=True)
     parser.add_argument("--launch-deg", type=float, required=True)
     parser.add_argument("--spin-rpm", type=float, required=True)
-    parser.add_argument("--tee-m", type=float, default=1.5)
+    parser.add_argument("--tee-m", type=float, default=DEFAULT_TEE_RANGE_M)
     parser.add_argument(
         "--restore-cfg",
         default="config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg",
