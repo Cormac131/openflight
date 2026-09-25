@@ -457,9 +457,11 @@ IQ16 bytes = TX x loops x frames x RX x saved bins x 4
 IQ8 bytes  = TX x loops x frames x RX x saved bins x 2
 ```
 
-The result must fit within 786,432 L3 bytes along with any variant-specific L3
-scratch sections. The linker places `.l3ring` and `.l3scratch` in `L3_RAM` and
-fails the build if they overflow.
+The result must fit within 786,432 L3 bytes; the linker places `.l3ring` in
+`L3_RAM` and fails the build if it overflows. The IQ16 ping/pong frame
+scratch (`g_iq16FrameScratch`) lives in the `.dataScratch` section in
+`DATA_RAM`, not in L3 — it no longer competes with the capture ring for L3
+space.
 
 The firmware rejects invalid windows, frame plans, and L3 budgets at
 `sensorStart`. The dense IQ8 profile also has only about 380 microseconds
@@ -486,7 +488,9 @@ uv run pytest \
 Also check:
 
 1. The `.cfg` matches all compile-time capture geometry.
-2. The map file keeps `.l3ring` and `.l3scratch` inside L3.
+2. The map file keeps `.l3ring` occupying all of `L3_RAM` (0 unused) and
+   `.dataScratch` inside `DATA_RAM`, with `DATA_RAM` unused staying above the
+   16,384 B floor.
 3. The first static capture has the expected version, dimensions, frame period,
    per-frame window table, and total byte count.
 4. Repeated dump/rearm cycles work without resetting the board.

@@ -15,9 +15,14 @@ MIN_DATA_RAM_FREE_BYTES = 16 * 1024
 
 
 def test_scratch_is_not_carved_out_of_the_capture_arena():
+    """L3_IQ8_CAPTURE_BYTES was deleted outright (its only value was always
+    L3_TOTAL_BYTES once the scratch left L3), so the equivalent surviving
+    construct is l3_captureCapacityBytes() returning L3_TOTAL_BYTES
+    unconditionally, with no offset-cast into g_ring."""
     source = FIRMWARE.read_text(encoding="utf-8")
-    assert "#define L3_IQ8_CAPTURE_BYTES   (L3_TOTAL_BYTES)" in source
+    assert "L3_IQ8_CAPTURE_BYTES" not in source
     assert "&g_ring[L3_IQ8_CAPTURE_BYTES]" not in source
+    assert "return L3_TOTAL_BYTES;" in source
 
 
 def test_scratch_is_a_real_array_in_its_own_section():

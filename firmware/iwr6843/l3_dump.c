@@ -174,9 +174,10 @@
 #define L3_MIN_LOOPS           2U
 #ifdef L3_RING_IQ8
 /* The HWA emits complex16 samples. One maximum-size production frame lands in
- * scratch, then the rearm task block-quantizes it into the compact IQ8 ring.
- * IQ16 mode uses the whole arena directly; IQ8 mode overlays ping-pong scratch
- * onto the upper portion that its compressed capture does not use. */
+ * scratch (g_iq16FrameScratch, in DATA_RAM), then the rearm task
+ * block-quantizes it into the compact IQ8 ring. Both IQ16 and IQ8 mode use
+ * the whole L3 arena directly; only the compressed IQ8 ring's contents
+ * differ in size. */
 #define L3_IQ8_HWA_SHIFT      4U
 #define L3_IQ8_HWA_SCALE      (1U << L3_IQ8_HWA_SHIFT)
 #ifdef L3_IQ8_SPARSE_SCALE
@@ -190,12 +191,8 @@
 #define L3_IQ16_SCRATCH_FRAME_BYTES  \
     (N_TX * L3_MAX_LOOPS * N_RX * L3_RING_MAX_BINS * 2U * \
      (uint32_t)sizeof(int16_t))
-#define L3_IQ16_SCRATCH_BYTES  (2U * L3_IQ16_SCRATCH_FRAME_BYTES)
 #define L3_IQ16_SCRATCH_WORDS  \
     (L3_IQ16_SCRATCH_FRAME_BYTES / (uint32_t)sizeof(int16_t))
-/* The scratch now lives in DATA_RAM (see g_iq16FrameScratch), so IQ8 capture
- * owns the entire L3 arena. */
-#define L3_IQ8_CAPTURE_BYTES   (L3_TOTAL_BYTES)
 #endif
 #ifndef L3_RING_MAX_BINS
 /* Only meaningful for the iq8 ring; harmless placeholder for the plan
@@ -442,11 +439,10 @@ static uint8_t l3_captureUsesIq8(void)
 
 static uint32_t l3_captureCapacityBytes(void)
 {
-#ifdef L3_RING_IQ8
-    if (l3_captureUsesIq8()) {
-        return L3_IQ8_CAPTURE_BYTES;
-    }
-#endif
+    /* Both IQ8 and IQ16 capture use the entire L3 arena: the IQ16 ping/pong
+     * scratch that used to be carved out of the tail of g_ring now lives in
+     * DATA_RAM (see g_iq16FrameScratch), so there is no smaller IQ8-only
+     * capacity to report. */
     return L3_TOTAL_BYTES;
 }
 
