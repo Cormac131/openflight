@@ -95,8 +95,30 @@ def test_sensor_stop_cancels_post_capture_at_next_completed_frame():
     assert "l3_hwaMaybeQueueRearm()" in shutdown_freeze
     assert "l3_freezeHwaForShutdown" in shutdown_stop
     assert "l3_finishCaptureStop" in shutdown_stop
-    assert "if (!gCaptureActive)" in sensor_stop
-    assert "return l3_stopCaptureForShutdown()" in sensor_stop
+    assert "if (gCaptureActive)" in sensor_stop
+    assert "l3_stopCaptureForShutdown()" in sensor_stop
+
+
+def test_sensor_stop_closes_the_front_end_so_the_next_start_can_reconfigure():
+    """MMWave_config is refused (-3110 subsys 83) while the BSS holds the old
+    profile. sensorStop must close it; sensorStart reopens when unopened."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    sensor_stop = _function_source(
+        source,
+        "static int32_t l3_cli_sensorStop",
+        "static void l3_initTask",
+    )
+    sensor_start = _function_source(
+        source,
+        "static int32_t l3_cli_sensorStart",
+        "static int32_t l3_cli_sensorStop",
+    )
+
+    assert "MMWave_close(gMMWaveHandle" in sensor_stop
+    assert "gSensorOpened = 0U" in sensor_stop
+    assert sensor_stop.index("l3_stopCaptureForShutdown()") < sensor_stop.index("MMWave_close")
+    assert "if (!gSensorOpened)" in sensor_start
+    assert sensor_start.index("MMWave_open") < sensor_start.index("MMWave_config(")
 
 
 def test_shutdown_waits_for_iq8_pack_without_rearming():

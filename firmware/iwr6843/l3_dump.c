@@ -4039,14 +4039,27 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
 
 static int32_t l3_cli_sensorStop(int32_t argc, char *argv[])
 {
+    int32_t status = 0;
+    int32_t errCode;
     (void)argc; (void)argv;
-    if (!gCaptureActive) {
-        return 0;
-    }
+
+    if (gCaptureActive) {
 #ifdef LIVE_SNAPSHOT_RING
-    gRawFrameReadyMask = 0U;
+        gRawFrameReadyMask = 0U;
 #endif
-    return l3_stopCaptureForShutdown();
+        status = l3_stopCaptureForShutdown();
+    }
+    /* MMWave_config is refused while the BSS still holds the last profile
+     * (-3110 subsys 83). Closing here lets the next sensorStart reopen and
+     * configure again without a power cycle. */
+    if (gSensorOpened) {
+        if (MMWave_close(gMMWaveHandle, &errCode) < 0) {
+            CLI_write("Error: MMWave_close failed (%d)\n", errCode);
+            return -1;
+        }
+        gSensorOpened = 0U;
+    }
+    return status;
 }
 
 /* System init task: UART, mmWave control, EDMA + ADCBUF + frame-start ISR, CLI. */
