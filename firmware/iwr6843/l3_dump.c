@@ -193,7 +193,9 @@
 #define L3_IQ16_SCRATCH_BYTES  (2U * L3_IQ16_SCRATCH_FRAME_BYTES)
 #define L3_IQ16_SCRATCH_WORDS  \
     (L3_IQ16_SCRATCH_FRAME_BYTES / (uint32_t)sizeof(int16_t))
-#define L3_IQ8_CAPTURE_BYTES   (L3_TOTAL_BYTES - L3_IQ16_SCRATCH_BYTES)
+/* The scratch now lives in DATA_RAM (see g_iq16FrameScratch), so IQ8 capture
+ * owns the entire L3 arena. */
+#define L3_IQ8_CAPTURE_BYTES   (L3_TOTAL_BYTES)
 #endif
 #ifndef L3_RING_MAX_BINS
 /* Only meaningful for the iq8 ring; harmless placeholder for the plan
@@ -223,9 +225,13 @@
 static uint8_t g_ring[L3_TOTAL_BYTES];
 #ifdef L3_RING_IQ8
 static uint8_t gCaptureFormat = L3_CAPTURE_FORMAT_IQ16;
-#define g_iq16FrameScratch \
-    (*((int16_t (*)[2][L3_IQ16_SCRATCH_WORDS]) \
-       (void *)&g_ring[L3_IQ8_CAPTURE_BYTES]))
+#pragma DATA_SECTION(g_iq16FrameScratch, ".dataScratch")
+#pragma DATA_ALIGN(g_iq16FrameScratch, 8)
+static int16_t g_iq16FrameScratch[2][L3_IQ16_SCRATCH_WORDS];
+/* DATA_RAM is 0x30000 B and is shared with .bss, .data and the stack. If this
+ * fires, either the scratch or the rest of the image grew past the region. */
+_Static_assert(sizeof(g_iq16FrameScratch) <= 0x18000U,
+               "IQ16 scratch exceeds its DATA_RAM allowance");
 #endif
 static L3CapturePlan gCapturePlan = {
     L3_DEFAULT_PRE_START,

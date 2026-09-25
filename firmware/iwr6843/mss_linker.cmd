@@ -8,16 +8,18 @@
 /*   systemHeap  - the SYS/BIOS system heap created in mss.cfg                 */
 /*   .l3ring     - the rolling buffer (raw ADC for legacy builds, compact      */
 /*                 FFT range snapshots for HWA_CHAINED_SNAPSHOT_RING builds).  */
-/*   .l3scratch  - optional raw-frame scratch space used by chained-snapshot   */
-/*                 builds before HWA compression into .l3ring. If these        */
-/*                 sections overflow L3_RAM, the link fails loudly.            */
+/*   .dataScratch - the IQ16 ping/pong frame scratch used by chained-snapshot  */
+/*                 builds before HWA compression into .l3ring. It lives in     */
+/*                 DATA_RAM (not L3_RAM) so IQ8 capture owns the whole L3      */
+/*                 arena. If these sections overflow their region, the link    */
+/*                 fails loudly.                                               */
 /*----------------------------------------------------------------------------*/
 --retain="*(.intvecs)"
 
 SECTIONS
 {
-    systemHeap : {} > DATA_RAM
-    .l3ring    : {} > L3_RAM
-    .l3scratch : {} > L3_RAM
+    systemHeap   : {} > DATA_RAM
+    .l3ring      : {} > L3_RAM
+    .dataScratch : {} > DATA_RAM
 }
 /*----------------------------------------------------------------------------*/
