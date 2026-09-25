@@ -17,6 +17,7 @@ from __future__ import annotations
 import glob
 import logging
 import time
+from typing import Callable
 
 import serial
 
@@ -24,19 +25,28 @@ from openflight.iwr6843.dump import HEADER, MAGIC, parse_header, payload_nbytes
 from openflight.iwr6843.sparse import (
     POWER_MAGIC,
     SLICE_MAGIC,
+    SPARSE_REQUEST_MAX_BYTES,
     TRACK_MAGIC,
-    CaptureLayout,
     OnboardTrack,
+    PowerSummary,
+    SlicePlanner,
+    SparseCapture,
+    SparsePlan,
+    assemble_capture,
     assemble_dump,
+    fit_cell_request,
     format_cell_request,
     parse_power,
     parse_track,
     power_packet_size,
-    slice_stride,
+    slice_packet_size,
     track_packet_size,
 )
 
 BAUD = 1_041_667
+# Firmware CLI line written when the self-trigger freezes the ring.
+TRIGGER_NOTICE = b"Triggered"
+_NOTICE_TAIL_BYTES = len(TRIGGER_NOTICE) - 1
 _PORT_GLOBS = ("/dev/ttyUSB*", "/dev/tty.SLAB_USBtoUART*")
 
 logger = logging.getLogger(__name__)
@@ -58,9 +68,6 @@ def open_port(port: str, baud: int = BAUD, timeout: float = 0.3) -> serial.Seria
 
 class IWR6843Radar:
     """CLI + dump transport for the custom L3-dump firmware."""
-
-    # Bytes read past the end of one sparse packet, kept for the next one.
-    _backlog: bytes = b""
 
     def __init__(self, port: str | None = None, baud: int = BAUD):
         if port is None:
@@ -94,16 +101,18 @@ class IWR6843Radar:
                 return cand
         return None
 
-    def consume_trigger_notice(self, pending: bytes = b"") -> tuple[bool, bytes]:
-        """Read any idle CLI bytes and report the self-trigger ``Triggered`` line."""
+    def wait_trigger_notice(self, pending: bytes = b"") -> tuple[bool, bytes]:
+        """Wait up to the port timeout for CLI bytes; report a ``Triggered`` line.
+
+        ``read`` returns as soon as a byte arrives, so the notice is seen
+        within about a millisecond. ``pending`` carries a partial line
+        between calls; the tail kept is long enough to hold a split word.
+        """
         waiting = self.ser.in_waiting
-        if waiting:
-            pending += self.ser.read(waiting)
-        if b"Triggered" in pending:
+        pending += self.ser.read(waiting if waiting else 1)
+        if TRIGGER_NOTICE in pending:
             return True, b""
-        if len(pending) > 64:
-            pending = pending[-64:]
-        return False, pending
+        return False, pending[-_NOTICE_TAIL_BYTES:]
 
     def cmd(self, line: str, window: float = 1.5) -> str:
         """Send one CLI line; collect the response until Done/Error/timeout."""
@@ -248,27 +257,31 @@ class IWR6843Radar:
                 )
         return payload
 
-    def read_sparse(self, planner, timeout_s: float = 8.0):
+    def read_sparse(self, planner: SlicePlanner, timeout_s: float = 8.0) -> SparseCapture | None:
         """Freeze, read residual power, then the complex cells ``planner`` names.
 
-        Returns the assembled range-snapshot dump, or None when this firmware
-        has no ``l3sparse`` command so the caller can fall back to ``l3dump``.
+        Returns None only when the firmware rejects ``l3sparse`` before it
+        freezes (older firmware, IQ8 storage), so ``l3dump`` is still safe.
+        Any failure after that raises: the firmware has already re-armed, and
+        an ``l3dump`` would return a ring recorded after the shot.
         """
-        self.ser.reset_input_buffer()
-        self._backlog = b""
-        self.ser.write(b"l3sparse\n")
         try:
-            packet = self._read_packet(POWER_MAGIC, power_packet_size, timeout_s)
+            exchange = self._sparse_exchange(planner, timeout_s)
         except UnsupportedCommand:
             return None
-        if packet is None:
+        if exchange is None:
             return None
-        summary = parse_power(packet)
-        self.ser.write(format_cell_request(list(planner(summary))))
-        raw = self._read_cells(summary, timeout_s)
-        if raw is None:
-            return None
-        return raw, summary.noise_power
+        summary, plan, requested, slice_packet = exchange
+        return assemble_capture(summary, slice_packet, plan, requested_cells=requested)
+
+    def release_sparse_freeze(self, timeout_s: float = 8.0) -> None:
+        """Request no cells, so a self-triggered freeze nobody wants re-arms."""
+        try:
+            exchange = self._sparse_exchange(lambda _summary: SparsePlan(cells=()), timeout_s)
+        except UnsupportedCommand:
+            exchange = None
+        if exchange is None:
+            raise RuntimeError("IWR6843 rejected l3sparse; the frozen ring was not released")
 
     def read_tracked(self, timeout_s: float = 8.0) -> tuple[bytes, float, OnboardTrack] | None:
         """Freeze and read the cells the firmware tracker chose (``l3track``).
@@ -281,91 +294,123 @@ class IWR6843Radar:
         already been rearmed, so a fallback would capture the wrong window.
         """
         self.ser.reset_input_buffer()
-        self._backlog = b""
         self.ser.write(b"l3track\n")
-        head = self._read_magic(TRACK_MAGIC, track_packet_size(b""), timeout_s)
-        if head is None:
+        try:
+            read = self._read_packet(TRACK_MAGIC, track_packet_size, timeout_s)
+        except TimeoutError as exc:
+            raise RuntimeError("IWR6843 l3track packet ended early") from exc
+        if read is None:
             return None
-        packet = self._complete(head, track_packet_size(head), timeout_s)
-        if packet is None:
-            raise RuntimeError("IWR6843 l3track packet ended early")
+        packet, rest = read
         layout, track = parse_track(packet)
-        raw = self._read_cells(layout, timeout_s)
-        if raw is None:
+        try:
+            read = self._read_packet(
+                SLICE_MAGIC,
+                lambda header: slice_packet_size(header, layout),
+                timeout_s,
+                pending=rest,
+            )
+        except TimeoutError as exc:
+            raise RuntimeError("IWR6843 l3track cell packet ended early") from exc
+        if read is None:
             raise RuntimeError("IWR6843 l3track cell packet ended early")
-        return raw, layout.noise_power, track
+        slice_packet, rest = read
+        trailer = self._wait_for_dump_cli_ready(rest, timeout_s=1.0)
+        if b"Error" in trailer:
+            raise RuntimeError(
+                "IWR6843 track capture completed but firmware restart failed: "
+                f"{trailer.decode(errors='replace').strip()}"
+            )
+        return assemble_dump(layout, slice_packet), layout.noise_power, track
 
-    def _read_packet(self, magic: bytes, size_of, timeout_s: float) -> bytes | None:
-        """Read one header-sized packet: sync on ``magic``, then its declared length."""
-        packet = self._read_magic(magic, size_of(b""), timeout_s)
-        if packet is None:
+    def _sparse_exchange(
+        self,
+        planner: SlicePlanner,
+        timeout_s: float,
+    ) -> tuple[PowerSummary, SparsePlan, int, bytes] | None:
+        """Run one l3sparse round trip. None when rejected before the freeze."""
+        self.ser.reset_input_buffer()
+        self.ser.write(b"l3sparse\n")
+        read = self._read_packet(POWER_MAGIC, power_packet_size, timeout_s)
+        if read is None:
             return None
-        return self._complete(packet, size_of(packet), timeout_s)
+        packet, _rest = read
+        summary = parse_power(packet)
+        try:
+            plan = planner(summary)
+        except Exception:
+            # The firmware is frozen and reading its next CLI line as the
+            # cell request. Answer it, or the next command would be eaten.
+            self.ser.write(format_cell_request([]))
+            raise
+        ordered = plan.request_order()
+        request, sent = fit_cell_request(ordered)
+        if sent < len(ordered):
+            logger.warning(
+                "[IWR6843] Sparse request trimmed to %d of %d cells (%d-byte limit)",
+                sent,
+                len(ordered),
+                SPARSE_REQUEST_MAX_BYTES,
+            )
+        self.ser.write(request)
+        read = self._read_packet(
+            SLICE_MAGIC,
+            lambda header: slice_packet_size(header, summary),
+            timeout_s,
+        )
+        if read is None:
+            raise RuntimeError("IWR6843 rejected the sparse cell request after freezing")
+        slice_packet, rest = read
+        trailer = self._wait_for_dump_cli_ready(rest, timeout_s=1.0)
+        if b"Error" in trailer:
+            raise RuntimeError(
+                "IWR6843 sparse capture completed but firmware restart failed: "
+                f"{trailer.decode(errors='replace').strip()}"
+            )
+        return summary, plan, len(ordered), slice_packet
 
-    def _complete(self, packet: bytes, total: int, timeout_s: float) -> bytes | None:
-        """Read the rest of a ``total``-byte packet that starts with ``packet``.
+    def _read_packet(
+        self,
+        magic: bytes,
+        packet_size: Callable[[bytes], int],
+        timeout_s: float,
+        pending: bytes = b"",
+    ) -> tuple[bytes, bytes] | None:
+        """Read one ``magic`` packet sized by its own header.
 
-        Bytes past ``total`` belong to the next packet (l3track streams ILS1
-        straight after ILT1), so they wait in the backlog for the next read.
+        Returns (packet, bytes after it), or None when the CLI reports an
+        error before the magic. Only bytes before the magic are searched for
+        error text; the binary payload can contain any byte sequence.
+        ``pending`` holds bytes already read that belong to this packet.
         """
-        if len(packet) < total:
-            rest = self._read_exact(total - len(packet), timeout_s)
-            if rest is None:
-                return None
-            packet += rest
-        self._backlog = packet[total:]
-        return packet[:total]
-
-    def _read_cells(self, layout: CaptureLayout, timeout_s: float) -> bytes | None:
-        """Read one ILS1 cell packet and rebuild the dump it describes."""
-        slice_packet = self._read_magic(SLICE_MAGIC, 6, timeout_s)
-        if slice_packet is None:
-            return None
-        count = int.from_bytes(slice_packet[4:6], "little")
-        slice_packet = self._complete(slice_packet, 6 + count * slice_stride(layout), timeout_s)
-        if slice_packet is None:
-            return None
-        return assemble_dump(layout, slice_packet)
-
-    def _read_magic(self, magic: bytes, minimum: int, timeout_s: float) -> bytes | None:
-        """Read until ``magic``. None on a CLI error or timeout before it.
-
-        Raises UnsupportedCommand when the CLI does not recognise the command.
-        """
-        buf = bytearray()
-        chunk, self._backlog = self._backlog, b""
+        header_size = packet_size(b"")
+        buf = bytearray(pending)
         deadline = time.monotonic() + timeout_s
+        start: int | None = None
         while time.monotonic() < deadline:
-            if not chunk:
-                waiting = self.ser.in_waiting
-                chunk = self.ser.read(waiting if waiting else 1)
-            if not chunk:
-                continue
-            buf.extend(chunk)
-            chunk = b""
-            idx = buf.find(magic)
-            # Only CLI text before the magic can be a reply; after it is binary.
-            text = buf if idx < 0 else buf[:idx]
-            if b"not recognized" in text:
-                raise UnsupportedCommand(text.decode(errors="replace").strip())
-            if b"Error" in text:
-                return None
-            if idx >= 0 and len(buf) - idx >= minimum:
-                return bytes(buf[idx:])
-        return None
-
-    def _read_exact(self, count: int, timeout_s: float) -> bytes | None:
-        """Read ``count`` more bytes, or None on timeout."""
-        buf = bytearray()
-        deadline = time.monotonic() + timeout_s
-        while len(buf) < count and time.monotonic() < deadline:
+            if start is None:
+                idx = buf.find(magic)
+                if idx < 0:
+                    text = bytes(buf)
+                    if b"not recognized" in text:
+                        raise UnsupportedCommand(text.decode(errors="replace").strip())
+                    if b"Error" in text:
+                        return None
+                else:
+                    start = idx
+            if start is not None:
+                body = bytes(buf[start:])
+                if len(body) >= header_size:
+                    total = packet_size(body)
+                    if len(body) >= total:
+                        return body[:total], body[total:]
             waiting = self.ser.in_waiting
-            chunk = self.ser.read(min(waiting if waiting else 1, count - len(buf)))
+            chunk = self.ser.read(waiting if waiting else 1)
             if chunk:
                 buf.extend(chunk)
-        if len(buf) != count:
-            return None
-        return bytes(buf)
+        raise TimeoutError(
+            f"IWR6843 {magic.decode()} packet incomplete after {timeout_s:.1f}s ({len(buf)} bytes)"
+        )
 
     def _wait_for_dump_cli_ready(self, initial: bytes, *, timeout_s: float) -> bytes:
         """Consume the dump handler's trailing response before reusing the CLI."""

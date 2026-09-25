@@ -58,6 +58,16 @@ MPH_PER_MS = 2.23694
 # only 12. Capping at the tee finds it on 14 of 14.
 CLUB_APPROACH_DEPTH_M = 0.6  # observed approach spans 0.90-1.33 m at a 1.372 m tee
 CLUB_GATE_TEE_MARGIN_M = 0.05  # ~1 range bin, so samples at the tee are not clipped
+CLUB_GATE_MIN_RANGE_M = 0.35  # antenna near field; nothing closer is a clubhead
+
+
+def club_gate_m(tee_range_m: float) -> tuple[float, float]:
+    """Range gate the clubhead approaches the tee through."""
+    return (
+        max(CLUB_GATE_MIN_RANGE_M, tee_range_m - CLUB_APPROACH_DEPTH_M),
+        tee_range_m + CLUB_GATE_TEE_MARGIN_M,
+    )
+
 
 # Radial speed bounds. Measured pre-impact: 24.7-37.9 m/s for 66-88 mph clubs.
 # The 18.0 floor is a second, independent guard against the slow body mover
@@ -353,8 +363,7 @@ def find_club(
       short of the ball, so anything beyond the tee is body, hands, or clutter
       -- and being slower, it wins most-inliers RANSAC when admitted.
     """
-    lo = max(0.35, tee_range_m - CLUB_APPROACH_DEPTH_M)
-    hi = tee_range_m + CLUB_GATE_TEE_MARGIN_M
+    lo, hi = club_gate_m(tee_range_m)
     ops_speed_ms = ops_club_speed_mph / MPH_PER_MS
     projection_lo, projection_hi = CLUB_SPEED_PROJECTION_RANGE
     speed_bounds_ms = (

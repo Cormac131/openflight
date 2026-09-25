@@ -49,6 +49,13 @@
 #define L3_SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED 4
 #define L3_SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED 5
 
+/* l3sparse: the host's "cells N f b ..." request must fit this buffer,
+ * including the terminating NUL. openflight.iwr6843.sparse mirrors it as
+ * SPARSE_REQUEST_MAX_BYTES; tests/test_iwr6843_sparse.py checks they match. */
+#define L3_SPARSE_REQUEST_MAX 768U
+/* How long l3sparse waits for that request after streaming the power. */
+#define L3_SPARSE_REQUEST_TIMEOUT_MS 5000U
+
 typedef struct __attribute__((packed)) {
     char     magic[4];          /* "ILD1" */
     uint16_t version;           /* L3_DUMP_VERSION */

@@ -22,6 +22,10 @@ import numpy as np
 DEFAULT_CAL_PATH = "config/iwr6843_calibration_reference.json"
 
 
+# Antenna-center to tee slant range when the setup has not measured one.
+DEFAULT_TEE_RANGE_M = 1.575
+
+
 @dataclass
 class Calibration:
     """Loaded calibration constants, ready to apply to snapshots."""

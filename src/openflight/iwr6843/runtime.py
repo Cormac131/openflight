@@ -4,10 +4,25 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from dataclasses import dataclass, field, replace
+from typing import Callable
 
-from openflight.iwr6843.calibration import Calibration
-from openflight.iwr6843.club import ClubPathResult, ClubWindowPolicy, estimate_club_path
+from openflight.iwr6843 import tracking
+from openflight.iwr6843.calibration import DEFAULT_TEE_RANGE_M, Calibration
+from openflight.iwr6843.club import (
+    ClubPathResult,
+    ClubWindowPolicy,
+    club_gate_m,
+    estimate_club_path,
+)
+from openflight.iwr6843.late_window import (
+    LateWindowPlan,
+    capture_late_window,
+    net_gate_m,
+    plan_late_window,
+    planner_mode,
+)
 from openflight.iwr6843.lcmf import (
     LCMFResult,
     PreparedLCMFCapture,
@@ -20,6 +35,13 @@ from openflight.iwr6843.recovery import (
     RecoveryPrior,
     find_recovery_candidates,
     select_recovery_candidate,
+)
+from openflight.iwr6843.sparse import (
+    PowerSummary,
+    SparsePlan,
+    expand_cells,
+    noise_cells,
+    track_cells,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,11 +153,75 @@ class IWR6843Runtime:
     recovery_observations: list[tuple[float, float, float]] = field(default_factory=list)
 
     @property
+    def self_trigger_enabled(self) -> bool:
+        """True when the firmware trigger, not the sound gate, starts shots."""
+        return self.capture_monitor.watch_self_trigger
+
+    @property
     def tracking_net_m(self) -> float | None:
         """Net clamp for ball tracks. Open flight does not apply one."""
-        from openflight.iwr6843.late_window import net_gate_m
-
         return net_gate_m(self.flight_mode, self.net_range_m)
+
+    def plan_late_window(
+        self,
+        *,
+        ball_speed_mph: float,
+        launch_angle_deg: float | None,
+        spin_rpm: float | None,
+    ) -> LateWindowPlan | None:
+        """Late looks for an open-flight shot, or None in a net or without a launch."""
+        mode = planner_mode(self.flight_mode)
+        if mode is None or launch_angle_deg is None:
+            return None
+        plan = plan_late_window(
+            mode,
+            ball_speed_mph,
+            launch_angle_deg,
+            spin_rpm or 0.0,
+            self.calibration.tee_range_m or DEFAULT_TEE_RANGE_M,
+        )
+        return plan if plan.enabled else None
+
+    def measure_late_window(
+        self,
+        plan: LateWindowPlan,
+        *,
+        impact_timestamp: float,
+        on_measured: Callable[[dict | None], None],
+    ) -> bool:
+        """Queue the late looks on the capture worker, which owns the radar.
+
+        ``on_measured`` runs on that worker with the measurement, or None when
+        the look was missed or failed. Returns False when nothing was queued.
+        """
+        monitor = self.capture_monitor
+        tee_range_m = self.calibration.tee_range_m or DEFAULT_TEE_RANGE_M
+
+        def measure(_radar) -> None:
+            result: dict | None = None
+            try:
+
+                def capture(radar) -> None:
+                    nonlocal result
+                    result = capture_late_window(
+                        radar,
+                        plan,
+                        impact_timestamp=impact_timestamp,
+                        tee_range_m=tee_range_m,
+                        restore_cfg=str(monitor.config_path),
+                        now=time.time,
+                        sleep=time.sleep,
+                    )
+
+                monitor.run_on_other_profile(capture)
+                if result is not None:
+                    logger.info("[IWR6843] Late window timing: %s", result.get("timing_s"))
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.warning("[IWR6843] Late-window measurement failed", exc_info=True)
+                result = None
+            on_measured(result)
+
+        return monitor.submit("late-window", measure)
 
     def _remember_recovery_observation(
         self, measurement: LCMFResult, ball_speed_mph: float
@@ -269,15 +355,28 @@ class IWR6843Runtime:
             return None
         return (max(0.35, tee - CLUB_APPROACH_DEPTH_M), tee + CLUB_GATE_TEE_MARGIN_M)
 
-    def plan_sparse_cells(self, summary):
-        """Name the range cells whose complex samples LCMF and club path need."""
-        from openflight.iwr6843.sparse import plan_cells  # pylint: disable=import-outside-toplevel
+    def plan_sparse_cells(self, summary: PowerSummary) -> SparsePlan:
+        """Name the range cells LCMF, club path, and the noise floor need.
 
-        return plan_cells(
-            summary,
-            max_range_m=self._ball_max_range_m(),
-            club_gate_m=self._club_gate_m(),
+        Ball-track centers come first, then their neighbors, then club-gate
+        peaks, so a trimmed request drops club context before the ball.
+        """
+        geometry = summary.geometry
+        track = tracking.find_ball_from_power(
+            summary.power,
+            geometry,
+            max_range_m=tracking.track_max_range_m(self.tracking_net_m),
         )
+        cells = track_cells(track, geometry) if track is not None else []
+        tee = self.calibration.tee_range_m
+        if tee:
+            rows, bins = tracking.detection_peaks(
+                summary.power, geometry, gates_m=(club_gate_m(tee),)
+            )
+            seen = set(cells)
+            peaks = [(int(row) // summary.n_loops, absolute) for row, absolute in zip(rows, bins)]
+            cells.extend(cell for cell in expand_cells(peaks, geometry) if cell not in seen)
+        return SparsePlan(cells=tuple(cells), noise_cells=tuple(noise_cells(summary, cells)))
 
     def track_config_command(self) -> str:
         """``trackCfg`` line that gives the firmware tracker this rig's limits.
@@ -320,7 +419,8 @@ class IWR6843Runtime:
         if tilt_deg is not None:
             shot_calibration = replace(self.calibration, tilt_rad=math.radians(tilt_deg))
         prepared = prepare_lcmf_capture(capture.raw)
-        if capture.noise_power:
+        if capture.noise_power is not None:
+            # A sparse cube is mostly zeros; its own median would be ~0.
             prepared.vertical.set_noise_power(capture.noise_power)
         measurement = estimate_lcmf_v1(
             capture.raw,

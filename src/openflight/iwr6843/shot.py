@@ -9,6 +9,7 @@ server's Shot dataclass comes after TrackMan blesses the numbers.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -269,13 +270,21 @@ class PreparedShotDump:
                     ]
                 )
                 noise = np.median(valid_power)
-            self._noise_by_scope[scope] = float(noise)
+            self._noise_by_scope[scope] = _positive_noise(noise)
         return self._noise_by_scope[scope]
 
     def set_noise_power(self, noise: float) -> None:
-        """Use a noise floor measured on the full ring, not a sparse cube."""
-        self._noise_by_scope["burst"] = float(noise)
-        self._noise_by_scope["window"] = float(noise)
+        """Use a noise floor measured outside the cube, e.g. sparse noise cells."""
+        self._noise_by_scope["burst"] = _positive_noise(noise)
+        self._noise_by_scope["window"] = _positive_noise(noise)
+
+
+def _positive_noise(noise: float) -> float:
+    """SNR divides by this; zero or NaN would make every sample look infinite."""
+    value = float(noise)
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"IWR6843 noise floor must be positive, got {value}")
+    return value
 
 
 def geometry_from_header(meta: dict, *, loop_period_s: float = tracking.LOOP_PRI_S) -> Geometry:
@@ -358,10 +367,7 @@ def process_dump(
         prepared = prepare_shot_dump(raw, loop_period_s=loop_period_s)
     geo = prepared.geometry
     mti = prepared.mti()
-    # keep everything 25 cm short of the net: a ball riding up the net is
-    # an upward mover that tilts every angle fit high (user setup: net
-    # ~3 m past the tee)
-    max_r = (net_range_m - 0.25) if net_range_m else None
+    max_r = tracking.track_max_range_m(net_range_m)
     klass = club_class(club)
     min_ms = CLUB_MIN_BALL_MS[klass]
     track = tracking.find_ball(mti, geo, max_range_m=max_r, min_ball_ms=min_ms)

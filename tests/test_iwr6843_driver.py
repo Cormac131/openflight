@@ -193,3 +193,56 @@ def test_read_dump_sizes_v5_header_extension():
 
     assert dump == raw
     assert serial.writes == [b"l3dump\n"]
+
+
+class _NoticeSerial:
+    """Serial double that hands out queued CLI chunks one read at a time."""
+
+    def __init__(self, chunks: list[bytes]):
+        self.chunks = list(chunks)
+        self.read_sizes: list[int] = []
+
+    @property
+    def in_waiting(self) -> int:
+        return len(self.chunks[0]) if self.chunks else 0
+
+    def read(self, count: int) -> bytes:
+        self.read_sizes.append(count)
+        return self.chunks.pop(0) if self.chunks else b""
+
+
+def _notice_radar(chunks: list[bytes]) -> IWR6843Radar:
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = _NoticeSerial(chunks)
+    return radar
+
+
+def test_trigger_notice_in_one_read_is_reported():
+    assert _notice_radar([b"Triggered\n"]).wait_trigger_notice() == (True, b"")
+
+
+def test_trigger_notice_split_across_reads_is_reported_on_the_second():
+    radar = _notice_radar([b"...Trig", b"gered\n"])
+
+    found, pending = radar.wait_trigger_notice()
+    assert found is False
+    found, pending = radar.wait_trigger_notice(pending)
+    assert found is True
+    assert pending == b""
+
+
+def test_idle_port_blocks_on_a_single_byte_read():
+    """read(1) returns as soon as a byte arrives; no poll interval adds latency."""
+    radar = _notice_radar([])
+
+    assert radar.wait_trigger_notice() == (False, b"")
+    assert radar.ser.read_sizes == [1]
+
+
+def test_unrelated_cli_text_is_trimmed_to_a_split_word_tail():
+    radar = _notice_radar([b"stats frames=12 wraps=3 active=1\n"])
+
+    found, pending = radar.wait_trigger_notice()
+
+    assert found is False
+    assert len(pending) == len(b"Triggered") - 1

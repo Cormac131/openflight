@@ -290,6 +290,7 @@ class Shot:
     late_window: Optional[dict] = None  # Open-flight pre/post apex looks, when enabled
     descent_angle_deg: Optional[float] = None  # Chord through the measured late looks
     landing_angle_deg: Optional[float] = None  # Measured descent when present, else ballistic
+    landing_angle_source: Optional[str] = None  # "ballistic" or "late_window_model_assisted"
 
     @property
     def ball_speed_ms(self) -> float:
@@ -434,6 +435,7 @@ class Shot:
             "late_window": self.late_window,
             "descent_angle_deg": self.descent_angle_deg,
             "landing_angle_deg": self.landing_angle_deg,
+            "landing_angle_source": self.landing_angle_source,
             "spin_rpm": self.spin_rpm,
             "spin_rpm_measured": self.spin_rpm_measured,
             "spin_source": self.spin_source,

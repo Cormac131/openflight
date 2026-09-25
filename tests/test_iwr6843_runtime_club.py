@@ -32,6 +32,7 @@ class FakeCapture:
     trigger_timestamp = 1.0
     dump_duration_s = 5.3
     sequence = 1
+    noise_power = None
 
 
 class FakeMonitor:
@@ -513,3 +514,49 @@ def test_azimuth_offset_corrects_horizontal_ball_launch():
 
     assert result.measurement.horizontal_deg == pytest.approx(0.3)
     assert result.measurement.horizontal_raw_deg == pytest.approx(3.3)
+
+
+def test_sparse_noise_floor_reaches_the_prepared_capture():
+    """Without it, the sparse cube's own median noise would be ~0."""
+
+    class NoisyCapture(FakeCapture):
+        noise_power = 7.5
+
+    class NoisyMonitor(FakeMonitor):
+        def capture_for_shot(self, _ts, timeout_s):
+            return NoisyCapture()
+
+    noise_calls = []
+    vertical = SimpleNamespace(set_noise_power=noise_calls.append)
+    runtime = IWR6843Runtime(
+        capture_monitor=NoisyMonitor(),
+        calibration=object(),
+        net_range_m=4.064,
+    )
+    with (
+        patch(
+            "openflight.iwr6843.runtime.prepare_lcmf_capture",
+            return_value=SimpleNamespace(vertical=vertical),
+        ),
+        patch("openflight.iwr6843.runtime.estimate_lcmf_v1", return_value=None),
+    ):
+        runtime.process_shot(impact_timestamp=1.0, ball_speed_mph=100.0, club="7i")
+
+    assert noise_calls == [7.5]
+
+
+def test_full_dump_keeps_its_own_noise_floor():
+    noise_calls = []
+    runtime = _runtime()
+    with (
+        patch(
+            "openflight.iwr6843.runtime.prepare_lcmf_capture",
+            return_value=SimpleNamespace(
+                vertical=SimpleNamespace(set_noise_power=noise_calls.append)
+            ),
+        ),
+        patch("openflight.iwr6843.runtime.estimate_lcmf_v1", return_value=None),
+    ):
+        runtime.process_shot(impact_timestamp=1.0, ball_speed_mph=100.0, club="7i")
+
+    assert noise_calls == []

@@ -26,6 +26,9 @@ SPEED_BOUNDS_MS = (20.0, 90.0)
 # clubhead ~0.7x ball) outlast the ball in the gates and win most-inliers
 # RANSAC. 2026-07-14 TrackMan session: 5 driver + several SW live tracks
 # stolen this way. A fast track wins if it has enough support of its own.
+# Keep ball tracks this far short of the net: a ball riding up the net is an
+# upward mover that tilts every angle fit high.
+NET_CLEARANCE_M = 0.25
 FAST_TRACK_MS = 26.5  # RADIAL m/s: slowest real SW ball reads ~27.5
 #                               (66 mph x cos projection); flying tee ~25
 FAST_SUPPORT_FRAC = 0.55  # of the most-inliers candidate
@@ -315,6 +318,13 @@ def find_ball(
         speed_bounds_ms=speed_bounds_ms,
         time_window_s=time_window_s,
     )
+
+
+def track_max_range_m(net_range_m: float | None) -> float | None:
+    """Farthest range a ball track may use, or None when no net clamps it."""
+    if not net_range_m:
+        return None
+    return net_range_m - NET_CLEARANCE_M
 
 
 def detection_peaks(
