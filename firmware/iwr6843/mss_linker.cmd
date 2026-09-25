@@ -7,8 +7,8 @@
 /* Here we only add the app-specific sections:                                */
 /*   systemHeap  - the SYS/BIOS system heap created in mss.cfg                 */
 /*   .l3ring     - the rolling buffer (raw ADC for legacy builds, compact      */
-/*                 FFT range snapshots for LIVE_SNAPSHOT_RING builds).         */
-/*   .l3scratch  - optional raw-frame scratch space used by live snapshot       */
+/*                 FFT range snapshots for HWA_CHAINED_SNAPSHOT_RING builds).  */
+/*   .l3scratch  - optional raw-frame scratch space used by chained-snapshot   */
 /*                 builds before HWA compression into .l3ring. If these        */
 /*                 sections overflow L3_RAM, the link fails loudly.            */
 /*----------------------------------------------------------------------------*/

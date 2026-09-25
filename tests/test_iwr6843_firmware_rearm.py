@@ -50,7 +50,7 @@ def test_completed_frame_advances_circular_ring_slot():
     )
 
     assert "gRingFrame++" in callback
-    assert "gRingFrame % RING_FRAMES" in callback
+    assert "(gPreFramesCaptured % gCapturePlan.preFrames) == 0U" in callback
 
 
 def test_freeze_request_keeps_rearming_until_post_trigger_target():
@@ -65,9 +65,9 @@ def test_freeze_request_keeps_rearming_until_post_trigger_target():
     )
 
     assert "gHwaFreezeRequested" in queue
-    assert "gRingFrame >= gHwaFreezeTargetFrame" in queue
+    assert "gPostFramesCaptured >= gCapturePlan.postFrames" in queue
     assert "Semaphore_post(gHwaFreezeSemaphore)" in queue
-    assert "gHwaFreezeTargetFrame = gRingFrame + HWA_POST_TRIGGER_FRAMES" in freeze
+    assert "gHwaFreezeTargetFrame = 0U" in freeze
 
 
 def test_sensor_stop_cancels_post_capture_at_next_completed_frame():
@@ -178,7 +178,12 @@ def test_dump_header_rotates_from_oldest_completed_frame():
     source = FIRMWARE.read_text(encoding="utf-8")
     dump = _function_source(source, "int32_t l3_cli_dump", "static int32_t l3_cli_stats")
 
-    assert "gRingFrame % RING_FRAMES" in dump
+    assert (
+        "oldestPre = (gPreFramesCaptured >= gCapturePlan.preFrames)\n"
+        "                    ? (gPreFramesCaptured % gCapturePlan.preFrames) : 0U;"
+        in dump
+    )
+    assert "uint32_t slot = (oldestPre + i) % gCapturePlan.preFrames;" in dump
 
 
 def test_production_build_uses_configurable_compression_and_single_release():
@@ -265,15 +270,20 @@ def test_supported_profiles_fit_the_l3_capture_budget():
 
 def test_dynamic_window_start_is_recorded_per_ring_slot():
     source = FIRMWARE.read_text(encoding="utf-8")
-    output = _function_source(
+    finalize = _function_source(
         source,
-        "static int32_t l3_configHwaFrameOutput",
-        "static void l3_drainHwaRearmSemaphore",
+        "static int32_t l3_finalizeCapturePlan",
+        "static int32_t l3_cli_captureCfg",
     )
-    dump = _function_source(source, "int32_t l3_cli_dump", "static int32_t l3_cli_stats")
+    descriptor = _function_source(
+        source,
+        "static void l3_writeFrameDescriptor",
+        "static uint16_t l3_iq8FrameScale",
+    )
 
-    assert "gFrameBinStart[ringSlot % RING_FRAMES]" in output
-    assert "UART_writePolling(gDataUart, gFrameBinStart" in dump
+    assert "gFrameBinStart[frame] = gCapturePlan.preStart;" in finalize
+    assert "gFrameBinStart[slot] =" in finalize
+    assert "descriptor[0] = gFrameBinStart[slot];" in descriptor
 
 
 # --- l3track: on-chip ball track and cell selection -------------------------
@@ -393,3 +403,13 @@ def test_stats_reports_trigger_state_and_debug_prints_on_phase_change_only():
     assert "if (phase == gTriggerDebugPhase)" in debug_write
     assert debug_write.index("gTriggerDebugPhase = phase") < debug_write.index("CLI_write(")
     assert "gTriggerDebugPhase = 0xFFU" in debug_cfg
+
+
+def test_dead_build_variants_are_gone():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    assert "LIVE_SNAPSHOT_RING" not in source
+    assert "CONFIGURABLE_CAPTURE" not in source
+    # Live variants must survive the cleanup.
+    assert "L3_RING_IQ8" in source
+    assert "L3_IQ8_EDMA_PACK" in source
+    assert "HWA_CHAINED_SNAPSHOT_RING" in source
