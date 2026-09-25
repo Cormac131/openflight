@@ -61,8 +61,30 @@ def test_freeze_request_keeps_rearming_until_post_trigger_target():
     )
 
     assert "gHwaFreezeRequested" in queue
-    assert "gPostFramesCaptured >= gCapturePlan.postFrames" in queue
+    assert "l3_shouldFreezeNow()" in queue
     assert "Semaphore_post(gHwaFreezeSemaphore)" in queue
+
+
+def test_freeze_condition_is_written_once():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    assert source.count("gPostFramesCaptured >= gCapturePlan.postFrames") == 1
+    assert "l3_shouldFreezeNow" in source
+    assert source.count("l3_shouldFreezeNow()") >= 3
+
+
+def test_shouldFreezeNow_predicate_holds_the_freeze_condition():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    predicate = _function_source(
+        source,
+        "CALLER MUST HOLD THE CRITICAL SECTION",
+        "static void l3_hwaMaybeQueueRearm",
+    )
+
+    assert "CALLER MUST HOLD THE CRITICAL SECTION" in predicate
+    assert "gHwaFreezeRequested" in predicate
+    assert "gActiveFrameIsPost" in predicate
+    assert "gActiveFrameShouldKeep" in predicate
+    assert "gPostFramesCaptured >= gCapturePlan.postFrames" in predicate
 
 
 def test_sensor_stop_cancels_post_capture_at_next_completed_frame():

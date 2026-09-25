@@ -906,6 +906,17 @@ static int32_t l3_emitSnapshotChirp(const int16_t *rawChirp)
 #endif
 
 #ifdef HWA_CHAINED_SNAPSHOT_RING
+/* True when the post-trigger movie is complete and capture may stop.
+ * CALLER MUST HOLD THE CRITICAL SECTION: every call site is already inside
+ * Hwi_disable(), and the globals it reads are written from the EDMA and HWA
+ * completion callbacks. */
+static inline uint8_t l3_shouldFreezeNow(void)
+{
+    return (uint8_t)(gHwaFreezeRequested && gActiveFrameIsPost &&
+                     gActiveFrameShouldKeep &&
+                     gPostFramesCaptured >= gCapturePlan.postFrames);
+}
+
 static void l3_hwaMaybeQueueRearm(void)
 {
     uintptr_t key;
@@ -936,11 +947,14 @@ static void l3_hwaMaybeQueueRearm(void)
             if (gHwaFreezeRequested && !gActiveFrameIsPost) {
                 gPostCaptureStarted = 1U;
             }
+            /* UNRESOLVED: this arm sets gHwaRearmPending unconditionally, unlike the
+             * IQ16 arm below, which gates it on l3_shouldFreezeNow(). Whether that is
+             * deliberate is not established. Do not collapse these two bodies until a
+             * test pins the intended behaviour: see
+             * docs/superpowers/specs/2026-09-25-iwr6843-longer-movie-design.md. */
             gHwaRearmPending = 1U;
             queue = 1U;
-        } else if (gHwaFreezeRequested && gActiveFrameIsPost &&
-                   gActiveFrameShouldKeep &&
-                   gPostFramesCaptured >= gCapturePlan.postFrames) {
+        } else if (l3_shouldFreezeNow()) {
             gCaptureActive = 0U;
             gHwaFreezeRequested = 0U;
             gHwaFreezeCompletions++;
@@ -953,9 +967,7 @@ static void l3_hwaMaybeQueueRearm(void)
             queue = 1U;
         }
 #else
-        if (gHwaFreezeRequested && gActiveFrameIsPost &&
-            gActiveFrameShouldKeep &&
-            gPostFramesCaptured >= gCapturePlan.postFrames) {
+        if (l3_shouldFreezeNow()) {
             gCaptureActive = 0U;
             gHwaFreezeRequested = 0U;
             gHwaFreezeCompletions++;
@@ -1922,9 +1934,7 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
                     gHwaShutdownRequested = 0U;
                     gHwaRearmPending = 0U;
                     freezeAfterPack = 1U;
-                } else if (gHwaFreezeRequested && gActiveFrameIsPost &&
-                    gActiveFrameShouldKeep &&
-                    gPostFramesCaptured >= gCapturePlan.postFrames) {
+                } else if (l3_shouldFreezeNow()) {
                     gCaptureActive = 0U;
                     gHwaFreezeRequested = 0U;
                     gHwaFreezeCompletions++;
