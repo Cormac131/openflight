@@ -397,6 +397,10 @@ static volatile uint8_t  gTriggerToward;
 static volatile uint8_t  gTriggerAway;
 static volatile uint32_t gTriggerPeakBin;
 static volatile uint8_t  gTriggerHavePeak;
+static volatile uint8_t  gTriggerPhase;
+static volatile uint32_t gTriggerTeePower;
+static volatile uint32_t gTriggerApproachPower;
+static volatile uint8_t  gTriggerDebug;
 static volatile uint8_t  gHwaShutdownRequested;
 static volatile uint32_t gHwaFreezeRequestFrame;
 static volatile uint32_t gHwaFreezeTargetFrame;
@@ -2799,6 +2803,66 @@ static void l3_clearTriggerMotion(void)
     gTriggerHavePeak = 0U;
 }
 
+static const char *l3_triggerPhaseName(uint8_t phase)
+{
+    static const char *const names[] = {
+        "off", "no-frame", "bin-outside", "tee-low", "occupying",
+        "watching", "no-approach", "toward", "away", "fired"
+    };
+
+    if (phase >= (uint8_t)(sizeof(names) / sizeof(names[0]))) {
+        return "unknown";
+    }
+    return names[phase];
+}
+
+static void l3_writeTriggerDebug(uint8_t phase)
+{
+    if (!gTriggerDebug) {
+        return;
+    }
+    CLI_write(
+        "trig phase=%s tee=%u approach=%u ready=%u toward=%u away=%u "
+        "run=%u peak=%u have=%u bin=%u level=%u latched=%u\n",
+        l3_triggerPhaseName(phase),
+        (unsigned)gTriggerTeePower,
+        (unsigned)gTriggerApproachPower,
+        (unsigned)gTriggerReady,
+        (unsigned)gTriggerToward,
+        (unsigned)gTriggerAway,
+        (unsigned)gTriggerRun,
+        (unsigned)gTriggerPeakBin,
+        (unsigned)gTriggerHavePeak,
+        (unsigned)gTriggerBin,
+        (unsigned)gTriggerPower,
+        (unsigned)gSelfTriggerLatched);
+}
+
+static void l3_noteTrigger(uint8_t phase, float tee, float approach)
+{
+    gTriggerPhase = phase;
+    gTriggerTeePower = (uint32_t)tee;
+    gTriggerApproachPower = (uint32_t)approach;
+    l3_writeTriggerDebug(phase);
+}
+
+static void l3_latchSelfTrigger(float tee, float approach)
+{
+    uintptr_t key = Hwi_disable();
+
+    gHwaFreezeRequested = 1U;
+    gPostCaptureStarted = 0U;
+    gPostFramesCaptured = 0U;
+    gPostFramesObserved = 0U;
+    gActiveFrameShouldKeep = 1U;
+    gSelfTriggerLatched = 1U;
+    gHwaFreezeRequests++;
+    Hwi_restore(key);
+    l3_clearTriggerMotion();
+    l3_noteTrigger(9U, tee, approach);
+    CLI_write("Triggered\n");
+}
+
 static void l3_considerSelfTrigger(void)
 {
     uint32_t slot;
@@ -2807,39 +2871,35 @@ static void l3_considerSelfTrigger(void)
     uint32_t peakBin = 0U;
     float peak = 0.0F;
     float tee;
-    uintptr_t key;
     uint8_t havePeak = 0U;
 
-    if (!gTriggerEnabled || gSelfTriggerLatched || gHwaFreezeRequested || gPostCaptureStarted) {
+    if (!gTriggerEnabled) {
+        l3_noteTrigger(0U, 0.0F, 0.0F);
+        return;
+    }
+    if (gSelfTriggerLatched || gHwaFreezeRequested || gPostCaptureStarted) {
+        l3_noteTrigger(9U, (float)gTriggerTeePower, (float)gTriggerApproachPower);
         return;
     }
     if (gPreFramesCaptured == 0U || gCapturePlan.preFrames == 0U || gCapturePlan.loops == 0U) {
+        l3_noteTrigger(1U, 0.0F, 0.0F);
         return;
     }
     if (gTriggerBin >= gFrameBinCount[0] && gTriggerBin >= gCapturePlan.preBins) {
+        l3_noteTrigger(2U, 0.0F, 0.0F);
         return;
     }
     slot = (gPreFramesCaptured - 1U) % gCapturePlan.preFrames;
     if (gTriggerBin >= gFrameBinCount[slot]) {
+        l3_noteTrigger(2U, 0.0F, 0.0F);
         return;
     }
     tee = l3_verticalPowerAt(slot, gTriggerBin);
+    /* A real hit keeps the tee bin loud. Waiting for it to fall below the
+     * level never fires: the ball has already moved past the tee. */
     if (tee < gTriggerPower) {
-        if (gTriggerReady && gTriggerToward && gTriggerAway) {
-            key = Hwi_disable();
-            gHwaFreezeRequested = 1U;
-            gPostCaptureStarted = 0U;
-            gPostFramesCaptured = 0U;
-            gPostFramesObserved = 0U;
-            gActiveFrameShouldKeep = 1U;
-            gSelfTriggerLatched = 1U;
-            gHwaFreezeRequests++;
-            Hwi_restore(key);
-            l3_clearTriggerMotion();
-            CLI_write("Triggered\n");
-            return;
-        }
         l3_clearTriggerMotion();
+        l3_noteTrigger(3U, tee, 0.0F);
         return;
     }
     gTriggerRun++;
@@ -2847,6 +2907,7 @@ static void l3_considerSelfTrigger(void)
         if (gTriggerRun >= gTriggerHits) {
             gTriggerReady = 1U;
         }
+        l3_noteTrigger(gTriggerReady ? 5U : 4U, tee, 0.0F);
         return;
     }
     first = (gTriggerBin > L3_TRIGGER_APPROACH_BINS) ? (gTriggerBin - L3_TRIGGER_APPROACH_BINS) : 0U;
@@ -2863,6 +2924,7 @@ static void l3_considerSelfTrigger(void)
         }
     }
     if (!havePeak) {
+        l3_noteTrigger(6U, tee, 0.0F);
         return;
     }
     /* gTriggerHavePeak, not gTriggerPeakBin != 0: bin 0 is a real bin. */
@@ -2873,6 +2935,29 @@ static void l3_considerSelfTrigger(void)
     }
     gTriggerPeakBin = peakBin;
     gTriggerHavePeak = 1U;
+    if (gTriggerAway) {
+        l3_latchSelfTrigger(tee, peak);
+        return;
+    }
+    if (gTriggerToward) {
+        uint32_t pastEnd = gTriggerBin + L3_TRIGGER_APPROACH_BINS;
+        float pastPeak = 0.0F;
+
+        if (pastEnd > gFrameBinCount[slot]) {
+            pastEnd = gFrameBinCount[slot];
+        }
+        for (bin = gTriggerBin + 1U; bin < pastEnd; bin++) {
+            float past = l3_verticalPowerAt(slot, bin);
+            if (past > pastPeak) {
+                pastPeak = past;
+            }
+        }
+        if (pastPeak >= gTriggerPower && pastPeak > peak) {
+            l3_latchSelfTrigger(tee, pastPeak);
+            return;
+        }
+    }
+    l3_noteTrigger(gTriggerToward ? 7U : 5U, tee, peak);
 }
 #endif
 
@@ -3286,6 +3371,36 @@ static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
     gTriggerEnabled = (hits > 0U) ? 1U : 0U;
     CLI_write("Done\n");
     return 0;
+}
+
+/* CLI "debugCfg <0|1>": stream one trig line per detection frame. */
+static int32_t l3_cli_debugCfg(int32_t argc, char *argv[])
+{
+#ifdef CONFIGURABLE_CAPTURE
+    unsigned long enabled;
+    char *end;
+
+    if (argc != 2) {
+        CLI_write("Error: debugCfg <0|1>\n");
+        return -1;
+    }
+    enabled = strtoul(argv[1], &end, 10);
+    if (*end != '\0' || enabled > 1UL) {
+        CLI_write("Error: debugCfg <0|1>\n");
+        return -1;
+    }
+    gTriggerDebug = (uint8_t)enabled;
+    if (gTriggerDebug) {
+        l3_writeTriggerDebug(gTriggerPhase);
+    }
+    CLI_write("Done\n");
+    return 0;
+#else
+    (void)argc;
+    (void)argv;
+    CLI_write("Error: debugCfg requires configurable capture\n");
+    return -1;
+#endif
 }
 
 /* CLI "stats": report capture counters (diagnostic). */
@@ -4156,6 +4271,9 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[14].cmd           = "trackCfg";
     cliCfg.tableEntry[14].helpString    = "trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM>";
     cliCfg.tableEntry[14].cmdHandlerFxn = l3_cli_trackCfg;
+    cliCfg.tableEntry[15].cmd           = "debugCfg";
+    cliCfg.tableEntry[15].helpString    = "debugCfg <0|1> stream trigger decisions";
+    cliCfg.tableEntry[15].cmdHandlerFxn = l3_cli_debugCfg;
     CLI_open(&cliCfg);
 }
 
