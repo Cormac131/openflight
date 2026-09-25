@@ -980,10 +980,23 @@ git commit -m "feat(iwr6843): move the IQ16 scratch into DATA_RAM to free 96 KB 
 Add to `tests/test_iwr6843_firmware_rearm.py`:
 
 ```python
-def test_l3_total_bytes_is_not_hardcoded():
+def test_l3_total_bytes_is_derived_from_the_sdk_bank_defines():
     source = FIRMWARE.read_text(encoding="utf-8")
     assert "6U * 128U * 1024U" not in source
-    assert "__l3ring_size" in source
+    assert "MMWAVE_L3RAM_NUM_BANK * MMWAVE_SHMEM_BANK_SIZE" in source
+
+
+def test_derived_arena_matches_the_linker_region(tmp_path):
+    """The C's arena expression must equal the map's actual L3_RAM length.
+
+    This is the check that makes deriving worthwhile: it fails if the two ever
+    disagree, whichever side changed. Skips without a local build, like the
+    other map-based checks.
+    """
+    from tests.test_iwr6843_memory_layout import _memory_rows
+
+    used, unused = _memory_rows()["L3_RAM"]
+    assert used + unused == 6 * 128 * 1024
 
 
 def test_wide_iq16_profile_still_fits_the_arena():
@@ -1001,44 +1014,56 @@ uv run pytest tests/test_iwr6843_firmware_rearm.py::test_l3_total_bytes_is_not_h
 
 Expected: FAIL.
 
-- [ ] **Step 3: Export the region size**
+- [ ] **Step 3: Derive the size from the same inputs the linker uses**
 
-In `mss_linker.cmd`, after the `SECTIONS` block:
+**This step replaces an earlier linker-symbol approach that was wrong.** The TI
+platform linker command file
+(`$SDK/packages/ti/platform/xwr68xx/r4f_linker.cmd:17,23`) sizes the region as:
 
 ```
-/* The application sizes its capture arena from the region, so the two can
-   never drift. */
-__l3ring_size = size(L3_RAM);
+#define MMWAVE_L3RAM_SIZE (MMWAVE_L3RAM_NUM_BANK*MMWAVE_SHMEM_BANK_SIZE)
+    L3_RAM (RW)   : origin=0x51000000 length=MMWAVE_L3RAM_SIZE
 ```
 
-- [ ] **Step 4: Consume it**
+and `mmwave_sdk.mak:132-134,150-152` passes **both** `MMWAVE_L3RAM_NUM_BANK` and
+`MMWAVE_SHMEM_BANK_SIZE` as `--define` to `R4F_CFLAGS` *and* `R4F_LDFLAGS`. So
+the C can compute the identical expression from the identical inputs — not a
+copy of the value, and still a compile-time constant, so `g_ring[]` keeps
+working with no runtime check.
 
-Replace the define at `l3_dump.c:182`:
+First establish whether the defines actually reach the compiler in this build.
+Temporarily add to `l3_dump.c`:
 
 ```c
-/* Exported by mss_linker.cmd as size(L3_RAM). Taking the address of the
- * linker symbol yields the value, which is the standard TI idiom. */
-extern uint8_t __l3ring_size;
-#define L3_TOTAL_BYTES ((uint32_t)(uintptr_t)&__l3ring_size)
+#if !defined(MMWAVE_L3RAM_NUM_BANK) || !defined(MMWAVE_SHMEM_BANK_SIZE)
+#error "probe: SDK bank defines are not visible to the compiler"
+#endif
 ```
 
-Because this is no longer a constant expression, `static uint8_t g_ring[L3_TOTAL_BYTES]` will not compile. Keep `g_ring` sized by a separate compile-time `L3_RING_DECLARED_BYTES (6U * 128U * 1024U)` and add:
+Build. If it compiles, the defines are visible; remove the probe and go to 3a.
+If the build fails on that `#error`, go to 3b instead. Record which branch you took.
+
+**Step 3a — defines visible (preferred).** Replace the hardcode at `l3_dump.c:171`:
 
 ```c
-/* g_ring must be declared at compile time, but the capture arena is sized
- * from the linker. If a bank-count change makes these disagree, the runtime
- * check in l3_initCapture() refuses to start rather than overrunning. */
+/* Same expression the TI platform linker uses to size the L3_RAM region
+ * (ti/platform/xwr68xx/r4f_linker.cmd), computed from the same two --define
+ * values the SDK passes to both the compiler and the linker. Deriving it
+ * rather than hardcoding means a MMWAVE_L3RAM_NUM_BANK change cannot leave
+ * the firmware's idea of the arena disagreeing with the linker's. */
+#define L3_TOTAL_BYTES (MMWAVE_L3RAM_NUM_BANK * MMWAVE_SHMEM_BANK_SIZE)
 ```
 
-Then in the sensor-start path, before the first `l3plan_build` call, reject a mismatch:
+**Step 3b — defines not visible (fallback).** Keep a hardcoded constant but make
+the drift detectable: leave `L3_TOTAL_BYTES` as-is and rely on the map test added
+in Step 5 to catch a mismatch. Do not invent a runtime check.
 
-```c
-if (L3_TOTAL_BYTES != L3_RING_DECLARED_BYTES) {
-    CLI_write("Error: L3 region is %u B but g_ring is %u B; rebuild\n",
-              (unsigned)L3_TOTAL_BYTES, (unsigned)L3_RING_DECLARED_BYTES);
-    return -1;
-}
-```
+- [ ] **Step 4: Verify the derived value is unchanged**
+
+Build and confirm the map still shows `L3_RAM` length `000c0000` and that
+`DATA_RAM` is unchanged at `0002ae2d`/`000051d3`. The derived expression must
+produce exactly the same 786,432 B as the hardcode it replaced, so **nothing in
+the map may move**. If anything moves, the expression is wrong.
 
 - [ ] **Step 5: Build and test**
 
