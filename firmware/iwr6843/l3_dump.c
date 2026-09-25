@@ -160,9 +160,6 @@
 #ifndef RING_FRAMES
 #define RING_FRAMES  6
 #endif
-#ifndef HWA_POST_TRIGGER_FRAMES
-#define HWA_POST_TRIGGER_FRAMES 8U
-#endif
 #define RING_CHIRPS  (RING_FRAMES * CHIRPS_PER_FRAME)
 #if defined(HWA_CHAINED_SNAPSHOT_RING)
 #define RING_FRAME_COMPLEX SNAPSHOT_FRAME_COMPLEX
@@ -363,7 +360,6 @@ static volatile uint8_t  gTriggerDebug;
 static volatile uint8_t  gTriggerDebugPhase = 0xFFU;
 static volatile uint8_t  gHwaShutdownRequested;
 static volatile uint32_t gHwaFreezeRequestFrame;
-static volatile uint32_t gHwaFreezeTargetFrame;
 static volatile uint32_t gHwaFreezeRequests;
 static volatile uint32_t gHwaFreezeCompletions;
 static volatile uint32_t gHwaFreezeTimeouts;
@@ -1815,7 +1811,6 @@ static int32_t l3_freezeHwaAfterPostFrames(void)
     gPostFramesCaptured = 0U;
     gPostFramesObserved = 0U;
     gActiveFrameShouldKeep = 1U;
-    gHwaFreezeTargetFrame = 0U;
     gHwaFreezeRequests++;
     Hwi_restore(key);
     /* Allow the configured post-trigger frames plus scheduling/stop margin. */
@@ -2487,7 +2482,6 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
 #ifdef HWA_CHAINED_SNAPSHOT_RING
     gRingFrame = 0U;
     gHwaFreezeRequestFrame = 0U;
-    gHwaFreezeTargetFrame = 0U;
     gPreFramesCaptured = 0U;
     gPostFramesCaptured = 0U;
     gPostFramesObserved = 0U;
@@ -2979,7 +2973,6 @@ static int32_t l3_sparseRearm(void)
 {
     gRingFrame = 0U;
     gHwaFreezeRequestFrame = 0U;
-    gHwaFreezeTargetFrame = 0U;
     gPreFramesCaptured = 0U;
     gPostFramesCaptured = 0U;
     gPostFramesObserved = 0U;
@@ -3712,7 +3705,6 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     gHwaFreezeRequested = 0U;
     gHwaShutdownRequested = 0U;
     gHwaFreezeRequestFrame = 0U;
-    gHwaFreezeTargetFrame = 0U;
     gHwaFreezeRequests = 0U;
     gHwaFreezeCompletions = 0U;
     gHwaFreezeTimeouts = 0U;

@@ -58,16 +58,10 @@ def test_freeze_request_keeps_rearming_until_post_trigger_target():
     queue = _function_source(
         source, "static void l3_hwaMaybeQueueRearm", "static void l3_hwaChainDoneCB"
     )
-    freeze = _function_source(
-        source,
-        "static int32_t l3_freezeHwaAfterPostFrames",
-        "static int32_t l3_armHwaChain",
-    )
 
     assert "gHwaFreezeRequested" in queue
     assert "gPostFramesCaptured >= gCapturePlan.postFrames" in queue
     assert "Semaphore_post(gHwaFreezeSemaphore)" in queue
-    assert "gHwaFreezeTargetFrame = 0U" in freeze
 
 
 def test_sensor_stop_cancels_post_capture_at_next_completed_frame():
