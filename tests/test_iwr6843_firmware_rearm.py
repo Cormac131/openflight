@@ -363,3 +363,26 @@ def test_track_config_takes_the_fields_the_runtime_sends():
     assert "argc != 6" in config
     assert "strtod(" in config
     assert "l3track_default_params(&gTrackParams)" in config
+
+
+def test_stats_reports_trigger_state_and_debug_prints_on_phase_change_only():
+    """A missed Triggered line must still be visible, without a per-frame UART write."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    stats = _function_source(source, "static int32_t l3_cli_stats", "static int32_t l3_cli_hwaStats")
+    debug_write = _function_source(
+        source,
+        "static void l3_writeTriggerDebug",
+        "static void l3_noteTrigger",
+    )
+    debug_cfg = _function_source(
+        source,
+        "static int32_t l3_cli_debugCfg",
+        "static int32_t l3_cli_stats",
+    )
+
+    assert 'CLI_write("trig phase=%s tee=%u latched=%u enabled=%u\\n"' in stats
+    assert "l3_triggerPhaseName(gTriggerPhase)" in stats
+    assert stats.index("trig phase=") < stats.index("return 0")
+    assert "if (phase == gTriggerDebugPhase)" in debug_write
+    assert debug_write.index("gTriggerDebugPhase = phase") < debug_write.index("CLI_write(")
+    assert "gTriggerDebugPhase = 0xFFU" in debug_cfg

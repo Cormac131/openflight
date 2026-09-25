@@ -401,6 +401,7 @@ static volatile uint8_t  gTriggerPhase;
 static volatile uint32_t gTriggerTeePower;
 static volatile uint32_t gTriggerApproachPower;
 static volatile uint8_t  gTriggerDebug;
+static volatile uint8_t  gTriggerDebugPhase = 0xFFU;
 static volatile uint8_t  gHwaShutdownRequested;
 static volatile uint32_t gHwaFreezeRequestFrame;
 static volatile uint32_t gHwaFreezeTargetFrame;
@@ -2821,6 +2822,10 @@ static void l3_writeTriggerDebug(uint8_t phase)
     if (!gTriggerDebug) {
         return;
     }
+    if (phase == gTriggerDebugPhase) {
+        return;
+    }
+    gTriggerDebugPhase = phase;
     CLI_write(
         "trig phase=%s tee=%u approach=%u ready=%u toward=%u away=%u "
         "run=%u peak=%u have=%u bin=%u level=%u latched=%u\n",
@@ -3390,7 +3395,9 @@ static int32_t l3_cli_debugCfg(int32_t argc, char *argv[])
         return -1;
     }
     gTriggerDebug = (uint8_t)enabled;
-    if (gTriggerDebug) {
+    if (!gTriggerDebug) {
+        gTriggerDebugPhase = 0xFFU;
+    } else {
         l3_writeTriggerDebug(gTriggerPhase);
     }
     CLI_write("Done\n");
@@ -3506,6 +3513,13 @@ static int32_t l3_cli_stats(int32_t argc, char *argv[])
               (unsigned)gNumFrame, (unsigned)gNumWrap, (int)gCaptureActive,
               (unsigned)gCalibStatus, (unsigned)gRfFaults);
 #endif
+#endif
+#ifdef CONFIGURABLE_CAPTURE
+    CLI_write("trig phase=%s tee=%u latched=%u enabled=%u\n",
+              l3_triggerPhaseName(gTriggerPhase),
+              (unsigned)gTriggerTeePower,
+              (unsigned)gSelfTriggerLatched,
+              (unsigned)gTriggerEnabled);
 #endif
     return 0;
 }
