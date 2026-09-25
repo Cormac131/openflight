@@ -214,6 +214,7 @@ that is the weakest possible guard, so this project adds executable coverage:
 | Other host read-path timeouts may exist beyond `monitor.py:599` | Spec requires a sweep, not an assumption |
 | More frames means more cells competing for the fixed 768-byte `l3sparse` request, raising truncation risk on the fallback path | Acceptance criterion 4; if truncation worsens, the request encoding or cap needs revisiting as separate work |
 | Cell count on the `l3track` path scales with frame count, so the sub-1 s outcome erodes as the movie grows | Measured, not computed, at 51 frames. The budget is ~268 cells; cap cells-per-frame if approached. |
+| L3 bank headroom beyond the 6 banks (768 KB) currently allocated was unknown | Probed: building with `MMWAVE_L3RAM_NUM_BANK=8` succeeds and the linker map reports `L3_RAM 51000000 00100000 000c0000 00040000` — a 1 MB (8-bank) region vs. the baseline 768 KB (6-bank) `000c0000`, with `DATA_RAM`, `HWA_RAM`, `HS_RAM`, and `PROG_RAM` all unchanged. Spare L3 exists (256 KB / 2 banks free at 8, not taken from another region); this is a floor-not-ceiling finding for a follow-up, and the 51-frame target in this plan is unchanged. |
 
 ## Prerequisites
 
