@@ -112,6 +112,7 @@ class IWR6843Runtime:
     capture_monitor: IWR6843CaptureMonitor
     calibration: Calibration
     net_range_m: float | None
+    flight_mode: str = "net"
     tx_order: str = "normal"
     capture_timeout_s: float = 12.0
     azimuth_offset_deg: float = 0.0
@@ -128,6 +129,13 @@ class IWR6843Runtime:
     # vertical solution may use that prior to recover impact timing for the
     # independent experimental club search, never to publish vertical launch.
     recovery_observations: list[tuple[float, float, float]] = field(default_factory=list)
+
+    @property
+    def tracking_net_m(self) -> float | None:
+        """Net clamp for ball tracks. Open flight does not apply one."""
+        from openflight.iwr6843.late_window import net_gate_m
+
+        return net_gate_m(self.flight_mode, self.net_range_m)
 
     def _remember_recovery_observation(
         self, measurement: LCMFResult, ball_speed_mph: float
@@ -160,7 +168,7 @@ class IWR6843Runtime:
                 raw,
                 calibration,
                 ball_speed_mph=ball_speed_mph,
-                net_range_m=self.net_range_m,
+                net_range_m=self.tracking_net_m,
             )
         except ValueError:
             # Older/raw-ADC firmware formats cannot run the snapshot recovery.
@@ -197,7 +205,7 @@ class IWR6843Runtime:
                     raw,
                     calibration,
                     ball_speed_mph=ball_speed_mph,
-                    net_range_m=self.net_range_m,
+                    net_range_m=self.tracking_net_m,
                     prepared=prepared.vertical,
                 )
             )
@@ -213,7 +221,7 @@ class IWR6843Runtime:
                 calibration,
                 ball_speed_mph=ball_speed_mph,
                 club=club,
-                net_range_m=self.net_range_m,
+                net_range_m=self.tracking_net_m,
                 tx_order=self.tx_order,
                 tdm_sign_policy=self.tdm_sign_policy,
                 horizontal_phase_reference_rad=self.horizontal_phase_reference_rad,
@@ -257,7 +265,7 @@ class IWR6843Runtime:
         )
 
         geometry = summary.geometry
-        max_range = (self.net_range_m - 0.25) if self.net_range_m else None
+        max_range = (self.tracking_net_m - 0.25) if self.tracking_net_m else None
         track = find_ball_from_power(summary.power, geometry, max_range_m=max_range)
         cells = track_cells(track, geometry) if track is not None else []
         tee = self.calibration.tee_range_m
@@ -308,7 +316,7 @@ class IWR6843Runtime:
             shot_calibration,
             ball_speed_mph=ball_speed_mph,
             club=club,
-            net_range_m=self.net_range_m,
+            net_range_m=self.tracking_net_m,
             tx_order=self.tx_order,
             tdm_sign_policy=self.tdm_sign_policy,
             horizontal_phase_reference_rad=self.horizontal_phase_reference_rad,

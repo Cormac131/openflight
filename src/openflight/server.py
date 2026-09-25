@@ -1096,6 +1096,7 @@ def init_iwr6843(
     horizontal_phase_reference_rad: float | None = None,
     save_dumps: bool = False,
     self_trigger: tuple[int, float, int] | None = None,
+    flight: str = "net",
 ) -> bool:
     """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator."""
     global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
@@ -1153,6 +1154,7 @@ def init_iwr6843(
             capture_monitor=capture_monitor,
             calibration=calibration,
             net_range_m=net_range_m,
+            flight_mode=flight,
             tx_order=resolved_order,
             capture_timeout_s=capture_timeout_s,
             azimuth_offset_deg=azimuth_offset_deg,
@@ -1172,6 +1174,7 @@ def init_iwr6843(
             "trigger_pin_bcm": trigger_pin,
             "tee_slant_range_m": tee_range_m,
             "net_range_m": net_range_m,
+            "flight": flight,
             "tx_order": resolved_order,
             "tdm_sign_policy": iwr6843_runtime.tdm_sign_policy,
             "tilt_deg": math.degrees(calibration.tilt_rad),
@@ -2395,6 +2398,42 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
     shot.inclinometer = data
 
 
+def _measure_late_window(shot: Shot, record: dict) -> dict | None:
+    """Sample the planned looks when the impact dump finished in time."""
+    from .iwr6843.late_window import LateLook, LateWindowPlan, capture_late_window
+
+    if iwr6843_runtime is None or shot.impact_timestamp is None:
+        return None
+    looks = tuple(
+        LateLook(
+            t_s=look["t_s"],
+            downrange_m=look["downrange_m"],
+            height_m=look["height_m"],
+            slant_range_m=look["slant_range_m"],
+        )
+        for look in record["looks"]
+    )
+    plan = LateWindowPlan(
+        enabled=True,
+        reason=record["reason"],
+        apex_t_s=record["apex_t_s"],
+        looks=looks,
+    )
+    try:
+        return capture_late_window(
+            iwr6843_runtime.capture_monitor.radar,
+            plan,
+            impact_timestamp=shot.impact_timestamp,
+            tee_range_m=iwr6843_runtime.calibration.tee_range_m or 1.5,
+            restore_cfg=iwr6843_runtime_config["config"],
+            now=time.time,
+            sleep=time.sleep,
+        )
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Late-window measurement failed: %s", error)
+        return None
+
+
 def _process_iwr6843_angle(shot: Shot) -> float | None:
     """Apply a correlated LCMF-v1 result without risking the OPS shot."""
     if iwr6843_runtime is None or shot.mode == "mock":
@@ -3200,16 +3239,46 @@ def _finalize_shot_detected(
     # back to the table estimator otherwise (either ballistics disabled or
     # angle missing → resolve_launch returns None). This is the only place
     # that writes carry_spin_adjusted for a live shot.
+    if shot.mode != "mock" and iwr6843_runtime is not None:
+        from .iwr6843.late_window import late_window_record
+
+        record = late_window_record(
+            iwr6843_runtime.flight_mode,
+            ball_speed_mph=shot.ball_speed_mph,
+            launch_angle_deg=shot.launch_angle_vertical,
+            spin_rpm=shot.spin_rpm or 0.0,
+            tee_range_m=iwr6843_runtime.calibration.tee_range_m or 1.5,
+        )
+        if record is not None:
+            measured = _measure_late_window(shot, record)
+            if measured is not None:
+                record["measured"] = measured
+                if measured.get("descent_deg") is not None:
+                    shot.descent_angle_deg = measured["descent_deg"]
+            shot.late_window = record
+            logger.info(
+                "[SERVER] Late window: apex %.2fs, looks at %.2fs and %.2fs",
+                record["apex_t_s"],
+                record["looks"][0]["t_s"],
+                record["looks"][1]["t_s"],
+            )
+
     if shot.mode != "mock":
         conditions = resolve_launch(shot) if ballistics_enabled else None
         if conditions is not None:
             trajectory = simulate(conditions)
             shot.carry_spin_adjusted = trajectory.carry_yards
+            shot.landing_angle_deg = (
+                shot.descent_angle_deg
+                if shot.descent_angle_deg is not None
+                else trajectory.landing_angle_deg
+            )
             logger.info(
-                "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s)",
+                "[SERVER] Ballistic carry: %.0f yds (spin: %.0f rpm, source: %s, landing: %.1f deg)",
                 shot.carry_spin_adjusted,
                 conditions.spin_rpm,
                 conditions.spin_source,
+                shot.landing_angle_deg,
             )
         else:
             has_reliable_spin = (
@@ -4538,6 +4607,13 @@ def main():
         help="Antenna-center to net range in metres (default: 4.6)",
     )
     parser.add_argument(
+        "--iwr6843-flight",
+        choices=["net", "range", "course"],
+        default="net",
+        help="net clamps tracks at the net. range or course keeps returns past it "
+        "and records the late-window looks (default: net)",
+    )
+    parser.add_argument(
         "--iwr6843-tilt-deg",
         type=float,
         default=None,
@@ -4884,6 +4960,7 @@ def main():
             trigger_pin=args.iwr6843_trigger_pin,
             tee_range_m=args.iwr6843_tee_m,
             net_range_m=args.iwr6843_net_m,
+            flight=args.iwr6843_flight,
             tx_order=args.iwr6843_tx_order,
             capture_timeout_s=args.iwr6843_capture_timeout,
             tilt_deg=args.iwr6843_tilt_deg,

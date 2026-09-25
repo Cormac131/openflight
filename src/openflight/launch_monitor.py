@@ -287,6 +287,9 @@ class Shot:
     )
     spin_axis_deg: Optional[float] = None  # Spin axis tilt: 0=backspin, +right(fade), -left(draw)
     inclinometer: Optional[dict] = None  # Stable enclosure orientation used for this shot
+    late_window: Optional[dict] = None  # Open-flight pre/post apex looks, when enabled
+    descent_angle_deg: Optional[float] = None  # Chord through the measured late looks
+    landing_angle_deg: Optional[float] = None  # Measured descent when present, else ballistic
 
     @property
     def ball_speed_ms(self) -> float:
@@ -428,6 +431,9 @@ class Shot:
             "camera_replay": dict(self.camera_replay) if self.camera_replay else None,
             "spin_axis_deg": self.spin_axis_deg,
             "inclinometer": self.inclinometer,
+            "late_window": self.late_window,
+            "descent_angle_deg": self.descent_angle_deg,
+            "landing_angle_deg": self.landing_angle_deg,
             "spin_rpm": self.spin_rpm,
             "spin_rpm_measured": self.spin_rpm_measured,
             "spin_source": self.spin_source,
