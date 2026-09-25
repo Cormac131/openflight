@@ -137,17 +137,17 @@ Phase 0 is a gate. Its outcome can invalidate the rest of the plan.
    `MEMORY CONFIGURATION` block. Determines whether extra L3 exists.
 2. TCMB spike: build with the scratch relocated, run the soak, read
    `hwa_missed` / `iq8_overrun` / `iq8_waits` (`l3_dump.c:3569`).
-3. DSS memory probe: determine whether the on-chip solve project
-   (`2026-09-25-iwr6843-onchip-solve-design.md`) needs an L3 working buffer,
-   or whether the C674x L2 holds its ~70 KB cell working set. Both projects
-   contend for the same 786,432 B, so this must be answered before the
-   memory layout is fixed in Phase 2.
+3. DSS memory confirmation: the on-chip solve
+   (`2026-09-25-iwr6843-onchip-solve-design.md`) reads the capture arena in
+   place from L3 and caches it in the C674x L2, reserving **no additional
+   L3**. Confirm this holds once a DSS image exists, so the capture arena can
+   claim all 786,432 B.
 
 *Gate:* if EDMA-to-TCM contention breaks the 380 us budget, the scratch stays
 in L3, the gain drops from +6 frames to +2.4 (right-sizing only), and the
-target movie length must be revised before proceeding. If the DSS needs L3,
-the capture arena must be sized around its reservation rather than claiming
-all 786,432 B.
+target movie length must be revised before proceeding. If the DSS turns out to
+need a resident L3 buffer after all, the capture arena must be sized around
+that reservation.
 
 **Phase 1 - Behaviour-preserving refactors** (each build-verified, own commit)
 

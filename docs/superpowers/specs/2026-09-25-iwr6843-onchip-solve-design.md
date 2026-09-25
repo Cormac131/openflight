@@ -70,7 +70,8 @@ control, and the self-trigger.
 | # | Decision | Choice |
 |---|---|---|
 | 17 | Scope | Full on-chip solve on the DSS: `lcmf`, `club`, `tracking`, `late_window`. |
-| 18 | Sequencing | The DSS memory question is probed in the movie-extension project's Phase 0, before its memory layout is fixed. |
+| 18 | Sequencing | The DSS memory question is confirmed in the movie-extension project's Phase 0, before its memory layout is fixed. |
+| 22 | DSS memory | The DSS reads the capture arena **in place** from L3 and caches it in the C674x L2; it reserves no additional L3. Solve intermediates live in L2 SRAM. The L2 SRAM/cache split is set in Phase 0 and is the only tunable here. |
 | 19 | Verification | Per-stage golden vectors with stated tolerance bands, via the `track_select.c` ctypes pattern, plus end-to-end MAE against the 59 TrackMan-matched shots. |
 | 20 | Failure path | On-chip solve first; on no-confidence, fall back to cell transfer and the Python solve, mirroring the existing `l3track` -> `l3sparse` -> `l3dump` tiering. |
 | 21 | Raw transfer | Debug-mode-only. Normal play transfers results; raw cell transfer stays available behind `save_dumps` (`monitor.py:233`) for calibration, tuning, and replay. |
@@ -92,8 +93,9 @@ across 2,700 lines.
 1. Re-enable `TI_CGT_C6000`, `DSPLIB_C674x`, `MATHLIB_C674x` in the SDK
    install; rebuild the Docker image. Confirm a trivial DSS image links and
    boots alongside the existing MSS image.
-2. Memory probe: does the solve's working set fit the C674x L2, or does it need
-   L3? Feeds the movie-extension project's Phase 0 gate.
+2. Memory: configure the L2 SRAM/cache split, confirm the DSS reads the capture
+   arena in place from L3 with no resident L3 buffer of its own, and confirm
+   the solve intermediates fit L2 SRAM. Feeds the movie-extension Phase 0 gate.
 3. Compute probe: port one representative stage (the `lcmf.py` FFT path) and
    measure it on-chip against the 1 s budget.
 
@@ -163,9 +165,10 @@ test, and Python stays the reference)
 |---|---|
 | ~2,700 lines of numeric port is roughly 5x the `track_select.c` precedent | Staged per-module porting, each with its own golden-vector gate |
 | Active algorithm development moves behind a C rewrite plus firmware flash | Per-stage harness to keep re-porting cheap; Python stays the reference and the replay engine |
-| DSS may need L3, competing with the movie extension | Probed in Phase 0 of both projects before either fixes a layout |
+| DSS may need L3, competing with the movie extension | Resolved by decision 22: reads in place, caches in L2, reserves no L3. Confirmed in Phase 0 once a DSS image exists. |
+| Caching the capture arena from the DSS adds L3 read traffic while the HWA and EDMAs are writing it | Acceptance criterion 5. The solve runs post-freeze, when capture is halted, so the overlap should be limited to the rearm boundary. |
 | Adding a running DSS core may perturb the 380 us inter-frame budget through shared-bus contention | Acceptance criterion 5; measured with the existing soak harness |
-| C674x L2 capacity for the working set is assumed, not verified from this repo | Phase 0 memory probe |
+| C674x L2 capacity and the SRAM/cache split are assumed from the device family, not verified from this repo | Phase 0 step 2 sets and confirms the split |
 | Re-enabling the C6000 toolchain changes install size and Docker build time | Phase 0 step 1 establishes the real cost before any porting |
 | Numeric divergence may be legitimate rather than a bug (different FP ordering) | Tolerances stated per stage with reasons, not a single global epsilon |
 
