@@ -42,6 +42,16 @@ def _leave_power(n_loops: int = 1) -> np.ndarray:
     return np.stack(rows)
 
 
+def test_windows_port_name_is_rejected_on_the_pi():
+    message = swing_trigger.port_name_error("COM5", "linux")
+
+    assert message is not None
+    assert "leave --port off" in message
+    assert swing_trigger.port_name_error("COM5", "win32") is None
+    assert swing_trigger.port_name_error("/dev/ttyUSB0", "linux") is None
+    assert swing_trigger.port_name_error(None, "linux") is None
+
+
 def test_parse_trig_reads_stats_and_debug_lines():
     stats = swing_trigger.parse_trig("trig phase=watching tee=1800 latched=0 enabled=1")
     debug = swing_trigger.parse_trig(

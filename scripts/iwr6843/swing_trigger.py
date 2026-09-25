@@ -9,13 +9,14 @@ and polls ``stats`` while the phase sits still so tee power stays visible.
 On ``Triggered`` (or ``latched=1``) it reads the frozen ring, replays the
 ball-leave detector, and prints PASS or FAIL. Ctrl+C stops.
 
-    uv run python scripts/iwr6843/swing_trigger.py
-    uv run python scripts/iwr6843/swing_trigger.py --port COM5 --tee-m 1.575
+    uv run python scripts/iwr6843/swing_trigger.py --tee-m 1.575
+    uv run python scripts/iwr6843/swing_trigger.py --port /dev/ttyUSB0 --tee-m 1.575
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 
 import numpy as np
@@ -28,6 +29,19 @@ from openflight.iwr6843.sparse import SparsePlan
 
 _DEFAULT_CFG = "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
 _QUIET_POLL_S = 2.0
+
+
+def port_name_error(port: str | None, platform: str) -> str | None:
+    """Windows ``COMn`` names are not device paths on the Pi."""
+    if not port or platform == "win32":
+        return None
+    suffix = port[3:]
+    if port.upper().startswith("COM") and suffix.isdigit():
+        return (
+            f"{port} is a Windows port name. On this machine leave --port off, "
+            "or pass a device path such as /dev/ttyUSB0."
+        )
+    return None
 
 
 def parse_trig(line: str) -> dict[str, str] | None:
@@ -289,13 +303,20 @@ def _arm(radar: IWR6843Radar, config: str, tee_bin: int, level: float, hits: int
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", default=None, help="IWR6843 CLI port (COMx on Windows)")
+    parser.add_argument(
+        "--port",
+        default=None,
+        help="IWR6843 CLI device. Leave unset to probe /dev/ttyUSB*. On Windows pass COMx.",
+    )
     parser.add_argument("--config", default=_DEFAULT_CFG)
     parser.add_argument("--tee-m", type=float, default=DEFAULT_TEE_RANGE_M)
     parser.add_argument("--level", type=float, default=1000.0)
     parser.add_argument("--hits", type=int, default=2)
     args = parser.parse_args()
 
+    error = port_name_error(args.port, sys.platform)
+    if error:
+        raise SystemExit(error)
     tee_bin = tee_local_bin(args.tee_m, args.config)
     radar = IWR6843Radar(port=args.port)
     print(f"IWR6843 on {radar.port}. Stop the kiosk before swinging.", flush=True)
