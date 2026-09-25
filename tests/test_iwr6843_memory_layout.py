@@ -14,15 +14,30 @@ BASELINE_MAP = ROOT / "firmware" / "iwr6843" / "baseline" / "l3_dump_mss.map.bas
 MIN_DATA_RAM_FREE_BYTES = 16 * 1024
 
 
+def _function_source(source: str, name: str, next_name: str) -> str:
+    start = source.rindex(name)
+    end = source.index(next_name, start)
+    return source[start:end]
+
+
 def test_scratch_is_not_carved_out_of_the_capture_arena():
     """L3_IQ8_CAPTURE_BYTES was deleted outright (its only value was always
     L3_TOTAL_BYTES once the scratch left L3), so the equivalent surviving
     construct is l3_captureCapacityBytes() returning L3_TOTAL_BYTES
-    unconditionally, with no offset-cast into g_ring."""
+    unconditionally, with no offset-cast into g_ring and no IQ8/IQ16 branch
+    left over from the old capacity split."""
     source = FIRMWARE.read_text(encoding="utf-8")
     assert "L3_IQ8_CAPTURE_BYTES" not in source
     assert "&g_ring[L3_IQ8_CAPTURE_BYTES]" not in source
-    assert "return L3_TOTAL_BYTES;" in source
+
+    capacity = _function_source(
+        source,
+        "static uint32_t l3_captureCapacityBytes",
+        "static uint32_t l3_captureBytesPerComplex",
+    )
+    assert "return L3_TOTAL_BYTES;" in capacity
+    assert "l3_captureUsesIq8" not in capacity
+    assert "L3_RING_IQ8" not in capacity
 
 
 def test_scratch_is_a_real_array_in_its_own_section():
