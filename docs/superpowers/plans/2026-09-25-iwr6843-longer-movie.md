@@ -827,11 +827,17 @@ def test_scratch_is_a_real_array_in_its_own_section():
     assert "static int16_t g_iq16FrameScratch[2][L3_IQ16_SCRATCH_WORDS];" in source
 
 
-def _memory_rows() -> dict[str, tuple[int, int]]:
-    if not MAP.exists():
-        pytest.fail(f"no linker map at {MAP}; build with 'make -C firmware docker-build'")
+def _memory_rows(path: Path = MAP) -> dict[str, tuple[int, int]]:
+    if not path.exists():
+        pytest.skip(
+            f"no linker map at {path}; this check needs a local firmware build "
+            f"(see the plan's Global Constraints for the docker command). The "
+            f"_Static_assert in l3_dump.c enforces the scratch size at build "
+            f"time regardless, and test_baseline_map_geometry_is_intact below "
+            f"always runs."
+        )
     rows: dict[str, tuple[int, int]] = {}
-    for line in MAP.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         match = re.match(
             r"\s+(\w+)\s+([0-9a-f]{8})\s+([0-9a-f]+)\s+([0-9a-f]+)\s+([0-9a-f]+)",
             line,
@@ -854,9 +860,32 @@ def test_l3_is_fully_claimed_by_the_capture_ring():
     used, unused = _memory_rows()["L3_RAM"]
     assert unused == 0
     assert used == 786_432
+
+
+def test_baseline_map_geometry_is_intact():
+    """Always runs: the baseline map IS tracked, unlike the build output.
+
+    Guards the parser itself and catches a corrupted or truncated baseline,
+    so CI keeps real coverage even with no toolchain present.
+    """
+    rows = _memory_rows(BASELINE_MAP)
+    assert rows["L3_RAM"] == (786_432, 0)
+    baseline_data_ram_free = rows["DATA_RAM"][1]
+    assert baseline_data_ram_free >= 98_304 + MIN_DATA_RAM_FREE_BYTES, (
+        "the pre-relocation baseline no longer has room for a 98,304 B scratch "
+        "plus the required margin; the relocation premise is broken"
+    )
 ```
 
-Note: `pytest.fail` rather than `pytest.skip` on a missing map is deliberate — a silently-skipping layout test is worse than none.
+Add `BASELINE_MAP = ROOT / "firmware" / "iwr6843" / "baseline" / "l3_dump_mss.map.baseline"` beside `MAP`.
+
+**Why skip, not fail, on a missing build map:** `firmware/iwr6843/l3_dump_mss.map` is
+gitignored (`firmware/iwr6843/.gitignore`), so it exists only after a local
+build. A `pytest.fail` there would redden the suite permanently for anyone
+without the TI toolchain, including CI. The always-running
+`test_baseline_map_geometry_is_intact` plus the `_Static_assert` in
+`l3_dump.c` carry the coverage that matters; the skip message names the build
+command so the gap is visible rather than silent.
 
 - [ ] **Step 2: Run to verify failure**
 
