@@ -24,17 +24,26 @@ from openflight.iwr6843.dump import HEADER, MAGIC, parse_header, payload_nbytes
 from openflight.iwr6843.sparse import (
     POWER_MAGIC,
     SLICE_MAGIC,
+    TRACK_MAGIC,
+    CaptureLayout,
+    OnboardTrack,
     assemble_dump,
     format_cell_request,
     parse_power,
+    parse_track,
     power_packet_size,
     slice_stride,
+    track_packet_size,
 )
 
 BAUD = 1_041_667
 _PORT_GLOBS = ("/dev/ttyUSB*", "/dev/tty.SLAB_USBtoUART*")
 
 logger = logging.getLogger(__name__)
+
+
+class UnsupportedCommand(RuntimeError):
+    """The firmware CLI does not know the command, so it is an older image."""
 
 
 def open_port(port: str, baud: int = BAUD, timeout: float = 0.3) -> serial.Serial:
@@ -49,6 +58,9 @@ def open_port(port: str, baud: int = BAUD, timeout: float = 0.3) -> serial.Seria
 
 class IWR6843Radar:
     """CLI + dump transport for the custom L3-dump firmware."""
+
+    # Bytes read past the end of one sparse packet, kept for the next one.
+    _backlog: bytes = b""
 
     def __init__(self, port: str | None = None, baud: int = BAUD):
         if port is None:
@@ -243,44 +255,101 @@ class IWR6843Radar:
         has no ``l3sparse`` command so the caller can fall back to ``l3dump``.
         """
         self.ser.reset_input_buffer()
+        self._backlog = b""
         self.ser.write(b"l3sparse\n")
-        packet = self._read_magic(POWER_MAGIC, power_packet_size(b""), timeout_s)
+        try:
+            packet = self._read_packet(POWER_MAGIC, power_packet_size, timeout_s)
+        except UnsupportedCommand:
+            return None
         if packet is None:
             return None
-        total = power_packet_size(packet)
+        summary = parse_power(packet)
+        self.ser.write(format_cell_request(list(planner(summary))))
+        raw = self._read_cells(summary, timeout_s)
+        if raw is None:
+            return None
+        return raw, summary.noise_power
+
+    def read_tracked(self, timeout_s: float = 8.0) -> tuple[bytes, float, OnboardTrack] | None:
+        """Freeze and read the cells the firmware tracker chose (``l3track``).
+
+        Returns the assembled dump, the noise power and the firmware's track,
+        or None when the firmware refuses before streaming (no trackCfg, IQ8
+        storage), so the caller can fall back to another command.
+        Raises UnsupportedCommand when the firmware has no ``l3track``, and
+        RuntimeError when the stream breaks after it starts: the ring has
+        already been rearmed, so a fallback would capture the wrong window.
+        """
+        self.ser.reset_input_buffer()
+        self._backlog = b""
+        self.ser.write(b"l3track\n")
+        head = self._read_magic(TRACK_MAGIC, track_packet_size(b""), timeout_s)
+        if head is None:
+            return None
+        packet = self._complete(head, track_packet_size(head), timeout_s)
+        if packet is None:
+            raise RuntimeError("IWR6843 l3track packet ended early")
+        layout, track = parse_track(packet)
+        raw = self._read_cells(layout, timeout_s)
+        if raw is None:
+            raise RuntimeError("IWR6843 l3track cell packet ended early")
+        return raw, layout.noise_power, track
+
+    def _read_packet(self, magic: bytes, size_of, timeout_s: float) -> bytes | None:
+        """Read one header-sized packet: sync on ``magic``, then its declared length."""
+        packet = self._read_magic(magic, size_of(b""), timeout_s)
+        if packet is None:
+            return None
+        return self._complete(packet, size_of(packet), timeout_s)
+
+    def _complete(self, packet: bytes, total: int, timeout_s: float) -> bytes | None:
+        """Read the rest of a ``total``-byte packet that starts with ``packet``.
+
+        Bytes past ``total`` belong to the next packet (l3track streams ILS1
+        straight after ILT1), so they wait in the backlog for the next read.
+        """
         if len(packet) < total:
             rest = self._read_exact(total - len(packet), timeout_s)
             if rest is None:
                 return None
             packet += rest
-        summary = parse_power(packet[:total])
-        cells = list(planner(summary))
-        self.ser.write(format_cell_request(cells))
+        self._backlog = packet[total:]
+        return packet[:total]
+
+    def _read_cells(self, layout: CaptureLayout, timeout_s: float) -> bytes | None:
+        """Read one ILS1 cell packet and rebuild the dump it describes."""
         slice_packet = self._read_magic(SLICE_MAGIC, 6, timeout_s)
         if slice_packet is None:
             return None
         count = int.from_bytes(slice_packet[4:6], "little")
-        slice_total = 6 + count * slice_stride(summary)
-        if len(slice_packet) < slice_total:
-            rest = self._read_exact(slice_total - len(slice_packet), timeout_s)
-            if rest is None:
-                return None
-            slice_packet += rest
-        return assemble_dump(summary, slice_packet[:slice_total]), summary.noise_power
+        slice_packet = self._complete(slice_packet, 6 + count * slice_stride(layout), timeout_s)
+        if slice_packet is None:
+            return None
+        return assemble_dump(layout, slice_packet)
 
     def _read_magic(self, magic: bytes, minimum: int, timeout_s: float) -> bytes | None:
-        """Read until ``magic``. A CLI error before it means this command is absent."""
+        """Read until ``magic``. None on a CLI error or timeout before it.
+
+        Raises UnsupportedCommand when the CLI does not recognise the command.
+        """
         buf = bytearray()
+        chunk, self._backlog = self._backlog, b""
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            waiting = self.ser.in_waiting
-            chunk = self.ser.read(waiting if waiting else 1)
+            if not chunk:
+                waiting = self.ser.in_waiting
+                chunk = self.ser.read(waiting if waiting else 1)
             if not chunk:
                 continue
             buf.extend(chunk)
-            if b"Error" in buf or b"not recognized" in buf:
-                return None
+            chunk = b""
             idx = buf.find(magic)
+            # Only CLI text before the magic can be a reply; after it is binary.
+            text = buf if idx < 0 else buf[:idx]
+            if b"not recognized" in text:
+                raise UnsupportedCommand(text.decode(errors="replace").strip())
+            if b"Error" in text:
+                return None
             if idx >= 0 and len(buf) - idx >= minimum:
                 return bytes(buf[idx:])
         return None

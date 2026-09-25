@@ -48,6 +48,7 @@
 #include <ti/utils/cli/cli.h>
 
 #include "dump_format.h"
+#include "track_select.h"
 
 #if defined(L3_DUMP_IQ8) || defined(L3_RING_IQ8)
 #define L3_ANY_IQ8 1
@@ -436,6 +437,7 @@ static MMWave_CtrlCfg gCtrlCfg;
 /* Forward declarations. */
 int32_t l3_cli_dump(int32_t argc, char *argv[]);
 int32_t l3_cli_sparse(int32_t argc, char *argv[]);
+int32_t l3_cli_track(int32_t argc, char *argv[]);
 static int32_t l3_cli_sensorStart(int32_t argc, char *argv[]);
 static int32_t l3_cli_sensorStop(int32_t argc, char *argv[]);
 static int32_t l3_cli_stats(int32_t argc, char *argv[]);
@@ -2840,33 +2842,20 @@ static void l3_considerSelfTrigger(void)
 }
 #endif
 
-int32_t l3_cli_sparse(int32_t argc, char *argv[])
-{
 #ifdef CONFIGURABLE_CAPTURE
+/* The frozen frames a sparse command streams, oldest first. */
+typedef struct {
     uint32_t slots[L3_MAX_CAPTURE_FRAMES];
-    uint8_t starts[L3_MAX_CAPTURE_FRAMES];
-    uint8_t counts[L3_MAX_CAPTURE_FRAMES];
-    uint32_t nFrames = 0U;
-    uint32_t maxBins = 0U;
-    uint32_t frame;
-    uint32_t actualPre;
-    uint32_t actualPost;
-    uint32_t oldestPre;
-    char request[768];
-    char *cursor;
-    int32_t cellCount;
-    int32_t cell;
-#else
-    (void)argc;
-    (void)argv;
-    CLI_write("Error: sparse dump requires configurable capture\n");
-    return -1;
-#endif
-    (void)argc;
-    (void)argv;
-#ifndef CONFIGURABLE_CAPTURE
-    return -1;
-#else
+    uint8_t  starts[L3_MAX_CAPTURE_FRAMES];
+    uint8_t  counts[L3_MAX_CAPTURE_FRAMES];
+    uint32_t nFrames;
+    uint32_t maxBins;
+} l3_sparse_window_t;
+
+/* Freeze the ring for l3sparse or l3track. A self-trigger has already
+ * requested the freeze; otherwise stop at the next frame boundary. */
+static int32_t l3_sparseFreeze(void)
+{
 #ifdef L3_RING_IQ8
     if (l3_captureUsesIq8()) {
         CLI_write("Error: sparse dump requires IQ16 storage\n");
@@ -2887,114 +2876,98 @@ int32_t l3_cli_sparse(int32_t argc, char *argv[])
     } else if (l3_stopCaptureAtBoundary() != 0) {
         return -1;
     }
+    return 0;
+}
+
+static void l3_sparseWindow(l3_sparse_window_t *window)
+{
+    uint32_t frame;
+    uint32_t actualPre;
+    uint32_t actualPost;
+    uint32_t oldestPre;
+
+    window->nFrames = 0U;
+    window->maxBins = 0U;
     actualPre = (gPreFramesCaptured < gCapturePlan.preFrames)
                     ? gPreFramesCaptured : gCapturePlan.preFrames;
     actualPost = (gPostFramesCaptured < gCapturePlan.postFrames)
                      ? gPostFramesCaptured : gCapturePlan.postFrames;
     oldestPre = (gPreFramesCaptured >= gCapturePlan.preFrames)
                     ? (gPreFramesCaptured % gCapturePlan.preFrames) : 0U;
-    for (frame = 0U; frame < actualPre && nFrames < L3_MAX_CAPTURE_FRAMES; frame++) {
-        slots[nFrames] = (oldestPre + frame) % gCapturePlan.preFrames;
-        nFrames++;
+    for (frame = 0U; frame < actualPre && window->nFrames < L3_MAX_CAPTURE_FRAMES; frame++) {
+        window->slots[window->nFrames] = (oldestPre + frame) % gCapturePlan.preFrames;
+        window->nFrames++;
     }
-    for (frame = 0U; frame < actualPost && nFrames < L3_MAX_CAPTURE_FRAMES; frame++) {
-        slots[nFrames] = gCapturePlan.preFrames + frame;
-        nFrames++;
+    for (frame = 0U; frame < actualPost && window->nFrames < L3_MAX_CAPTURE_FRAMES; frame++) {
+        window->slots[window->nFrames] = gCapturePlan.preFrames + frame;
+        window->nFrames++;
     }
-    for (frame = 0U; frame < nFrames; frame++) {
-        starts[frame] = gFrameBinStart[slots[frame]];
-        counts[frame] = gFrameBinCount[slots[frame]];
-        if (counts[frame] > maxBins) {
-            maxBins = counts[frame];
+    for (frame = 0U; frame < window->nFrames; frame++) {
+        window->starts[frame] = gFrameBinStart[window->slots[frame]];
+        window->counts[frame] = gFrameBinCount[window->slots[frame]];
+        if (window->counts[frame] > window->maxBins) {
+            window->maxBins = window->counts[frame];
         }
     }
-    UART_writePolling(gDataUart, (uint8_t *)"ILP1", 4U);
-    l3_writeU16((uint16_t)nFrames);
+}
+
+/* ILP1/ILT1 header and per-frame window table (sparse.CaptureLayout). */
+static void l3_sparseWriteHeader(const char *magic, const l3_sparse_window_t *window)
+{
+    uint32_t frame;
+
+    UART_writePolling(gDataUart, (uint8_t *)magic, 4U);
+    l3_writeU16((uint16_t)window->nFrames);
     l3_writeU16((uint16_t)gCapturePlan.loops);
-    l3_writeU16((uint16_t)maxBins);
+    l3_writeU16((uint16_t)window->maxBins);
     l3_writeU16((uint16_t)(gCapturePlan.chirpsPerFrame / gCapturePlan.loops));
     l3_writeU16((uint16_t)N_RX);
-    l3_writeU16(nFrames ? starts[0] : 0U);
+    l3_writeU16(window->nFrames ? window->starts[0] : 0U);
     l3_writeU16(gFramePeriodUs);
     /* Zero tells the host to keep its own noise floor. A summed-power median
      * is not the per-sample floor LCMF divides by. */
     l3_writeF32(0.0F);
-    for (frame = 0U; frame < nFrames; frame++) {
+    for (frame = 0U; frame < window->nFrames; frame++) {
         uint8_t pair[2];
-        pair[0] = starts[frame];
-        pair[1] = counts[frame];
+        pair[0] = window->starts[frame];
+        pair[1] = window->counts[frame];
         UART_writePolling(gDataUart, pair, sizeof(pair));
     }
-    for (frame = 0U; frame < nFrames; frame++) {
-        uint32_t loop;
-        uint32_t bin;
-        for (loop = 0U; loop < gCapturePlan.loops; loop++) {
-            for (bin = 0U; bin < maxBins; bin++) {
-                float power = 0.0F;
-                if (bin < counts[frame]) {
-                    power = l3_verticalPowerAt(slots[frame], loop, bin);
-                }
-                l3_writeF32(power);
-            }
-        }
-    }
-    if (l3_readLine(request, sizeof(request)) != 0) {
-        CLI_write("Error: sparse cell request missing\n");
-        goto rearm;
-    }
-    cursor = request;
-    while (*cursor != '\0' && *cursor != ' ') {
-        cursor++;
-    }
-    cellCount = 0;
-    if (*cursor == ' ') {
-        cursor++;
-        cellCount = (int32_t)strtol(cursor, &cursor, 10);
-    }
-    if (cellCount < 0) {
-        cellCount = 0;
-    }
-    UART_writePolling(gDataUart, (uint8_t *)"ILS1", 4U);
-    l3_writeU16((uint16_t)cellCount);
-    for (cell = 0; cell < cellCount; cell++) {
-        uint32_t frameIndex;
-        uint32_t localBin;
-        uint32_t chirp;
+}
+
+/* One ILS1 cell: (frame, local bin) then the vertical TX pair's samples. */
+static void l3_sparseWriteCell(const l3_sparse_window_t *window,
+                               uint32_t frameIndex, uint32_t localBin)
+{
+    uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
+    uint32_t verticalChirps = gCapturePlan.loops * ((ntx == 3U) ? 2U : ntx);
+    uint32_t vertical;
+
+    l3_writeU16((uint16_t)frameIndex);
+    l3_writeU16((uint16_t)localBin);
+    for (vertical = 0U; vertical < verticalChirps; vertical++) {
+        uint32_t loop = vertical / ((ntx == 3U) ? 2U : ntx);
+        uint32_t which = vertical % ((ntx == 3U) ? 2U : ntx);
+        uint32_t tx = (ntx == 3U && which == 1U) ? 2U : which;
+        uint32_t chirp = loop * ntx + tx;
         uint32_t rx;
-        long frameValue;
-        long binValue;
-
-        frameValue = strtol(cursor, &cursor, 10);
-        binValue = strtol(cursor, &cursor, 10);
-        frameIndex = (frameValue < 0) ? 0U : (uint32_t)frameValue;
-        localBin = (binValue < 0) ? 0U : (uint32_t)binValue;
-        l3_writeU16((uint16_t)frameIndex);
-        l3_writeU16((uint16_t)localBin);
-        {
-            uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
-            uint32_t verticalChirps = gCapturePlan.loops * ((ntx == 3U) ? 2U : ntx);
-            uint32_t vertical;
-
-            for (vertical = 0U; vertical < verticalChirps; vertical++) {
-                uint32_t loop = vertical / ((ntx == 3U) ? 2U : ntx);
-                uint32_t which = vertical % ((ntx == 3U) ? 2U : ntx);
-                uint32_t tx = (ntx == 3U && which == 1U) ? 2U : which;
-                chirp = loop * ntx + tx;
-                for (rx = 0U; rx < N_RX; rx++) {
-                    if (frameIndex >= nFrames || localBin >= counts[frameIndex]) {
-                        l3_writeU16(0U);
-                        l3_writeU16(0U);
-                    } else {
-                        const int16_t *sample = l3_iq16Sample(
-                            slots[frameIndex], chirp, rx, localBin);
-                        l3_writeU16((uint16_t)sample[0]);
-                        l3_writeU16((uint16_t)sample[1]);
-                    }
-                }
+        for (rx = 0U; rx < N_RX; rx++) {
+            if (frameIndex >= window->nFrames || localBin >= window->counts[frameIndex]) {
+                l3_writeU16(0U);
+                l3_writeU16(0U);
+            } else {
+                const int16_t *sample = l3_iq16Sample(
+                    window->slots[frameIndex], chirp, rx, localBin);
+                l3_writeU16((uint16_t)sample[0]);
+                l3_writeU16((uint16_t)sample[1]);
             }
         }
     }
-rearm:
+}
+
+/* Clear the capture state and restart the ring after a sparse command. */
+static int32_t l3_sparseRearm(void)
+{
     gRingFrame = 0U;
     gHwaFreezeRequestFrame = 0U;
     gHwaFreezeTargetFrame = 0U;
@@ -3016,7 +2989,197 @@ rearm:
         return -1;
     }
     return 0;
+}
 #endif
+
+int32_t l3_cli_sparse(int32_t argc, char *argv[])
+{
+#ifdef CONFIGURABLE_CAPTURE
+    l3_sparse_window_t window;
+    uint32_t frame;
+    char request[768];
+    char *cursor;
+    int32_t cellCount;
+    int32_t cell;
+#else
+    (void)argc;
+    (void)argv;
+    CLI_write("Error: sparse dump requires configurable capture\n");
+    return -1;
+#endif
+    (void)argc;
+    (void)argv;
+#ifndef CONFIGURABLE_CAPTURE
+    return -1;
+#else
+    if (l3_sparseFreeze() != 0) {
+        return -1;
+    }
+    l3_sparseWindow(&window);
+    l3_sparseWriteHeader("ILP1", &window);
+    for (frame = 0U; frame < window.nFrames; frame++) {
+        uint32_t loop;
+        uint32_t bin;
+        for (loop = 0U; loop < gCapturePlan.loops; loop++) {
+            for (bin = 0U; bin < window.maxBins; bin++) {
+                float power = 0.0F;
+                if (bin < window.counts[frame]) {
+                    power = l3_verticalPowerAt(window.slots[frame], loop, bin);
+                }
+                l3_writeF32(power);
+            }
+        }
+    }
+    if (l3_readLine(request, sizeof(request)) != 0) {
+        CLI_write("Error: sparse cell request missing\n");
+        return l3_sparseRearm();
+    }
+    cursor = request;
+    while (*cursor != '\0' && *cursor != ' ') {
+        cursor++;
+    }
+    cellCount = 0;
+    if (*cursor == ' ') {
+        cursor++;
+        cellCount = (int32_t)strtol(cursor, &cursor, 10);
+    }
+    if (cellCount < 0) {
+        cellCount = 0;
+    }
+    UART_writePolling(gDataUart, (uint8_t *)"ILS1", 4U);
+    l3_writeU16((uint16_t)cellCount);
+    for (cell = 0; cell < cellCount; cell++) {
+        long frameValue = strtol(cursor, &cursor, 10);
+        long binValue = strtol(cursor, &cursor, 10);
+        l3_sparseWriteCell(&window,
+                           (frameValue < 0) ? 0U : (uint32_t)frameValue,
+                           (binValue < 0) ? 0U : (uint32_t)binValue);
+    }
+    return l3_sparseRearm();
+#endif
+}
+
+/* Firmware ball tracker (track_select.c). trackCfg supplies the rig limits;
+ * the algorithm constants live in l3track_default_params. */
+#ifdef CONFIGURABLE_CAPTURE
+static L3TrackWorkspace gTrackWorkspace;
+#endif
+static L3TrackParams gTrackParams;
+static double gTrackLoopPeriodS;
+static double gTrackRangeResM;
+static uint8_t gTrackConfigured;
+
+#ifdef CONFIGURABLE_CAPTURE
+static void l3_trackRow(void *ctx, uint32_t frame, uint32_t loop,
+                        float *out, uint32_t count)
+{
+    const l3_sparse_window_t *window = (const l3_sparse_window_t *)ctx;
+    uint32_t bin;
+
+    for (bin = 0U; bin < count; bin++) {
+        out[bin] = l3_verticalPowerAt(window->slots[frame], loop, bin);
+    }
+}
+#endif
+
+/* CLI "l3track": freeze, find the ball and club cells on-chip, then stream
+ * an ILT1 layout + track record and the ILS1 cells. No host round trip. */
+int32_t l3_cli_track(int32_t argc, char *argv[])
+{
+#ifdef CONFIGURABLE_CAPTURE
+    l3_sparse_window_t window;
+    L3TrackLayout layout;
+    L3TrackResult result;
+    L3TrackRng rng;
+    int32_t cellCount;
+    uint32_t frame;
+#endif
+    (void)argc;
+    (void)argv;
+#ifndef CONFIGURABLE_CAPTURE
+    CLI_write("Error: track dump requires configurable capture\n");
+    return -1;
+#else
+    if (!gTrackConfigured) {
+        CLI_write("Error: l3track needs trackCfg\n");
+        return -1;
+    }
+    if (l3_sparseFreeze() != 0) {
+        return -1;
+    }
+    l3_sparseWindow(&window);
+    layout.nFrames = window.nFrames;
+    layout.nLoops = gCapturePlan.loops;
+    layout.maxBins = window.maxBins;
+    layout.binStarts = window.starts;
+    layout.binCounts = window.counts;
+    /* sparse._parse_layout: a zero period reads as 3 ms. */
+    layout.framePeriodS = (gFramePeriodUs != 0U) ? ((double)gFramePeriodUs / 1e6) : 0.003;
+    layout.loopPeriodS = gTrackLoopPeriodS;
+    layout.rangeResM = gTrackRangeResM;
+    l3track_rng_seed(&rng, 1U);
+    cellCount = l3track_select(&layout, &gTrackParams, l3_trackRow, &window,
+                               l3track_rng_pair, &rng, &gTrackWorkspace, &result);
+    if (cellCount < 0) {
+        CLI_write("Error: track layout exceeds firmware limits\n");
+        (void)l3_sparseRearm();
+        return -1;
+    }
+    l3_sparseWriteHeader("ILT1", &window);
+    l3_writeU16(result.found ? 1U : 0U);
+    l3_writeU16((uint16_t)result.nInliers);
+    l3_writeF32((float)result.slopeBins);
+    l3_writeF32((float)result.interceptBins);
+    l3_writeF32((float)result.rmsBins);
+    l3_writeF32((float)result.tFirstS);
+    l3_writeF32((float)result.tLastS);
+    UART_writePolling(gDataUart, (uint8_t *)"ILS1", 4U);
+    l3_writeU16((uint16_t)cellCount);
+    for (frame = 0U; frame < window.nFrames; frame++) {
+        uint32_t bin;
+        for (bin = 0U; bin < L3T_MAX_BINS; bin++) {
+            if (((gTrackWorkspace.cellMask[frame] >> bin) & 1U) != 0U) {
+                l3_sparseWriteCell(&window, frame, bin);
+            }
+        }
+    }
+    return l3_sparseRearm();
+#endif
+}
+
+/* CLI "trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM>":
+ * the rig limits from IWR6843Runtime.track_config_command. maxRangeM of 0
+ * disables the net clamp; clubHiM <= clubLoM disables the club cells. */
+static int32_t l3_cli_trackCfg(int32_t argc, char *argv[])
+{
+    double values[5];
+    char *end;
+    int32_t i;
+
+    if (argc != 6) {
+        CLI_write("Error: trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM>\n");
+        return -1;
+    }
+    for (i = 0; i < 5; i++) {
+        values[i] = strtod(argv[i + 1], &end);
+        if (*end != '\0' || !(values[i] >= 0.0)) {
+            CLI_write("Error: trackCfg value\n");
+            return -1;
+        }
+    }
+    if (values[0] <= 0.0 || values[1] <= 0.0) {
+        CLI_write("Error: trackCfg period and resolution must be positive\n");
+        return -1;
+    }
+    l3track_default_params(&gTrackParams);
+    gTrackLoopPeriodS = values[0];
+    gTrackRangeResM = values[1];
+    gTrackParams.maxRangeM = values[2];
+    gTrackParams.clubGate.loM = values[3];
+    gTrackParams.clubGate.hiM = values[4];
+    gTrackConfigured = 1U;
+    CLI_write("Done\n");
+    return 0;
 }
 
 /* CLI "triggerCfg <localBin> <power> <hits>": arm contact detection.
@@ -3924,6 +4087,12 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[12].cmd           = "triggerCfg";
     cliCfg.tableEntry[12].helpString    = "triggerCfg <localBin> <power> <hits>";
     cliCfg.tableEntry[12].cmdHandlerFxn = l3_cli_triggerCfg;
+    cliCfg.tableEntry[13].cmd           = "l3track";
+    cliCfg.tableEntry[13].helpString    = "Freeze, pick ball and club cells on-chip, send them";
+    cliCfg.tableEntry[13].cmdHandlerFxn = l3_cli_track;
+    cliCfg.tableEntry[14].cmd           = "trackCfg";
+    cliCfg.tableEntry[14].helpString    = "trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM>";
+    cliCfg.tableEntry[14].cmdHandlerFxn = l3_cli_trackCfg;
     CLI_open(&cliCfg);
 }
 

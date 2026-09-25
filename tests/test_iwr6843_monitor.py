@@ -387,3 +387,129 @@ def test_self_trigger_notice_starts_the_shot_listeners(tmp_path):
     assert capture is not None and capture.valid
     assert len(heard) == 1
     monitor.stop()
+
+
+# --- read order: l3track, then l3sparse, then l3dump ------------------------
+
+from openflight.iwr6843.driver import UnsupportedCommand  # noqa: E402
+from openflight.iwr6843.sparse import OnboardTrack  # noqa: E402
+
+_ONBOARD = OnboardTrack(True, 40, 960.0, 49.0, 0.2, 0.001, 0.03)
+
+
+class SparseRadar(FakeRadar):
+    """Records which read path the monitor took."""
+
+    def __init__(self, raw: bytes, *, tracked=None, sparse=None):
+        super().__init__(raw)
+        self.tracked = tracked
+        self.sparse = sparse
+        self.calls = []
+
+    def read_tracked(self):
+        self.calls.append("l3track")
+        if isinstance(self.tracked, Exception):
+            raise self.tracked
+        return self.tracked
+
+    def read_sparse(self, planner):
+        self.calls.append("l3sparse")
+        assert callable(planner)
+        return self.sparse
+
+    def read_dump(self):
+        self.calls.append("l3dump")
+        return super().read_dump()
+
+
+def _monitor(tmp_path, radar, *, onboard=True, planner=True):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    return IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=radar,
+        button_factory=FakeButton,
+        slice_planner=(lambda _summary: []) if planner else None,
+        onboard_tracking=onboard,
+    )
+
+
+def test_firmware_tracked_cells_are_read_first(tmp_path):
+    radar = SparseRadar(b"full", tracked=(b"tracked", 2.5, _ONBOARD), sparse=(b"sparse", 1.0))
+    monitor = _monitor(tmp_path, radar)
+
+    raw, noise, track = monitor._read_capture()  # pylint: disable=protected-access
+
+    assert (raw, noise, track) == (b"tracked", 2.5, _ONBOARD)
+    assert radar.calls == ["l3track"]
+
+
+def test_old_firmware_turns_onboard_tracking_off_for_the_session(tmp_path):
+    radar = SparseRadar(b"full", tracked=UnsupportedCommand("not recognized"), sparse=(b"s", 1.0))
+    monitor = _monitor(tmp_path, radar)
+
+    first = monitor._read_capture()  # pylint: disable=protected-access
+    second = monitor._read_capture()  # pylint: disable=protected-access
+
+    assert first == (b"s", 1.0, None) == second
+    assert monitor.onboard_tracking is False
+    assert radar.calls == ["l3track", "l3sparse", "l3sparse"]
+
+
+def test_firmware_refusal_falls_back_to_host_planned_cells(tmp_path):
+    """No trackCfg or IQ8 storage: try l3sparse, keep trying l3track later."""
+    radar = SparseRadar(b"full", tracked=None, sparse=(b"s", 1.0))
+    monitor = _monitor(tmp_path, radar)
+
+    assert monitor._read_capture() == (b"s", 1.0, None)  # pylint: disable=protected-access
+    assert monitor.onboard_tracking is True
+    assert radar.calls == ["l3track", "l3sparse"]
+
+
+def test_full_dump_is_the_last_resort(tmp_path):
+    radar = SparseRadar(_raw_dump(), tracked=None, sparse=None)
+    monitor = _monitor(tmp_path, radar)
+
+    raw, noise, track = monitor._read_capture()  # pylint: disable=protected-access
+
+    assert raw == _raw_dump() and noise is None and track is None
+    assert radar.calls == ["l3track", "l3sparse", "l3dump"]
+
+
+def test_onboard_tracking_off_skips_l3track(tmp_path):
+    radar = SparseRadar(b"full", tracked=(b"t", 1.0, _ONBOARD), sparse=(b"s", 1.0))
+    monitor = _monitor(tmp_path, radar, onboard=False)
+
+    assert monitor._read_capture() == (b"s", 1.0, None)  # pylint: disable=protected-access
+    assert radar.calls == ["l3sparse"]
+
+
+def test_broken_track_stream_fails_the_capture_instead_of_falling_back(tmp_path):
+    """After the firmware rearms, l3sparse would read a different window."""
+    radar = SparseRadar(b"full", tracked=RuntimeError("l3track cell packet ended early"))
+    monitor = _monitor(tmp_path, radar)
+    monitor.start()
+
+    edge = time.time()
+    assert monitor.notify_trigger(edge)
+    capture = monitor.capture_for_shot(edge, timeout_s=1.0)
+
+    assert capture is not None and not capture.valid
+    assert "ended early" in capture.error
+    assert radar.calls == ["l3track"]
+    monitor.stop()
+
+
+def test_capture_carries_the_firmware_track(tmp_path):
+    radar = SparseRadar(b"full", tracked=(_raw_dump(), 0.0, _ONBOARD))
+    monitor = _monitor(tmp_path, radar)
+    monitor.start()
+
+    edge = time.time()
+    assert monitor.notify_trigger(edge)
+    capture = monitor.capture_for_shot(edge, timeout_s=1.0)
+
+    assert capture is not None and capture.valid
+    assert capture.onboard_track == _ONBOARD
+    monitor.stop()

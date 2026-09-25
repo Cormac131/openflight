@@ -252,42 +252,53 @@ class IWR6843Runtime:
             return replace(baseline, status="accepted_track_speed_warning")
         return baseline
 
-    def plan_sparse_cells(self, summary):
-        """Name the range cells whose complex samples LCMF and club path need."""
+    def _ball_max_range_m(self) -> float | None:
+        """Ball-gate clamp just short of the net, or None in open flight."""
+        net = self.tracking_net_m
+        return (net - 0.25) if net else None
+
+    def _club_gate_m(self) -> tuple[float, float] | None:
+        """Range gate around the tee where the club approaches, or None."""
         from openflight.iwr6843.club import (  # pylint: disable=import-outside-toplevel
             CLUB_APPROACH_DEPTH_M,
             CLUB_GATE_TEE_MARGIN_M,
         )
-        from openflight.iwr6843.sparse import track_cells
-        from openflight.iwr6843.tracking import (  # pylint: disable=import-outside-toplevel
-            detection_peaks,
-            find_ball_from_power,
+
+        tee = self.calibration.tee_range_m
+        if not tee:
+            return None
+        return (max(0.35, tee - CLUB_APPROACH_DEPTH_M), tee + CLUB_GATE_TEE_MARGIN_M)
+
+    def plan_sparse_cells(self, summary):
+        """Name the range cells whose complex samples LCMF and club path need."""
+        from openflight.iwr6843.sparse import plan_cells  # pylint: disable=import-outside-toplevel
+
+        return plan_cells(
+            summary,
+            max_range_m=self._ball_max_range_m(),
+            club_gate_m=self._club_gate_m(),
         )
 
-        geometry = summary.geometry
-        max_range = (self.tracking_net_m - 0.25) if self.tracking_net_m else None
-        track = find_ball_from_power(summary.power, geometry, max_range_m=max_range)
-        cells = track_cells(track, geometry) if track is not None else []
-        tee = self.calibration.tee_range_m
-        if tee:
-            gate = (
-                max(0.35, tee - CLUB_APPROACH_DEPTH_M),
-                tee + CLUB_GATE_TEE_MARGIN_M,
-            )
-            rows, bins = detection_peaks(summary.power, geometry, gates_m=(gate,))
-            seen = set(cells)
-            for row, absolute in zip(rows, bins):
-                frame = int(row) // summary.n_loops
-                center = int(round(float(absolute)))
-                for offset in (-1, 0, 1):
-                    bin_index = center + offset
-                    if not geometry.contains_bin(bin_index, frame=frame):
-                        continue
-                    key = (frame, geometry.local_bin(bin_index, frame))
-                    if key not in seen:
-                        seen.add(key)
-                        cells.append(key)
-        return cells
+    def track_config_command(self) -> str:
+        """``trackCfg`` line that gives the firmware tracker this rig's limits.
+
+        Fields, all SI: loop period (s), range bin size (m), ball max range
+        (m), club gate low and high (m). A zero max range disables the net
+        clamp; a zero-width gate disables the club cells. 17 significant
+        digits let the firmware's strtod land on the host's exact doubles.
+        """
+        from openflight.iwr6843.sparse import (  # pylint: disable=import-outside-toplevel
+            RANGE_FFT_SIZE,
+        )
+        from openflight.iwr6843.tracking import (  # pylint: disable=import-outside-toplevel
+            LOOP_PRI_S,
+            RANGE_SPAN_M,
+        )
+
+        max_range = self._ball_max_range_m() or 0.0
+        club_lo, club_hi = self._club_gate_m() or (0.0, 0.0)
+        fields = (LOOP_PRI_S, RANGE_SPAN_M / RANGE_FFT_SIZE, max_range, club_lo, club_hi)
+        return "trackCfg " + " ".join(f"{value:.17g}" for value in fields)
 
     def process_shot(  # pylint: disable=too-many-arguments
         self,

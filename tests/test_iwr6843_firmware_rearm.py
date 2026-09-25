@@ -245,3 +245,99 @@ def test_dynamic_window_start_is_recorded_per_ring_slot():
 
     assert "gFrameBinStart[ringSlot % RING_FRAMES]" in output
     assert "UART_writePolling(gDataUart, gFrameBinStart" in dump
+
+
+# --- l3track: on-chip ball track and cell selection -------------------------
+
+import re  # noqa: E402
+
+from openflight.iwr6843 import sparse  # noqa: E402
+
+TRACK_HEADER = Path(__file__).parents[1] / "firmware" / "iwr6843" / "track_select.h"
+APP_MAKEFILE = Path(__file__).parents[1] / "firmware" / "iwr6843" / "makefile"
+
+
+def _define(source: str, name: str) -> int:
+    match = re.search(rf"#define\s+{name}\s+(\d+)U", source)
+    assert match, name
+    return int(match.group(1))
+
+
+def test_track_commands_are_registered_on_the_cli():
+    source = FIRMWARE.read_text(encoding="utf-8")
+
+    assert 'tableEntry[13].cmd           = "l3track"' in source
+    assert "tableEntry[13].cmdHandlerFxn = l3_cli_track;" in source
+    assert 'tableEntry[14].cmd           = "trackCfg"' in source
+    assert "tableEntry[14].cmdHandlerFxn = l3_cli_trackCfg;" in source
+
+
+def test_track_select_is_built_into_the_image():
+    makefile = APP_MAKEFILE.read_text(encoding="utf-8")
+
+    assert re.search(r"^SOURCES\s*=.*\btrack_select\.c\b", makefile, re.MULTILINE)
+
+
+def test_track_limits_match_the_capture_limits():
+    """The tracker's fixed buffers must hold any capture the ring can freeze."""
+    firmware = FIRMWARE.read_text(encoding="utf-8")
+    header = TRACK_HEADER.read_text(encoding="utf-8")
+
+    assert _define(header, "L3T_MAX_FRAMES") == _define(firmware, "L3_MAX_CAPTURE_FRAMES")
+    assert _define(header, "L3T_MAX_LOOPS") == _define(firmware, "L3_MAX_LOOPS")
+    assert _define(header, "L3T_MAX_BINS") == _define(firmware, "L3_RING_MAX_BINS")
+
+
+def test_track_command_freezes_selects_streams_then_rearms():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    track = _function_source(source, "int32_t l3_cli_track(", "static int32_t l3_cli_trackCfg")
+
+    order = [
+        track.index("gTrackConfigured"),
+        track.index("l3_sparseFreeze()"),
+        track.index("l3track_select("),
+        track.index('l3_sparseWriteHeader("ILT1"'),
+        track.index('"ILS1"'),
+        track.index("l3_sparseWriteCell("),
+        track.rindex("return l3_sparseRearm();"),
+    ]
+    assert order == sorted(order)
+    # A rejected layout still restarts the ring before reporting the error.
+    rejected = track[track.index("if (cellCount < 0)") : track.index('l3_sparseWriteHeader("ILT1"')]
+    assert "l3_sparseRearm()" in rejected
+
+
+def test_track_record_matches_the_host_parser():
+    """ILT1 track record: the firmware writes the fields sparse.parse_track reads."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    track = _function_source(source, "int32_t l3_cli_track(", "static int32_t l3_cli_trackCfg")
+    record = track[track.index('l3_sparseWriteHeader("ILT1"') : track.index('"ILS1"')]
+    writes = re.findall(r"l3_write(U16|F32)\(", record)
+
+    codes = "".join("H" if kind == "U16" else "f" for kind in writes)
+    assert "<" + codes == sparse._TRACK_RECORD.format  # pylint: disable=protected-access
+
+
+def test_sparse_and_track_share_one_header_writer():
+    """ILP1 and ILT1 must stay byte-compatible with sparse._parse_layout."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    header = _function_source(
+        source, "static void l3_sparseWriteHeader", "static void l3_sparseWriteCell"
+    )
+    writes = re.findall(r"l3_write(U16|F32)\(", header)
+
+    codes = "".join("H" if kind == "U16" else "f" for kind in writes)
+    assert "<4s" + codes == sparse._POWER_HEADER.format  # pylint: disable=protected-access
+    sparse_cmd = _function_source(
+        source, "int32_t l3_cli_sparse(int32_t argc", "static L3TrackWorkspace"
+    )
+    assert 'l3_sparseWriteHeader("ILP1"' in sparse_cmd
+
+
+def test_track_config_takes_the_fields_the_runtime_sends():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    config = _function_source(source, "static int32_t l3_cli_trackCfg", '/* CLI "triggerCfg')
+
+    assert "argc != 6" in config
+    assert "strtod(" in config
+    assert "l3track_default_params(&gTrackParams)" in config

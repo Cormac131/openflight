@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import Callable
 
 from openflight.gpio_factory import ensure_lgpio_pin_factory
-from openflight.iwr6843.driver import IWR6843Radar
+from openflight.iwr6843.driver import IWR6843Radar, UnsupportedCommand
 from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
+from openflight.iwr6843.sparse import OnboardTrack
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ class IWR6843Capture:
     error: str | None = None
     temperature_report: dict[str, int] | None = None
     noise_power: float | None = None
+    onboard_track: OnboardTrack | None = None
 
     @property
     def valid(self) -> bool:
@@ -97,6 +99,7 @@ class IWR6843CaptureMonitor:
         trigger_observers: list[Callable[[float], None]] | None = None,
         slice_planner: Callable | None = None,
         watch_self_trigger: bool = False,
+        onboard_tracking: bool = False,
     ):
         self.config_path = Path(config_path)
         self.output_dir = Path(output_dir).expanduser()
@@ -118,6 +121,8 @@ class IWR6843CaptureMonitor:
         self._trigger_observers = list(trigger_observers or [])
         self.slice_planner = slice_planner
         self.watch_self_trigger = watch_self_trigger
+        # Firmware picks the cells itself (l3track). Cleared if it cannot.
+        self.onboard_tracking = onboard_tracking
         self._trigger_notice = b""
 
     @property
@@ -241,6 +246,36 @@ class IWR6843CaptureMonitor:
         if found:
             self.notify_trigger()
 
+    def _read_capture(self) -> tuple[bytes, float | None, OnboardTrack | None]:
+        """Read one frozen capture, preferring the least serial traffic.
+
+        Firmware-tracked cells (``l3track``), then host-planned cells
+        (``l3sparse``), then the full ring (``l3dump``). Each step falls back
+        only when the firmware refused before streaming.
+        """
+        if self.onboard_tracking:
+            try:
+                tracked = self.radar.read_tracked()
+            except UnsupportedCommand:
+                logger.warning("[IWR6843] Firmware has no l3track; the host will plan cells")
+                self.onboard_tracking = False
+                tracked = None
+            if tracked is not None:
+                raw, noise_power, track = tracked
+                logger.info(
+                    "[IWR6843] Firmware track: %s",
+                    f"{track.slope_bins:.0f} bins/s, {track.n_inliers} inliers"
+                    if track.found
+                    else "no ball",
+                )
+                return raw, noise_power, track
+        if self.slice_planner is not None:
+            sparse = self.radar.read_sparse(self.slice_planner)
+            if sparse is not None:
+                raw, noise_power = sparse
+                return raw, noise_power, None
+        return self.radar.read_dump(), None, None
+
     def _capture_loop(self) -> None:
         while self._running:
             self._poll_self_trigger()
@@ -260,17 +295,13 @@ class IWR6843CaptureMonitor:
             error = None
             metadata = None
             noise_power = None
+            onboard_track = None
             try:
                 logger.info(
                     "[IWR6843] Trigger #%d: reading track samples",
                     sequence,
                 )
-                if self.slice_planner is not None:
-                    sparse = self.radar.read_sparse(self.slice_planner)
-                    if sparse is not None:
-                        raw, noise_power = sparse
-                if raw is None:
-                    raw = self.radar.read_dump()
+                raw, noise_power, onboard_track = self._read_capture()
                 metadata = self._validate_dump(raw)
                 if self.save_dumps:
                     path = self._capture_path(sequence, edge_timestamp)
@@ -292,6 +323,7 @@ class IWR6843CaptureMonitor:
                     metadata.get("temperature_report") if metadata is not None else None
                 ),
                 noise_power=noise_power,
+                onboard_track=onboard_track,
             )
             with self._condition:
                 self._capture_active = False
