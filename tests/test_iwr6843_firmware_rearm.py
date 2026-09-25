@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 FIRMWARE = Path(__file__).parents[1] / "firmware" / "iwr6843" / "l3_dump.c"
+CAPTURE_PLAN = Path(__file__).parents[1] / "firmware" / "iwr6843" / "capture_plan.c"
 FIRMWARE_MAKEFILE = Path(__file__).parents[1] / "firmware" / "Makefile"
 CONFIG_DIR = Path(__file__).parents[1] / "config"
 WIDE_CONFIG = CONFIG_DIR / "iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
@@ -264,19 +265,19 @@ def test_supported_profiles_fit_the_l3_capture_budget():
 
 def test_dynamic_window_start_is_recorded_per_ring_slot():
     source = FIRMWARE.read_text(encoding="utf-8")
-    finalize = _function_source(
-        source,
-        "static int32_t l3_finalizeCapturePlan",
-        "static int32_t l3_cli_captureCfg",
-    )
     descriptor = _function_source(
         source,
         "static void l3_writeFrameDescriptor",
         "static uint16_t l3_iq8FrameScale",
     )
+    # The per-frame bin-start arithmetic itself was extracted into
+    # capture_plan.c (l3plan_build) so the host compiler/ctypes can test it;
+    # l3_dump.c only owns wiring gCapturePlan/gFrameBinStart into the call
+    # and consuming the result (l3_writeFrameDescriptor below).
+    build = CAPTURE_PLAN.read_text(encoding="utf-8")
 
-    assert "gFrameBinStart[frame] = gCapturePlan.preStart;" in finalize
-    assert "gFrameBinStart[slot] =" in finalize
+    assert "tables->binStart[frame] = plan->preStart;" in build
+    assert "tables->binStart[slot] =" in build
     assert "descriptor[0] = gFrameBinStart[slot];" in descriptor
 
 

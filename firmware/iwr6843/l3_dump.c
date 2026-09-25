@@ -50,6 +50,7 @@
 
 #include "dump_format.h"
 #include "detect_queue.h"
+#include "capture_plan.h"
 #include "track_select.h"
 
 #if defined(L3_DUMP_IQ8) || defined(L3_RING_IQ8)
@@ -194,6 +195,12 @@
     (L3_IQ16_SCRATCH_FRAME_BYTES / (uint32_t)sizeof(int16_t))
 #define L3_IQ8_CAPTURE_BYTES   (L3_TOTAL_BYTES - L3_IQ16_SCRATCH_BYTES)
 #endif
+#ifndef L3_RING_MAX_BINS
+/* Only meaningful for the iq8 ring; harmless placeholder for the plan
+ * geometry when this build has no iq8 support at all, since l3plan_build
+ * only consults it when bytesPerComplex == 2U (iq8). */
+#define L3_RING_MAX_BINS       N_SAMPLES
+#endif
 #define L3_DEFAULT_PRE_START   20U
 #define L3_DEFAULT_PRE_BINS    32U
 #define L3_DEFAULT_POST_START  32U
@@ -207,30 +214,9 @@
 #endif
 #define L3_MAX_POST_STRIDE     16U
 
-typedef struct {
-    uint8_t preStart;
-    uint8_t preBins;
-    uint8_t postStart;
-    uint8_t postBins;
-    uint8_t lateStart;
-    uint8_t postFrames;
-    uint8_t postStride;
-    uint8_t preFrames;
-    uint8_t totalFrames;
-    uint16_t loops;
-    uint16_t chirpsPerFrame;
-    uint32_t preFrameBytes;
-    uint32_t postFrameBytes;
-    uint32_t postBaseOffset;
-    uint32_t usedBytes;
-    uint8_t phased;
-    uint8_t requestedPreFrames;
-    uint8_t impactStart;
-    uint8_t impactBins;
-    uint8_t impactFrames;
-    uint8_t ballFrames;
-    uint32_t impactFrameBytes;
-} l3_capture_plan_t;
+/* L3CapturePlan (capture_plan.h) mirrors what used to be a private
+ * l3_capture_plan_t defined here; it now lives there so l3plan_build can be
+ * compiled and tested on the host without any TI headers. */
 
 #pragma DATA_SECTION(g_ring, ".l3ring")
 #pragma DATA_ALIGN(g_ring, 8)
@@ -241,7 +227,7 @@ static uint8_t gCaptureFormat = L3_CAPTURE_FORMAT_IQ16;
     (*((int16_t (*)[2][L3_IQ16_SCRATCH_WORDS]) \
        (void *)&g_ring[L3_IQ8_CAPTURE_BYTES]))
 #endif
-static l3_capture_plan_t gCapturePlan = {
+static L3CapturePlan gCapturePlan = {
     L3_DEFAULT_PRE_START,
     L3_DEFAULT_PRE_BINS,
     L3_DEFAULT_POST_START,
@@ -528,146 +514,22 @@ static int32_t l3_cli_iq8Scale(int32_t argc, char *argv[])
 
 static int32_t l3_finalizeCapturePlan(uint16_t loops)
 {
-    uint32_t bytesPerBin;
-    uint32_t bytesPerComplex;
-    uint32_t captureBytes;
-    uint32_t postBytes;
-    uint32_t remaining;
-    uint32_t preFrames;
-    uint32_t frame;
-    uint32_t cursor;
+    static const L3CaptureGeometry geometry = {
+        N_TX, N_RX, N_SAMPLES, L3_MAX_CAPTURE_FRAMES,
+        L3_MAX_LOOPS, L3_MIN_LOOPS, L3_RING_MAX_BINS, L3_MAX_POST_STRIDE
+    };
+    L3CaptureTables tables = {
+        gFrameBinStart, gFrameBinCount, gFrameDeltaUs, gFrameOffset, gFrameBytes
+    };
+    uint32_t captureBytes = l3_captureCapacityBytes();
+    char err[128];
 
-    if (loops < L3_MIN_LOOPS || loops > L3_MAX_LOOPS || (loops & 1U) != 0U) {
-        CLI_write("Error: loops must be even and between %u and %u\n",
-                  (unsigned)L3_MIN_LOOPS, (unsigned)L3_MAX_LOOPS);
+    if (l3plan_build(&gCapturePlan, &geometry, &tables, loops, gFramePeriodUs,
+                      captureBytes, l3_captureBytesPerComplex(),
+                      err, (uint32_t)sizeof(err)) != 0) {
+        CLI_write("%s", err);
         return -1;
     }
-#ifdef L3_RING_IQ8
-    if (l3_captureUsesIq8() &&
-        (gCapturePlan.preBins > L3_RING_MAX_BINS ||
-         gCapturePlan.postBins > L3_RING_MAX_BINS ||
-         (gCapturePlan.phased &&
-          gCapturePlan.impactBins > L3_RING_MAX_BINS))) {
-        CLI_write("Error: iq8 capture windows cannot exceed %u bins\n",
-                  (unsigned)L3_RING_MAX_BINS);
-        return -1;
-    }
-#endif
-    if (gCapturePlan.preBins == 0U || gCapturePlan.postBins == 0U ||
-        gCapturePlan.postFrames == 0U ||
-        gCapturePlan.postStride == 0U ||
-        gCapturePlan.postStride > L3_MAX_POST_STRIDE ||
-        gCapturePlan.postFrames >= L3_MAX_CAPTURE_FRAMES ||
-        gFramePeriodUs == 0U ||
-        ((uint32_t)gFramePeriodUs * gCapturePlan.postStride) > 0xFFFFU ||
-        ((uint32_t)gCapturePlan.preStart + gCapturePlan.preBins) > N_SAMPLES ||
-        ((uint32_t)gCapturePlan.postStart + gCapturePlan.postBins) > N_SAMPLES ||
-        ((uint32_t)gCapturePlan.lateStart + gCapturePlan.postBins) > N_SAMPLES ||
-        (gCapturePlan.phased &&
-         (gCapturePlan.requestedPreFrames == 0U ||
-          gCapturePlan.impactBins == 0U ||
-          gCapturePlan.impactFrames == 0U ||
-          gCapturePlan.ballFrames == 0U ||
-          ((uint32_t)gCapturePlan.impactStart + gCapturePlan.impactBins) > N_SAMPLES ||
-          ((uint32_t)gCapturePlan.requestedPreFrames +
-           gCapturePlan.postFrames) > L3_MAX_CAPTURE_FRAMES))) {
-        CLI_write("Error: captureCfg needs valid windows and 1-%u post frames\n",
-                  (unsigned)(L3_MAX_CAPTURE_FRAMES - 1U));
-        return -1;
-    }
-
-    gCapturePlan.loops = loops;
-    gCapturePlan.chirpsPerFrame = (uint16_t)(N_TX * loops);
-    bytesPerComplex = l3_captureBytesPerComplex();
-    captureBytes = l3_captureCapacityBytes();
-    bytesPerBin = (uint32_t)gCapturePlan.chirpsPerFrame *
-                  N_RX * bytesPerComplex;
-    gCapturePlan.preFrameBytes = bytesPerBin * gCapturePlan.preBins;
-    gCapturePlan.postFrameBytes = bytesPerBin * gCapturePlan.postBins;
-    gCapturePlan.impactFrameBytes = bytesPerBin * gCapturePlan.impactBins;
-    postBytes = gCapturePlan.phased
-                    ? (gCapturePlan.impactFrameBytes * gCapturePlan.impactFrames) +
-                      (gCapturePlan.postFrameBytes * gCapturePlan.ballFrames)
-                    : gCapturePlan.postFrameBytes * gCapturePlan.postFrames;
-    if (postBytes >= captureBytes) {
-        CLI_write("Error: post-trigger capture needs %u bytes; L3 has %u\n",
-                  (unsigned)postBytes, (unsigned)captureBytes);
-        return -1;
-    }
-    remaining = captureBytes - postBytes;
-    preFrames = gCapturePlan.phased
-                    ? gCapturePlan.requestedPreFrames
-                    : remaining / gCapturePlan.preFrameBytes;
-    if (preFrames == 0U) {
-        CLI_write("Error: capture plan leaves no pre-trigger frame\n");
-        return -1;
-    }
-    if (!gCapturePlan.phased &&
-        preFrames + gCapturePlan.postFrames > L3_MAX_CAPTURE_FRAMES) {
-        preFrames = L3_MAX_CAPTURE_FRAMES - gCapturePlan.postFrames;
-    }
-    if (preFrames == 0U ||
-        preFrames * gCapturePlan.preFrameBytes > remaining) {
-        CLI_write("Error: capture plan exceeds L3 after pre-trigger reservation\n");
-        return -1;
-    }
-
-    gCapturePlan.preFrames = (uint8_t)preFrames;
-    gCapturePlan.totalFrames =
-        (uint8_t)(preFrames + gCapturePlan.postFrames);
-    gCapturePlan.postBaseOffset = preFrames * gCapturePlan.preFrameBytes;
-    cursor = 0U;
-
-    for (frame = 0U; frame < preFrames; frame++) {
-        gFrameOffset[frame] = cursor;
-        gFrameBinStart[frame] = gCapturePlan.preStart;
-        gFrameBinCount[frame] = gCapturePlan.preBins;
-        gFrameDeltaUs[frame] = gFramePeriodUs;
-        gFrameBytes[frame] = gCapturePlan.preFrameBytes;
-        cursor += gCapturePlan.preFrameBytes;
-    }
-
-    if (gCapturePlan.phased) {
-        for (frame = 0U; frame < gCapturePlan.impactFrames; frame++) {
-            uint32_t slot = preFrames + frame;
-            gFrameOffset[slot] = cursor;
-            gFrameBinStart[slot] = gCapturePlan.impactStart;
-            gFrameBinCount[slot] = gCapturePlan.impactBins;
-            gFrameDeltaUs[slot] = gFramePeriodUs;
-            gFrameBytes[slot] = gCapturePlan.impactFrameBytes;
-            cursor += gCapturePlan.impactFrameBytes;
-        }
-        for (frame = 0U; frame < gCapturePlan.ballFrames; frame++) {
-            uint32_t slot = preFrames + gCapturePlan.impactFrames + frame;
-            gFrameOffset[slot] = cursor;
-            gFrameBinStart[slot] =
-                (frame < (gCapturePlan.ballFrames / 2U))
-                    ? gCapturePlan.postStart : gCapturePlan.lateStart;
-            gFrameBinCount[slot] = gCapturePlan.postBins;
-            gFrameDeltaUs[slot] =
-                (frame == 0U)
-                    ? gFramePeriodUs
-                    : (uint16_t)(gFramePeriodUs * gCapturePlan.postStride);
-            gFrameBytes[slot] = gCapturePlan.postFrameBytes;
-            cursor += gCapturePlan.postFrameBytes;
-        }
-    } else {
-        for (frame = 0U; frame < gCapturePlan.postFrames; frame++) {
-            uint32_t slot = preFrames + frame;
-            gFrameOffset[slot] = cursor;
-            gFrameBinStart[slot] =
-                (frame < (gCapturePlan.postFrames / 2U))
-                    ? gCapturePlan.postStart : gCapturePlan.lateStart;
-            gFrameBinCount[slot] = gCapturePlan.postBins;
-            gFrameDeltaUs[slot] =
-                (frame == 0U)
-                    ? gFramePeriodUs
-                    : (uint16_t)(gFramePeriodUs * gCapturePlan.postStride);
-            gFrameBytes[slot] = gCapturePlan.postFrameBytes;
-            cursor += gCapturePlan.postFrameBytes;
-        }
-    }
-    gCapturePlan.usedBytes = cursor;
 
     if (gCapturePlan.phased) {
         CLI_write("Capture plan: loops=%u pre=%ux%u@%uus impact=%ux%u@%uus "
