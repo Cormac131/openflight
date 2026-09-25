@@ -7,6 +7,7 @@ from openflight.clubs.types import ClubType
 import numpy as np
 
 from openflight.iwr6843.dump import pack_dump
+from openflight.iwr6843.monitor import tee_local_bin
 from openflight.iwr6843.late_window import (
     CHIRP_MAX_RANGE_M,
     IMPACT_WINDOW_S,
@@ -25,6 +26,11 @@ from openflight.iwr6843.late_window import (
 _DRIVER = dict(ball_speed_mph=160.0, launch_angle_deg=12.0, spin_rpm=2500.0)
 # l3sparse power cube plus track cells at 1,041,667 baud. A CP2105 stall is extra.
 _SPARSE_DUMP_S = 1.0
+
+
+def test_enable_flag_bin_comes_from_the_tee_distance():
+    cfg = "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
+    assert tee_local_bin(1.575, cfg) == 14
 
 
 def test_net_keeps_the_gate_and_skips_the_record():

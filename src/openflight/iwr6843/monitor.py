@@ -38,6 +38,23 @@ def tx_order_from_config(config_path: str | Path) -> str:
     raise ValueError(f"IWR6843 config must contain chirp TX masks 1/4, 4/1, or 1/2/4, got {masks}")
 
 
+def tee_local_bin(tee_range_m: float, config_path: str | Path, fft_size: int = 128) -> int:
+    """Tee bin inside the cfg's first saved window."""
+    from openflight.iwr6843.tracking import RANGE_SPAN_M
+
+    window_start = None
+    with Path(config_path).open(encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if line.startswith("phaseCaptureCfg"):
+                window_start = int(line.split()[1])
+                break
+    if window_start is None:
+        raise ValueError(f"{config_path} has no phaseCaptureCfg")
+    absolute = int(round(tee_range_m / (RANGE_SPAN_M / fft_size)))
+    return max(0, absolute - window_start)
+
+
 @dataclass(frozen=True)
 class IWR6843Capture:
     """One GPIO edge and its completed L3 dump."""

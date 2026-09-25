@@ -1078,6 +1078,30 @@ def init_camera_capture(
         return False
 
 
+_SELF_TRIGGER_LEVEL = 1000.0
+
+
+def _self_trigger_args(args) -> tuple[int, float, int] | None:
+    """Bin, power, and hit count for triggerCfg, or None when it stays off."""
+    from .iwr6843.monitor import tee_local_bin
+
+    if not args.iwr6843_self_trigger:
+        if args.iwr6843_self_trigger_bin is None or args.iwr6843_self_trigger_level is None:
+            return None
+        return (
+            args.iwr6843_self_trigger_bin,
+            args.iwr6843_self_trigger_level,
+            args.iwr6843_self_trigger_hits,
+        )
+    bin_index = args.iwr6843_self_trigger_bin
+    if bin_index is None:
+        bin_index = tee_local_bin(args.iwr6843_tee_m, args.iwr6843_config)
+    level = args.iwr6843_self_trigger_level
+    if level is None:
+        level = _SELF_TRIGGER_LEVEL
+    return (bin_index, level, args.iwr6843_self_trigger_hits)
+
+
 def init_iwr6843(
     *,
     port: str | None,
@@ -4570,6 +4594,11 @@ def main():
         help="TI complex array/range calibration JSON",
     )
     parser.add_argument(
+        "--iwr6843-self-trigger",
+        action="store_true",
+        help="Arm the IWR ball-leave trigger. The tee bin comes from --iwr6843-tee-m",
+    )
+    parser.add_argument(
         "--iwr6843-self-trigger-bin",
         type=int,
         default=None,
@@ -4580,7 +4609,7 @@ def main():
         "--iwr6843-self-trigger-level",
         type=float,
         default=None,
-        help="Residual-power threshold for the IWR self-trigger",
+        help="Residual-power threshold. Defaults to 1000 with --iwr6843-self-trigger",
     )
     parser.add_argument(
         "--iwr6843-self-trigger-hits",
@@ -4969,13 +4998,7 @@ def main():
             azimuth_offset_deg=args.iwr6843_azimuth_offset_deg,
             horizontal_phase_reference_rad=args.iwr6843_horizontal_phase_reference_rad,
             save_dumps=args.debug,
-            self_trigger=(
-                (args.iwr6843_self_trigger_bin, args.iwr6843_self_trigger_level,
-                 args.iwr6843_self_trigger_hits)
-                if args.iwr6843_self_trigger_bin is not None
-                and args.iwr6843_self_trigger_level is not None
-                else None
-            ),
+            self_trigger=_self_trigger_args(args),
         ):
             calibration = iwr6843_runtime.calibration
             ball_speed_correction_distance_ft = args.iwr6843_tee_m * 3.28084
