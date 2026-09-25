@@ -350,3 +350,40 @@ def test_capture_monitor_closes_serial_when_gpio_setup_fails(tmp_path):
         raise AssertionError("expected GPIO setup to fail")
     assert radar.shutdown_events == ["sensorStop", "close"]
     assert radar.closed
+
+
+class _NoticingRadar(FakeRadar):
+    """Fake transport that reports one firmware self-trigger line."""
+
+    def __init__(self, raw: bytes):
+        super().__init__(raw)
+        self._armed_notice = True
+
+    def consume_trigger_notice(self, pending: bytes = b"") -> tuple[bool, bytes]:
+        if self._armed_notice:
+            self._armed_notice = False
+            return True, b""
+        return False, pending
+
+
+def test_self_trigger_notice_starts_the_shot_listeners(tmp_path):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    heard = []
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=_NoticingRadar(_raw_dump()),
+        button_factory=FakeButton,
+        watch_self_trigger=True,
+    )
+    monitor.add_trigger_observer(heard.append)
+    monitor.start(armed=False)
+    monitor.arm()
+
+    assert monitor._button.when_pressed is None  # pylint: disable=protected-access
+    capture = monitor.capture_for_shot(None, timeout_s=1.0)
+
+    assert capture is not None and capture.valid
+    assert len(heard) == 1
+    monitor.stop()

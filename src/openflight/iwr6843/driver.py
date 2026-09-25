@@ -82,6 +82,17 @@ class IWR6843Radar:
                 return cand
         return None
 
+    def consume_trigger_notice(self, pending: bytes = b"") -> tuple[bool, bytes]:
+        """Read any idle CLI bytes and report the self-trigger ``Triggered`` line."""
+        waiting = self.ser.in_waiting
+        if waiting:
+            pending += self.ser.read(waiting)
+        if b"Triggered" in pending:
+            return True, b""
+        if len(pending) > 64:
+            pending = pending[-64:]
+        return False, pending
+
     def cmd(self, line: str, window: float = 1.5) -> str:
         """Send one CLI line; collect the response until Done/Error/timeout."""
         self.ser.reset_input_buffer()

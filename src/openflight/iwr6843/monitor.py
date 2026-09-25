@@ -96,6 +96,7 @@ class IWR6843CaptureMonitor:
         save_dumps: bool = False,
         trigger_observers: list[Callable[[float], None]] | None = None,
         slice_planner: Callable | None = None,
+        watch_self_trigger: bool = False,
     ):
         self.config_path = Path(config_path)
         self.output_dir = Path(output_dir).expanduser()
@@ -116,6 +117,8 @@ class IWR6843CaptureMonitor:
         self._worker: threading.Thread | None = None
         self._trigger_observers = list(trigger_observers or [])
         self.slice_planner = slice_planner
+        self.watch_self_trigger = watch_self_trigger
+        self._trigger_notice = b""
 
     @property
     def port(self) -> str:
@@ -181,10 +184,16 @@ class IWR6843CaptureMonitor:
         if self._armed:
             return
         # Attach while logically disarmed so a line already high from OPS
-        # startup cannot synchronously create a false capture.
-        self._button.when_pressed = self.notify_trigger
+        # startup cannot synchronously create a false capture. The self-trigger
+        # path listens for the firmware line instead of this pin.
+        if not self.watch_self_trigger:
+            self._button.when_pressed = self.notify_trigger
         self._armed = True
         logger.info("[IWR6843] Armed on BCM%d", self.gpio_pin)
+
+    def add_trigger_observer(self, observer: Callable[[float], None]) -> None:
+        """Notify one more listener when a trigger is accepted."""
+        self._trigger_observers.append(observer)
 
     def notify_trigger(self, timestamp: float | None = None) -> bool:
         """Queue a GPIO edge without doing serial work in the callback."""
@@ -224,9 +233,21 @@ class IWR6843CaptureMonitor:
         timestamp = datetime.fromtimestamp(trigger_timestamp).strftime("%Y%m%d_%H%M%S_%f")[:-3]
         return self.output_dir / f"iwr6843_{timestamp}_{sequence:03d}.l3dump"
 
+    def _poll_self_trigger(self) -> None:
+        """Queue a capture when the firmware reports that the ball left."""
+        if not self.watch_self_trigger or not self._armed or self._capture_active:
+            return
+        found, self._trigger_notice = self.radar.consume_trigger_notice(self._trigger_notice)
+        if found:
+            self.notify_trigger()
+
     def _capture_loop(self) -> None:
         while self._running:
-            edge_timestamp = self._events.get()
+            self._poll_self_trigger()
+            try:
+                edge_timestamp = self._events.get(timeout=0.05 if self.watch_self_trigger else None)
+            except queue.Empty:
+                continue
             if edge_timestamp is None or not self._running:
                 break
             with self._condition:

@@ -2802,6 +2802,7 @@ static void l3_considerSelfTrigger(void)
             gHwaFreezeRequests++;
             Hwi_restore(key);
             l3_clearTriggerMotion();
+            CLI_write("Triggered\n");
             return;
         }
         l3_clearTriggerMotion();

@@ -1156,6 +1156,7 @@ def init_iwr6843(
                 if camera_capture_runtime is not None
                 else None
             ),
+            watch_self_trigger=self_trigger is not None,
         )
         # OPS initialization can pulse the shared sound gate. Configure TI now,
         # but do not accept edges until the OPS trigger path is fully running.
@@ -3934,7 +3935,17 @@ def start_monitor(
             processing_callback=on_shot_processing,
         )
         if iwr6843_runtime is not None:
-            iwr6843_runtime.capture_monitor.arm()
+            capture_monitor = iwr6843_runtime.capture_monitor
+            ops_radar = getattr(monitor, "radar", None)
+            if (
+                capture_monitor.watch_self_trigger
+                and ops_radar is not None
+                and hasattr(ops_radar, "request_capture")
+            ):
+                capture_monitor.add_trigger_observer(
+                    lambda _timestamp, radar=ops_radar: radar.request_capture()
+                )
+            capture_monitor.arm()
     else:
         monitor.start(shot_callback=on_shot_detected, live_callback=on_live_reading)
 

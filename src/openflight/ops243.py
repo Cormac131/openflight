@@ -1377,6 +1377,17 @@ class OPS243Radar:
             sample_rate_ksps,
         )
 
+    def request_capture(self) -> None:
+        """Ask the rolling buffer to dump. The capture loop reads the reply.
+
+        ``S!`` uses the OPS UART already wired to the Pi. It does not need
+        the sound-detector edge on HOST_INT.
+        """
+        if not self.serial or not self.serial.is_open:
+            raise ConnectionError("Not connected to radar")
+        self.serial.write(b"S!\r")
+        self.serial.flush()
+
     def trigger_capture(self, timeout: Optional[float] = None) -> str:
         """
         Trigger buffer capture and return raw I/Q data.
