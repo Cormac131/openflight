@@ -46,7 +46,7 @@ Flash one configurable firmware image, then select a runtime profile:
 | Frames and spacing | 24 at 3 ms | 45 at 2 ms | 36 at 2 ms | 51 at 2 ms |
 | Saved window | 53 bins | 53 bins | 53 bins | 53 bins |
 | Storage | IQ16 | Fixed-scale IQ8 | Fixed-scale IQ8 | Fixed-scale IQ8 |
-| Complete dump | 732,812 bytes | 687,194 bytes | 549,764 bytes | 778,464 bytes |
+| Complete dump | 732,812 bytes | 687,194 bytes | 549,764 bytes | 778,814 bytes |
 | Choose it for | Ball flight and setup tolerance | 54 ms ball phase at 2 ms | Testing slower-shot late-flight coverage | 66 ms ball phase at 2 ms |
 
 Start with **wide/default**. Its wider range window is more tolerant of tee
