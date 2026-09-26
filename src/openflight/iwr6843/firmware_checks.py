@@ -8,7 +8,10 @@ The checks talk to the firmware through ``IWR6843Radar`` only.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Callable
+
+from openflight.iwr6843.driver import IWR6843Radar
 
 _INT_FIELD = re.compile(r"(\w+)=(\d+)")
 _USED = re.compile(r"used=(\d+)/(\d+)")
@@ -115,3 +118,112 @@ def parse_snapshot(text: str) -> StatsSnapshot:
         latched=_trig_int(trig, "latched"),
         enabled=_trig_int(trig, "enabled"),
     )
+
+
+PASS = "PASS"
+FAIL = "FAIL"
+SKIP = "SKIP"
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    """One printed line of the suite."""
+
+    name: str
+    status: str
+    detail: str = ""
+    seconds: float = 0.0
+
+
+@dataclass
+class Context:
+    """Everything a check needs; callables are injected so tests never wait."""
+
+    radar: IWR6843Radar
+    config: str
+    tee_m: float
+    level: float | None
+    hits: int
+    wait_s: float
+    shots: int
+    profiles: tuple[str, ...]
+    prompt: Callable[[str], None]
+    sleep: Callable[[float], None]
+    clock: Callable[[], float]
+    out: Callable[[str], None]
+
+
+@dataclass(frozen=True)
+class Check:
+    """A named check; ``needs_swing`` ones run only with ``--swing``."""
+
+    name: str
+    run: Callable[[Context], CheckResult]
+    needs_swing: bool = False
+
+
+@dataclass(frozen=True)
+class Section:
+    """Checks that share a required sensor state: active, stopped, or any."""
+
+    name: str
+    sensor: str
+    checks: tuple[Check, ...] = field(default_factory=tuple)
+
+
+def passed(name: str, detail: str = "") -> CheckResult:
+    """A PASS line."""
+    return CheckResult(name, PASS, detail)
+
+
+def failed(name: str, detail: str = "") -> CheckResult:
+    """A FAIL line."""
+    return CheckResult(name, FAIL, detail)
+
+
+def skipped(name: str, detail: str = "") -> CheckResult:
+    """A SKIP line; never fails the run."""
+    return CheckResult(name, SKIP, detail)
+
+
+def stats_snapshot(ctx: Context) -> StatsSnapshot:
+    """One ``stats`` round trip."""
+    return parse_snapshot(ctx.radar.stats())
+
+
+def wait_until(
+    ctx: Context, predicate: Callable[[], bool], timeout_s: float, poll_s: float = 0.1
+) -> bool:
+    """Poll ``predicate`` until it is true or ``timeout_s`` passes."""
+    deadline = ctx.clock() + timeout_s
+    while True:
+        if predicate():
+            return True
+        if ctx.clock() >= deadline:
+            return False
+        ctx.sleep(poll_s)
+
+
+def read_port_text(ctx: Context, seconds: float) -> str:
+    """Raw CLI text that arrives within ``seconds`` (no command is sent)."""
+    deadline = ctx.clock() + seconds
+    collected = bytearray()
+    while ctx.clock() < deadline:
+        waiting = ctx.radar.ser.in_waiting
+        chunk = ctx.radar.ser.read(waiting if waiting else 1)
+        if chunk:
+            collected.extend(chunk)
+        else:
+            ctx.sleep(0.02)
+    return collected.decode(errors="replace")
+
+
+def ensure_sensor(ctx: Context, state: str) -> None:
+    """Bring the sensor to ``state`` ("active", "stopped", "any") if it is not there."""
+    if state == "any":
+        return
+    active = stats_snapshot(ctx).active
+    if state == "active" and active != 1:
+        ctx.radar.send_config(ctx.config)
+    elif state == "stopped" and active != 0:
+        ctx.radar.stop_sensor()

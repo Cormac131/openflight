@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import struct
 from types import SimpleNamespace
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 
 from openflight.iwr6843.sparse import POWER_MAGIC, SLICE_MAGIC, PowerSummary
 from openflight.iwr6843.tracking import Geometry, mti_filter
+
+if TYPE_CHECKING:
+    from openflight.iwr6843.driver import IWR6843Radar
 
 _POWER_HEADER = struct.Struct("<4sHHHHHHHf")
 _SLICE_HEADER = struct.Struct("<4sH")
@@ -225,3 +228,65 @@ class FakeSparseSerial:
 
     def reset_input_buffer(self) -> None:
         return None
+
+
+class ScriptedSerial:
+    """Serial port that answers CLI lines from a reply table.
+
+    A written line matches first by its full stripped text, then by its
+    first token. A callable reply receives how many times that key was
+    sent before (starting at 0), so ``stats`` can show counters advancing.
+    ``inject`` queues bytes ahead of the next read, the way a ``Triggered``
+    notice or a ``trig`` debug line arrives unasked.
+    """
+
+    def __init__(
+        self,
+        replies: dict[str, bytes | Callable[[int], bytes]],
+        *,
+        unknown: bytes = b"'{cmd}' is not recognized as a CLI command\n",
+    ):
+        self._replies = dict(replies)
+        self._unknown = unknown
+        self._buffer = bytearray()
+        self._sent: dict[str, int] = {}
+        self.written: list[str] = []
+
+    @property
+    def in_waiting(self) -> int:
+        return len(self._buffer)
+
+    def read(self, count: int) -> bytes:
+        count = min(count, len(self._buffer))
+        chunk = bytes(self._buffer[:count])
+        del self._buffer[:count]
+        return chunk
+
+    def write(self, data: bytes) -> None:
+        line = data.decode(errors="replace").strip()
+        self.written.append(line)
+        key = line if line in self._replies else line.split(" ", 1)[0]
+        reply = self._replies.get(key)
+        if reply is None:
+            self._buffer += self._unknown.replace(b"{cmd}", line.encode())
+            return
+        count = self._sent.get(key, 0)
+        self._sent[key] = count + 1
+        self._buffer += reply(count) if callable(reply) else reply
+
+    def inject(self, data: bytes) -> None:
+        self._buffer += data
+
+    def reset_input_buffer(self) -> None:
+        self._buffer.clear()
+
+
+def scripted_radar(replies: dict, **kwargs) -> "IWR6843Radar":
+    """An ``IWR6843Radar`` on a ``ScriptedSerial`` without opening a port."""
+    from openflight.iwr6843.driver import IWR6843Radar  # pylint: disable=import-outside-toplevel
+
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = ScriptedSerial(replies, **kwargs)
+    radar.port = "scripted"
+    radar._trigger_pending = b""  # pylint: disable=protected-access
+    return radar
