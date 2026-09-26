@@ -137,10 +137,12 @@ def _write(out_dir: Path, case: str, arrays: dict[str, np.ndarray]) -> Path:
 
 def _tracking_inputs(raw: bytes, *, tx_order: str = "normal"):
     meta0, _ = parse_dump(raw)
-    loop_period_s = tracking.LOOP_PRI_S
+    # Same-TX loop period from the physical TX count, not a hardcoded
+    # constant -- this must always track tracking.same_tx_loop_period_s so
+    # the corpus can never drift from the oracle's own row timing.
+    loop_period_s = tracking.same_tx_loop_period_s(meta0["n_tx"])
     if meta0["n_tx"] == 3:
         raw = project_tx_pair(raw, (0, 2))
-        loop_period_s = lcmf_mod.TX2_LOOP_PERIOD_S
     prepared = prepare_shot_dump(raw, loop_period_s=loop_period_s)
     return prepared.mti(), prepared.geometry
 
