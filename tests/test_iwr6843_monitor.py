@@ -95,6 +95,54 @@ def _raw_dump(temperature_report: dict[str, int] | None = None) -> bytes:
     )
 
 
+def test_capture_config_reports_physical_timing_and_format(tmp_path):
+    config = tmp_path / "radar.cfg"
+    config.write_text(
+        "\n".join(
+            (
+                "profileCfg 0 60.0 7 3 38 0 0 100 1 128 4000 0 0 30",
+                "chirpCfg 0 0 0 0 0 0 0 1",
+                "chirpCfg 1 1 0 0 0 0 0 2",
+                "chirpCfg 2 2 0 0 0 0 0 4",
+                "frameCfg 0 2 12 0 2 1 0",
+                "captureFormat iq16",
+                "phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = read_capture_config(config)
+
+    assert summary.n_tx == 3
+    assert summary.loops == 12
+    assert summary.frame_period_s == pytest.approx(0.002)
+    assert summary.chirp_period_s == pytest.approx(45e-6)
+    assert summary.loop_period_s == pytest.approx(135e-6)
+    assert summary.capture_format == "iq16"
+
+
+def test_capture_monitor_rejects_iq8_self_trigger_before_configuring_hardware(tmp_path):
+    config = tmp_path / "radar.cfg"
+    config.write_text(
+        "captureFormat iq8\nphaseCaptureCfg 20 53 14 32 53 10 47 53 64 12 1\n",
+        encoding="utf-8",
+    )
+    radar = FakeRadar(_raw_dump())
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=radar,
+        self_trigger=SelfTriggerConfig(local_bin=1, level=2.0, hits=2),
+    )
+
+    with pytest.raises(ValueError, match="IQ8.*self-trigger"):
+        monitor.start()
+
+    assert radar.configs == []
+
+
 def test_capture_monitor_matches_gpio_edge_to_ops_impact(tmp_path):
     config = tmp_path / "radar.cfg"
     config.write_text("sensorStart\n", encoding="utf-8")
@@ -434,7 +482,7 @@ def test_self_trigger_notice_starts_the_shot_listeners(tmp_path):
 
     capture = monitor.capture_for_shot(None, timeout_s=1.0)
 
-    assert monitor._button.when_pressed is None  # pylint: disable=protected-access
+    assert monitor._button is None  # pylint: disable=protected-access
     assert capture is not None and capture.valid
     assert len(heard) == 1
     assert heard[0] == capture.trigger_timestamp
@@ -1043,9 +1091,9 @@ def test_dump_fallback_timeout_covers_the_frame_cap():
     """The host's shot-matching deadline must outlast the slowest possible
     `l3dump` diagnostic fallback (the full 64-frame cap) with margin, so a
     future profile can't silently outgrow it."""
-    default = inspect.signature(
-        IWR6843CaptureMonitor.capture_for_shot
-    ).parameters["timeout_s"].default
+    default = (
+        inspect.signature(IWR6843CaptureMonitor.capture_for_shot).parameters["timeout_s"].default
+    )
 
     worst_case_bytes = _DUMP_HEADER_BYTES + _MAX_CAPTURE_FRAMES * (
         _RAW_FRAME_BYTES + _PER_FRAME_OVERHEAD_BYTES
@@ -1144,3 +1192,23 @@ def test_cadence_soak_miss_rate_threshold_exceeds_baseline():
     soak = _load_cadence_soak()
 
     assert soak.MAX_MISS_RATE > soak.BASELINE_MISS_RATE
+
+
+def test_self_trigger_does_not_allocate_a_gpio(tmp_path):
+    monitor = _self_trigger_monitor(tmp_path, SelfTriggerRadar(_raw_dump()))
+    monitor._button_factory = lambda *a, **k: pytest.fail("self-trigger allocated GPIO")
+    monitor.start()
+    monitor.stop()
+
+
+def test_tracker_configuration_precedes_trigger_and_listener(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    monitor = _self_trigger_monitor(tmp_path, radar)
+    monitor.start(armed=False, onboard_track_config="trackCfg 0.000135 0.046875 4 1 1.6")
+    monitor.stop()
+    assert [command for command, _ in radar.commands] == [
+        "trackCfg 0.000135 0.046875 4 1 1.6",
+        "triggerCfg 12 1000.0 2",
+    ]
+    assert all(thread == threading.current_thread().name for _, thread in radar.commands)
+    assert monitor.onboard_tracking
