@@ -111,6 +111,20 @@ def _assert_magnitude_close(actual: np.ndarray, expected: np.ndarray, *, label: 
     algorithm itself is designed to keep (numpy's own accuracy for a
     512-point double-precision FFT), so a real algorithmic error (wrong
     window, wrong padding, wrong butterfly) still fails this comfortably.
+
+    DO NOT COPY THIS METRIC BLINDLY INTO A LATER STAGE. Relative-to-peak is
+    right here because this test's only job is proving the FFT primitive
+    itself (Task 4's narrow purpose) -- it deliberately does not, and does
+    not need to, care about low-magnitude bins. But `lcmf`'s angle fit reads
+    spectral STRUCTURE, and the bins that carry angle information are often
+    exactly the low-magnitude ones near a null, not the peak. A
+    relative-to-peak metric can hide a large relative error in one of those
+    small bins while still passing comfortably here -- so a later stage
+    whose correctness depends on low-magnitude spectral shape (`lcmf` is
+    named specifically because that is where this will bite) must justify
+    its own error metric against what it actually needs to preserve, rather
+    than defaulting to "1e-5 relative to peak" because that is what Task 4
+    used.
     """
     actual_mag = np.abs(actual)
     expected_mag = np.abs(expected)
@@ -144,6 +158,85 @@ def test_matches_numpy_fft(lib, n_rows, n_samples, n_fft, seed):
     expected = _expected(snapshot, n_fft)
 
     _assert_magnitude_close(actual, expected, label=f"rows={n_rows},samples={n_samples},fft={n_fft}")
+
+
+def test_accepts_exactly_at_limit_request(lib):
+    """nRows==MAX_ROWS, nSamples==MAX_SAMPLES, nFft==MAX_N simultaneously --
+    the boundary solve_fft_apply's three size checks (solve_fft.c, the
+    `> SOLVE_FFT_MAX_ROWS` / `> SOLVE_FFT_MAX_SAMPLES` / `> SOLVE_FFT_MAX_N`
+    guards) must accept, not reject. This is also the real worst-case shape
+    used to size dss_solveTask's stack (see dss_main.c) -- if this ever
+    stops succeeding, that arithmetic is wrong too.
+
+    Tasks 5-8 copy this file's validate-then-compute pattern for stages with
+    many more buffers; each of those stages must add its own version of this
+    test rather than assume solve_fft.c's coverage transfers."""
+    rng = np.random.default_rng(100)
+    snapshot = rng.normal(size=(MAX_ROWS, MAX_SAMPLES)) + 1j * rng.normal(
+        size=(MAX_ROWS, MAX_SAMPLES)
+    )
+    snapshot = snapshot.astype(np.complex128)
+
+    actual = _run(lib, snapshot, MAX_N)
+    expected = _expected(snapshot, MAX_N)
+
+    _assert_magnitude_close(actual, expected, label="at-limit rows/samples/fft")
+
+
+def test_rejects_rows_over_limit(lib):
+    """nRows == MAX_ROWS + 1 must be rejected, not silently clamped to
+    MAX_ROWS or read out of bounds. The request's `real`/`imag` arrays are
+    fixed at MAX_ROWS rows by the ctypes layout, so this also asserts the C
+    side bounds-checks nRows itself rather than relying on the caller never
+    passing more than the buffer holds."""
+    request = FftRequest()
+    request.nRows = MAX_ROWS + 1
+    request.nSamples = MAX_SAMPLES
+    request.nFft = MAX_N
+
+    result = FftResult()
+    status = lib.solve_fft_apply(ctypes.byref(request), ctypes.byref(result))
+    assert status == 1
+    assert result.status == 1
+    # Rejected before any row was transformed -- not a truncated (e.g.
+    # MAX_ROWS-row) partial result.
+    assert result.nRows == 0
+    assert result.nFft == 0
+
+
+def test_rejects_samples_over_limit(lib):
+    """nSamples == MAX_SAMPLES + 1 must be rejected outright, not truncated
+    to MAX_SAMPLES samples (which would silently window/pad a different
+    signal than the caller asked for)."""
+    request = FftRequest()
+    request.nRows = 1
+    request.nSamples = MAX_SAMPLES + 1
+    request.nFft = MAX_N
+
+    result = FftResult()
+    status = lib.solve_fft_apply(ctypes.byref(request), ctypes.byref(result))
+    assert status == 1
+    assert result.status == 1
+    assert result.nRows == 0
+    assert result.nFft == 0
+
+
+def test_rejects_n_fft_over_limit(lib):
+    """nFft == 2*MAX_N (still a power of two, so it only trips the size
+    guard, not the power-of-two guard) must be rejected, not silently
+    clamped to MAX_N -- which would return an FFT of the wrong length
+    without telling the caller."""
+    request = FftRequest()
+    request.nRows = 1
+    request.nSamples = 4
+    request.nFft = 2 * MAX_N
+
+    result = FftResult()
+    status = lib.solve_fft_apply(ctypes.byref(request), ctypes.byref(result))
+    assert status == 1
+    assert result.status == 1
+    assert result.nRows == 0
+    assert result.nFft == 0
 
 
 def test_rejects_padding_shorter_than_the_input(lib):

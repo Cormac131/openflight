@@ -135,6 +135,19 @@ checked against the Python reference there. A green host test run is
 evidence the port's algorithm (window, pad, per-row iteration) is correct;
 it is not evidence the DSPLIB FFT call is correct.
 
+**Tolerance warning for Tasks 5-8 (added in the pre-Task-5 hardening
+round):** 1e-5 relative-to-peak is the right metric for *this* test because
+Task 4's only job is proving the FFT primitive itself, and it deliberately
+does not care about low-magnitude bins. It is not automatically the right
+metric for a later stage. `lcmf`'s angle fit reads spectral structure, and
+the bins carrying angle information are often exactly the low-magnitude
+ones near a null, not the peak -- a relative-to-peak metric can hide a
+large relative error in one of those bins while still passing comfortably.
+Whichever task ports `lcmf` must justify its own equivalence metric against
+what that stage actually needs to preserve, rather than reusing "1e-5
+relative to peak" because that is what Task 4 used. See the same note in
+`tests/test_iwr6843_solve_fft.py::_assert_magnitude_close`.
+
 **On-chip measurement: PARKED, not run.** Step 4 of the Task 4 brief (add a
 temporary `l3fft` CLI command, flash it, and measure elapsed microseconds
 on real silicon) requires hardware access this session did not have. No
@@ -184,8 +197,11 @@ its own `0x00020000`. The Task 2 32 KB-cache/rest-SRAM split (`dss.cfg`,
 `dss_linker.cmd`) is unchanged and remains adequate for this stage; nothing
 here required moving it.
 
-**An open item for Task 5+, found while checking the above (not fixed in
-this task, since the DSPLIB path is not yet called from anywhere):**
+**FIXED (pre-Task-5 hardening round, see `.superpowers/sdd/2026-09-25-iwr6843-onchip-solve/task-4-report.md`
+for the full writeup): `dss_solveTask`'s stack was 4 KiB.** The item
+recorded below is what that round closed, kept here verbatim as the
+original finding:
+
 `dss_main.c`'s `dss_solveTask` is created with a 4 KiB stack
 (`taskParams.stackSize = 4 * 1024`, set in Task 2 before any solve stage
 existed). `solve_fft_apply`'s per-row locals alone are two
@@ -199,6 +215,17 @@ will not stay inert once a solve stage is actually invoked from a BIOS
 task: `dss_solveTask`'s stack size needs raising (or these buffers need to
 move off the call stack) before then, and should be checked again once the
 `l3fft` measurement step actually runs.
+
+The fix: a dedicated 32 KiB static stack buffer for `dss_solveTask`
+(`dss_solveTaskStack[]` in `dss_main.c`, passed via `taskParams.stack`/
+`stackSize` rather than left for `Task_create` to allocate from the 32 KiB
+`systemHeap` -- doing that would have tried to hand the entire heap to one
+task's stack). 32 KiB carries ~10 KiB of headroom over the ~22.4 KiB derived
+(not silicon-measured) worst case for the FFT stage, and the resulting DSS
+L2 usage still leaves ~84.8 KiB of headroom under the 229,376 B
+`.cacheReserve` ceiling. Tasks 5-8 must re-derive this number for their own
+stack-resident buffers before landing -- see the stack-size comment in
+`dss_main.c` and the porting recipe in the Task 4 report.
 
 **Phase 1 - Infrastructure**
 
