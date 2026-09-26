@@ -267,22 +267,47 @@ def test_supported_profiles_keep_their_capture_duration():
         assert expected_frames * expected_period_ms == expected_duration_ms
 
 
+def _parse_define(source: str, name: str) -> str:
+    match = re.search(rf"^#define\s+{name}\s+(.+)$", source, re.MULTILINE)
+    assert match, f"{name} not found in the firmware source"
+    return match.group(1).strip()
+
+
 def test_supported_profiles_fit_the_l3_capture_budget():
     tx, loops, rx = 3, 12, 4
     wide_bytes = tx * loops * rx * 24 * 53 * 4
-    dense_bytes = tx * loops * rx * 45 * 53 * 2
+    dense_bytes = tx * loops * rx * 51 * 53 * 2
     wide_late_bytes = tx * loops * rx * 36 * 53 * 2
-    iq8_capacity = 688_128
+    iq8_capacity = 786_432
     dense_frame_bytes = tx * loops * rx * 53 * 2
-    dense_post_bytes = (10 + 27) * dense_frame_bytes
+    dense_post_bytes = (10 + 33) * dense_frame_bytes
 
     assert wide_bytes == 732_672
-    assert dense_bytes == 686_880
+    assert dense_bytes == 778_464
     assert wide_late_bytes == 549_504
-    assert wide_bytes < 786_432
-    assert dense_bytes < iq8_capacity
-    assert wide_late_bytes < iq8_capacity
+    assert wide_bytes <= iq8_capacity
+    assert dense_bytes <= iq8_capacity
+    assert wide_late_bytes <= iq8_capacity
     assert 8 * dense_frame_bytes <= iq8_capacity - dense_post_bytes
+
+    # The arena-capacity function must still describe the whole L3 region:
+    # L3_IQ8_CAPTURE_BYTES was removed once l3_captureCapacityBytes() started
+    # returning L3_TOTAL_BYTES unconditionally (IQ8 and IQ16 both use the
+    # entire arena now that the IQ16 scratch lives in DATA_RAM). The
+    # surviving cross-check is that L3_TOTAL_BYTES is derived from the SDK
+    # bank defines, and that l3_captureCapacityBytes() returns it
+    # unconditionally rather than gating on capture format.
+    source = FIRMWARE.read_text(encoding="utf-8")
+    assert _parse_define(source, "L3_TOTAL_BYTES") == (
+        "(MMWAVE_L3RAM_NUM_BANK * MMWAVE_SHMEM_BANK_SIZE)"
+    ), "L3_TOTAL_BYTES is no longer derived from the SDK bank defines"
+
+    capacity_fn = _function_source(
+        source, "static uint32_t l3_captureCapacityBytes", "static uint32_t l3_captureBytesPerComplex"
+    )
+    assert "return L3_TOTAL_BYTES;" in capacity_fn, (
+        "l3_captureCapacityBytes() must unconditionally return the whole L3 arena"
+    )
 
 
 def test_dynamic_window_start_is_recorded_per_ring_slot():
