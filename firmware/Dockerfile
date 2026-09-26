@@ -78,6 +78,13 @@ FROM base AS tools
 # firmware/ti_installers/. They are copied to a writable scratch directory
 # (the install target chmod +x's them, which a read-only mount forbids) and
 # deleted inside the same layer, so only /opt/ti persists.
+#
+# firmware/Makefile's SDK_INSTALLER invocation (install-ti-tools-native) now
+# leaves TI_CGT_C6000, DSPLIB_C674x and MATHLIB_C674x enabled -- the C674x DSP
+# compiler (cl6x) and libraries the on-chip DSS solve needs -- rather than
+# disabling them. That grows this image by roughly 440 MB versus an R4F-only
+# install; there is no standalone C6000 installer to swap in instead, so this
+# component has to come from the bundled SDK installer.
 RUN --mount=type=bind,source=Makefile,target=/ctx/Makefile,ro \
     --mount=type=bind,source=ti_installers,target=/ctx/ti_installers,ro \
     set -eux; \

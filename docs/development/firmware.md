@@ -231,8 +231,10 @@ sysconfig-1.10.0_2163-setup.run
 xdctools_3_61_00_16_core_linux.zip
 ```
 
-The application is MSS/R4F-only; it does not require the C674x DSP compiler or
-DSP libraries.
+The current application is MSS/R4F-only, but the SDK install now also enables
+the C674x DSP compiler (`cl6x`) and the DSPLIB/MATHLIB C674x libraries for the
+in-progress on-chip DSS solve; the build container is correspondingly larger
+(roughly +440 MB) than a strictly R4F-only image would be.
 
 Verify the installer set:
 
@@ -255,6 +257,9 @@ The resulting layout is:
 
 ```text
 /opt/ti/sdk/mmwave_sdk_03_06_02_00-LTS
+/opt/ti/sdk/ti-cgt-c6000_8.3.3
+/opt/ti/sdk/dsplib_c674x_3_4_0_0
+/opt/ti/sdk/mathlib_c674x_3_1_2_1
 /opt/ti/cgt-arm/ti-cgt-arm_20.2.7.LTS
 /opt/ti/bios/bios_6_73_01_01
 /opt/ti/xdc/xdctools_3_61_00_16_core

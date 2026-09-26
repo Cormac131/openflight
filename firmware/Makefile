@@ -105,7 +105,7 @@ probe-installers-native: check-installers
 install-ti-tools-native: check-installers
 	sudo mkdir -p "$(TI_ROOT)/sdk" "$(TI_ROOT)/cgt-arm" "$(TI_ROOT)/bios" "$(TI_ROOT)/xdc" "$(SYSCONFIG_INSTALL_PATH)"
 	chmod +x "$(SDK_INSTALLER)" "$(R4F_INSTALLER)" "$(BIOS_INSTALLER)" "$(SYSCONFIG_INSTALLER)"
-	sudo "$(SDK_INSTALLER)" --mode unattended --prefix "$(TI_ROOT)/sdk" --disable-components TI_CGT_C6000,TI_CGT_ARM,DSPLIB_C64Px,DSPLIB_C674x,MATHLIB_C674x,XDCtools,SYS_BIOS
+	sudo "$(SDK_INSTALLER)" --mode unattended --prefix "$(TI_ROOT)/sdk" --disable-components TI_CGT_ARM,DSPLIB_C64Px,XDCtools,SYS_BIOS
 	sudo "$(R4F_INSTALLER)" --mode unattended --prefix "$(TI_ROOT)/cgt-arm"
 	sudo "$(BIOS_INSTALLER)" --mode unattended --prefix "$(TI_ROOT)/bios"
 	sudo "$(SYSCONFIG_INSTALLER)" --mode unattended --prefix "$(SYSCONFIG_INSTALL_PATH)"
