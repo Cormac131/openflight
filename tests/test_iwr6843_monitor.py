@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import threading
 import time
 
@@ -968,3 +969,36 @@ def test_capture_carries_the_firmware_track(tmp_path):
     assert capture is not None and capture.valid
     assert capture.onboard_track == _ONBOARD
     monitor.stop()
+
+
+# Data UART rate for `l3dump` readback (firmware/iwr6843/l3_dump.c).
+_DUMP_BAUD = 1_041_667
+_DUMP_BYTES_PER_SECOND = _DUMP_BAUD / 10  # 8N1: 10 bits on the wire per byte
+_MAX_CAPTURE_FRAMES = 64  # firmware L3_MAX_CAPTURE_FRAMES cap
+# Raw IQ16 samples per frame: 3 TX x 12 loops x 4 RX x 53 bins x 2 B.
+_RAW_FRAME_BYTES = 3 * 12 * 4 * 53 * 2
+# On-the-wire overhead (see firmware/iwr6843/dump_format.h and l3_dump.c):
+# l3_dump_header_t (20 B) + l3_temperature_report_t (24 B) once per dump,
+# plus a 4 B per-frame descriptor and a 2 B per-frame IQ8 scale byte pair.
+_DUMP_HEADER_BYTES = 20 + 24
+_PER_FRAME_OVERHEAD_BYTES = 4 + 2
+_REQUIRED_MARGIN_S = 2.0
+
+
+def test_dump_fallback_timeout_covers_the_frame_cap():
+    """The host's shot-matching deadline must outlast the slowest possible
+    `l3dump` diagnostic fallback (the full 64-frame cap) with margin, so a
+    future profile can't silently outgrow it."""
+    default = inspect.signature(
+        IWR6843CaptureMonitor.capture_for_shot
+    ).parameters["timeout_s"].default
+
+    worst_case_bytes = _DUMP_HEADER_BYTES + _MAX_CAPTURE_FRAMES * (
+        _RAW_FRAME_BYTES + _PER_FRAME_OVERHEAD_BYTES
+    )
+    worst_case_s = worst_case_bytes / _DUMP_BYTES_PER_SECOND
+
+    assert default >= worst_case_s + _REQUIRED_MARGIN_S, (
+        f"timeout {default}s leaves under {_REQUIRED_MARGIN_S}s over a "
+        f"{worst_case_s:.2f}s worst-case {_MAX_CAPTURE_FRAMES}-frame dump"
+    )
