@@ -168,7 +168,12 @@
 #define RING_FRAME_COMPLEX SAVED_FRAME_COMPLEX
 #endif
 
-#define L3_TOTAL_BYTES         (6U * 128U * 1024U)
+/* Same expression the TI platform linker uses to size the L3_RAM region
+ * (ti/platform/xwr68xx/r4f_linker.cmd), computed from the same two --define
+ * values the SDK passes to both the compiler and the linker. Deriving it
+ * rather than hardcoding means a MMWAVE_L3RAM_NUM_BANK change cannot leave
+ * the firmware's idea of the arena disagreeing with the linker's. */
+#define L3_TOTAL_BYTES         (MMWAVE_L3RAM_NUM_BANK * MMWAVE_SHMEM_BANK_SIZE)
 #define L3_MAX_CAPTURE_FRAMES  64U
 #define L3_MAX_LOOPS           16U
 #define L3_MIN_LOOPS           2U

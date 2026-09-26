@@ -430,3 +430,29 @@ def test_dead_build_variants_are_gone():
     assert "L3_RING_IQ8" in source
     assert "L3_IQ8_EDMA_PACK" in source
     assert "HWA_CHAINED_SNAPSHOT_RING" in source
+
+
+def test_l3_total_bytes_is_derived_from_the_sdk_bank_defines():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    assert "6U * 128U * 1024U" not in source
+    assert "MMWAVE_L3RAM_NUM_BANK * MMWAVE_SHMEM_BANK_SIZE" in source
+
+
+def test_derived_arena_matches_the_linker_region(tmp_path):
+    """The C's arena expression must equal the map's actual L3_RAM length.
+
+    This is the check that makes deriving worthwhile: it fails if the two ever
+    disagree, whichever side changed. Skips without a local build, like the
+    other map-based checks.
+    """
+    from tests.test_iwr6843_memory_layout import _memory_rows
+
+    used, unused = _memory_rows()["L3_RAM"]
+    assert used + unused == 6 * 128 * 1024
+
+
+def test_wide_iq16_profile_still_fits_the_arena():
+    tx, loops, rx = 3, 12, 4
+    wide_bytes = tx * loops * rx * 24 * 53 * 4
+    assert wide_bytes == 732_672
+    assert wide_bytes <= 786_432
