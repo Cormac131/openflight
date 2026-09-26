@@ -67,10 +67,10 @@ The supported angle radar.
 | `--iwr6843-tee-m` | float; default `1.575` | Antenna-center to tee slant range in metres (default: 1.575) |
 | `--iwr6843-net-m` | float; default `4.6` | Antenna-center to net range in metres (default: 4.6) |
 | `--iwr6843-flight` | choices: `net`, `range`, `course`; default `net` | net clamps tracks at the net. range or course keeps returns past it and measures the late-window descent after the shot is published |
-| `--iwr6843-self-trigger` | flag | Freeze the IWR ring when the ball leaves the tee and send S! to the OPS, instead of the sound-gate edge. Disconnect the SEN-14262 GATE from HOST_INT. Requires --iwr6843 and --trigger sound |
+| `--iwr6843-self-trigger` | flag | Freeze the IWR ring when the firmware tracks the clubhead into the tee and send S! to the OPS, instead of the sound-gate edge. Disconnect the SEN-14262 GATE from HOST_INT. Requires --iwr6843 and --trigger sound |
 | `--iwr6843-self-trigger-bin` | int | Local range bin of the tee (default: from --iwr6843-tee-m). Requires --iwr6843-self-trigger |
-| `--iwr6843-self-trigger-level` | float | Residual-power threshold (default: 1000). Requires --iwr6843-self-trigger |
-| `--iwr6843-self-trigger-hits` | int | Consecutive frames the tee bin must be occupied before it is ready, at least 1 (default: 2). Requires --iwr6843-self-trigger |
+| `--iwr6843-self-trigger-snr` | float | Clubhead candidate threshold as a multiple of the firmware's running noise floor, at least 1 (default: 6). Requires --iwr6843-self-trigger |
+| `--iwr6843-self-trigger-frames` | int | Frames a candidate must be tracked approaching the tee before it can fire, at least 1 (default: 2). Requires --iwr6843-self-trigger |
 | `--iwr6843-tilt-deg` | float | Override mount tilt from the TI calibration JSON |
 | `--iwr6843-radar-height-m` | float | Override antenna-center height from the TI calibration JSON |
 | `--iwr6843-ball-height-m` | float; default `0.04` | Ball-center height above the floor/mat (default: 0.040) |

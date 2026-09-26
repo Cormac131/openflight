@@ -48,6 +48,7 @@
 #include <ti/utils/cli/cli.h>
 
 #include "dump_format.h"
+#include "l3_trigger.h"
 
 #if defined(L3_DUMP_IQ8) || defined(L3_RING_IQ8)
 #define L3_ANY_IQ8 1
@@ -387,15 +388,13 @@ static volatile uint8_t  gHwaRearmBusy;
 static volatile uint8_t  gHwaFreezeRequested;
 static volatile uint8_t  gTriggerEnabled;
 static volatile uint8_t  gSelfTriggerLatched;
-static volatile uint32_t gTriggerBin;
-static volatile float    gTriggerPower;
-static volatile uint32_t gTriggerHits;
-static volatile uint32_t gTriggerRun;
-static volatile uint8_t  gTriggerReady;
-static volatile uint8_t  gTriggerToward;
-static volatile uint8_t  gTriggerAway;
-static volatile uint32_t gTriggerPeakBin;
-static volatile uint8_t  gTriggerHavePeak;
+/* Self-trigger detector (l3_trigger.c). The HWA rearm task updates it once
+ * per completed frame with gTrigBusy raised; the CLI task (triggerCfg,
+ * triggerLog) waits for that flag before it resets or reads the state. */
+static l3_trig_cfg_t     gTrigCfg;
+static l3_trig_t         gTrig;
+static volatile uint8_t  gTrigBusy;
+static float             gTrigLoopPeriodS;
 static volatile uint8_t  gHwaShutdownRequested;
 static volatile uint32_t gHwaFreezeRequestFrame;
 static volatile uint32_t gHwaFreezeTargetFrame;
@@ -462,6 +461,7 @@ static void l3_snapshotTask(UArg arg0, UArg arg1);
 #ifdef HWA_CHAINED_SNAPSHOT_RING
 static void l3_hwaRearmTask(UArg arg0, UArg arg1);
 static void l3_considerSelfTrigger(void);
+static void l3_trigRearm(void);
 #endif
 
 #ifdef CONFIGURABLE_CAPTURE
@@ -2606,6 +2606,7 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
     gHwaFreezeTargetFrame = 0U;
 #ifdef CONFIGURABLE_CAPTURE
     gPreFramesCaptured = 0U;
+    l3_trigRearm();
     gPostFramesCaptured = 0U;
     gPostFramesObserved = 0U;
     gPostCaptureStarted = 0U;
@@ -2732,19 +2733,32 @@ static const int16_t *l3_iq16Sample(
     return &frame[index * 2U];
 }
 
-/* Burst-MTI residual power of one bin for every loop of a frame, summed over
- * the vertical TX pair (TX0 and TX2 of three) and all RX. Each (tx, rx) loop
- * mean is computed once, so a bin costs O(loops), not O(loops^2).
- * out[] must hold gCapturePlan.loops values. */
-static void l3_verticalPowerLoops(uint32_t slot, uint32_t localBin, float *out)
+/* Burst-MTI residual of one bin over every loop of a frame, summed over the
+ * vertical TX pair (TX0 and TX2 of three) and all RX. Each (tx, rx) loop
+ * mean is computed once, so a bin costs O(loops), not O(loops^2). perLoop[]
+ * (gCapturePlan.loops values) receives the residual power of each loop; obs
+ * receives the residual energy integrated over every loop and the lag-1
+ * loop autocorrelation the trigger reads Doppler from. Either may be NULL. */
+static void l3_verticalResidual(uint32_t slot, uint32_t localBin,
+                                float *perLoop, l3_trig_obs_t *obs)
 {
+    const int16_t *frame = (const int16_t *)&g_ring[gFrameOffset[slot]];
+    uint32_t binCount = gFrameBinCount[slot];
     uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
     uint32_t loops = gCapturePlan.loops;
+    /* The same (tx, rx) one loop later is ntx chirps on: N_RX * binCount
+     * complex samples per chirp, two int16 each. */
+    uint32_t loopStride = ntx * N_RX * binCount * 2U;
+    float energy = 0.0F;
+    float r1Re = 0.0F;
+    float r1Im = 0.0F;
     uint32_t tx;
     uint32_t loop;
 
-    for (loop = 0U; loop < loops; loop++) {
-        out[loop] = 0.0F;
+    if (perLoop != NULL) {
+        for (loop = 0U; loop < loops; loop++) {
+            perLoop[loop] = 0.0F;
+        }
     }
     for (tx = 0U; tx < ntx; tx++) {
         uint32_t rx;
@@ -2752,61 +2766,73 @@ static void l3_verticalPowerLoops(uint32_t slot, uint32_t localBin, float *out)
             continue;
         }
         for (rx = 0U; rx < N_RX; rx++) {
+            const int16_t *base = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U];
+            const int16_t *sample = base;
             float meanIm = 0.0F;
             float meanRe = 0.0F;
-            const int16_t *sample;
+            float prevIm = 0.0F;
+            float prevRe = 0.0F;
 
             for (loop = 0U; loop < loops; loop++) {
-                sample = l3_iq16Sample(slot, loop * ntx + tx, rx, localBin);
                 meanIm += (float)sample[0];
                 meanRe += (float)sample[1];
+                sample += loopStride;
             }
             meanIm /= (float)loops;
             meanRe /= (float)loops;
+            sample = base;
             for (loop = 0U; loop < loops; loop++) {
-                float im;
-                float re;
-                sample = l3_iq16Sample(slot, loop * ntx + tx, rx, localBin);
-                im = (float)sample[0] - meanIm;
-                re = (float)sample[1] - meanRe;
-                out[loop] += im * im + re * re;
+                float im = (float)sample[0] - meanIm;
+                float re = (float)sample[1] - meanRe;
+                float power = im * im + re * re;
+                sample += loopStride;
+                energy += power;
+                if (perLoop != NULL) {
+                    perLoop[loop] += power;
+                }
+                if (loop > 0U) {
+                    /* residual[loop] * conj(residual[loop - 1]) */
+                    r1Re += re * prevRe + im * prevIm;
+                    r1Im += im * prevRe - re * prevIm;
+                }
+                prevIm = im;
+                prevRe = re;
             }
         }
     }
+    if (obs != NULL) {
+        obs->energy = energy;
+        obs->r1Re = r1Re;
+        obs->r1Im = r1Im;
+    }
 }
 
-/* Loop-0 residual power of one bin; the self-trigger's per-frame probe. */
-static float l3_verticalPowerAt(uint32_t slot, uint32_t localBin)
+/* l3sparse's per-loop residual power rows. */
+static void l3_verticalPowerLoops(uint32_t slot, uint32_t localBin, float *out)
 {
-    float perLoop[L3_MAX_LOOPS];
-
-    l3_verticalPowerLoops(slot, localBin, perLoop);
-    return perLoop[0];
+    l3_verticalResidual(slot, localBin, out, NULL);
 }
 
-/* Clubhead is short of the ball. Twelve bins is about 0.6 m at the wide profile. */
-#define L3_TRIGGER_APPROACH_BINS 12U
-
-static void l3_clearTriggerMotion(void)
+/* The ring was re-armed for the next shot: forget the track and any fired
+ * state, keep the noise floor, counters and log. */
+static void l3_trigRearm(void)
 {
-    gTriggerReady = 0U;
-    gTriggerToward = 0U;
-    gTriggerAway = 0U;
-    gTriggerRun = 0U;
-    gTriggerPeakBin = 0U;
-    gTriggerHavePeak = 0U;
+    l3_trig_rearm(&gTrig);
 }
 
+/* Per completed pre-trigger frame: reduce the watch region around the tee
+ * to one observation per bin and hand it to the detector. Fires the freeze
+ * that the sound gate would otherwise have requested. */
 static void l3_considerSelfTrigger(void)
 {
+    /* Static: the rearm task's stack is 2 KB and only it runs this. */
+    static l3_trig_obs_t obs[L3_TRIG_MAX_BINS];
     uint32_t slot;
-    uint32_t bin;
     uint32_t first;
-    uint32_t peakBin = 0U;
-    float peak = 0.0F;
-    float tee;
+    uint32_t count;
+    uint32_t bin;
+    int32_t fired;
     uintptr_t key;
-    uint8_t havePeak = 0U;
 
     if (!gTriggerEnabled || gSelfTriggerLatched || gHwaFreezeRequested || gPostCaptureStarted) {
         return;
@@ -2814,63 +2840,30 @@ static void l3_considerSelfTrigger(void)
     if (gPreFramesCaptured == 0U || gCapturePlan.preFrames == 0U || gCapturePlan.loops == 0U) {
         return;
     }
-    if (gTriggerBin >= gFrameBinCount[0] && gTriggerBin >= gCapturePlan.preBins) {
-        return;
-    }
     slot = (gPreFramesCaptured - 1U) % gCapturePlan.preFrames;
-    if (gTriggerBin >= gFrameBinCount[slot]) {
+    if (!l3_trig_region(&gTrigCfg, gFrameBinCount[slot], &first, &count)) {
         return;
     }
-    tee = l3_verticalPowerAt(slot, gTriggerBin);
-    if (tee < gTriggerPower) {
-        if (gTriggerReady && gTriggerToward && gTriggerAway) {
-            key = Hwi_disable();
-            gHwaFreezeRequested = 1U;
-            gPostCaptureStarted = 0U;
-            gPostFramesCaptured = 0U;
-            gPostFramesObserved = 0U;
-            gActiveFrameShouldKeep = 1U;
-            gSelfTriggerLatched = 1U;
-            gHwaFreezeRequests++;
-            Hwi_restore(key);
-            l3_clearTriggerMotion();
-            CLI_write("Triggered\n");
-            return;
-        }
-        l3_clearTriggerMotion();
+    gTrigBusy = 1U;
+    for (bin = 0U; bin < count; bin++) {
+        l3_verticalResidual(slot, first + bin, NULL, &obs[bin]);
+    }
+    gTrig.loopPeriodS = gTrigLoopPeriodS;
+    fired = l3_trig_update(&gTrig, gPreFramesCaptured, first, obs, count);
+    gTrigBusy = 0U;
+    if (!fired) {
         return;
     }
-    gTriggerRun++;
-    if (!gTriggerReady) {
-        if (gTriggerRun >= gTriggerHits) {
-            gTriggerReady = 1U;
-        }
-        return;
-    }
-    first = (gTriggerBin > L3_TRIGGER_APPROACH_BINS) ? (gTriggerBin - L3_TRIGGER_APPROACH_BINS) : 0U;
-    for (bin = first; bin < gTriggerBin; bin++) {
-        float power;
-        if (bin >= gFrameBinCount[slot]) {
-            break;
-        }
-        power = l3_verticalPowerAt(slot, bin);
-        if (power >= gTriggerPower && (!havePeak || power > peak)) {
-            peak = power;
-            peakBin = bin;
-            havePeak = 1U;
-        }
-    }
-    if (!havePeak) {
-        return;
-    }
-    /* gTriggerHavePeak, not gTriggerPeakBin != 0: bin 0 is a real bin. */
-    if (gTriggerHavePeak && peakBin > gTriggerPeakBin) {
-        gTriggerToward = 1U;
-    } else if (gTriggerToward && gTriggerHavePeak && peakBin < gTriggerPeakBin) {
-        gTriggerAway = 1U;
-    }
-    gTriggerPeakBin = peakBin;
-    gTriggerHavePeak = 1U;
+    key = Hwi_disable();
+    gHwaFreezeRequested = 1U;
+    gPostCaptureStarted = 0U;
+    gPostFramesCaptured = 0U;
+    gPostFramesObserved = 0U;
+    gActiveFrameShouldKeep = 1U;
+    gSelfTriggerLatched = 1U;
+    gHwaFreezeRequests++;
+    Hwi_restore(key);
+    CLI_write("Triggered\n");
 }
 #endif
 
@@ -3061,6 +3054,7 @@ rearm:
     gHwaFreezeRequestFrame = 0U;
     gHwaFreezeTargetFrame = 0U;
     gPreFramesCaptured = 0U;
+    l3_trigRearm();
     gPostFramesCaptured = 0U;
     gPostFramesObserved = 0U;
     gPostCaptureStarted = 0U;
@@ -3081,46 +3075,126 @@ rearm:
 #endif
 }
 
-/* CLI "triggerCfg <localBin> <power> <hits>": arm contact detection.
- * The tee bin must stay occupied for <hits> frames. A second return must then
- * walk toward that bin and back away, and the tee return must leave. hits of
- * 0 disables it. */
+/* Longest triggerCfg waits for the rearm task to finish scoring a frame. */
+#define L3_TRIGGER_CFG_WAIT_MS 50U
+
+/* CLI "triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep]":
+ * arm the approaching-clubhead detector around the tee bin. A candidate
+ * needs integrated residual energy of at least <snr> times the running
+ * noise floor; its track needs <frames> observations before entering the
+ * impact gate fires the capture. frames of 0 disables the trigger. The
+ * optional values are the bins watched short of the tee, the gate
+ * half-width in bins, the minimum Doppler coherence (0..1, 0 = off) and the
+ * minimum mean approach rate in bins per frame. Re-arming clears the log. */
 static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
 {
-    unsigned long bin;
-    unsigned long hits;
-    float power;
+    l3_trig_cfg_t cfg;
+    unsigned long value;
     char *end;
 
-    if (argc != 4) {
-        CLI_write("Error: triggerCfg <localBin> <power> <hits>\n");
+    if (argc < 4 || argc > 8) {
+        CLI_write("Error: triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep]\n");
         return -1;
     }
-    bin = strtoul(argv[1], &end, 10);
+    l3_trig_cfg_defaults(&cfg);
+    value = strtoul(argv[1], &end, 10);
     if (*end != '\0') {
         CLI_write("Error: trigger bin\n");
         return -1;
     }
-    power = strtof(argv[2], &end);
-    if (*end != '\0' || power < 0.0F) {
-        CLI_write("Error: trigger power\n");
-        return -1;
-    }
-    hits = strtoul(argv[3], &end, 10);
+    cfg.teeBin = (uint32_t)value;
+    cfg.snr = strtof(argv[2], &end);
     if (*end != '\0') {
-        CLI_write("Error: trigger hits\n");
+        CLI_write("Error: trigger snr\n");
         return -1;
     }
-    gTriggerBin = (uint32_t)bin;
-    gTriggerPower = power;
-    gTriggerHits = (uint32_t)hits;
-    gTriggerRun = 0U;
-    gTriggerReady = 0U;
-    gTriggerToward = 0U;
-    gTriggerAway = 0U;
-    gTriggerPeakBin = 0U;
-    gTriggerHavePeak = 0U;
-    gTriggerEnabled = (hits > 0U) ? 1U : 0U;
+    value = strtoul(argv[3], &end, 10);
+    if (*end != '\0') {
+        CLI_write("Error: trigger frames\n");
+        return -1;
+    }
+    cfg.trackFrames = (uint32_t)value;
+    if (argc > 4) {
+        value = strtoul(argv[4], &end, 10);
+        if (*end != '\0') {
+            CLI_write("Error: trigger approach bins\n");
+            return -1;
+        }
+        cfg.approachBins = (uint32_t)value;
+    }
+    if (argc > 5) {
+        value = strtoul(argv[5], &end, 10);
+        if (*end != '\0') {
+            CLI_write("Error: trigger gate bins\n");
+            return -1;
+        }
+        cfg.gateBins = (uint32_t)value;
+    }
+    if (argc > 6) {
+        cfg.minCoherence = strtof(argv[6], &end);
+        if (*end != '\0') {
+            CLI_write("Error: trigger min coherence\n");
+            return -1;
+        }
+    }
+    if (argc > 7) {
+        cfg.minStepBins = strtof(argv[7], &end);
+        if (*end != '\0') {
+            CLI_write("Error: trigger min step\n");
+            return -1;
+        }
+    }
+    if (cfg.trackFrames != 0U && l3_trig_cfg_check(&cfg) != 0) {
+        CLI_write("Error: trigger config (snr >= 1, gate < approach <= %u)\n",
+                  (unsigned)L3_TRIG_MAX_BINS);
+        return -1;
+    }
+    /* Stop the detector, let a frame already being scored finish (the CLI
+     * task outranks the rearm task, so sleep rather than spin), then reset.
+     * Scoring takes well under a frame; the bound only guards a stalled
+     * rearm task from wedging the CLI. */
+    gTriggerEnabled = 0U;
+    {
+        uint32_t waited = 0U;
+        while (gTrigBusy && waited < L3_TRIGGER_CFG_WAIT_MS) {
+            Task_sleep(1);
+            waited++;
+        }
+    }
+    gTrigCfg = cfg;
+    l3_trig_init(&gTrig, &gTrigCfg, gTrigLoopPeriodS);
+    gTriggerEnabled = (cfg.trackFrames != 0U) ? 1U : 0U;
+    CLI_write("Done\n");
+    return 0;
+}
+
+/* CLI "triggerLog": the detector's state and counters, its configuration,
+ * then one line per logged frame, oldest first. Only frames with a
+ * candidate or an active track are logged; gap= counts the quiet frames
+ * before each. Records keep accruing while this prints, so a frame logged
+ * mid-print can show twice or not at all. */
+static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
+{
+    /* Static, not on the CLI task's small stack. */
+    static char line[160];
+    l3_trig_record_t record;
+    uint32_t count;
+    uint32_t index;
+
+    (void)argc;
+    (void)argv;
+    (void)l3_trig_format_summary(&gTrig, line, sizeof(line));
+    CLI_write("%s\n", line);
+    (void)l3_trig_format_config(&gTrig, line, sizeof(line));
+    CLI_write("%s\n", line);
+    count = l3_trig_log_count(&gTrig);
+    for (index = 0U; index < count; index++) {
+        if (!l3_trig_log_get(&gTrig, index, &record)) {
+            break;
+        }
+        (void)l3_trig_format_record(&record, line, sizeof(line));
+        CLI_write("%s\n", line);
+    }
     CLI_write("Done\n");
     return 0;
 }
@@ -3672,6 +3746,10 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
         gFramePeriodUs =
             (uint16_t)(gCtrlCfg.u.frameCfg.frameCfg.framePeriodicity / 200U);
 #ifdef CONFIGURABLE_CAPTURE
+        /* One loop is one chirp per TX; idle and ramp are in 10 ns units.
+         * The trigger's Doppler readout is aliased at +/- lambda / (4 T). */
+        gTrigLoopPeriodS = (float)(profCfg.idleTimeConst + profCfg.rampEndTime) *
+                           1.0e-8F * (float)chirpCount;
         if (l3_finalizeCapturePlan(gCtrlCfg.u.frameCfg.frameCfg.numLoops) != 0) {
             return -1;
         }
@@ -3718,6 +3796,7 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     gHwaFreezeRestarts = 0U;
 #ifdef CONFIGURABLE_CAPTURE
     gPreFramesCaptured = 0U;
+    l3_trigRearm();
     gPostFramesCaptured = 0U;
     gPostFramesObserved = 0U;
     gPostCaptureStarted = 0U;
@@ -3985,8 +4064,12 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[11].helpString    = "Freeze, send residual power, then requested cells";
     cliCfg.tableEntry[11].cmdHandlerFxn = l3_cli_sparse;
     cliCfg.tableEntry[12].cmd           = "triggerCfg";
-    cliCfg.tableEntry[12].helpString    = "triggerCfg <localBin> <power> <hits>";
+    cliCfg.tableEntry[12].helpString    =
+        "triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep]";
     cliCfg.tableEntry[12].cmdHandlerFxn = l3_cli_triggerCfg;
+    cliCfg.tableEntry[13].cmd           = "triggerLog";
+    cliCfg.tableEntry[13].helpString    = "Print the self-trigger detector's frame log";
+    cliCfg.tableEntry[13].cmdHandlerFxn = l3_cli_triggerLog;
     CLI_open(&cliCfg);
 }
 

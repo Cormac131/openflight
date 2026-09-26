@@ -405,7 +405,7 @@ def _self_trigger_monitor(tmp_path, radar, **kwargs) -> IWR6843CaptureMonitor:
         output_dir=tmp_path / "dumps",
         radar=radar,
         button_factory=FakeButton,
-        self_trigger=SelfTriggerConfig(local_bin=12, level=1000.0, hits=2),
+        self_trigger=SelfTriggerConfig(local_bin=12, snr=6.0, track_frames=2),
         **kwargs,
     )
 
@@ -443,7 +443,7 @@ def test_self_trigger_config_is_sent_before_the_worker_owns_the_port(tmp_path):
     monitor.start(armed=False)
     monitor.stop()
 
-    assert radar.commands[0] == ("triggerCfg 12 1000.0 2", threading.current_thread().name)
+    assert radar.commands[0] == ("triggerCfg 12 6.0 2", threading.current_thread().name)
 
 
 def test_rejected_self_trigger_config_fails_start_and_releases_the_radar(tmp_path):
@@ -526,7 +526,7 @@ def test_other_profile_turns_the_trigger_off_and_back_on_even_on_failure(tmp_pat
     monitor.stop()
 
     lines = [line for line, _thread in radar.commands]
-    assert lines == ["triggerCfg 12 1000.0 2", SELF_TRIGGER_OFF_COMMAND, "triggerCfg 12 1000.0 2"]
+    assert lines == ["triggerCfg 12 6.0 2", SELF_TRIGGER_OFF_COMMAND, "triggerCfg 12 6.0 2"]
 
 
 def test_trigger_during_a_serial_job_is_rejected(tmp_path):
@@ -633,14 +633,21 @@ def test_sparse_failure_after_freeze_is_a_capture_error_not_a_fallback(tmp_path)
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"local_bin": -1, "level": 1000.0, "hits": 2}, "bin"),
-        ({"local_bin": 3, "level": 0.0, "hits": 2}, "level"),
-        ({"local_bin": 3, "level": 1000.0, "hits": 0}, "hits"),
+        ({"local_bin": -1, "snr": 6.0, "track_frames": 2}, "bin"),
+        ({"local_bin": 3, "snr": 0.5, "track_frames": 2}, "snr"),
+        ({"local_bin": 3, "snr": float("nan"), "track_frames": 2}, "snr"),
+        ({"local_bin": 3, "snr": 6.0, "track_frames": 0}, "track frames"),
     ],
 )
 def test_self_trigger_config_rejects_values_the_firmware_would_misread(kwargs, message):
     with pytest.raises(ValueError, match=message):
         SelfTriggerConfig(**kwargs)
+
+
+def test_self_trigger_command_is_the_firmware_triggercfg_line():
+    assert SelfTriggerConfig(local_bin=14, snr=6.0, track_frames=2).command == "triggerCfg 14 6.0 2"
+    # Zero frames is the firmware's "off"; the on-line never sends it.
+    assert SELF_TRIGGER_OFF_COMMAND == "triggerCfg 0 0 0"
 
 
 def _cfg(tmp_path, *lines: str):

@@ -105,6 +105,64 @@ component into L3 without a CPU packing loop. Firmware `stats` report completed
 EDMA packs, waits, errors, clipped components, and missed HWA starts rather than
 silently hiding cadence failures.
 
+## Onboard Self-Trigger
+
+With `--iwr6843-self-trigger` the firmware, not the sound gate, decides when
+impact is imminent. Once per completed frame the HWA rearm task scores the
+range bins around the tee and hands them to the detector in
+`firmware/iwr6843/l3_trigger.c`:
+
+```text
+completed frame (every loop of the vertical TX pair, all RX)
+  -> burst-MTI residual per bin: mean over loops removed, so the stationary
+     ball and the room vanish and only movers remain
+  -> per bin: residual energy integrated over ALL loops, plus the lag-1 loop
+     autocorrelation (Doppler phase and coherence)
+  -> noise floor = smoothed median of the watched bins; threshold = floor x snr
+  -> candidate = strongest bin above threshold
+  -> IDLE -> TRACKING: the candidate is followed frame to frame by range
+     continuity (a step of -1..+8 bins keeps the track, more restarts it,
+     one missing frame is bridged)
+  -> TRACKING -> FIRED: the track enters the impact gate (tee +/- gate bins)
+     with at least <frames> observations and a mean approach rate of at
+     least minStep bins per frame
+  -> the freeze the sound gate would have requested, then "Triggered" on the CLI
+```
+
+Nothing is required of the tee bin itself, and the club is never required to
+be seen moving away again: that only makes the trigger late and adds a
+condition a real swing can fail. The reported Doppler velocity is a readout,
+not a condition: with three TX at 45 us chirps a loop is 135 us, so Doppler
+is unambiguous only to about +/- 9 m/s and a clubhead aliases. Range rate
+across frames is what separates a clubhead (2-3 bins per 3 ms frame for a
+driver) from a player walking up to the ball (a bin every few frames).
+
+The detector is armed and tuned over the CLI:
+
+```text
+triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep]
+triggerLog
+```
+
+`snr` is the candidate threshold over the running noise floor (default 6 on
+the host), `frames` the observations a track needs before the gate may fire
+(host default 2; 0 disables the trigger). The optional values default to 12
+approach bins (about 0.56 m short of the tee), a gate half-width of 3 bins,
+no coherence test, and one bin per frame of approach. `triggerLog` prints the
+detector's state and counters, its configuration, then one line per frame
+that had a moving return above the floor (idle frames only count toward the
+next line's `gap=`): candidate bin, energy against the floor, apparent
+velocity, coherence, track age, and `why=` the frame did or did not fire
+(`acquired`, `advanced`, `jumped`, `missed`, `lost`, `lowcoh`, `young`,
+`slow`, `fired`). Read it after a missed swing before re-arming: the ring
+re-arm after `l3sparse` keeps the log, `triggerCfg` clears it.
+`scripts/hardware-test/test_iwr_self_trigger.py --swing` prints it for you.
+
+The detector has no hardware dependencies, so
+`tests/test_iwr6843_firmware_trigger.py` builds it with the host C compiler
+and drives synthetic swings, walkers, backswings and noise steps through it.
+Change the tracking rules there first.
+
 ## Firmware And Host Contract
 
 The wire format is defined in two places that must stay synchronized:
@@ -143,6 +201,7 @@ matching host-parser change and regression tests in the same commit.
 | Path | Responsibility |
 |---|---|
 | `firmware/iwr6843/l3_dump.c` | RF control, HWA/EDMA pipeline, circular ring, freeze/rearm, CLI, and dump streaming |
+| `firmware/iwr6843/l3_trigger.c`, `l3_trigger.h` | Self-trigger detector: noise floor, clubhead track, impact gate, frame log (host-testable, no hardware) |
 | `firmware/iwr6843/dump_format.h` | Packed firmware-side wire contract |
 | `firmware/iwr6843/makefile` | TI mmWave SDK application build and meta-image generation |
 | `firmware/iwr6843/mss.cfg` | SYS/BIOS configuration |

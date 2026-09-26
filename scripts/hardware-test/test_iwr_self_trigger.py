@@ -13,11 +13,16 @@ or FAIL and the script exits non-zero if any check fails.
   4. A request that arrives after L3_SPARSE_REQUEST_TIMEOUT_MS is refused,
      and the next l3sparse still works.
   5. (--swing) With the trigger armed, a real swing prints "Triggered" and
-     the frozen ring reads back.
+     the frozen ring reads back. Whether or not it fired, the firmware's
+     triggerLog is printed afterwards: one line per frame that had a moving
+     return above the noise floor, with its range bin, energy against the
+     floor, Doppler velocity and coherence, track age, and the reason it did
+     or did not fire. A missed swing is therefore diagnosable, not silent.
 
 Usage:
     uv run python scripts/hardware-test/test_iwr_self_trigger.py
     uv run python scripts/hardware-test/test_iwr_self_trigger.py --swing --tee-m 1.575
+    uv run python scripts/hardware-test/test_iwr_self_trigger.py --swing --snr 4 --frames 3
 """
 
 from __future__ import annotations
@@ -66,11 +71,26 @@ def _every_cell(summary) -> list[tuple[int, int]]:
 def check_trigger_cfg(radar: IWR6843Radar) -> bool:
     """Valid lines answer Done; malformed ones answer Error."""
     ok = True
-    good = radar.cmd(SelfTriggerConfig(local_bin=10, level=1000.0, hits=2).command, 2.0)
+    good = radar.cmd(SelfTriggerConfig(local_bin=10, snr=6.0, track_frames=2).command, 2.0)
     ok &= _report("triggerCfg valid line", "Done" in good and "Error" not in good, good.strip())
-    for line in ("triggerCfg 10 1000", "triggerCfg x 1000 2", "triggerCfg 10 -5 2"):
+    tuned = radar.cmd("triggerCfg 10 6 2 12 3 0.5 1.0", 2.0)
+    ok &= _report(
+        "triggerCfg with tunables", "Done" in tuned and "Error" not in tuned, tuned.strip()
+    )
+    for line in (
+        "triggerCfg 10 6",  # too few arguments
+        "triggerCfg x 6 2",  # bin not a number
+        "triggerCfg 10 -5 2",  # snr under the floor
+        "triggerCfg 10 6 2 12 12",  # gate not inside the approach
+    ):
         reply = radar.cmd(line, 2.0)
         ok &= _report(f"rejects {line!r}", "Error" in reply, reply.strip())
+    log = radar.trigger_log()
+    ok &= _report(
+        "triggerLog answers with state and config",
+        "trig state=" in log and "trigcfg tee=10" in log and "Done" in log,
+        log.strip().splitlines()[0][:80] if log.strip() else "",
+    )
     off = radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
     ok &= _report("triggerCfg off", "Done" in off, off.strip())
     return ok
@@ -173,8 +193,25 @@ def check_swing(radar: IWR6843Radar, config: SelfTriggerConfig, wait_s: float) -
             capture is not None,
             f"{time.monotonic() - notice_at:.2f}s after the notice",
         )
+    # Read the detector's log before disarming: triggerCfg clears it.
+    print_trigger_log(radar)
     radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
     return ok
+
+
+def print_trigger_log(radar: IWR6843Radar) -> None:
+    """Show what the firmware saw frame by frame around the swing."""
+    lines = [
+        line.strip()
+        for line in radar.trigger_log().splitlines()
+        if line.strip().startswith(("trig ", "trigcfg ", "frame="))
+    ]
+    if not lines:
+        print("  (no triggerLog: firmware predates the detector log)")
+        return
+    print("  triggerLog:")
+    for line in lines:
+        print(f"    {line}")
 
 
 def main() -> int:
@@ -183,8 +220,12 @@ def main() -> int:
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--swing", action="store_true", help="also wait for a real swing")
     parser.add_argument("--tee-m", type=float, default=1.575)
-    parser.add_argument("--level", type=float, default=1000.0)
-    parser.add_argument("--hits", type=int, default=2)
+    parser.add_argument(
+        "--snr", type=float, default=6.0, help="candidate threshold over the noise floor"
+    )
+    parser.add_argument(
+        "--frames", type=int, default=2, help="tracked frames before the gate may fire"
+    )
     parser.add_argument("--wait-s", type=float, default=60.0)
     args = parser.parse_args()
 
@@ -201,8 +242,8 @@ def main() -> int:
         if args.swing:
             config = SelfTriggerConfig(
                 local_bin=tee_local_bin(args.tee_m, args.config),
-                level=args.level,
-                hits=args.hits,
+                snr=args.snr,
+                track_frames=args.frames,
             )
             results.append(check_swing(radar, config, args.wait_s))
     finally:
