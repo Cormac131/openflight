@@ -15,7 +15,14 @@ from typing import Callable
 
 from openflight.iwr6843.driver import IWR6843Radar, UnsupportedCommand
 from openflight.iwr6843.dump import parse_header
-from openflight.iwr6843.monitor import read_capture_config
+from openflight.iwr6843.monitor import (
+    SELF_TRIGGER_OFF_COMMAND,
+    SelfTriggerConfig,
+    measure_trigger_level,
+    read_capture_config,
+    tee_local_bin,
+)
+from openflight.iwr6843.self_trigger import FLOOR_PROBE_LEVEL
 from openflight.iwr6843.sparse import (
     POWER_MAGIC,
     RANGE_FFT_SIZE,
@@ -780,5 +787,196 @@ def readback_section() -> Section:
             Check("readback/l3track without trackCfg is refused", _check_track_needs_cfg),
             Check("readback/trackCfg validation", _check_track_cfg_validation),
             Check("readback/l3track streams the tracked cells", _check_track_streams),
+        ),
+    )
+
+
+TRIGGER_CFG_CASES: tuple[tuple[str, bool], ...] = (
+    ("triggerCfg 10 1000 2", True),
+    ("triggerCfg 10 1000", False),
+    ("triggerCfg x 1000 2", False),
+    ("triggerCfg 10 -5 2", False),
+    ("triggerCfg 10 1000 y", False),
+)
+# Phases the detector reports while watching an empty or occupied tee (l3_triggerPhaseName).
+LIVE_PHASES = frozenset({"tee-low", "occupying", "watching", "no-approach", "toward", "away"})
+TRIG_DEBUG_FIELDS = (
+    "phase",
+    "tee",
+    "approach",
+    "ready",
+    "toward",
+    "away",
+    "run",
+    "peak",
+    "have",
+    "bin",
+    "level",
+    "latched",
+)
+
+
+def arm_command(ctx: Context, level: float) -> str:
+    """``triggerCfg`` for this rig's tee bin at ``level``."""
+    return SelfTriggerConfig(
+        local_bin=tee_local_bin(ctx.tee_m, ctx.config), level=level, hits=ctx.hits
+    ).command
+
+
+def _trig_state(snap: StatsSnapshot) -> str:
+    return f"phase={snap.phase} latched={snap.latched} enabled={snap.enabled}"
+
+
+def _check_fresh_session(ctx: Context) -> CheckResult:
+    name = "trigger/fresh session untriggered"
+    ctx.radar.send_config(ctx.config)
+    snap = stats_snapshot(ctx)
+    if (snap.phase, snap.latched, snap.enabled) != ("off", 0, 0):
+        return failed(name, _trig_state(snap))
+    return passed(name, _trig_state(snap))
+
+
+def _check_trigger_cfg_validation(ctx: Context) -> CheckResult:
+    result = _run_validation_table(ctx, "trigger/triggerCfg validation", TRIGGER_CFG_CASES)
+    ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+    return result
+
+
+def _check_arming(ctx: Context) -> CheckResult:
+    name = "trigger/arming starts the detector"
+    reply = ctx.radar.cmd(arm_command(ctx, FLOOR_PROBE_LEVEL), 2.0)
+    if "Done" not in reply:
+        return failed(name, f"arm rejected: {reply.strip()[:60]!r}")
+    latest: dict[str, StatsSnapshot] = {}
+
+    def live() -> bool:
+        snap = stats_snapshot(ctx)
+        latest["snap"] = snap
+        return snap.enabled == 1 and snap.phase in LIVE_PHASES and (snap.tee or 0) > 0
+
+    reached = wait_until(ctx, live, ctx.wait_s)
+    snap = latest["snap"]
+    ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+    problems = []
+    if snap.enabled != 1:
+        problems.append(f"enabled={snap.enabled}")
+    if snap.phase not in LIVE_PHASES:
+        problems.append(f"phase={snap.phase} never went live")
+    if snap.latched:
+        problems.append("latched=1 on an empty lane")
+    if snap.pre_seen is not None and snap.plan_pre is not None and snap.pre_seen < snap.plan_pre:
+        problems.append(f"pre_seen={snap.pre_seen} < plan {snap.plan_pre}")
+    if not reached or problems:
+        return failed(name, "; ".join(problems) or _trig_state(snap))
+    return passed(name, f"{_trig_state(snap)} tee={snap.tee} pre_seen={snap.pre_seen}")
+
+
+def _check_disarm(ctx: Context) -> CheckResult:
+    name = "trigger/triggerCfg 0 0 0 disarms"
+    ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+    snap = stats_snapshot(ctx)
+    if (snap.enabled, snap.phase, snap.latched) != (0, "off", 0):
+        return failed(name, _trig_state(snap))
+    return passed(name, _trig_state(snap))
+
+
+def _debug_lines(text: str) -> list[dict[str, str]]:
+    """Every ``trig`` line in ``text`` (the debug stream carries no other trig lines)."""
+    parsed = [parse_trig(line) for line in text.splitlines()]
+    return [fields for fields in parsed if fields is not None]
+
+
+def _check_debug_cfg(ctx: Context) -> CheckResult:
+    name = "trigger/debugCfg streams parsable lines"
+    local_bin = tee_local_bin(ctx.tee_m, ctx.config)
+    ctx.radar.cmd(arm_command(ctx, FLOOR_PROBE_LEVEL), 2.0)
+    try:
+        reply = ctx.radar.cmd("debugCfg 1", 2.0)
+        lines = _debug_lines(reply)
+        problems = []
+        if not lines:
+            problems.append("no trig line in the debugCfg 1 reply")
+        for fields in lines:
+            missing = [key for key in TRIG_DEBUG_FIELDS if key not in fields]
+            if missing:
+                problems.append(f"missing fields {missing}")
+                break
+            if fields["bin"] != str(local_bin) or fields["level"] != str(int(FLOOR_PROBE_LEVEL)):
+                problems.append(
+                    f"bin={fields['bin']} level={fields['level']} do not echo the armed values"
+                )
+                break
+        off = ctx.radar.cmd("debugCfg 0", 2.0)
+        if "Done" not in off:
+            problems.append("debugCfg 0 rejected")
+        if _debug_lines(read_port_text(ctx, 0.5)):
+            problems.append("trig lines still streaming after debugCfg 0")
+        bad = ctx.radar.cmd("debugCfg 2", 2.0)
+        if "Error" not in bad:
+            problems.append("debugCfg 2 accepted")
+    finally:
+        ctx.radar.cmd("debugCfg 0", 2.0)
+        ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+    if problems:
+        return failed(name, "; ".join(problems))
+    return passed(name, f"{len(lines)} line(s), bin={local_bin} level={int(FLOOR_PROBE_LEVEL)}")
+
+
+def _check_debug_change_only(ctx: Context) -> CheckResult:
+    name = "trigger/debug lines only change on phase change"
+    ctx.radar.cmd(arm_command(ctx, FLOOR_PROBE_LEVEL), 2.0)
+    try:
+        # The debugCfg 1 reply carries the first line; anything after Done streams on.
+        lines = _debug_lines(ctx.radar.cmd("debugCfg 1", 2.0))
+        lines += _debug_lines(read_port_text(ctx, 1.0))
+    finally:
+        ctx.radar.cmd("debugCfg 0", 2.0)
+        ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+    repeats = sum(1 for a, b in zip(lines, lines[1:]) if a["phase"] == b["phase"])
+    if repeats:
+        return failed(name, f"{repeats} repeated same-phase line(s) in 1 s")
+    return passed(name, f"{len(lines)} line(s) in 1 s, no repeats")
+
+
+def _check_floor(ctx: Context) -> CheckResult:
+    name = "trigger/floor measurement"
+    local_bin = tee_local_bin(ctx.tee_m, ctx.config)
+    try:
+        floor, level = measure_trigger_level(
+            ctx.radar, local_bin, ctx.hits, clock=ctx.clock, pause=ctx.sleep
+        )
+    except RuntimeError as exc:
+        ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+        return failed(name, str(exc))
+    ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+    if not floor > 0 or not level > floor:
+        return failed(name, f"floor={floor:.1f} level={level:.1f}")
+    return passed(name, f"floor={floor:.1f} level={level:.1f}")
+
+
+def _check_reconfigure_clears_arm(ctx: Context) -> CheckResult:
+    name = "trigger/reconfigure clears a previous arm"
+    ctx.radar.cmd(arm_command(ctx, FLOOR_PROBE_LEVEL), 2.0)
+    ctx.radar.send_config(ctx.config)
+    snap = stats_snapshot(ctx)
+    if (snap.enabled, snap.latched, snap.phase) != (0, 0, "off"):
+        return failed(name, _trig_state(snap))
+    return passed(name, _trig_state(snap))
+
+
+def trigger_section() -> Section:
+    """Self-trigger lifecycle and observability without a swing."""
+    return Section(
+        "trigger",
+        "active",
+        (
+            Check("trigger/fresh session untriggered", _check_fresh_session),
+            Check("trigger/triggerCfg validation", _check_trigger_cfg_validation),
+            Check("trigger/arming starts the detector", _check_arming),
+            Check("trigger/triggerCfg 0 0 0 disarms", _check_disarm),
+            Check("trigger/debugCfg streams parsable lines", _check_debug_cfg),
+            Check("trigger/debug lines only change on phase change", _check_debug_change_only),
+            Check("trigger/floor measurement", _check_floor),
+            Check("trigger/reconfigure clears a previous arm", _check_reconfigure_clears_arm),
         ),
     )

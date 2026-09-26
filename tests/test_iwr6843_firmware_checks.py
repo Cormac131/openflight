@@ -781,3 +781,183 @@ def test_l3track_streams_and_rearms():
         }
     )
     assert check.run(_ctx(iq8)).status == "SKIP"
+
+
+def _trigger_radar(
+    *,
+    phases=("tee-low",),
+    enabled_after_arm=1,
+    latched=0,
+    pre_seen=999,
+    plan_pre=16,
+    debug_lines=None,
+):
+    """A radar whose trig state follows the last triggerCfg it was sent."""
+    state = {"enabled": 0, "phase": "off", "bin": 0, "level": 0, "n": 0}
+
+    def stats(_n):
+        phase = state["phase"] if state["enabled"] else "off"
+        text = (
+            f"frames={1000 + state['n'] * 10} active=1 rf_faults=0 freeze_req=0 freeze_done=0 "
+            f"format=iq16 plan={plan_pre}pre/8post loops=12 used=1/2\npre_seen={pre_seen} stride=1\n"
+            f"trig phase={phase} tee={412 if state['enabled'] else 0} latched={latched} enabled={state['enabled']}\nDone\n"
+        )
+        state["n"] += 1
+        return text.encode()
+
+    def trigger_cfg(line):
+        fields = line.split()
+        if (
+            len(fields) != 4
+            or not fields[1].isdigit()
+            or not fields[3].isdigit()
+            or fields[2].startswith("-")
+        ):
+            return b"Error: triggerCfg <localBin> <power> <hits>\n"
+        hits = int(fields[3])
+        state["enabled"] = enabled_after_arm if hits else 0
+        state["phase"] = phases[0]
+        state["bin"], state["level"] = int(fields[1]), int(float(fields[2]))
+        return b"Done\n"
+
+    def debug_cfg(line):
+        if line.split()[1] not in ("0", "1"):
+            return b"Error: debugCfg <0|1>\n"
+        if line.endswith("1"):
+            lines = debug_lines or [
+                f"trig phase={state['phase']} tee=412 approach=0 ready=1 toward=0 away=0 "
+                f"run=0 peak=0 have=0 bin={state['bin']} level={state['level']} latched=0\n"
+            ]
+            return "".join(lines).encode() + b"Done\n"
+        return b"Done\n"
+
+    class Port(ScriptedSerial):
+        def write(self, data):
+            line = data.decode(errors="replace").strip()
+            self.written.append(line)
+            if line.startswith("triggerCfg"):
+                self.inject(trigger_cfg(line))
+            elif line.startswith("debugCfg"):
+                self.inject(debug_cfg(line))
+            elif line == "stats":
+                self.inject(stats(0))
+            else:
+                self.inject(b"Done\n")
+
+    from openflight.iwr6843.driver import IWR6843Radar
+
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = Port({})
+    radar.port = "scripted"
+    radar._trigger_pending = b""
+    radar.send_config = lambda cfg: state.update(enabled=0, phase="off")  # type: ignore[method-assign]
+    return radar
+
+
+def test_trigger_section_names_match_the_spec():
+    assert _names(fc.trigger_section()) == [
+        "trigger/fresh session untriggered",
+        "trigger/triggerCfg validation",
+        "trigger/arming starts the detector",
+        "trigger/triggerCfg 0 0 0 disarms",
+        "trigger/debugCfg streams parsable lines",
+        "trigger/debug lines only change on phase change",
+        "trigger/floor measurement",
+        "trigger/reconfigure clears a previous arm",
+    ]
+
+
+def test_fresh_session_must_report_off_and_unlatched():
+    check = fc.trigger_section().checks[0]
+
+    assert check.run(_ctx(_trigger_radar())).status == "PASS"
+
+    stale = _trigger_radar(latched=1)
+    stale.send_config = lambda cfg: None  # a firmware that forgets to clear the latch
+    result = check.run(_ctx(stale))
+    assert result.status == "FAIL" and "latched=1" in result.detail
+
+
+def test_trigger_cfg_validation_table():
+    lines = dict(fc.TRIGGER_CFG_CASES)
+    assert lines["triggerCfg 10 1000 2"] is True
+    assert lines["triggerCfg 10 1000"] is False
+    assert lines["triggerCfg x 1000 2"] is False
+    assert lines["triggerCfg 10 -5 2"] is False
+    assert lines["triggerCfg 10 1000 y"] is False
+
+    assert fc.trigger_section().checks[1].run(_ctx(_trigger_radar())).status == "PASS"
+
+
+def test_arming_needs_enabled_live_phase_full_ring_and_tee_power():
+    check = fc.trigger_section().checks[2]
+
+    good = check.run(_ctx(_trigger_radar()))
+    assert good.status == "PASS", good.detail
+    assert "tee=412" in good.detail
+
+    not_enabled = check.run(_ctx(_trigger_radar(enabled_after_arm=0)))
+    assert not_enabled.status == "FAIL" and "enabled=0" in not_enabled.detail
+
+    short_ring = check.run(_ctx(_trigger_radar(pre_seen=3, plan_pre=16)))
+    assert short_ring.status == "FAIL" and "pre_seen" in short_ring.detail
+
+    stuck = check.run(_ctx(_trigger_radar(phases=("no-frame",))))
+    assert stuck.status == "FAIL" and "no-frame" in stuck.detail
+
+
+def test_disarm_returns_to_off():
+    check = fc.trigger_section().checks[3]
+    radar = _trigger_radar()
+
+    assert check.run(_ctx(radar)).status == "PASS"
+    assert radar.ser.written[0] == "triggerCfg 0 0 0"
+
+
+def test_debug_cfg_lines_parse_and_echo_the_armed_values():
+    check = fc.trigger_section().checks[4]
+
+    good = check.run(_ctx(_trigger_radar()))
+    assert good.status == "PASS", good.detail
+
+    missing_field = _trigger_radar(debug_lines=["trig phase=tee-low tee=1 latched=0\n"])
+    result = check.run(_ctx(missing_field))
+    assert result.status == "FAIL" and "fields" in result.detail
+
+
+def test_debug_stream_must_not_repeat_the_same_phase():
+    check = fc.trigger_section().checks[5]
+
+    quiet = _trigger_radar()
+    assert check.run(_ctx(quiet)).status == "PASS"
+
+    line = "trig phase=tee-low tee=1 approach=0 ready=1 toward=0 away=0 run=0 peak=0 have=0 bin=14 level=5 latched=0\n"
+    chatty = _trigger_radar(debug_lines=[line] * 3)  # same phase written three times
+    result = check.run(_ctx(chatty))
+    assert result.status == "FAIL" and "repeated" in result.detail
+
+
+def test_floor_measurement_uses_the_runtime_helper(monkeypatch):
+    check = fc.trigger_section().checks[6]
+    monkeypatch.setattr(
+        fc, "measure_trigger_level", lambda radar, local_bin, hits, clock, pause: (300.0, 450.0)
+    )
+    assert check.run(_ctx(_trigger_radar())).status == "PASS"
+
+    def latched(*_a, **_k):
+        raise RuntimeError("background sample latched the trigger")
+
+    monkeypatch.setattr(fc, "measure_trigger_level", latched)
+    result = check.run(_ctx(_trigger_radar()))
+    assert result.status == "FAIL" and "latched" in result.detail
+
+
+def test_reconfigure_must_clear_a_previous_arm():
+    check = fc.trigger_section().checks[7]
+
+    assert check.run(_ctx(_trigger_radar())).status == "PASS"
+
+    sticky = _trigger_radar()
+    sticky.send_config = lambda cfg: None
+    result = check.run(_ctx(sticky))
+    assert result.status == "FAIL" and "enabled=1" in result.detail
