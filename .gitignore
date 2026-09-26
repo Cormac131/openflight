@@ -88,3 +88,6 @@ ui/test-results/
 .crossnote/head.html
 .crossnote/parser.js
 .crossnote/style.less
+
+# Claude Code worktrees
+.claude/worktrees/
