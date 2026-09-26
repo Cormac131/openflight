@@ -2631,7 +2631,10 @@ static void l3_considerSelfTrigger(uint32_t slot)
         l3_noteTrigger(9U, (float)gTriggerTeePower, (float)gTriggerApproachPower);
         return;
     }
-    if (gPreFramesCaptured == 0U || gCapturePlan.preFrames == 0U || gCapturePlan.loops == 0U) {
+    /* Freezing before the ring has wrapped would hand the host pre-trigger
+     * slots this session never wrote. */
+    if (gCapturePlan.preFrames == 0U || gCapturePlan.loops == 0U ||
+        gPreFramesCaptured < gCapturePlan.preFrames) {
         l3_noteTrigger(1U, 0.0F, 0.0F);
         return;
     }
@@ -3108,12 +3111,7 @@ static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
     gTriggerBin = (uint32_t)bin;
     gTriggerPower = power;
     gTriggerHits = (uint32_t)hits;
-    gTriggerRun = 0U;
-    gTriggerReady = 0U;
-    gTriggerToward = 0U;
-    gTriggerAway = 0U;
-    gTriggerPeakBin = 0U;
-    gTriggerHavePeak = 0U;
+    l3_clearTriggerMotion();
     gTriggerEnabled = (hits > 0U) ? 1U : 0U;
     CLI_write("Done\n");
     return 0;
@@ -3601,6 +3599,12 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     gActiveFrameIsPost = 0U;
     gActiveFrameShouldKeep = 1U;
     l3_resetDetectQueue();
+    /* A new session starts untriggered: a latch or enable left by a host that
+     * died mid-shot must not freeze or self-trigger this one. triggerCfg
+     * re-enables it. */
+    gSelfTriggerLatched = 0U;
+    gTriggerEnabled = 0U;
+    l3_clearTriggerMotion();
 #ifdef L3_RING_IQ8
     gIq8Pending = 0U;
     gIq8PendingDetect = 0U;
