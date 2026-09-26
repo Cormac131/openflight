@@ -110,7 +110,7 @@ It exercises every command the firmware registers on its CLI and prints one
 |---|---|---|
 | `lifecycle` | `sensorStart`/`sensorStop`/`stats` behave; config commands are refused while active; a restart resets counters | yes |
 | `profiles` | `captureCfg`, `phaseCaptureCfg`, `captureFormat`, `iq8Scale` validate their arguments; every shipped `config/iwr6843_*.cfg` loads with the declared format and stride | yes |
-| `readback` | `l3dump`, `l3sparse` (limit, oversized, late request), `trackCfg`, and `l3track` stream and rearm | yes |
+| `readback` | `l3dump`, `l3sparse` (limit, oversized, late request), `trackCfg`, `l3track`, and `l3release` stream and rearm | yes |
 | `trigger` | a fresh session is untriggered, `triggerCfg` arms and disarms, the detector goes live only once the pre-trigger ring is full, `debugCfg` streams parsable change-only lines, the floor measurement works, and reconfiguring clears a previous arm | yes |
 | `trigger-swing` | with `--swing`: a ball on the tee reaches `watching`, a swing fires `Triggered` (the notice must survive a `stats` reply), the frozen ring reads back in under 1.0 s, the host detector replay agrees, the ring rearms, and a latched session is cleared by reconfigure | no, prompts you |
 | `solve` | always `SKIP`: the on-chip DSS solve is in the image but the MSS exposes no CLI entry point for it yet | yes |

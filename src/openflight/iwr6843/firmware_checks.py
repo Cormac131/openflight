@@ -882,6 +882,37 @@ def _check_track_streams(ctx: Context) -> CheckResult:
     return passed(name, detail)
 
 
+def _check_l3release(ctx: Context) -> CheckResult:
+    name = "readback/l3release rearms without streaming"
+    before = stats_snapshot(ctx)
+    reply = cli(ctx, "l3release", 3.0)
+    problems = []
+    if "Done" not in reply or "Error" in reply:
+        problems.append(f"reply {reply.strip()[:60]!r}")
+    if any(magic in reply for magic in ("ILP1", "ILT1", "ILD1")):
+        problems.append("streamed a packet")
+    if problems:
+        return failed(name, "; ".join(problems))
+
+    def settled() -> bool:
+        snap = stats_snapshot(ctx)
+        return snap.freeze_done is not None and snap.freeze_done == snap.freeze_req
+
+    wait_until(ctx, settled, ctx.wait_s)
+    after = stats_snapshot(ctx)
+    if after.active != 1:
+        problems.append(f"active={after.active}")
+    if after.latched != 0:
+        problems.append(f"latched={after.latched}")
+    if before.freeze_req is not None and after.freeze_req != before.freeze_req + 1:
+        problems.append(f"freeze_req {before.freeze_req} -> {after.freeze_req}")
+    if problems:
+        return failed(name, "; ".join(problems))
+    return passed(
+        name, f"freeze_req {before.freeze_req} -> {after.freeze_req}, active={after.active}"
+    )
+
+
 def readback_section() -> Section:
     """l3dump, l3sparse and l3track all stream and rearm on the default profile."""
     return Section(
@@ -895,6 +926,7 @@ def readback_section() -> Section:
             Check("readback/l3track without trackCfg is refused", _check_track_needs_cfg),
             Check("readback/trackCfg validation", _check_track_cfg_validation),
             Check("readback/l3track streams the tracked cells", _check_track_streams),
+            Check("readback/l3release rearms without streaming", _check_l3release),
         ),
     )
 
@@ -1344,6 +1376,7 @@ COMMANDS_COVERED = frozenset(
         "l3track",
         "trackCfg",
         "debugCfg",
+        "l3release",
     }
 )
 

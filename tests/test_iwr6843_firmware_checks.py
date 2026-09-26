@@ -680,6 +680,7 @@ def test_readback_section_names_match_the_spec():
         "readback/l3track without trackCfg is refused",
         "readback/trackCfg validation",
         "readback/l3track streams the tracked cells",
+        "readback/l3release rearms without streaming",
     ]
 
 
@@ -851,6 +852,68 @@ def test_l3track_streams_and_rearms():
         }
     )
     assert check.run(_ctx(iq8)).status == "SKIP"
+
+
+def test_l3release_rearms_without_streaming():
+    cube = _cube()
+    check = fc.readback_section().checks[7]
+    radar = scripted_radar(
+        {
+            "l3release": b"Done\n",
+            "stats": lambda n: _stats_for(cube, freeze=(1, 1) if n == 0 else (2, 2))(0),
+        }
+    )
+
+    result = check.run(_ctx(radar))
+
+    assert result.status == "PASS", result.detail
+    assert "freeze_req 1 -> 2" in result.detail
+
+
+def test_l3release_fails_on_a_reported_error():
+    cube = _cube()
+    check = fc.readback_section().checks[7]
+    radar = scripted_radar(
+        {
+            "l3release": b"Error: self-trigger freeze timed out\n",
+            "stats": _stats_for(cube, freeze=(1, 1)),
+        }
+    )
+
+    result = check.run(_ctx(radar))
+
+    assert result.status == "FAIL"
+    assert "reply" in result.detail
+
+
+def test_l3release_fails_when_the_sensor_does_not_stay_active():
+    check = fc.readback_section().checks[7]
+    radar = scripted_radar(
+        {
+            "l3release": b"Done\n",
+            "stats": (
+                "frames=100 active=0 rf_faults=0 freeze_req=1 freeze_done=1 "
+                "format=iq16 plan=3pre/1post loops=1 used=1/2\n"
+                "stride=1\ntrig phase=off tee=0 latched=0 enabled=0\nDone\n"
+            ).encode(),
+        }
+    )
+
+    result = check.run(_ctx(radar))
+
+    assert result.status == "FAIL"
+    assert "active=0" in result.detail
+
+
+def test_l3release_skips_on_an_image_without_the_command():
+    """Older firmware: an unknown l3release must SKIP, not blame the firmware with a FAIL."""
+    check = fc.readback_section().checks[7]
+    radar = scripted_radar({})  # every line answers "not recognized"
+
+    result = fc.run_check(_ctx(radar), check)
+
+    assert result.status == "SKIP"
+    assert "older firmware" in result.detail and "l3release" in result.detail
 
 
 def _trigger_radar(
