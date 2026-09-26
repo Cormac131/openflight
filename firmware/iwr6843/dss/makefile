@@ -23,8 +23,11 @@ APPNAME = l3_dump_dss
 
 # Sources live alongside this makefile, plus the solve stages one level up
 # in ../solve (firmware/iwr6843/solve/ -- shared with the host-compiler
-# equivalence tests under tests/).
-vpath %.c . ../solve
+# equivalence tests under tests/), plus track_select.c one level up in
+# ../ (firmware/iwr6843/track_select.c -- Task 5's solve_tracking.c reuses
+# its RNG/tolerance helpers rather than duplicating them, so it needs to be
+# part of this build too, not just the MSS/R4F one).
+vpath %.c . ../solve ..
 
 ###################################################################################
 # Libraries. C674_COMMON_STD_LIB already provides osal+soc. Milestone 1 does
@@ -53,7 +56,7 @@ CONFIGPKG  = dss_configPkg_$(MMWAVE_SDK_DEVICE_TYPE)
 MAP        = $(APPNAME).map
 OUT        = $(APPNAME).$(C674_EXE_EXT)
 APP_CMD    = dss_linker.cmd
-SOURCES    = dss_main.c solve_fft.c
+SOURCES    = dss_main.c solve_fft.c solve_tracking.c track_select.c
 DEPENDS    = $(addprefix $(PLATFORM_OBJDIR)/, $(SOURCES:.c=.$(C674_DEP_EXT)))
 OBJECTS    = $(addprefix $(PLATFORM_OBJDIR)/, $(SOURCES:.c=.$(C674_OBJ_EXT)))
 

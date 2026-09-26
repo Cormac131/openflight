@@ -104,6 +104,25 @@ int main(void)
      * whatever it calls into, exceeds the current headroom. Do not just
      * bump this number without redoing the arithmetic above (and update
      * DSS_SOLVE_TASK_STACK_SIZE's definition above to match).
+     *
+     * Task 5 (tracking stage, solve_tracking.c): no change needed. Unlike
+     * solve_fft_apply(), solve_tracking_find_ball()'s large scratch (the
+     * detection/order arrays and the one-row MTI buffer, tens of KB at
+     * SOLVE_TRACKING_MAX_* sizes) lives in a caller-owned
+     * SolveTrackingWorkspace passed BY POINTER, not as a local -- deliberately,
+     * because those buffers are far too large for any reasonable stack
+     * budget (see solve_tracking.h). The function's own stack frame and its
+     * call chain (-> solve_tracking_scan -> solve_tracking_loop_power/
+     * solve_tracking_detect -> solve_tracking_median) are all scalars and
+     * small fixed locals, on the order of 100-200 B total, not simultaneous
+     * with solve_fft's own ~21.5 KiB frame pair (a different stage, run at a
+     * different time on the same task). 32 KiB stays comfortably sized for
+     * either stage. The workspace itself is NOT yet instantiated anywhere in
+     * this DSS build (no caller invokes solve_tracking_find_ball from
+     * dss_main.c -- there is no on-chip MTI-cube producer yet for it to
+     * consume), so it costs zero L2 today; whoever wires the real mailbox
+     * dispatch (Task 6+) must budget ~42 KB of static workspace against the
+     * L2 headroom at that point -- see the Task 5 report.
      */
     taskParams.stack = dss_solveTaskStack;
     taskParams.stackSize = sizeof(dss_solveTaskStack);
