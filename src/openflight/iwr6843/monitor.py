@@ -8,7 +8,7 @@ import queue
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -139,34 +139,38 @@ def _pause(seconds: float) -> None:
 
 @dataclass(frozen=True)
 class SelfTriggerConfig:
-    """Firmware ``triggerCfg``: freeze when the ball leaves the tee bin.
+    """Firmware ``triggerCfg``: freeze when a tracked clubhead reaches the tee.
 
-    ``measure_floor`` samples the empty lane once at startup and replaces
-    ``level``. A later profile restore sends that measured level again.
+    The firmware watches the range bins short of ``local_bin`` for a moving
+    return of at least ``snr`` times its running noise floor, follows it
+    frame to frame, and fires once it has been seen ``track_frames`` times
+    and enters the impact gate around the tee. The gate width, approach
+    depth, Doppler coherence and approach-rate tunables keep their firmware
+    defaults; ``triggerLog`` on the board reports what each frame saw.
     """
 
     local_bin: int
-    level: float
-    hits: int
-    measure_floor: bool = False
+    snr: float
+    track_frames: int
 
     def __post_init__(self) -> None:
         if self.local_bin < 0:
             raise ValueError(f"self-trigger bin must be >= 0, got {self.local_bin}")
-        if not math.isfinite(self.level) or self.level <= 0.0:
-            raise ValueError(f"self-trigger level must be > 0, got {self.level}")
-        if self.hits < 1:
-            # triggerCfg treats 0 hits as "off", which would leave the host
+        if not math.isfinite(self.snr) or self.snr < 1.0:
+            # Below the floor itself every frame would be a candidate.
+            raise ValueError(f"self-trigger snr must be >= 1, got {self.snr}")
+        if self.track_frames < 1:
+            # triggerCfg treats 0 frames as "off", which would leave the host
             # waiting for a notice that never comes.
-            raise ValueError(f"self-trigger hits must be >= 1, got {self.hits}")
+            raise ValueError(f"self-trigger track frames must be >= 1, got {self.track_frames}")
 
     @property
     def command(self) -> str:
         """CLI line that arms this trigger."""
-        return f"triggerCfg {self.local_bin} {self.level} {self.hits}"
+        return f"triggerCfg {self.local_bin} {self.snr} {self.track_frames}"
 
 
-# hits=0 disables the firmware trigger (see l3_cli_triggerCfg).
+# frames=0 disables the firmware trigger (see l3_cli_triggerCfg).
 SELF_TRIGGER_OFF_COMMAND = "triggerCfg 0 0 0"
 
 
@@ -320,7 +324,7 @@ class IWR6843CaptureMonitor:
         if not self.config_path.is_file():
             raise FileNotFoundError(f"IWR6843 config not found: {self.config_path}")
         if self.watch_self_trigger:
-            # The firmware's tee-power probe and the host replay both read IQ16.
+            # The clubhead detector reads IQ16 residuals.
             capture_format = read_capture_config(self.config_path).capture_format
             if capture_format == "iq8":
                 raise ValueError("IQ8 capture does not support the IWR6843 self-trigger")
@@ -409,18 +413,6 @@ class IWR6843CaptureMonitor:
         """Send ``triggerCfg`` for the configured self-trigger, if any."""
         if self.self_trigger is None:
             return
-        if self.self_trigger.measure_floor:
-            floor, level = measure_trigger_level(
-                self.radar,
-                self.self_trigger.local_bin,
-                self.self_trigger.hits,
-            )
-            logger.info(
-                "[IWR6843] Empty-lane tee p95 %.0f; arming trigger at %.0f",
-                floor,
-                level,
-            )
-            self.self_trigger = replace(self.self_trigger, level=level, measure_floor=False)
         reply = self.radar.cmd(self.self_trigger.command, 2.0)
         if "Error" in reply or "Done" not in reply:
             raise RuntimeError(f"IWR6843 self-trigger rejected: {reply.strip()}")

@@ -988,6 +988,7 @@ def test_trigger_section_names_match_the_spec():
         "trigger/debug lines only change on phase change",
         "trigger/floor measurement",
         "trigger/reconfigure clears a previous arm",
+        "trigger/triggerLog prints the detector log",
     ]
 
 

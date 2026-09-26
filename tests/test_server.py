@@ -4765,8 +4765,8 @@ def _self_trigger_args(**overrides):
     values = {
         "iwr6843_self_trigger": False,
         "iwr6843_self_trigger_bin": None,
-        "iwr6843_self_trigger_level": None,
-        "iwr6843_self_trigger_hits": None,
+        "iwr6843_self_trigger_snr": None,
+        "iwr6843_self_trigger_frames": None,
         "iwr6843_tee_m": 1.575,
         "iwr6843_config": "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg",
         "sound_pre_trigger": None,
@@ -4785,8 +4785,8 @@ class TestSelfTriggerCli:
         ("flag", "value"),
         [
             ("iwr6843_self_trigger_bin", 14),
-            ("iwr6843_self_trigger_level", 500.0),
-            ("iwr6843_self_trigger_hits", 3),
+            ("iwr6843_self_trigger_snr", 4.0),
+            ("iwr6843_self_trigger_frames", 3),
         ],
     )
     def test_tuning_without_the_switch_is_refused(self, flag, value):
@@ -4796,28 +4796,31 @@ class TestSelfTriggerCli:
     def test_switch_alone_takes_the_bin_from_the_tee_and_the_defaults(self):
         config = server_module._self_trigger_config(_self_trigger_args(iwr6843_self_trigger=True))
 
-        assert config.local_bin == 14
-        assert config.hits == 2
-        assert config.measure_floor is True
+        assert (config.local_bin, config.snr, config.track_frames) == (14, 6.0, 2)
+        assert config.command == "triggerCfg 14 6.0 2"
 
     def test_explicit_tuning_wins(self):
         config = server_module._self_trigger_config(
             _self_trigger_args(
                 iwr6843_self_trigger=True,
                 iwr6843_self_trigger_bin=9,
-                iwr6843_self_trigger_level=250.0,
-                iwr6843_self_trigger_hits=4,
+                iwr6843_self_trigger_snr=4.5,
+                iwr6843_self_trigger_frames=4,
             )
         )
 
-        assert (config.local_bin, config.level, config.hits) == (9, 250.0, 4)
-        assert config.measure_floor is False
-        assert config.command == "triggerCfg 9 250.0 4"
+        assert (config.local_bin, config.snr, config.track_frames) == (9, 4.5, 4)
 
-    def test_zero_hits_is_refused_instead_of_silently_disabling_capture(self):
-        with pytest.raises(ValueError, match="hits must be >= 1"):
+    def test_zero_frames_is_refused_instead_of_silently_disabling_capture(self):
+        with pytest.raises(ValueError, match="track frames must be >= 1"):
             server_module._self_trigger_config(
-                _self_trigger_args(iwr6843_self_trigger=True, iwr6843_self_trigger_hits=0)
+                _self_trigger_args(iwr6843_self_trigger=True, iwr6843_self_trigger_frames=0)
+            )
+
+    def test_snr_under_the_floor_is_refused(self):
+        with pytest.raises(ValueError, match="snr must be >= 1"):
+            server_module._self_trigger_config(
+                _self_trigger_args(iwr6843_self_trigger=True, iwr6843_self_trigger_snr=0.5)
             )
 
     def test_tee_outside_the_capture_window_is_refused(self):

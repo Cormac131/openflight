@@ -1,7 +1,9 @@
 """Source checks for the l3sparse and self-trigger firmware paths.
 
-The firmware cannot build or run here; these pin the properties the host
-relies on. scripts/hardware-test/test_iwr_firmware.py runs the readback section against a board.
+l3_dump.c cannot build here (it needs the mmWave SDK); these pin the
+properties the host relies on. The detector itself is built and exercised
+in test_iwr6843_firmware_trigger.py. scripts/hardware-test/test_iwr_firmware.py
+runs the readback section against a board.
 """
 
 from __future__ import annotations
@@ -105,6 +107,7 @@ def test_self_trigger_reads_a_finished_slot_beside_capture():
     done = _function("static void l3_hwaOutputDoneCB")
     packed = _function("static void l3_iq8EdmaDoneCB")
     stats = _function("static int32_t l3_cli_stats")
+    consider = _function("static void l3_considerSelfTrigger(")
 
     assert "l3_considerSelfTrigger" not in rearm
     assert "l3_considerSelfTrigger(queuedSlot)" in detect
@@ -112,24 +115,123 @@ def test_self_trigger_reads_a_finished_slot_beside_capture():
     assert "l3_publishDetectFrame" in done
     assert "l3_publishDetectFrame" in packed
     assert 'CLI_write("detect dropped=%u stale=%u\\n"' in stats
+    assert "gPreFramesCaptured < gCapturePlan.preFrames" in consider
 
 
-def test_trigger_peak_tracks_bin_zero_with_an_explicit_flag():
+def test_trigger_scores_every_loop_not_just_loop_zero():
+    """The detector's observation integrates the MTI residual over all loops."""
+    source = _source()
     consider = _function("static void l3_considerSelfTrigger(")
 
-    assert "gTriggerPeakBin != 0U" not in consider
-    assert consider.count("gTriggerHavePeak") >= 3
-    assert "gTriggerHavePeak = 0U;" in _function("static void l3_clearTriggerMotion(")
-    assert "l3_clearTriggerMotion();" in _function("static int32_t l3_cli_triggerCfg(")
+    assert "l3_verticalPowerAt" not in source
+    assert "perLoop[0]" not in source
+    assert "l3_verticalResidual(slot, first + bin, NULL, &obs[bin]);" in consider
+    assert "l3_trig_update(&gTrig, gPreFramesCaptured, first, obs, count)" in consider
+
+
+def test_trigger_no_longer_gates_on_the_tee_bin_or_a_toward_away_sequence():
+    consider = _function("static void l3_considerSelfTrigger(")
+
+    for retired in ("gTriggerPower", "gTriggerToward", "gTriggerAway", "gTriggerReady"):
+        assert retired not in _source(), retired
+    assert "l3_trig_region(&gTrigCfg" in consider
+
+
+def test_trigger_freeze_request_is_unchanged_by_the_new_detector():
+    consider = _function("static void l3_considerSelfTrigger(")
+    freeze = consider[consider.index("key = Hwi_disable();") : consider.index("Hwi_restore(key);")]
+
+    for line in (
+        "gHwaFreezeRequested = 1U;",
+        "gPostCaptureStarted = 0U;",
+        "gPostFramesCaptured = 0U;",
+        "gPostFramesObserved = 0U;",
+        "gActiveFrameShouldKeep = 1U;",
+        "gSelfTriggerLatched = 1U;",
+        "gHwaFreezeRequests++;",
+    ):
+        assert line in freeze, line
+    assert 'CLI_write("Triggered\\n");' in consider
+
+
+def test_trigger_config_waits_for_a_frame_in_progress_before_resetting():
+    cfg = _function("static int32_t l3_cli_triggerCfg(")
+
+    assert (
+        cfg.index("gTriggerEnabled = 0U;")
+        < cfg.index("while (gTrigBusy && waited")
+        < cfg.index("l3_trig_init(&gTrig")
+    )
+    consider = _function("static void l3_considerSelfTrigger(")
+    assert (
+        consider.index("gTrigBusy = 1U;")
+        < consider.index("l3_trig_update(")
+        < consider.index("gTrigBusy = 0U;")
+    )
+
+
+def test_trigger_config_disables_on_zero_frames_and_checks_the_rest():
+    cfg = _function("static int32_t l3_cli_triggerCfg(")
+
+    assert "if (cfg.trackFrames != 0U && l3_trig_cfg_check(&cfg) != 0)" in cfg
+    assert "gTriggerEnabled = (cfg.trackFrames != 0U) ? 1U : 0U;" in cfg
+    assert "argc < 4 || argc > 8" in cfg
+
+
+def test_every_ring_rearm_resets_the_detector_but_keeps_its_log():
+    source = _source()
+
+    assert source.count("    gPreFramesCaptured = 0U;\n    l3_trigRearm();\n") == 3
+    assert "l3_trig_rearm(&gTrig);" in _function("static void l3_trigRearm(")
+
+
+def test_trigger_log_command_is_registered_and_ends_with_done():
+    source = _source()
+    log = _function("static int32_t l3_cli_triggerLog(")
+
+    assert 'cliCfg.tableEntry[17].cmd           = "triggerLog";' in source
+    assert "l3_trig_format_summary(&gTrig" in log
+    assert "l3_trig_format_config(&gTrig" in log
+    assert log.rindex('CLI_write("Done\\n");') > log.rindex("l3_trig_format_record(")
+
+
+def test_detector_source_is_built_into_the_firmware():
+    makefile = (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
+
+    assert "l3_trigger.c" in makefile
+    assert "live_selector.c" in makefile
+    assert "track_select.c" in makefile
+    assert '#include "l3_trigger.h"' in _source()
+
+
+def test_loop_period_for_doppler_comes_from_the_accepted_profile():
+    source = _source()
+
+    assert "gTrigLoopPeriodS = (float)(profCfg.idleTimeConst + profCfg.rampEndTime)" in source
+    assert "gTrig.loopPeriodS = gTrigLoopPeriodS;" in _function(
+        "static void l3_considerSelfTrigger("
+    )
 
 
 def test_loop_means_are_computed_once_per_bin():
-    loops = _function("static void l3_verticalPowerLoops(")
+    residual = _function("static void l3_verticalResidual(")
 
     # One pass accumulates the mean, a second applies it: two loop-index
     # loops per (tx, rx), never a mean loop nested inside the output loop.
-    assert "meanLoop" not in loops
-    assert len(re.findall(r"for \(loop = 0U; loop < loops; loop\+\+\)", loops)) == 3
+    assert "meanLoop" not in residual
+    assert len(re.findall(r"for \(loop = 0U; loop < loops; loop\+\+\)", residual)) == 3
+    # The sparse rows and the trigger share that one pass.
+    assert "l3_verticalResidual(slot, localBin, out, NULL);" in _function(
+        "static void l3_verticalPowerLoops("
+    )
+
+
+def test_residual_walks_loops_by_stride_instead_of_recomputing_indices():
+    residual = _function("static void l3_verticalResidual(")
+
+    assert "l3_iq16Sample" not in residual
+    assert "uint32_t loopStride = ntx * N_RX * binCount * 2U;" in residual
+    assert residual.count("sample += loopStride;") == 2
 
 
 def test_power_rows_go_out_in_one_write_per_loop():

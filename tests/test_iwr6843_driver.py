@@ -38,6 +38,28 @@ def test_stop_sensor_requires_acknowledgement_and_inactive_health(monkeypatch):
     assert calls == [("sensorStop", 3.0), ("stats", 2.0)]
 
 
+def test_trigger_log_reads_the_detector_log_with_a_window_for_128_lines(monkeypatch):
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    calls = []
+    reply = (
+        "triggerLog\ntrig state=idle floor=812 frames=4000 cand=9 acq=3 adv=4 jump=0 "
+        "miss=1 lost=1 lowcoh=0 young=0 slow=0 fired=1 records=9\n"
+        "trigcfg tee=14 snr=6.00 track=2 approach=12 gate=3 mincoh=0.00 minstep=1.00 loopus=135.0\n"
+        "frame=3120 gap=2900 state=tracking why=acquired bin=5 age=1 energy=9800 floor=810 "
+        "snr=12.1 v=-3.20 coh=71\n"
+        "Done\nl3dump:/>"
+    )
+
+    def fake_cmd(command, window):
+        calls.append((command, window))
+        return reply
+
+    monkeypatch.setattr(radar, "cmd", fake_cmd)
+
+    assert radar.trigger_log() == reply
+    assert calls == [("triggerLog", 6.0)]
+
+
 def test_stop_sensor_rejects_firmware_that_remains_active(monkeypatch):
     radar = IWR6843Radar.__new__(IWR6843Radar)
     responses = iter(["sensorStop\nDone\n", "stats\nactive=1\nDone\n"])

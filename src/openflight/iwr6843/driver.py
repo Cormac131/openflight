@@ -498,6 +498,17 @@ class IWR6843Radar:
         """Firmware health line (frames/wraps/active/calib/rf_faults)."""
         return self.cmd("stats", 2.0)
 
+    def trigger_log(self) -> str:
+        """The self-trigger detector's summary, configuration and frame log.
+
+        One text line per logged frame: candidate bin, integrated residual
+        energy against the noise floor, Doppler velocity and coherence, track
+        age, and why the frame did or did not fire. A missed swing reads back
+        as long as nothing above the floor has been seen since; the firmware
+        prints up to 128 records, so allow a few seconds at CLI baud.
+        """
+        return self.cmd("triggerLog", 6.0)
+
     def stop_sensor(self) -> None:
         """Stop capture and verify the firmware returned to its idle CLI state."""
         self._require_done("sensorStop", self.cmd("sensorStop", 3.0))

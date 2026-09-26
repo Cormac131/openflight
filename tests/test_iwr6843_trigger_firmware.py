@@ -1,8 +1,8 @@
 """Run the firmware self-trigger detector natively on synthetic range power.
 
-Compiles ``l3_considerSelfTrigger`` and ``l3_clearTriggerMotion`` straight out
-of ``l3_dump.c`` with the host C compiler, with stubs for the capture globals,
-so the lifecycle guards are executed rather than only grepped.
+The leave-detector harness below compiles the old ``l3_considerSelfTrigger``.
+The clubhead detector in ``l3_trigger.c`` replaced it; those cases skip, and
+``test_iwr6843_firmware_trigger.py`` covers the replacement.
 """
 
 from __future__ import annotations
@@ -51,6 +51,8 @@ def detector(tmp_path_factory):
     if compiler is None:
         pytest.skip("C compiler unavailable")
     source = FIRMWARE.read_text(encoding="utf-8")
+    if "static void l3_clearTriggerMotion(void)" not in source:
+        pytest.skip("the leave detector was replaced by l3_trigger.c")
     trigger_globals = "\n".join(
         line.replace("volatile ", "")
         for line in re.findall(r"^static volatile[^\n]*\bgTrigger\w*[^\n]*;", source, re.M)
@@ -253,17 +255,16 @@ def test_sensor_start_forgets_every_trigger_from_the_previous_session():
 
     assert "gSelfTriggerLatched = 0U;" in start
     assert "gTriggerEnabled = 0U;" in start
-    assert "l3_clearTriggerMotion();" in start
-    assert source.index("static void l3_clearTriggerMotion(void)\n{") < source.index(
-        "static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])\n{"
-    )
+    assert "gTriggerPhase = 0U;" in start
+    assert "l3_trigRearm();" in start
 
 
-def test_trigger_cfg_clears_motion_through_the_shared_helper():
+def test_trigger_cfg_resets_the_detector_after_the_in_flight_frame():
     source = FIRMWARE.read_text(encoding="utf-8")
     trigger_cfg = _function_body(
-        source, "static int32_t l3_cli_triggerCfg(int32_t argc", "static int32_t l3_cli_debugCfg"
+        source, "static int32_t l3_cli_triggerCfg(int32_t argc", "static int32_t l3_cli_triggerLog"
     )
 
-    assert "l3_clearTriggerMotion();" in trigger_cfg
+    assert "l3_trig_init(&gTrig" in trigger_cfg
+    assert "while (gTrigBusy && waited" in trigger_cfg
     assert "gTriggerToward = 0U;" not in trigger_cfg

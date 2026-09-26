@@ -982,8 +982,14 @@ TRIG_DEBUG_FIELDS = (
 
 
 def arm_command(ctx: Context, level: float) -> str:
-    """``triggerCfg`` for this rig's tee bin at ``level``."""
-    return SelfTriggerConfig(local_bin=_tee_bin(ctx), level=level, hits=ctx.hits).command
+    """``triggerCfg`` for this rig's tee bin.
+
+    ``level`` is sent as the SNR multiple and ``ctx.hits`` as the number of
+    tracked frames, the three-number command these checks already send.
+    """
+    return SelfTriggerConfig(
+        local_bin=_tee_bin(ctx), snr=level, track_frames=ctx.hits
+    ).command
 
 
 def _trig_state(snap: StatsSnapshot) -> str:
@@ -1141,6 +1147,14 @@ def _check_reconfigure_clears_arm(ctx: Context) -> CheckResult:
     return passed(name, _trig_state(snap))
 
 
+def _check_trigger_log(ctx: Context) -> CheckResult:
+    name = "trigger/triggerLog prints the detector log"
+    reply = cli(ctx, "triggerLog")
+    if "Done" not in reply:
+        return failed(name, reply.strip()[:80] or "no Done")
+    return passed(name, "Done")
+
+
 def trigger_section() -> Section:
     """Self-trigger lifecycle and observability without a swing."""
     return Section(
@@ -1155,6 +1169,7 @@ def trigger_section() -> Section:
             Check("trigger/debug lines only change on phase change", _check_debug_change_only),
             Check("trigger/floor measurement", _check_floor),
             Check("trigger/reconfigure clears a previous arm", _check_reconfigure_clears_arm),
+            Check("trigger/triggerLog prints the detector log", _check_trigger_log),
         ),
     )
 
@@ -1414,6 +1429,7 @@ COMMANDS_COVERED = frozenset(
         "trackCfg",
         "debugCfg",
         "l3release",
+        "triggerLog",
     }
 )
 

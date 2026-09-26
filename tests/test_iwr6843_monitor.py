@@ -134,7 +134,7 @@ def test_capture_monitor_rejects_iq8_self_trigger_before_configuring_hardware(tm
         config_path=config,
         output_dir=tmp_path / "dumps",
         radar=radar,
-        self_trigger=SelfTriggerConfig(local_bin=1, level=2.0, hits=2),
+        self_trigger=SelfTriggerConfig(local_bin=1, snr=2.0, track_frames=2),
     )
 
     with pytest.raises(ValueError, match="IQ8.*self-trigger"):
@@ -457,7 +457,7 @@ def _self_trigger_monitor(tmp_path, radar, **kwargs) -> IWR6843CaptureMonitor:
         output_dir=tmp_path / "dumps",
         radar=radar,
         button_factory=FakeButton,
-        self_trigger=SelfTriggerConfig(local_bin=12, level=1000.0, hits=2),
+        self_trigger=SelfTriggerConfig(local_bin=12, snr=6.0, track_frames=2),
         **kwargs,
     )
 
@@ -495,103 +495,7 @@ def test_self_trigger_config_is_sent_before_the_worker_owns_the_port(tmp_path):
     monitor.start(armed=False)
     monitor.stop()
 
-    assert radar.commands[0] == ("triggerCfg 12 1000.0 2", threading.current_thread().name)
-
-
-class _FloorRadar(SelfTriggerRadar):
-    """Stats replies with a fixed empty-lane tee residual."""
-
-    def __init__(self, raw: bytes, *, tee: str = "200000", latched: str = "0"):
-        super().__init__(raw)
-        self.tee = tee
-        self.latched = latched
-
-    def stats(self) -> str:
-        self.commands.append(("stats", threading.current_thread().name))
-        return (
-            "frames=10 active=1\n"
-            f"trig phase=tee-low tee={self.tee} latched={self.latched} enabled=1\n"
-            "Done\n"
-        )
-
-
-def _instant_sample_clock(monkeypatch) -> None:
-    """Advance the startup sample without waiting on the wall clock."""
-    clock = {"t": 0.0}
-
-    def monotonic() -> float:
-        return clock["t"]
-
-    def pause(seconds: float) -> None:
-        clock["t"] += seconds
-
-    monkeypatch.setattr(iwr_monitor, "_monotonic", monotonic)
-    monkeypatch.setattr(iwr_monitor, "_pause", pause)
-
-
-def _measured_monitor(tmp_path, radar) -> IWR6843CaptureMonitor:
-    config = tmp_path / "radar.cfg"
-    config.write_text("sensorStart\n", encoding="utf-8")
-    return IWR6843CaptureMonitor(
-        config_path=config,
-        output_dir=tmp_path / "dumps",
-        radar=radar,
-        button_factory=FakeButton,
-        self_trigger=SelfTriggerConfig(local_bin=12, level=1000.0, hits=2, measure_floor=True),
-    )
-
-
-def test_startup_samples_the_empty_lane_and_arms_above_it(tmp_path, monkeypatch):
-    _instant_sample_clock(monkeypatch)
-    radar = _FloorRadar(_raw_dump())
-    monitor = _measured_monitor(tmp_path, radar)
-    monitor.start(armed=False)
-    done = threading.Event()
-
-    def job(_radar):
-        try:
-            monitor.run_on_other_profile(lambda _other: None)
-        finally:
-            done.set()
-
-    monitor.submit("late-window", job)
-    assert done.wait(1.0)
-    monitor.stop()
-
-    lines = [line for line, _thread in radar.commands]
-    probe = f"triggerCfg 12 {FLOOR_PROBE_LEVEL:.0f} 2"
-    measured = monitor.self_trigger.command
-    assert lines[0] == probe
-    assert lines.count(probe) == 1
-    assert set(lines[1 : lines.index(measured)]) == {"stats"}
-    assert len(lines[1 : lines.index(measured)]) >= 8
-    assert lines[-3:] == [measured, SELF_TRIGGER_OFF_COMMAND, measured]
-    assert monitor.self_trigger.measure_floor is False
-    assert monitor.self_trigger.level == pytest.approx(300000.0)
-    assert radar.commands[0][1] == threading.current_thread().name
-
-
-def test_startup_refuses_to_arm_when_the_lane_never_reports_power(tmp_path, monkeypatch):
-    _instant_sample_clock(monkeypatch)
-    radar = _FloorRadar(_raw_dump(), tee="0")
-    monitor = _measured_monitor(tmp_path, radar)
-
-    with pytest.raises(RuntimeError, match="background sample failed"):
-        monitor.start(armed=False)
-
-    assert radar.closed
-    assert "sensorStop" in radar.shutdown_events
-
-
-def test_startup_refuses_to_arm_when_the_sample_latches(tmp_path, monkeypatch):
-    _instant_sample_clock(monkeypatch)
-    radar = _FloorRadar(_raw_dump(), latched="1")
-    monitor = _measured_monitor(tmp_path, radar)
-
-    with pytest.raises(RuntimeError, match="latched the trigger"):
-        monitor.start(armed=False)
-
-    assert radar.closed
+    assert radar.commands[0] == ("triggerCfg 12 6.0 2", threading.current_thread().name)
 
 
 def test_measure_trigger_level_reads_p95_and_stops_if_the_probe_is_rejected():
@@ -763,7 +667,7 @@ def test_other_profile_turns_the_trigger_off_and_back_on_even_on_failure(tmp_pat
     monitor.stop()
 
     lines = [line for line, _thread in radar.commands]
-    assert lines == ["triggerCfg 12 1000.0 2", SELF_TRIGGER_OFF_COMMAND, "triggerCfg 12 1000.0 2"]
+    assert lines == ["triggerCfg 12 6.0 2", SELF_TRIGGER_OFF_COMMAND, "triggerCfg 12 6.0 2"]
 
 
 def test_trigger_during_a_serial_job_is_rejected(tmp_path):
@@ -870,14 +774,21 @@ def test_sparse_failure_after_freeze_is_a_capture_error_not_a_fallback(tmp_path)
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"local_bin": -1, "level": 1000.0, "hits": 2}, "bin"),
-        ({"local_bin": 3, "level": 0.0, "hits": 2}, "level"),
-        ({"local_bin": 3, "level": 1000.0, "hits": 0}, "hits"),
+        ({"local_bin": -1, "snr": 6.0, "track_frames": 2}, "bin"),
+        ({"local_bin": 3, "snr": 0.5, "track_frames": 2}, "snr"),
+        ({"local_bin": 3, "snr": float("nan"), "track_frames": 2}, "snr"),
+        ({"local_bin": 3, "snr": 6.0, "track_frames": 0}, "track frames"),
     ],
 )
 def test_self_trigger_config_rejects_values_the_firmware_would_misread(kwargs, message):
     with pytest.raises(ValueError, match=message):
         SelfTriggerConfig(**kwargs)
+
+
+def test_self_trigger_command_is_the_firmware_triggercfg_line():
+    assert SelfTriggerConfig(local_bin=14, snr=6.0, track_frames=2).command == "triggerCfg 14 6.0 2"
+    # Zero frames is the firmware's "off"; the on-line never sends it.
+    assert SELF_TRIGGER_OFF_COMMAND == "triggerCfg 0 0 0"
 
 
 def _cfg(tmp_path, *lines: str):
@@ -1208,7 +1119,7 @@ def test_tracker_configuration_precedes_trigger_and_listener(tmp_path):
     monitor.stop()
     assert [command for command, _ in radar.commands] == [
         "trackCfg 0.000135 0.046875 4 1 1.6",
-        "triggerCfg 12 1000.0 2",
+        "triggerCfg 12 6.0 2",
     ]
     assert all(thread == threading.current_thread().name for _, thread in radar.commands)
     assert monitor.onboard_tracking

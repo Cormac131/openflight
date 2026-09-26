@@ -67,12 +67,12 @@ The supported angle radar.
 | `--iwr6843-tee-m` | float; default `1.575` | Antenna-center to tee slant range in metres (default: 1.575) |
 | `--iwr6843-net-m` | float; default `4.6` | Antenna-center to net range in metres (default: 4.6) |
 | `--iwr6843-flight` | choices: `net`, `range`, `course`; default `net` | net clamps tracks at the net. range or course keeps returns past it and measures the late-window descent after the shot is published |
-| `--iwr6843-self-trigger` | flag | Freeze the IWR ring after approach motion followed by outward progression beyond the tee and send S! to the OPS, instead of the sound-gate edge. Disconnect the SEN-14262 GATE from HOST_INT. Requires --iwr6843 and --trigger sound |
+| `--iwr6843-self-trigger` | flag | Freeze the IWR ring when the firmware tracks the clubhead into the tee and send S! to the OPS, instead of the sound-gate edge. Disconnect the SEN-14262 GATE from HOST_INT. Requires --iwr6843 and --trigger sound |
 | `--iwr6843-full-capture` | flag | Transfer all samples and TX channels instead of selected cells; about 7 seconds for the default profile. Use with `--debug` to save full diagnostic dumps. |
 | `--no-iwr6843-onboard-track` | flag | Select cells on the Pi instead of onboard; still transfers selected samples unless `--iwr6843-full-capture` is set. |
 | `--iwr6843-self-trigger-bin` | int | Local range bin of the tee (default: from --iwr6843-tee-m). Requires --iwr6843-self-trigger |
-| `--iwr6843-self-trigger-level` | float | Residual-power threshold (default: 1000). Requires --iwr6843-self-trigger |
-| `--iwr6843-self-trigger-hits` | int | Consecutive frames the tee bin must be occupied before it is ready, at least 1 (default: 2). Requires --iwr6843-self-trigger |
+| `--iwr6843-self-trigger-snr` | float | Clubhead candidate threshold as a multiple of the firmware's running noise floor, at least 1 (default: 6). Requires --iwr6843-self-trigger |
+| `--iwr6843-self-trigger-frames` | int | Frames a candidate must be tracked approaching the tee before it can fire, at least 1 (default: 2). Requires --iwr6843-self-trigger |
 | `--iwr6843-tilt-deg` | float | Override mount tilt from the TI calibration JSON |
 | `--iwr6843-radar-height-m` | float | Override antenna-center height from the TI calibration JSON |
 | `--iwr6843-ball-height-m` | float; default `0.04` | Ball-center height above the floor/mat (default: 0.040) |
@@ -83,20 +83,20 @@ The supported angle radar.
 | `--iwr6843-horizontal-phase-reference-rad` | float | Static target-line phase measured by horizontal aim calibration. Subtracted from the TX2 horizontal proxy before angle conversion. |
 
 Self-trigger mode uses serial messages; no microphone or trigger GPIO is required,
-and the trigger pin is left unallocated. The detector waits for the pre-trigger
-history to fill, then requires a return beyond the tee to advance to a farther bin
-across frames after approach motion. A reversal alone does not trigger. Approach
-state expires after more than two missing frames or 60 ms without a departure; the
-timeout is counted in frames from the cfg's `frameCfg` period, so it holds on the
-2 ms profiles too. These checks reduce false triggers but do not prove ball identity;
-validate tee geometry and thresholds with real shots. Self-trigger needs an IQ16
-profile: the IQ8 dense profiles are rejected at startup. Full capture is a
-diagnostic alternative, not a longer recording window.
+and the trigger pin is left unallocated. The firmware watches the bins short of
+the tee for a moving return of at least the configured SNR times its running
+noise floor, follows that return frame to frame, and freezes once the track is
+old enough and enters the impact gate around the tee. It does not wait for the
+club to leave again. The detector also waits until the pre-trigger ring has
+wrapped, so the saved movie has its full history. These checks reduce false
+triggers but do not prove ball identity; validate tee geometry and thresholds
+with real shots. Self-trigger needs an IQ16 profile: the IQ8 dense profiles are
+rejected at startup. Full capture is a diagnostic alternative, not a longer
+recording window.
 
-The detector runs in the firmware; `scripts/iwr6843/swing_trigger.py` and
-`openflight.iwr6843.self_trigger` replay the same rule on the host, and
-`tests/test_iwr6843_trigger_firmware.py` checks the two agree frame by frame.
-Flash an image built from the matching `firmware/iwr6843/l3_dump.c`.
+The detector is `firmware/iwr6843/l3_trigger.c`.
+`tests/test_iwr6843_firmware_trigger.py` builds it on the host.
+Flash an image built from the matching firmware.
 
 ## Inclinometer
 

@@ -1081,11 +1081,13 @@ def init_camera_capture(
         return False
 
 
-# Positive stand-in until startup replaces it with the measured floor.
-# --iwr6843-self-trigger-level arms that value and skips the sample.
-_SELF_TRIGGER_DEFAULT_LEVEL = 1000.0
-# Consecutive frames the tee bin must stay occupied before the trigger arms.
-_SELF_TRIGGER_DEFAULT_HITS = 2
+# A moving return short of the tee counts as a clubhead candidate at this
+# multiple of the firmware's running noise floor. Tune with
+# --iwr6843-self-trigger-snr after reading the board's triggerLog.
+_SELF_TRIGGER_DEFAULT_SNR = 6.0
+# Frames a candidate must be tracked approaching before entering the impact
+# gate fires the capture.
+_SELF_TRIGGER_DEFAULT_TRACK_FRAMES = 2
 # OPS rolling-buffer split (S#n of 32 segments, ~4.27 ms each at 30 ksps).
 # The self-trigger reaches the OPS as S! a few ms to tens of ms after impact,
 # so keep more of the buffer before the request than the sound gate needs.
@@ -1107,8 +1109,8 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
         flag
         for flag, value in (
             ("--iwr6843-self-trigger-bin", args.iwr6843_self_trigger_bin),
-            ("--iwr6843-self-trigger-level", args.iwr6843_self_trigger_level),
-            ("--iwr6843-self-trigger-hits", args.iwr6843_self_trigger_hits),
+            ("--iwr6843-self-trigger-snr", args.iwr6843_self_trigger_snr),
+            ("--iwr6843-self-trigger-frames", args.iwr6843_self_trigger_frames),
         )
         if value is not None
     ]
@@ -1119,13 +1121,12 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
     bin_index = args.iwr6843_self_trigger_bin
     if bin_index is None:
         bin_index = tee_local_bin(args.iwr6843_tee_m, args.iwr6843_config)
-    level = args.iwr6843_self_trigger_level
-    hits = args.iwr6843_self_trigger_hits
+    snr = args.iwr6843_self_trigger_snr
+    frames = args.iwr6843_self_trigger_frames
     return SelfTriggerConfig(
         local_bin=bin_index,
-        level=_SELF_TRIGGER_DEFAULT_LEVEL if level is None else level,
-        hits=_SELF_TRIGGER_DEFAULT_HITS if hits is None else hits,
-        measure_floor=level is None,
+        snr=_SELF_TRIGGER_DEFAULT_SNR if snr is None else snr,
+        track_frames=_SELF_TRIGGER_DEFAULT_TRACK_FRAMES if frames is None else frames,
     )
 
 
@@ -4707,8 +4708,9 @@ def main():
     parser.add_argument(
         "--iwr6843-self-trigger",
         action="store_true",
-        help="Freeze the IWR ring when the ball leaves the tee and send S! to the OPS, "
-        "instead of the sound-gate edge. The tee bin comes from --iwr6843-tee-m",
+        help="Freeze the IWR ring when the firmware tracks the clubhead into the tee "
+        "and send S! to the OPS, instead of the sound-gate edge. The tee bin comes "
+        "from --iwr6843-tee-m",
     )
     parser.add_argument(
         "--iwr6843-self-trigger-bin",
@@ -4718,18 +4720,18 @@ def main():
         "Requires --iwr6843-self-trigger",
     )
     parser.add_argument(
-        "--iwr6843-self-trigger-level",
+        "--iwr6843-self-trigger-snr",
         type=float,
         default=None,
-        help="Residual-power threshold. Omit to sample the empty lane at startup "
-        "and arm above that floor. Requires --iwr6843-self-trigger",
+        help="Clubhead candidate threshold as a multiple of the firmware's running "
+        "noise floor, at least 1 (default: 6). Requires --iwr6843-self-trigger",
     )
     parser.add_argument(
-        "--iwr6843-self-trigger-hits",
+        "--iwr6843-self-trigger-frames",
         type=int,
         default=None,
-        help="Consecutive frames the tee bin must be occupied before it is ready "
-        "(default: 2 with --iwr6843-self-trigger)",
+        help="Frames a candidate must be tracked approaching before it can fire, "
+        "at least 1 (default: 2 with --iwr6843-self-trigger)",
     )
     parser.add_argument(
         "--iwr6843-full-capture",
