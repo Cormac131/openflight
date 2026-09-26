@@ -93,3 +93,56 @@ ball track does not meet the acceptance gates.
 In debug mode, verify that the session contains an `iwr6843_capture` entry, a
 `temperature_report` object, and a `capture_path` pointing to the saved
 `.l3dump` file.
+
+## Cadence Acceptance Soak
+
+This is the acceptance gate for any change to the capture-path DMA/CPU memory
+layout (for example, moving a scratch buffer between L3 and `DATA_RAM`). It
+runs the sensor for tens of thousands of frames and fails on any sign that
+the firmware could not keep up with the inter-frame budget:
+
+```bash
+uv run python scripts/hardware-test/iwr6843_cadence_soak.py \
+    --config config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg --frames 50000
+uv run python scripts/hardware-test/iwr6843_cadence_soak.py \
+    --config config/iwr6843_l3dump_dense_51f2ms_53bin_iq8.cfg --frames 50000
+```
+
+Run it against **both** shipped profiles — the wide/iq16 default and the
+dense/iq8 profile — since they run the same firmware image at different
+frame periods (3 ms and 2 ms respectively, read automatically from each
+`.cfg`'s `frameCfg` line).
+
+The script reads the firmware's `stats` CLI response
+(`firmware/iwr6843/l3_dump.c`, `l3_cli_stats`) and checks:
+
+- `hwa_frames` reached at least 90% of the requested `--frames` (a low count
+  means the sensor stalled or `sensorStop` cut the run short, not that the
+  cadence held).
+- `hwa_missed` / `hwa_frames` (the HWA frame-start miss rate) does not exceed
+  twice the recorded baseline of 0.0089% for the shipped profile. Doubling
+  the baseline is a materiality band: DMA/CPU contention from a bad
+  relocation shows up as a large jump, not a rate that hovers just above the
+  baseline.
+- `iq8_overrun` (IQ8 pack overruns) is zero.
+- `iq8_edma_err` (IQ8 EDMA errors) is zero.
+
+**Pass criteria:** the script prints `PASS` and exits 0 for both profiles.
+**A failure means the relocation broke the inter-frame budget on real
+silicon — revert to the L3 fallback rather than tuning around it.**
+
+The stats parser (`parse_stats` in the script) is unit-tested without
+hardware in `tests/test_iwr6843_monitor.py`
+(`test_cadence_soak_parses_firmware_stats` and related tests), against the
+exact field names the firmware emits.
+
+### Readback measurement (manual, alongside the soak)
+
+While soaking the dense/iq8 profile, take at least 20 shots and record:
+
+- `l3track` readback latency — must stay under 1.0 s per shot.
+- Frequency of `l3sparse` truncation warnings (`monitor.py:510`) — must be no
+  more frequent than on the 45-frame profile.
+
+Record both numbers alongside the soak's PASS/FAIL output when reporting
+results for a DATA_RAM relocation change.

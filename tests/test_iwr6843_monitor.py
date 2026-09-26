@@ -1002,3 +1002,76 @@ def test_dump_fallback_timeout_covers_the_frame_cap():
         f"timeout {default}s leaves under {_REQUIRED_MARGIN_S}s over a "
         f"{worst_case_s:.2f}s worst-case {_MAX_CAPTURE_FRAMES}-frame dump"
     )
+
+
+# --- cadence acceptance soak: stats parsing, no hardware ---------------------
+
+
+def _load_cadence_soak():
+    """Import the hardware-test script's parser without a serial port."""
+    import importlib.util
+    from pathlib import Path
+
+    script_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "hardware-test"
+        / "iwr6843_cadence_soak.py"
+    )
+    spec = importlib.util.spec_from_file_location("iwr6843_cadence_soak", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_cadence_soak_parses_firmware_stats():
+    """The real `stats` line (firmware/iwr6843/l3_dump.c, l3_cli_stats),
+    including the compound `plan=`/`used=` fields the regex partially
+    matches -- those extra matches must not break parsing."""
+    soak = _load_cadence_soak()
+
+    line = (
+        "frames=112345 wraps=0 active=1 calib=0x0 rf_faults=0 "
+        "hwa_frames=112345 hwa_out=112345 hwa_rearms=112344 hwa_rearm_err=0 "
+        "hwa_missed=10 freeze_req=0 freeze_done=0 freeze_to=0 "
+        "format=iq8 plan=51pre/0post loops=12 used=100/200\n"
+        "iq8_packed=112345 iq8_overrun=0 iq8_clipped=0 pending=0 pre_seen=112345 "
+        "post_kept=0 post_seen=0 stride=1 iq8_edma_done=112345 iq8_edma_err=0 "
+        "iq8_edma_wait=0 iq8_busy=0/1 iq8_scale=7\n"
+    )
+    stats = soak.parse_stats(line)
+
+    assert stats["hwa_frames"] == 112345
+    assert stats["hwa_missed"] == 10
+    assert stats["iq8_overrun"] == 0
+    assert stats["iq8_edma_err"] == 0
+
+
+def test_cadence_soak_fails_closed_on_missing_field():
+    """A firmware image that doesn't report a required counter (e.g. an
+    older build without L3_IQ8_EDMA_PACK) must not be silently treated as
+    zero missed/overrun/error counts."""
+    soak = _load_cadence_soak()
+
+    stats = soak.parse_stats("hwa_frames=100 hwa_missed=0\n")
+
+    missing = [f for f in soak.REQUIRED_STAT_FIELDS if f not in stats]
+    assert missing == ["iq8_overrun", "iq8_edma_err"]
+
+
+def test_cadence_soak_frame_period_from_cfg(tmp_path):
+    """Frame periodicity is read from the profile, not hardcoded -- the
+    wide/iq16 default (3 ms) and dense/iq8 profile (2 ms) differ."""
+    soak = _load_cadence_soak()
+    cfg = tmp_path / "profile.cfg"
+    cfg.write_text("dfeDataOutputMode 1\nframeCfg 0 2 12 0 3 1 0\nsensorStart\n")
+
+    assert soak.frame_period_s(str(cfg)) == pytest.approx(0.003)
+
+
+def test_cadence_soak_miss_rate_threshold_exceeds_baseline():
+    """The pass/fail threshold must be a materiality band above the
+    recorded baseline, not equal to it (any real miss would then fail)."""
+    soak = _load_cadence_soak()
+
+    assert soak.MAX_MISS_RATE > soak.BASELINE_MISS_RATE
