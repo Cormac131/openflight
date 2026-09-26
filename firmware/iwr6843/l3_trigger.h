@@ -34,8 +34,11 @@
 /* A track survives this many frames without a candidate. */
 #define L3_TRIG_MAX_MISSES        1U
 /* A candidate up to this many bins short of the last one still continues
- * the track (scatterer wander); more is a retreat and restarts the track. */
-#define L3_TRIG_JITTER_BINS       1U
+ * the track (scatterer wander, a slow backswing); more is a retreat and
+ * restarts the track. The approach rate is measured from the track's
+ * nearest point to the radar, so a tolerated retreat does not count
+ * against the downswing that follows it. */
+#define L3_TRIG_JITTER_BINS       2U
 /* A candidate more than this many bins ahead of the last one is a jump
  * (another scatterer), not the same target: 8 bins/frame is 125 m/s at
  * 4.7 cm bins and 3 ms frames. */
@@ -53,6 +56,16 @@
 #define L3_TRIG_DEFAULT_GATE_BINS     3U    /* ~0.14 m either side of it */
 #define L3_TRIG_DEFAULT_MIN_COHERENCE 0.0F  /* off until measured */
 #define L3_TRIG_DEFAULT_MIN_STEP_BINS 1.0F  /* ~15 m/s radial at 3 ms */
+#define L3_TRIG_DEFAULT_STAT          L3_TRIG_STAT_PEAK
+
+/* Which per-bin statistic the floor and the candidate threshold use. A fast
+ * clubhead can be in a bin for only part of a frame, so the strongest single
+ * loop is the sensitive choice for finding out whether the club is seen at
+ * all; the energy over every loop is the steadier one once it is. */
+enum {
+    L3_TRIG_STAT_ENERGY = 0,
+    L3_TRIG_STAT_PEAK = 1
+};
 
 enum {
     L3_TRIG_STATE_IDLE = 0,
@@ -99,12 +112,15 @@ typedef struct {
     uint32_t gateBins;      /* impact gate half-width around the tee */
     float    minCoherence;  /* 0..1; 0 disables the Doppler coherence test */
     float    minStepBins;   /* minimum mean approach rate, bins per frame */
+    uint32_t stat;          /* L3_TRIG_STAT_ENERGY or L3_TRIG_STAT_PEAK */
 } l3_trig_cfg_t;
 
 /* One range bin of one frame, summed over the vertical TX pair and all RX:
- * residual energy over every loop and the lag-1 residual autocorrelation. */
+ * residual energy over every loop, the strongest single loop's residual
+ * power, and the lag-1 residual autocorrelation. */
 typedef struct {
     float energy;
+    float peak;
     float r1Re;
     float r1Im;
 } l3_trig_obs_t;
@@ -118,7 +134,8 @@ typedef struct {
     uint8_t  age;
     int16_t  velocityCms;   /* apparent (aliased) Doppler velocity */
     float    energy;
-    float    floor;
+    float    peak;
+    float    floor;         /* in the configured statistic's units */
     uint8_t  coherencePct;
 } l3_trig_record_t;
 
@@ -129,7 +146,7 @@ typedef struct {
     float    loopPeriodS;   /* for the velocity readout; 0 disables it */
     /* Track. */
     uint8_t  trackBin;
-    uint8_t  trackStartBin;
+    uint8_t  trackStartBin;  /* nearest bin to the radar the track has held */
     uint8_t  trackAge;
     uint8_t  trackMisses;
     uint32_t trackStartFrame;

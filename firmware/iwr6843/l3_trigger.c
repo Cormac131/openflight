@@ -39,6 +39,7 @@ void l3_trig_cfg_defaults(l3_trig_cfg_t *cfg)
     cfg->gateBins = L3_TRIG_DEFAULT_GATE_BINS;
     cfg->minCoherence = L3_TRIG_DEFAULT_MIN_COHERENCE;
     cfg->minStepBins = L3_TRIG_DEFAULT_MIN_STEP_BINS;
+    cfg->stat = L3_TRIG_DEFAULT_STAT;
 }
 
 int32_t l3_trig_cfg_check(const l3_trig_cfg_t *cfg)
@@ -61,7 +62,16 @@ int32_t l3_trig_cfg_check(const l3_trig_cfg_t *cfg)
     if (!(cfg->minStepBins >= 0.0F)) {
         return -1;
     }
+    if (cfg->stat > L3_TRIG_STAT_PEAK) {
+        return -1;
+    }
     return 0;
+}
+
+/* The configured detection statistic of one observation. */
+static float l3_trig_stat(const l3_trig_cfg_t *cfg, const l3_trig_obs_t *obs)
+{
+    return (cfg->stat == L3_TRIG_STAT_PEAK) ? obs->peak : obs->energy;
 }
 
 void l3_trig_init(l3_trig_t *trig, const l3_trig_cfg_t *cfg, float loopPeriodS)
@@ -106,7 +116,8 @@ int32_t l3_trig_region(const l3_trig_cfg_t *cfg, uint32_t binCount,
 /* Median of count energies (count <= L3_TRIG_MAX_BINS). Insertion sort of a
  * copy: the region is a dozen or so bins, so this is cheaper than anything
  * cleverer. */
-static float l3_trig_median(const l3_trig_obs_t *obs, uint32_t count)
+static float l3_trig_median(const l3_trig_cfg_t *cfg, const l3_trig_obs_t *obs,
+                            uint32_t count)
 {
     /* Static: the caller's task stack is small and only one task scores
      * frames. Not reentrant. */
@@ -114,7 +125,7 @@ static float l3_trig_median(const l3_trig_obs_t *obs, uint32_t count)
     uint32_t i;
 
     for (i = 0U; i < count; i++) {
-        float value = obs[i].energy;
+        float value = l3_trig_stat(cfg, &obs[i]);
         uint32_t j = i;
         while (j > 0U && sorted[j - 1U] > value) {
             sorted[j] = sorted[j - 1U];
@@ -164,6 +175,7 @@ static void l3_trig_record(l3_trig_t *trig, uint32_t frame, uint8_t why,
     }
     record->velocityCms = (int16_t)velocity;
     record->energy = (obs != NULL) ? obs->energy : 0.0F;
+    record->peak = (obs != NULL) ? obs->peak : 0.0F;
     record->floor = trig->floor;
     record->coherencePct = (uint8_t)(coherence * 100.0F + 0.5F);
     trig->logNext = (trig->logNext + 1U) % L3_TRIG_LOG_DEPTH;
@@ -201,6 +213,7 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t firstBin,
     uint8_t bin = L3_TRIG_NO_BIN;
     uint8_t why = L3_TRIG_WHY_QUIET;
     uint8_t haveCandidate = 0U;
+    uint8_t continuation = 0U;
     uint8_t trackWasActive = (trig->trackBin != L3_TRIG_NO_BIN) ? 1U : 0U;
     float median;
     float threshold;
@@ -216,7 +229,7 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t firstBin,
 
     /* Adaptive floor: the median of the region is noise even while the club
      * occupies a few bins of it. The first frame seeds it outright. */
-    median = l3_trig_median(obs, count);
+    median = l3_trig_median(cfg, obs, count);
     if (trig->floor <= 0.0F) {
         trig->floor = median;
     } else {
@@ -227,13 +240,40 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t firstBin,
     }
     threshold = trig->floor * cfg->snr;
 
-    for (i = 0U; i < count; i++) {
-        if (best == NULL || obs[i].energy > best->energy) {
-            best = &obs[i];
-            bestIndex = i;
+    /* An existing track is continued by the strongest bin above threshold
+     * inside its continuation window, even when a stronger return sits
+     * elsewhere in the region: the strongest bin can swap between clubhead,
+     * shaft, hands and reflections from frame to frame, and following it
+     * blindly restarts the track each time. Only without a continuation is
+     * the region's strongest bin taken, as a new track. */
+    if (trackWasActive) {
+        int32_t low = (int32_t)trig->trackBin - (int32_t)L3_TRIG_JITTER_BINS;
+        int32_t high = (int32_t)trig->trackBin + (int32_t)L3_TRIG_MAX_STEP_BINS;
+        for (i = 0U; i < count; i++) {
+            int32_t candidateBin = (int32_t)(firstBin + i);
+            if (candidateBin < low || candidateBin > high) {
+                continue;
+            }
+            if (best == NULL || l3_trig_stat(cfg, &obs[i]) > l3_trig_stat(cfg, best)) {
+                best = &obs[i];
+                bestIndex = i;
+            }
+        }
+        if (best != NULL && l3_trig_stat(cfg, best) >= threshold) {
+            continuation = 1U;
+        } else {
+            best = NULL;
         }
     }
-    if (best->energy >= threshold) {
+    if (best == NULL) {
+        for (i = 0U; i < count; i++) {
+            if (best == NULL || l3_trig_stat(cfg, &obs[i]) > l3_trig_stat(cfg, best)) {
+                best = &obs[i];
+                bestIndex = i;
+            }
+        }
+    }
+    if (l3_trig_stat(cfg, best) >= threshold) {
         /* The bin is logged either way; only a coherent one is a candidate. */
         bin = (uint8_t)(firstBin + bestIndex);
         haveCandidate = 1U;
@@ -267,19 +307,22 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t firstBin,
     } else if (!trackWasActive) {
         l3_trig_startTrack(trig, frame, bin);
         why = L3_TRIG_WHY_ACQUIRED;
+    } else if (!continuation) {
+        l3_trig_startTrack(trig, frame, bin);
+        why = L3_TRIG_WHY_JUMPED;
     } else {
-        int32_t step = (int32_t)bin - (int32_t)trig->trackBin;
-        if (step < -(int32_t)L3_TRIG_JITTER_BINS || step > (int32_t)L3_TRIG_MAX_STEP_BINS) {
-            l3_trig_startTrack(trig, frame, bin);
-            why = L3_TRIG_WHY_JUMPED;
-        } else {
-            trig->trackBin = bin;
-            trig->trackMisses = 0U;
-            if (trig->trackAge < 0xFFU) {
-                trig->trackAge++;
-            }
-            why = L3_TRIG_WHY_ADVANCED;
+        trig->trackBin = bin;
+        trig->trackMisses = 0U;
+        if (trig->trackAge < 0xFFU) {
+            trig->trackAge++;
         }
+        if (bin <= trig->trackStartBin) {
+            /* Still on the backswing, or wandered: the approach is
+             * measured from here. */
+            trig->trackStartBin = bin;
+            trig->trackStartFrame = frame;
+        }
+        why = L3_TRIG_WHY_ADVANCED;
     }
 
     /* Impact gate: fire on entry, given enough history and a clubhead's
@@ -408,6 +451,7 @@ int32_t l3_trig_format_config(const l3_trig_t *trig, char *out, uint32_t cap)
     char coherenceText[16];
     char stepText[16];
     char loopText[16];
+    const char *statText = (trig->cfg.stat == L3_TRIG_STAT_PEAK) ? "peak" : "energy";
 
     l3_trig_fmtFixed(trig->cfg.snr, 2U, snrText, sizeof(snrText));
     l3_trig_fmtFixed(trig->cfg.minCoherence, 2U, coherenceText, sizeof(coherenceText));
@@ -415,22 +459,21 @@ int32_t l3_trig_format_config(const l3_trig_t *trig, char *out, uint32_t cap)
     l3_trig_fmtFixed(trig->loopPeriodS * 1.0e6F, 1U, loopText, sizeof(loopText));
     return snprintf(out, cap,
                     "trigcfg tee=%u snr=%s track=%u approach=%u gate=%u "
-                    "mincoh=%s minstep=%s loopus=%s",
+                    "mincoh=%s minstep=%s stat=%s loopus=%s",
                     (unsigned)trig->cfg.teeBin, snrText,
                     (unsigned)trig->cfg.trackFrames,
                     (unsigned)trig->cfg.approachBins,
                     (unsigned)trig->cfg.gateBins,
-                    coherenceText, stepText, loopText);
+                    coherenceText, stepText, statText, loopText);
 }
 
 int32_t l3_trig_format_record(const l3_trig_record_t *record, char *out, uint32_t cap)
 {
     char binText[8];
     char energyText[16];
+    char peakText[16];
     char floorText[16];
-    char snrText[16];
     char velocityText[16];
-    float snr = (record->floor > 0.0F) ? (record->energy / record->floor) : 0.0F;
 
     if (record->bin == L3_TRIG_NO_BIN) {
         (void)snprintf(binText, sizeof(binText), "-");
@@ -438,16 +481,17 @@ int32_t l3_trig_format_record(const l3_trig_record_t *record, char *out, uint32_
         (void)snprintf(binText, sizeof(binText), "%u", (unsigned)record->bin);
     }
     l3_trig_fmtFixed(record->energy, 0U, energyText, sizeof(energyText));
+    l3_trig_fmtFixed(record->peak, 0U, peakText, sizeof(peakText));
     l3_trig_fmtFixed(record->floor, 0U, floorText, sizeof(floorText));
-    l3_trig_fmtFixed(snr, 1U, snrText, sizeof(snrText));
     l3_trig_fmtFixed((float)record->velocityCms / 100.0F, 2U, velocityText,
                      sizeof(velocityText));
+    /* floor is in the configured statistic's units; the host divides. */
     return snprintf(out, cap,
                     "frame=%u gap=%u state=%s why=%s bin=%s age=%u energy=%s "
-                    "floor=%s snr=%s v=%s coh=%u",
+                    "peak=%s floor=%s v=%s coh=%u",
                     (unsigned)record->frame, (unsigned)record->gap,
                     (record->state < 3U) ? kStateNames[record->state] : "?",
                     l3_trig_why_name(record->why), binText,
-                    (unsigned)record->age, energyText, floorText, snrText,
+                    (unsigned)record->age, energyText, peakText, floorText,
                     velocityText, (unsigned)record->coherencePct);
 }

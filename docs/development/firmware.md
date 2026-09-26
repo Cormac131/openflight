@@ -116,13 +116,19 @@ range bins around the tee and hands them to the detector in
 completed frame (every loop of the vertical TX pair, all RX)
   -> burst-MTI residual per bin: mean over loops removed, so the stationary
      ball and the room vanish and only movers remain
-  -> per bin: residual energy integrated over ALL loops, plus the lag-1 loop
-     autocorrelation (Doppler phase and coherence)
-  -> noise floor = smoothed median of the watched bins; threshold = floor x snr
-  -> candidate = strongest bin above threshold
-  -> IDLE -> TRACKING: the candidate is followed frame to frame by range
-     continuity (a step of -1..+8 bins keeps the track, more restarts it,
-     one missing frame is bridged)
+  -> per bin: residual energy integrated over ALL loops, the strongest single
+     loop's residual power, plus the lag-1 loop autocorrelation (Doppler
+     phase and coherence)
+  -> noise floor = smoothed median of the watched bins in the chosen
+     statistic (strongest loop by default: a fast club can be in a bin for
+     only part of a frame); threshold = floor x snr
+  -> candidate = strongest bin above threshold inside the current track's
+     continuation window (-2..+8 bins), else the strongest bin in the region
+     as a new track
+  -> IDLE -> TRACKING: the track is followed frame to frame by that window
+     (one missing frame is bridged, a larger retreat restarts it); its
+     approach rate is measured from its nearest point to the radar, so a
+     slow backswing does not count against the downswing
   -> TRACKING -> FIRED: the track enters the impact gate (tee +/- gate bins)
      with at least <frames> observations and a mean approach rate of at
      least minStep bins per frame
@@ -140,7 +146,7 @@ driver) from a player walking up to the ball (a bin every few frames).
 The detector is armed and tuned over the CLI:
 
 ```text
-triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep]
+triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep stat]
 triggerLog
 ```
 
@@ -148,11 +154,14 @@ triggerLog
 the host), `frames` the observations a track needs before the gate may fire
 (host default 2; 0 disables the trigger). The optional values default to 12
 approach bins (about 0.56 m short of the tee), a gate half-width of 3 bins,
-no coherence test, and one bin per frame of approach. `triggerLog` prints the
-detector's state and counters, its configuration, then one line per frame
-that had a moving return above the floor (idle frames only count toward the
-next line's `gap=`): candidate bin, energy against the floor, apparent
-velocity, coherence, track age, and `why=` the frame did or did not fire
+no coherence test, one bin per frame of approach, and the strongest-loop
+statistic (`stat` 1; 0 selects the energy over all loops once the club is
+known to be seen). `triggerLog` prints the detector's state and counters,
+its configuration, then one line per frame that had a moving return above
+the floor (idle frames only count toward the next line's `gap=`): candidate
+bin, all-loop energy and strongest-loop peak against the floor (in the
+configured statistic's units), apparent velocity, coherence, track age, and
+`why=` the frame did or did not fire
 (`acquired`, `advanced`, `jumped`, `missed`, `lost`, `lowcoh`, `young`,
 `slow`, `fired`). Read it after a missed swing before re-arming: the ring
 re-arm after `l3sparse` keeps the log, `triggerCfg` clears it.

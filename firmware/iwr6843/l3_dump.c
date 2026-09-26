@@ -2749,16 +2749,17 @@ static void l3_verticalResidual(uint32_t slot, uint32_t localBin,
     /* The same (tx, rx) one loop later is ntx chirps on: N_RX * binCount
      * complex samples per chirp, two int16 each. */
     uint32_t loopStride = ntx * N_RX * binCount * 2U;
+    /* Per-loop power summed over channels, for the rows and the peak. */
+    float loopPower[L3_MAX_LOOPS];
     float energy = 0.0F;
+    float peak = 0.0F;
     float r1Re = 0.0F;
     float r1Im = 0.0F;
     uint32_t tx;
     uint32_t loop;
 
-    if (perLoop != NULL) {
-        for (loop = 0U; loop < loops; loop++) {
-            perLoop[loop] = 0.0F;
-        }
+    for (loop = 0U; loop < loops; loop++) {
+        loopPower[loop] = 0.0F;
     }
     for (tx = 0U; tx < ntx; tx++) {
         uint32_t rx;
@@ -2787,9 +2788,7 @@ static void l3_verticalResidual(uint32_t slot, uint32_t localBin,
                 float power = im * im + re * re;
                 sample += loopStride;
                 energy += power;
-                if (perLoop != NULL) {
-                    perLoop[loop] += power;
-                }
+                loopPower[loop] += power;
                 if (loop > 0U) {
                     /* residual[loop] * conj(residual[loop - 1]) */
                     r1Re += re * prevRe + im * prevIm;
@@ -2800,8 +2799,17 @@ static void l3_verticalResidual(uint32_t slot, uint32_t localBin,
             }
         }
     }
+    for (loop = 0U; loop < loops; loop++) {
+        if (perLoop != NULL) {
+            perLoop[loop] = loopPower[loop];
+        }
+        if (loopPower[loop] > peak) {
+            peak = loopPower[loop];
+        }
+    }
     if (obs != NULL) {
         obs->energy = energy;
+        obs->peak = peak;
         obs->r1Re = r1Re;
         obs->r1Im = r1Im;
     }
@@ -3078,22 +3086,24 @@ rearm:
 /* Longest triggerCfg waits for the rearm task to finish scoring a frame. */
 #define L3_TRIGGER_CFG_WAIT_MS 50U
 
-/* CLI "triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep]":
+/* CLI "triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep stat]":
  * arm the approaching-clubhead detector around the tee bin. A candidate
- * needs integrated residual energy of at least <snr> times the running
- * noise floor; its track needs <frames> observations before entering the
- * impact gate fires the capture. frames of 0 disables the trigger. The
- * optional values are the bins watched short of the tee, the gate
- * half-width in bins, the minimum Doppler coherence (0..1, 0 = off) and the
- * minimum mean approach rate in bins per frame. Re-arming clears the log. */
+ * needs a residual statistic of at least <snr> times the running noise
+ * floor; its track needs <frames> observations before entering the impact
+ * gate fires the capture. frames of 0 disables the trigger. The optional
+ * values are the bins watched short of the tee, the gate half-width in
+ * bins, the minimum Doppler coherence (0..1, 0 = off), the minimum mean
+ * approach rate in bins per frame, and the statistic (0 = energy over all
+ * loops, 1 = strongest loop). Re-arming clears the log. */
 static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
 {
     l3_trig_cfg_t cfg;
     unsigned long value;
     char *end;
 
-    if (argc < 4 || argc > 8) {
-        CLI_write("Error: triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep]\n");
+    if (argc < 4 || argc > 9) {
+        CLI_write("Error: triggerCfg <localBin> <snr> <frames> "
+                  "[approach gate minCoh minStep stat]\n");
         return -1;
     }
     l3_trig_cfg_defaults(&cfg);
@@ -3143,6 +3153,14 @@ static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
             CLI_write("Error: trigger min step\n");
             return -1;
         }
+    }
+    if (argc > 8) {
+        value = strtoul(argv[8], &end, 10);
+        if (*end != '\0') {
+            CLI_write("Error: trigger stat\n");
+            return -1;
+        }
+        cfg.stat = (uint32_t)value;
     }
     if (cfg.trackFrames != 0U && l3_trig_cfg_check(&cfg) != 0) {
         CLI_write("Error: trigger config (snr >= 1, gate < approach <= %u)\n",
@@ -4065,7 +4083,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[11].cmdHandlerFxn = l3_cli_sparse;
     cliCfg.tableEntry[12].cmd           = "triggerCfg";
     cliCfg.tableEntry[12].helpString    =
-        "triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep]";
+        "triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep stat]";
     cliCfg.tableEntry[12].cmdHandlerFxn = l3_cli_triggerCfg;
     cliCfg.tableEntry[13].cmd           = "triggerLog";
     cliCfg.tableEntry[13].helpString    = "Print the self-trigger detector's frame log";

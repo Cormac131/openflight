@@ -58,6 +58,9 @@ TEE = 20
 APPROACH = 12
 GATE = 3
 NOISE = 100.0
+# Strongest loop as a fraction of the 12-loop energy for a target present in
+# every loop, and for noise: 1/12 each, a little more for the maximum.
+PEAK_FRACTION = 0.25
 
 
 class Cfg(ctypes.Structure):
@@ -69,11 +72,20 @@ class Cfg(ctypes.Structure):
         ("gateBins", ctypes.c_uint32),
         ("minCoherence", ctypes.c_float),
         ("minStepBins", ctypes.c_float),
+        ("stat", ctypes.c_uint32),
     ]
 
 
+STAT_ENERGY, STAT_PEAK = 0, 1
+
+
 class Obs(ctypes.Structure):
-    _fields_ = [("energy", ctypes.c_float), ("r1Re", ctypes.c_float), ("r1Im", ctypes.c_float)]
+    _fields_ = [
+        ("energy", ctypes.c_float),
+        ("peak", ctypes.c_float),
+        ("r1Re", ctypes.c_float),
+        ("r1Im", ctypes.c_float),
+    ]
 
 
 class Record(ctypes.Structure):
@@ -86,6 +98,7 @@ class Record(ctypes.Structure):
         ("age", ctypes.c_uint8),
         ("velocityCms", ctypes.c_int16),
         ("energy", ctypes.c_float),
+        ("peak", ctypes.c_float),
         ("floor", ctypes.c_float),
         ("coherencePct", ctypes.c_uint8),
     ]
@@ -220,16 +233,24 @@ class Detector:
         noise: float = NOISE,
         coherence: float = 0.9,
         velocity_mps: float = 0.0,
+        peak_fraction: float = PEAK_FRACTION,
+        target_peak_fraction: float | None = None,
     ) -> bool:
         """One frame: noise everywhere, plus targets {local_bin: energy}.
 
         Noise varies by a few percent per bin so the median is exercised.
-        The lag-1 autocorrelation of each target carries the coherence and
-        the Doppler phase for velocity_mps at the fixture loop period.
+        Each bin's strongest-loop power is peak_fraction of its energy
+        (target_peak_fraction for targets), so with the default fixture the
+        peak and energy statistics see the same ratios. The lag-1
+        autocorrelation of each target carries the coherence and the Doppler
+        phase for velocity_mps at the fixture loop period.
         """
+        if target_peak_fraction is None:
+            target_peak_fraction = peak_fraction
         obs = (Obs * self.count)()
         for index in range(self.count):
             obs[index].energy = noise * (1.0 + 0.04 * ((index * 7 + self.frame) % 5 - 2))
+            obs[index].peak = obs[index].energy * peak_fraction
             obs[index].r1Re = 0.0
             obs[index].r1Im = 0.0
         phase = 4.0 * math.pi * velocity_mps * LOOP_PERIOD_S / WAVELENGTH_M
@@ -237,6 +258,7 @@ class Detector:
             index = local_bin - self.first
             assert 0 <= index < self.count, f"bin {local_bin} outside the region"
             obs[index].energy = energy
+            obs[index].peak = energy * target_peak_fraction
             obs[index].r1Re = coherence * energy * math.cos(phase)
             obs[index].r1Im = coherence * energy * math.sin(phase)
         self.frame += 1
@@ -293,6 +315,7 @@ def test_defaults_are_the_documented_ones_and_pass_the_check(lib):
     assert (cfg.approachBins, cfg.gateBins) == (12, 3)
     assert cfg.minCoherence == 0.0
     assert cfg.minStepBins == pytest.approx(1.0)
+    assert cfg.stat == STAT_PEAK
     assert lib.l3_trig_cfg_check(ctypes.byref(cfg)) == 0
 
 
@@ -308,6 +331,7 @@ def test_defaults_are_the_documented_ones_and_pass_the_check(lib):
         {"minCoherence": 1.5},
         {"minCoherence": -0.1},
         {"minStepBins": -1.0},
+        {"stat": 2},
         {"teeBin": 253, "gateBins": 3},  # record stores bins in a byte, 0xFF = none
     ],
 )
@@ -421,22 +445,66 @@ def test_one_missing_frame_does_not_break_the_track(lib):
     assert det.records()[-1].age == 4, "misses do not count as observations"
 
 
-def test_waggle_then_backswing_then_downswing_fires_on_the_downswing(lib):
-    """Moving away restarts the track; the toward-away-toward order is not required."""
+def test_fast_backswing_restarts_the_track_and_the_downswing_still_fires(lib):
+    """Retreating faster than the jitter window restarts the track; no order is required."""
     det = detector(lib)
-    for local_bin in [16, 14, 12]:  # away from the tee, 2 bins per frame
+    for local_bin in [16, 13, 10]:  # away from the tee, 3 bins per frame
         assert det.feed({local_bin: CLUB}) is False
     assert det.whys() == ["acquired", "jumped", "jumped"]
-    assert det.feed({14: CLUB}) is False
+    assert det.feed({13: CLUB}) is False
     assert det.feed({17: CLUB}) is True
     assert det.whys()[-2:] == ["advanced", "fired"]
 
 
-def test_one_bin_of_scatterer_wander_toward_the_radar_keeps_the_track(lib):
+def test_slow_backswing_within_the_jitter_window_does_not_poison_the_approach_rate(lib):
+    """A 2-bin retreat continues the track; the rate is measured from the turnaround."""
     det = detector(lib)
-    for local_bin in [10, 13, 12]:  # -1 bin is jitter, not a retreat
+    for local_bin in [16, 14, 12]:
         assert det.feed({local_bin: CLUB}) is False
     assert det.whys() == ["acquired", "advanced", "advanced"]
+    assert det.trig.trackStartBin == 12, "the nearest point is the reference"
+    assert det.feed({14: CLUB}) is False
+    assert det.feed({17: CLUB}) is True, "5 bins over 2 frames from the turnaround"
+
+
+def test_scatterer_wander_toward_the_radar_keeps_the_track(lib):
+    det = detector(lib)
+    for local_bin in [10, 13, 12, 14, 12]:  # -1 and -2 bins are jitter, not a retreat
+        assert det.feed({local_bin: CLUB}) is False
+    assert det.whys() == ["acquired", "advanced", "advanced", "advanced", "advanced"]
+
+
+def test_a_stronger_return_elsewhere_does_not_steal_the_track(lib):
+    """Clubhead, shaft, hands and reflections swap as the strongest bin; follow the track."""
+    det = detector(lib)
+    assert det.feed({10: CLUB}) is False
+    assert det.feed({12: CLUB}) is False
+    # The hands, three times stronger, light up behind the club at bin 9;
+    # outside the track's window (10..20), so the club at 15 keeps the track.
+    assert det.feed({15: CLUB, 9: 3 * CLUB}) is False
+    assert det.whys()[-1] == "advanced"
+    assert det.records()[-1].bin == 15
+    assert det.feed({18: CLUB, 9: 3 * CLUB}) is True
+    assert det.records()[-1].bin == 18
+
+
+def test_inside_the_window_the_strongest_return_leads(lib):
+    """Two returns both plausible as the club: the stronger one is the club."""
+    det = detector(lib)
+    det.feed({10: CLUB})
+    det.feed({12: CLUB})
+    det.feed({15: CLUB, 16: 3 * CLUB})  # both within 10..20 of the track at 12
+    assert det.whys()[-1] == "advanced"
+    assert det.records()[-1].bin == 16
+
+
+def test_without_a_continuation_the_strongest_return_starts_a_new_track(lib):
+    det = detector(lib)
+    det.feed({10: CLUB})
+    det.feed({12: CLUB})
+    assert det.feed({22: 3 * CLUB}) is False  # nothing near 12, so this is a jump
+    assert det.whys()[-1] == "young", "jumped into the gate at age 1"
+    assert det.trig.trackStartBin == 22
 
 
 def test_the_ball_bin_needs_no_motion_for_the_trigger_to_arm(lib):
@@ -462,7 +530,7 @@ def test_noise_alone_never_fires_and_logs_nothing(lib):
     assert det.counter("frames") == 200
     assert det.counter("cand") == 0
     assert det.records() == []
-    assert det.trig.floor == pytest.approx(NOISE, rel=0.05)
+    assert det.trig.floor == pytest.approx(NOISE * PEAK_FRACTION, rel=0.05)
 
 
 def test_a_person_walking_up_to_the_ball_is_too_slow(lib):
@@ -524,6 +592,31 @@ def test_candidates_below_snr_times_floor_are_not_candidates(lib):
     assert fired is True
 
 
+def test_peak_statistic_sees_a_club_present_for_only_part_of_the_frame(lib):
+    """Two strong loops out of twelve: modest energy, large strongest-loop power."""
+    # Energy 3x noise energy; its peak is a whole loop's worth, 12x the noise peak.
+    part_frame = {"targets": {12: 3.0 * NOISE}, "target_peak_fraction": 1.0}
+    peak = detector(lib, stat=STAT_PEAK)
+    peak.feed(part_frame["targets"], target_peak_fraction=part_frame["target_peak_fraction"])
+    assert peak.counter("cand") == 1
+    energy = detector(lib, stat=STAT_ENERGY)
+    energy.feed(part_frame["targets"], target_peak_fraction=part_frame["target_peak_fraction"])
+    assert energy.counter("cand") == 0
+
+
+def test_energy_statistic_is_selectable_and_floors_in_its_own_units(lib):
+    det = detector(lib, stat=STAT_ENERGY)
+    for _ in range(20):
+        det.feed()
+    assert det.trig.floor == pytest.approx(NOISE, rel=0.05)
+    peak = detector(lib, stat=STAT_PEAK)
+    for _ in range(20):
+        peak.feed()
+    assert peak.trig.floor == pytest.approx(NOISE * PEAK_FRACTION, rel=0.05)
+    assert "stat=energy" in det.config_line()
+    assert "stat=peak" in peak.config_line()
+
+
 # --- adaptive floor ----------------------------------------------------------
 
 
@@ -532,12 +625,12 @@ def test_floor_follows_the_room_and_the_threshold_with_it(lib):
     det = detector(lib, snr=4.0)
     for _ in range(20):
         det.feed()
-    assert det.trig.floor == pytest.approx(NOISE, rel=0.05)
+    assert det.trig.floor == pytest.approx(NOISE * PEAK_FRACTION, rel=0.05)
     assert det.feed({12: 5.0 * NOISE}) is False
     assert det.counter("cand") == 1, "5x the quiet floor is a candidate"
     for _ in range(60):
         det.feed(noise=10.0 * NOISE)
-    assert det.trig.floor == pytest.approx(10.0 * NOISE, rel=0.05)
+    assert det.trig.floor == pytest.approx(10.0 * NOISE * PEAK_FRACTION, rel=0.05)
     # The step itself reads as a candidate for the few frames the floor
     # takes to catch up (a 10x jump clears 4x the old floor); the range
     # track, not the threshold, is what keeps that from firing.
@@ -554,7 +647,7 @@ def test_floor_ignores_the_club_occupying_a_few_bins(lib):
         det.feed()
     for local_bin in [9, 10, 11, 12]:
         det.feed({local_bin: CLUB, local_bin + 1: CLUB, local_bin + 2: CLUB})
-    assert det.trig.floor == pytest.approx(NOISE, rel=0.05)
+    assert det.trig.floor == pytest.approx(NOISE * PEAK_FRACTION, rel=0.05)
 
 
 def test_floor_never_drops_to_zero(lib):
@@ -656,7 +749,8 @@ def test_record_carries_energy_floor_state_and_age(lib):
     det.feed({15: CLUB})
     record = det.records()[-1]
     assert record.energy == pytest.approx(CLUB)
-    assert record.floor == pytest.approx(NOISE, rel=0.05)
+    assert record.peak == pytest.approx(CLUB * PEAK_FRACTION)
+    assert record.floor == pytest.approx(NOISE * PEAK_FRACTION, rel=0.05)
     assert (record.state, record.age, record.bin) == (STATE_TRACKING, 2, 15)
 
 
@@ -678,7 +772,8 @@ def test_config_line_echoes_the_arming_parameters(lib):
     det = detector(lib, snr=6.5, minStepBins=1.25)
     line = det.config_line()
     assert line == (
-        "trigcfg tee=20 snr=6.50 track=2 approach=12 gate=3 mincoh=0.00 minstep=1.25 loopus=135.0"
+        "trigcfg tee=20 snr=6.50 track=2 approach=12 gate=3 mincoh=0.00 minstep=1.25 "
+        "stat=peak loopus=135.0"
     )
 
 
@@ -689,9 +784,9 @@ def test_record_line_is_human_readable_without_float_printf(lib):
     det.feed({12: CLUB}, velocity_mps=2.5)
     line = det.record_line(det.records()[0])
     assert line.startswith(
-        "frame=5 gap=4 state=tracking why=acquired bin=12 age=1 energy=6000 floor="
+        "frame=5 gap=4 state=tracking why=acquired bin=12 age=1 energy=6000 peak=1500 floor="
     )
-    assert " snr=" in line and " v=2.5" in line and line.endswith("coh=90")
+    assert " v=2.5" in line and line.endswith("coh=90")
 
 
 def test_record_line_shows_a_dash_when_no_bin_was_seen(lib):

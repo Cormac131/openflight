@@ -122,7 +122,7 @@ def test_trigger_config_disables_on_zero_frames_and_checks_the_rest():
 
     assert "if (cfg.trackFrames != 0U && l3_trig_cfg_check(&cfg) != 0)" in cfg
     assert "gTriggerEnabled = (cfg.trackFrames != 0U) ? 1U : 0U;" in cfg
-    assert "argc < 4 || argc > 8" in cfg
+    assert "argc < 4 || argc > 9" in cfg
 
 
 def test_every_ring_rearm_resets_the_detector_but_keeps_its_log():
@@ -163,8 +163,9 @@ def test_loop_means_are_computed_once_per_bin():
 
     # One pass accumulates the mean, a second applies it: two loop-index
     # loops per (tx, rx), never a mean loop nested inside the output loop.
+    # The other two are the per-loop init and the final peak/copy pass.
     assert "meanLoop" not in residual
-    assert len(re.findall(r"for \(loop = 0U; loop < loops; loop\+\+\)", residual)) == 3
+    assert len(re.findall(r"for \(loop = 0U; loop < loops; loop\+\+\)", residual)) == 4
     # The sparse rows and the trigger share that one pass.
     assert "l3_verticalResidual(slot, localBin, out, NULL);" in _function(
         "static void l3_verticalPowerLoops("
@@ -177,6 +178,10 @@ def test_residual_walks_loops_by_stride_instead_of_recomputing_indices():
     assert "l3_iq16Sample" not in residual
     assert "uint32_t loopStride = ntx * N_RX * binCount * 2U;" in residual
     assert residual.count("sample += loopStride;") == 2
+    # Energy, strongest loop and the Doppler autocorrelation come from the
+    # same pass; no second walk over the samples.
+    for field in ("obs->energy = energy;", "obs->peak = peak;", "obs->r1Re = r1Re;"):
+        assert field in residual, field
 
 
 def test_power_rows_go_out_in_one_write_per_loop():
