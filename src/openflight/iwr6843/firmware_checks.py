@@ -420,3 +420,143 @@ def lifecycle_section() -> Section:
             Check("lifecycle/restart resets counters", _check_restart_resets),
         ),
     )
+
+
+# (line, accepted?) — the firmware rules are in l3_cli_captureCfg / l3_cli_phaseCaptureCfg /
+# l3_cli_captureFormat / l3_cli_iq8Scale (firmware/iwr6843/l3_dump.c). N_SAMPLES is 128,
+# L3_MAX_CAPTURE_FRAMES is 64, L3_MAX_POST_STRIDE is 16.
+CAPTURE_CFG_CASES: tuple[tuple[str, bool], ...] = (
+    ("captureCfg 20 53 32 53 47 8", True),
+    ("captureCfg 20 53 32 53 47 8 2", True),
+    ("captureCfg 20 53 32 53 47", False),
+    ("captureCfg x 53 32 53 47 8", False),
+    ("captureCfg 300 53 32 53 47 8", False),
+    ("captureCfg 20 0 32 53 47 8", False),
+    ("captureCfg 100 53 32 53 47 8", False),
+    ("captureCfg 20 53 32 53 47 64", False),
+    ("captureCfg 20 53 32 53 47 8 17", False),
+)
+PHASE_CAPTURE_CFG_CASES: tuple[tuple[str, bool], ...] = (
+    ("phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1", True),
+    ("phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8", False),
+    ("phaseCaptureCfg 20 53 x 32 53 7 47 53 47 8 1", False),
+    ("phaseCaptureCfg 20 53 0 32 53 7 47 53 47 8 1", False),
+    ("phaseCaptureCfg 20 53 9 32 53 30 47 53 47 34 1", False),
+    ("phaseCaptureCfg 20 53 9 32 53 7 100 53 47 8 1", False),
+    ("phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 17", False),
+)
+CAPTURE_FORMAT_CASES: tuple[tuple[str, bool], ...] = (
+    ("captureFormat iq16", True),
+    ("captureFormat iq8", True),
+    ("captureFormat iq32", False),
+    ("captureFormat", False),
+)
+IQ8_SCALE_CASES: tuple[tuple[str, bool], ...] = (
+    ("iq8Scale 16", True),
+    ("iq8Scale 32", True),
+    ("iq8Scale 64", True),
+    ("iq8Scale 128", True),
+    ("iq8Scale 256", True),
+    ("iq8Scale 8", False),
+    ("iq8Scale 512", False),
+    ("iq8Scale 48", False),
+    ("iq8Scale abc", False),
+)
+
+
+def _run_validation_table(
+    ctx: Context, name: str, cases: tuple[tuple[str, bool], ...], echo: str | None = None
+) -> CheckResult:
+    """Send each line; accepted ones must not Error (and must ``echo``), refused ones must."""
+    wrong: list[str] = []
+    for line, expect_ok in cases:
+        reply = ctx.radar.cmd(line, 2.0)
+        refused = "Error" in reply
+        if expect_ok and refused:
+            wrong.append(f"refused {line!r}")
+        elif not expect_ok and not refused:
+            wrong.append(f"accepted {line!r}")
+        elif expect_ok and echo is not None and echo not in reply:
+            wrong.append(f"no {echo!r} echo for {line!r}")
+    if wrong:
+        return failed(name, "; ".join(wrong))
+    return passed(name, f"{len(cases)} lines behaved")
+
+
+def _check_capture_cfg(ctx: Context) -> CheckResult:
+    return _run_validation_table(ctx, "profiles/captureCfg validation", CAPTURE_CFG_CASES)
+
+
+def _check_phase_capture_cfg(ctx: Context) -> CheckResult:
+    return _run_validation_table(
+        ctx, "profiles/phaseCaptureCfg validation", PHASE_CAPTURE_CFG_CASES
+    )
+
+
+def _check_capture_format(ctx: Context) -> CheckResult:
+    return _run_validation_table(
+        ctx, "profiles/captureFormat", CAPTURE_FORMAT_CASES, echo="Capture format:"
+    )
+
+
+def _check_iq8_scale(ctx: Context) -> CheckResult:
+    return _run_validation_table(ctx, "profiles/iq8Scale", IQ8_SCALE_CASES, echo="IQ8 fixed scale:")
+
+
+def expected_profile_shape(cfg_path: str | Path) -> tuple[str | None, int | None]:
+    """``(format, stride)`` a .cfg declares; stride None for a 6-value captureCfg."""
+    fmt: str | None = None
+    stride: int | None = None
+    for raw_line in Path(cfg_path).read_text(encoding="utf-8").splitlines():
+        fields = raw_line.split()
+        if not fields:
+            continue
+        if fields[0] == "captureFormat" and len(fields) > 1:
+            fmt = fields[1]
+        elif fields[0] == "phaseCaptureCfg" and len(fields) == 12:
+            stride = int(fields[11])
+        elif fields[0] == "captureCfg" and len(fields) == 8:
+            stride = int(fields[7])
+    return fmt, stride
+
+
+def _profile_check(cfg_path: str) -> Check:
+    stem = Path(cfg_path).stem
+    name = f"profiles/profile {stem} loads"
+
+    def run(ctx: Context) -> CheckResult:
+        want_fmt, want_stride = expected_profile_shape(cfg_path)
+        ctx.radar.send_config(cfg_path)
+        try:
+            snap = stats_snapshot(ctx)
+        finally:
+            ctx.radar.stop_sensor()
+        problems = []
+        if snap.active != 1:
+            problems.append(f"active={snap.active}")
+        if want_fmt is not None and snap.format != want_fmt:
+            problems.append(f"format={snap.format} want {want_fmt}")
+        if want_stride is not None and snap.stride != want_stride:
+            problems.append(f"stride={snap.stride} want {want_stride}")
+        if snap.used is not None and snap.capacity is not None and snap.used > snap.capacity:
+            problems.append(f"used={snap.used} > capacity={snap.capacity}")
+        if problems:
+            return failed(name, "; ".join(problems))
+        return passed(
+            name,
+            f"format={snap.format} plan={snap.plan_pre}pre/{snap.plan_post}post used={snap.used}/{snap.capacity}",
+        )
+
+    return Check(name, run)
+
+
+def profiles_section(profiles: tuple[str, ...]) -> Section:
+    """Argument validation of the capture commands, then each shipped profile loads."""
+    checks = [
+        Check("profiles/captureCfg validation", _check_capture_cfg),
+        Check("profiles/phaseCaptureCfg validation", _check_phase_capture_cfg),
+        Check("profiles/captureFormat", _check_capture_format),
+        Check("profiles/iq8Scale", _check_iq8_scale),
+    ]
+    checks.extend(_profile_check(path) for path in profiles)
+    return Section("profiles", "stopped", tuple(checks))

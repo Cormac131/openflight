@@ -457,3 +457,123 @@ def test_lifecycle_restart_resets_counters(monkeypatch):
     same = _lifecycle_radar(stats=_stats_counting(start=50000, step=100))
     monkeypatch.setattr(same, "send_config", lambda cfg: None)
     assert check.run(_ctx(same)).status == "FAIL"
+
+
+def _validating(prefix, ok_reply):
+    """Reply Error for lines the firmware would refuse, ok_reply otherwise (table-driven)."""
+    table = {
+        "captureCfg": fc.CAPTURE_CFG_CASES,
+        "phaseCaptureCfg": fc.PHASE_CAPTURE_CFG_CASES,
+        "captureFormat": fc.CAPTURE_FORMAT_CASES,
+        "iq8Scale": fc.IQ8_SCALE_CASES,
+    }[prefix]
+    expected = dict(table)
+
+    class Port(ScriptedSerial):
+        def write(self, data):
+            line = data.decode().strip()
+            self.written.append(line)
+            if line.startswith(prefix):
+                good = expected.get(line, False)
+                self.inject(ok_reply(line) if good else f"Error: {prefix} rejected\n".encode())
+            else:
+                self.inject(b"Done\n")
+
+    from openflight.iwr6843.driver import IWR6843Radar
+
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = Port({})
+    radar.port = "scripted"
+    radar._trigger_pending = b""
+    return radar
+
+
+def test_profiles_section_names_match_the_spec():
+    section = fc.profiles_section(("config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg",))
+
+    assert _names(section) == [
+        "profiles/captureCfg validation",
+        "profiles/phaseCaptureCfg validation",
+        "profiles/captureFormat",
+        "profiles/iq8Scale",
+        "profiles/profile iwr6843_l3dump_wide_24f3ms_53bin_iq16 loads",
+    ]
+    assert section.sensor == "stopped"
+
+
+def test_capture_cfg_cases_cover_the_spec_table():
+    lines = dict(fc.CAPTURE_CFG_CASES)
+    assert lines["captureCfg 20 53 32 53 47 8"] is True
+    assert lines["captureCfg 20 53 32 53 47 8 2"] is True
+    assert lines["captureCfg 20 53 32 53 47"] is False  # wrong count
+    assert lines["captureCfg x 53 32 53 47 8"] is False  # non-integer
+    assert lines["captureCfg 300 53 32 53 47 8"] is False  # above 255
+    assert lines["captureCfg 20 0 32 53 47 8"] is False  # zero pre bins
+    assert lines["captureCfg 100 53 32 53 47 8"] is False  # window past 128
+    assert lines["captureCfg 20 53 32 53 47 64"] is False  # post frames at the cap
+
+
+def test_capture_cfg_validation_passes_and_fails_by_table():
+    check = fc.profiles_section(()).checks[0]
+
+    good = check.run(_ctx(_validating("captureCfg", lambda _l: b"Done\n")))
+    assert good.status == "PASS"
+
+    lax = scripted_radar({"captureCfg": b"Done\n"})  # accepts every line, even the bad ones
+    result = check.run(_ctx(lax))
+    assert result.status == "FAIL" and "accepted" in result.detail
+
+
+def test_capture_format_and_iq8_scale_echo_their_values():
+    fmt = fc.profiles_section(()).checks[2]
+    scale = fc.profiles_section(()).checks[3]
+
+    fmt_radar = _validating(
+        "captureFormat", lambda line: f"Capture format: {line.split()[1]}\nDone\n".encode()
+    )
+    scale_radar = _validating(
+        "iq8Scale",
+        lambda line: f"IQ8 fixed scale: {line.split()[1]} (HWA shift 6)\nDone\n".encode(),
+    )
+
+    assert fmt.run(_ctx(fmt_radar)).status == "PASS"
+    assert scale.run(_ctx(scale_radar)).status == "PASS"
+
+    silent = _validating("captureFormat", lambda _l: b"Done\n")
+    result = fmt.run(_ctx(silent))
+    assert result.status == "FAIL" and "echo" in result.detail
+
+
+def test_expected_profile_shape_reads_the_cfg(tmp_path):
+    cfg = tmp_path / "p.cfg"
+    cfg.write_text(
+        "captureFormat iq8\niq8Scale 128\nphaseCaptureCfg 20 53 8 32 53 10 47 53 64 27 1\nsensorStart\n"
+    )
+    plain = tmp_path / "q.cfg"
+    plain.write_text("captureFormat iq16\ncaptureCfg 20 53 32 53 47 8\nsensorStart\n")
+
+    assert fc.expected_profile_shape(cfg) == ("iq8", 1)
+    assert fc.expected_profile_shape(plain) == ("iq16", None)
+
+
+def test_profile_load_check_compares_format_stride_and_capacity(tmp_path, monkeypatch):
+    cfg = tmp_path / "wide.cfg"
+    cfg.write_text(
+        "captureFormat iq16\nphaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1\nsensorStart\n"
+    )
+    check = fc.profiles_section((str(cfg),)).checks[-1]
+
+    def radar_with(fmt, stride, used, cap):
+        radar = scripted_radar(
+            {
+                "stats": f"frames=9 active=1 format={fmt} plan=16pre/8post used={used}/{cap}\nstride={stride}\nDone\n".encode()
+            }
+        )
+        monkeypatch.setattr(radar, "send_config", lambda p: None)
+        monkeypatch.setattr(radar, "stop_sensor", lambda: None)
+        return radar
+
+    assert check.run(_ctx(radar_with("iq16", 1, 100, 200))).status == "PASS"
+    assert check.run(_ctx(radar_with("iq8", 1, 100, 200))).status == "FAIL"
+    assert check.run(_ctx(radar_with("iq16", 2, 100, 200))).status == "FAIL"
+    assert check.run(_ctx(radar_with("iq16", 1, 300, 200))).status == "FAIL"
