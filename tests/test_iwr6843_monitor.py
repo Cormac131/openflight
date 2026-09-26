@@ -609,6 +609,60 @@ def test_notice_while_disarmed_releases_the_ring_and_never_captures(tmp_path):
     monitor.stop()
 
 
+class _FlakyReleaseRadar(SelfTriggerRadar):
+    """Release fails ``failures`` times before succeeding."""
+
+    def __init__(self, raw: bytes, failures: int):
+        super().__init__(raw)
+        self.failures = failures
+        self.attempts = 0
+
+    def release_sparse_freeze(self) -> None:
+        self.attempts += 1
+        if self.attempts <= self.failures:
+            raise RuntimeError("l3sparse release timed out")
+        super().release_sparse_freeze()
+
+
+def test_a_failed_release_is_retried_until_the_ring_rearms(tmp_path, monkeypatch):
+    """One failed release must not leave the firmware frozen for the rest of the session."""
+    monkeypatch.setattr(iwr_monitor, "_LISTENER_ERROR_BACKOFF_S", 0.0)
+    radar = _FlakyReleaseRadar(_raw_dump(), failures=2)
+    monitor = _self_trigger_monitor(tmp_path, radar)
+    monitor.start(armed=False)
+    radar.notices.append(b"Triggered\n")
+
+    assert _wait_until(lambda: radar.releases == 1)
+    assert radar.attempts == 3
+    monitor.stop()
+
+
+def test_a_rejected_notice_while_armed_releases_the_ring(tmp_path, monkeypatch):
+    """A duplicate/busy rejection still froze the firmware; somebody must release it."""
+    radar = SelfTriggerRadar(_raw_dump())
+    monitor = _self_trigger_monitor(tmp_path, radar)
+    monitor.start()
+    monkeypatch.setattr(monitor, "notify_trigger", lambda *_args, **_kwargs: False)
+    radar.notices.append(b"Triggered\n")
+
+    assert _wait_until(lambda: radar.releases == 1)
+    assert radar.read_started_at is None
+    monitor.stop()
+
+
+def test_an_accepted_notice_is_not_released(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    monitor = _self_trigger_monitor(tmp_path, radar)
+    monitor.start()
+    radar.notices.append(b"Triggered\n")
+
+    capture = monitor.capture_for_shot(None, timeout_s=1.0)
+
+    assert capture is not None and capture.valid
+    assert radar.releases == 0
+    monitor.stop()
+
+
 def test_notice_split_across_reads_still_triggers(tmp_path):
     radar = SelfTriggerRadar(_raw_dump())
     monitor = _self_trigger_monitor(tmp_path, radar)

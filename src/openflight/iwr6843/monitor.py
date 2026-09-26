@@ -261,6 +261,8 @@ class IWR6843CaptureMonitor:
         # Firmware picks the cells itself (l3track). Cleared if it cannot.
         self.onboard_tracking = onboard_tracking
         self._trigger_notice = b""
+        # A frozen ring nobody will read. Retried until the release succeeds.
+        self._release_pending = False
 
     @property
     def watch_self_trigger(self) -> bool:
@@ -447,20 +449,17 @@ class IWR6843CaptureMonitor:
         The read returns as soon as a byte arrives, so the trigger reaches the
         OPS within about a millisecond of the notice instead of a poll period.
         """
-        found, self._trigger_notice = self.radar.wait_trigger_notice(self._trigger_notice)
-        if not found:
-            return
-        if self._armed:
-            self.notify_trigger()
-            return
-        # The firmware froze its ring and waits for l3sparse. Nobody will ask
-        # for this one, so release it now; otherwise the stale notice would
-        # fire a phantom capture at arm time and the ring would stay frozen.
-        logger.info("[IWR6843] Self-trigger fired while disarmed; releasing the frozen ring")
-        try:
-            self.radar.release_sparse_freeze()
-        except Exception:  # pylint: disable=broad-exception-caught
-            logger.warning("[IWR6843] Could not release the frozen ring", exc_info=True)
+        if not self._release_pending:
+            found, self._trigger_notice = self.radar.wait_trigger_notice(self._trigger_notice)
+            if not found or self.notify_trigger():
+                return
+            # Disarmed, busy or a duplicate: the firmware froze its ring and
+            # waits for l3sparse, but no capture will ask for it.
+            logger.info("[IWR6843] Releasing an unaccepted self-trigger capture")
+            self._release_pending = True
+        # Raises on failure; the caller backs off and this retries next pass.
+        self.radar.release_sparse_freeze()
+        self._release_pending = False
 
     def _next_event(self):
         """Next queued edge/job/stop. Listens for the self-trigger while idle."""
