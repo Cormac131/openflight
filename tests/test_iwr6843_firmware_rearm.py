@@ -11,6 +11,7 @@ CONFIG_DIR = Path(__file__).parents[1] / "config"
 WIDE_CONFIG = CONFIG_DIR / "iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
 DENSE_CONFIG = CONFIG_DIR / "iwr6843_l3dump_dense_45f2ms_53bin_iq8.cfg"
 DENSE_WIDE_LATE_CONFIG = CONFIG_DIR / "iwr6843_l3dump_dense_36f2ms_53bin_iq8_wide_late.cfg"
+DENSE_51_CONFIG = CONFIG_DIR / "iwr6843_l3dump_dense_51f2ms_53bin_iq8.cfg"
 
 
 def _function_source(source: str, name: str, next_name: str) -> str:
@@ -251,6 +252,20 @@ def test_dense_wide_late_profile_keeps_dense_timing_and_near_late_window():
     assert "captureFormat iq8" in lines
     assert "iq8Scale 128" in lines
     assert "phaseCaptureCfg 20 53 14 32 53 10 47 53 47 12 1" in lines
+
+
+def test_dense_51_profile_extends_the_ball_phase_at_2ms():
+    commands = {line.split()[0]: line.split() for line in _config_lines(DENSE_51_CONFIG)}
+    frame = commands["frameCfg"]
+    phase = commands["phaseCaptureCfg"]
+    assert float(frame[5]) == 2.0
+    assert int(frame[3]) == 12
+    assert commands["captureFormat"][1] == "iq8"
+    # preFrames, impactFrames, ballFrames
+    assert [int(phase[3]), int(phase[6]), int(phase[10])] == [8, 10, 33]
+    assert sum((int(phase[3]), int(phase[6]), int(phase[10]))) == 51
+    # every window is 53 bins
+    assert [int(phase[2]), int(phase[5]), int(phase[8])] == [53, 53, 53]
 
 
 def test_supported_profiles_keep_their_capture_duration():

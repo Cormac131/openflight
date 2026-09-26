@@ -67,8 +67,9 @@ firmware. Selected with `--iwr6843-config`.
 | `iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` | Wide, 24 frames × 3 ms, 53 bins, IQ16. **Default.** |
 | `iwr6843_l3dump_dense_45f2ms_53bin_iq8.cfg` | Dense, 45 frames × 2 ms, 53 bins, IQ8, 54 ms ball phase |
 | `iwr6843_l3dump_dense_36f2ms_53bin_iq8_wide_late.cfg` | Experimental dense IQ8 profile that keeps the wide profile's late-flight window |
+| `iwr6843_l3dump_dense_51f2ms_53bin_iq8.cfg` | Experimental dense IQ8 profile, 51 frames × 2 ms, 53 bins, 66 ms ball phase. Not validated against TrackMan. |
 
-All three work with the same flashed image — the profile is selected at runtime, not
+All four work with the same flashed image — the profile is selected at runtime, not
 at flash time. See
 [choosing a profile](../iwr6843/index.md#choose-a-profile).
 

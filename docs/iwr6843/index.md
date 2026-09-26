@@ -41,13 +41,13 @@ Flash one configurable firmware image, then select a runtime profile:
 
 ### Choose A Profile
 
-| Profile | Wide/default | Dense/advanced | Dense/wide-late experimental |
-|---|---:|---:|---:|
-| Frames and spacing | 24 at 3 ms | 45 at 2 ms | 36 at 2 ms |
-| Saved window | 53 bins | 53 bins | 53 bins |
-| Storage | IQ16 | Fixed-scale IQ8 | Fixed-scale IQ8 |
-| Complete dump | 732,812 bytes | 687,194 bytes | 549,764 bytes |
-| Choose it for | Ball flight and setup tolerance | 54 ms ball phase at 2 ms | Testing slower-shot late-flight coverage |
+| Profile | Wide/default | Dense/advanced | Dense/wide-late experimental | Dense/51-frame experimental |
+|---|---:|---:|---:|---:|
+| Frames and spacing | 24 at 3 ms | 45 at 2 ms | 36 at 2 ms | 51 at 2 ms |
+| Saved window | 53 bins | 53 bins | 53 bins | 53 bins |
+| Storage | IQ16 | Fixed-scale IQ8 | Fixed-scale IQ8 | Fixed-scale IQ8 |
+| Complete dump | 732,812 bytes | 687,194 bytes | 549,764 bytes | 778,464 bytes |
+| Choose it for | Ball flight and setup tolerance | 54 ms ball phase at 2 ms | Testing slower-shot late-flight coverage | 66 ms ball phase at 2 ms |
 
 Start with **wide/default**. Its wider range window is more tolerant of tee
 placement, ball speed, and setup geometry, while IQ16 retains full signal
@@ -66,6 +66,14 @@ movie and leaves every ball frame in bins 47-99. The standard dense profile's
 last 14 ball frames shift outward to bins 64-116. Use the wide-late profile to
 test whether that outward shift, rather than IQ8 storage, causes reduced
 accuracy on slower shots. It has not been validated against TrackMan.
+
+The **dense/51-frame experimental** profile
+(`config/iwr6843_l3dump_dense_51f2ms_53bin_iq8.cfg`) extends the same 2 ms, 8
+pre / 10 impact frame timing to a 33-frame, 66 ms ball phase — a 102 ms total
+movie fitting the freed 786,432-byte L3 arena with 7,968 bytes to spare. It is
+not the default and has not been validated against TrackMan; treat its
+horizontal, club, and spin metrics as experimental until a source-of-truth
+session confirms accuracy at this longer ball-phase length.
 
 Changing profiles does not require reflashing. It changes only the config
 passed to `--iwr6843-config`. All profiles use the same host-side mount-tilt
