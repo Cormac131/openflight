@@ -236,15 +236,18 @@ _Static_assert(sizeof(g_iq16FrameScratch) <= 0x18000U,
                "IQ16 scratch exceeds its DATA_RAM allowance");
 #endif
 static L3CapturePlan gCapturePlan = {
-    L3_DEFAULT_PRE_START,
-    L3_DEFAULT_PRE_BINS,
-    L3_DEFAULT_POST_START,
-    L3_DEFAULT_POST_BINS,
-    L3_DEFAULT_LATE_START,
-    L3_DEFAULT_POST_FRAMES,
-    L3_DEFAULT_POST_STRIDE,
-    0U, 0U, 0U, 0U, 0U, 0U, 0U,
-    0U, 0U, 0U, 0U, 0U, 0U, 0U
+    .preStart = L3_DEFAULT_PRE_START,
+    .preBins = L3_DEFAULT_PRE_BINS,
+    .postStart = L3_DEFAULT_POST_START,
+    .postBins = L3_DEFAULT_POST_BINS,
+    .lateStart = L3_DEFAULT_LATE_START,
+    .postFrames = L3_DEFAULT_POST_FRAMES,
+    .postStride = L3_DEFAULT_POST_STRIDE,
+    /* preFrames, totalFrames, loops, chirpsPerFrame, preFrameBytes,
+     * postFrameBytes, postBaseOffset, usedBytes, phased,
+     * requestedPreFrames, impactStart, impactBins, impactFrames,
+     * ballFrames and impactFrameBytes are all zero-initialized and are
+     * recomputed by l3plan_build(). */
 };
 static uint8_t gFrameBinStart[L3_MAX_CAPTURE_FRAMES];
 static uint8_t gFrameBinCount[L3_MAX_CAPTURE_FRAMES];
@@ -954,11 +957,14 @@ static void l3_hwaMaybeQueueRearm(void)
             if (gHwaFreezeRequested && !gActiveFrameIsPost) {
                 gPostCaptureStarted = 1U;
             }
-            /* UNRESOLVED: this arm sets gHwaRearmPending unconditionally, unlike the
-             * IQ16 arm below, which gates it on l3_shouldFreezeNow(). Whether that is
-             * deliberate is not established. Do not collapse these two bodies until a
-             * test pins the intended behaviour: see
-             * docs/superpowers/specs/2026-09-25-iwr6843-longer-movie-design.md. */
+            /* This arm queues unconditionally, unlike the IQ16 arm below, which
+             * gates queuing on l3_shouldFreezeNow(). That is deliberate: for IQ8
+             * the completed scratch frame must still be packed by l3_hwaRearmTask
+             * before it can be reused, even on the frame that satisfies the
+             * freeze condition, so the freeze decision itself is deferred to that
+             * task rather than made here. l3_hwaRearmTask re-evaluates
+             * l3_shouldFreezeNow() after packing (l3_dump.c:1944) and freezes
+             * there when it holds. Do not collapse these two bodies. */
             gHwaRearmPending = 1U;
             queue = 1U;
         } else if (l3_shouldFreezeNow()) {

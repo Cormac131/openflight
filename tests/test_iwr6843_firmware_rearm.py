@@ -492,11 +492,13 @@ def test_l3_total_bytes_is_derived_from_the_sdk_bank_defines():
 
 
 def test_derived_arena_matches_the_linker_region(tmp_path):
-    """The C's arena expression must equal the map's actual L3_RAM length.
+    """Pin the 6-bank arena geometry the derived L3_TOTAL_BYTES relies on.
 
-    This is the check that makes deriving worthwhile: it fails if the two ever
-    disagree, whichever side changed. Skips without a local build, like the
-    other map-based checks.
+    This does not read l3_dump.c or the bank-count defines themselves (see
+    test_l3_total_bytes_is_derived_from_the_sdk_bank_defines for that); it
+    only pins that the linker's L3_RAM region is still 6 * 128 KiB, which is
+    the assumption MMWAVE_L3RAM_NUM_BANK * MMWAVE_SHMEM_BANK_SIZE must keep
+    matching. Skips without a local build, like the other map-based checks.
     """
     from tests.test_iwr6843_memory_layout import _memory_rows
 
