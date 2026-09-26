@@ -432,22 +432,58 @@ def test_oversized_plan_is_trimmed_and_reported():
     assert capture.truncated
 
 
-def test_release_requests_no_cells():
-    cube = _cube(n_tx=2)
-    serial = FakeSparseSerial(cube=cube, n_tx=2, summary=vertical_loop_power(cube, n_tx=2))
+class _CliSerial:
+    """One CLI reply, delivered when the host writes."""
 
-    _radar(serial).release_sparse_freeze()
+    def __init__(self, reply: bytes):
+        self.reply = reply
+        self.written: list[bytes] = []
+        self._buffer = bytearray()
 
-    assert serial.written == [b"l3sparse\n", b"cells 0\n"]
+    @property
+    def in_waiting(self) -> int:
+        return len(self._buffer)
+
+    def read(self, count: int) -> bytes:
+        count = min(count, len(self._buffer))
+        chunk = bytes(self._buffer[:count])
+        del self._buffer[:count]
+        return chunk
+
+    def write(self, data: bytes) -> None:
+        self.written.append(data)
+        self._buffer += self.reply
+
+    def reset_input_buffer(self) -> None:
+        self._buffer.clear()
 
 
-def test_release_on_firmware_without_sparse_raises():
-    serial = FakeSparseSerial(
-        cube=None, n_tx=2, summary=None, before_power=b"'l3sparse' is not recognized\n"
-    )
+def test_release_is_one_command_with_no_cell_line():
+    serial = _CliSerial(b"Done\n")
+    radar = _radar(serial)
+    radar._trigger_pending = b""
 
-    with pytest.raises(RuntimeError, match="not released"):
-        _radar(serial).release_sparse_freeze(timeout_s=0.5)
+    radar.release_sparse_freeze()
+
+    assert serial.written == [b"l3release\n"]
+
+
+def test_release_reports_the_firmware_error_text():
+    serial = _CliSerial(b"Error: self-trigger freeze timed out\n")
+    radar = _radar(serial)
+    radar._trigger_pending = b""
+
+    with pytest.raises(RuntimeError, match="freeze timed out"):
+        radar.release_sparse_freeze()
+
+
+def test_release_on_firmware_without_the_command_raises():
+    serial = _CliSerial(b"'l3release' is not recognized as a CLI command\n")
+    radar = _radar(serial)
+    radar._trigger_pending = b""
+
+    with pytest.raises(RuntimeError, match="no l3release"):
+        radar.release_sparse_freeze()
 
 
 # --- runtime planner ---------------------------------------------------------------
@@ -508,3 +544,236 @@ def test_planner_failure_still_answers_the_frozen_firmware():
     with pytest.raises(ValueError, match="RANSAC"):
         _radar(serial).read_sparse(failing_planner)
     assert serial.written == [b"l3sparse\n", b"cells 0\n"]
+
+
+# --- l3track: firmware-planned cells --------------------------------------
+
+import pytest  # noqa: E402
+
+from openflight.iwr6843.driver import UnsupportedCommand  # noqa: E402
+from openflight.iwr6843.sparse import (  # noqa: E402
+    TRACK_MAGIC,
+    CaptureLayout,
+    OnboardTrack,
+    parse_track,
+    plan_cells,
+    track_packet_size,
+)
+
+_TRACK = OnboardTrack(
+    found=True,
+    n_inliers=42,
+    slope_bins=960.0,
+    intercept_bins=49.5,
+    rms_bins=0.25,
+    t_first=0.001,
+    t_last=0.030,
+)
+
+
+def _track_packet(summary, track=_TRACK) -> bytes:
+    return summary.header_bytes(TRACK_MAGIC) + track.to_bytes()
+
+
+class _StreamSerial:
+    """Serves one fixed byte stream, whatever is written."""
+
+    def __init__(self, stream: bytes):
+        self._stream = stream
+        self.written = b""
+
+    @property
+    def in_waiting(self) -> int:
+        return len(self._stream)
+
+    def read(self, count: int) -> bytes:
+        chunk, self._stream = self._stream[:count], self._stream[count:]
+        return chunk
+
+    def write(self, data: bytes) -> None:
+        self.written += data
+
+    def reset_input_buffer(self) -> None:
+        return None
+
+
+def _track_radar(stream: bytes) -> IWR6843Radar:
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = _StreamSerial(stream)
+    return radar
+
+
+def test_track_packet_round_trip_keeps_windowed_layout():
+    geometry = Geometry(
+        n_frames=3,
+        chirps_per_frame=8,
+        n_tx=2,
+        n_rx=4,
+        n_samples=16,
+        frame_period_s=0.003,
+        trigger_frame=0,
+        range_bin_start=20,
+        range_fft_size=128,
+        range_bin_starts=(20, 20, 32),
+        range_bin_counts=(16, 16, 12),
+    )
+    layout = CaptureLayout(n_tx=3, n_rx=4, n_loops=4, noise_power=0.0, geometry=geometry)
+    raw = _track_packet(layout)
+
+    assert track_packet_size(raw) == len(raw)
+    parsed, track = parse_track(raw)
+
+    assert parsed.n_tx == 3 and parsed.n_loops == 4
+    assert parsed.geometry.range_bin_starts == (20, 20, 32)
+    assert parsed.geometry.range_bin_counts == (16, 16, 12)
+    assert track.found and track.n_inliers == 42
+    assert track.slope_bins == pytest.approx(960.0)
+    assert track.t_last == pytest.approx(0.030)
+
+
+def test_track_packet_size_before_header_arrives():
+    assert track_packet_size(b"ILT1") == track_packet_size(b"")
+
+
+def test_parse_track_rejects_power_packet_and_short_record():
+    summary = vertical_loop_power(_cube(n_tx=2), n_tx=2)
+
+    with pytest.raises(ValueError, match="missing ILT1"):
+        parse_track(summary.to_bytes())
+    with pytest.raises(ValueError, match="short"):
+        parse_track(_track_packet(summary)[:-1])
+
+
+def test_onboard_track_becomes_ball_track():
+    res = 6.0 / 128
+    track = _TRACK.ball_track(res)
+
+    assert track.speed_ms == pytest.approx(960.0 * res)
+    assert track.bin_at(0.01) == pytest.approx(960.0 * 0.01 + 49.5)
+    assert track.quad_bins is None
+    assert not track.low_confidence
+
+
+def test_onboard_track_flags_short_or_ragged_walks():
+    short = OnboardTrack(True, 9, 960.0, 49.5, 0.1, 0.001, 0.010)
+    ragged = OnboardTrack(True, 30, 960.0, 49.5, 0.5, 0.001, 0.030)
+
+    assert short.ball_track(0.05).low_confidence
+    assert ragged.ball_track(0.05).low_confidence
+
+
+def test_missing_onboard_track_is_none():
+    assert OnboardTrack(False, 0, 0.0, 0.0, 0.0, 0.0, 0.0).ball_track(0.05) is None
+
+
+def test_driver_reads_firmware_track_then_cells():
+    cube = _cube(n_tx=2)
+    summary = vertical_loop_power(cube, n_tx=2)
+    cells = [(0, 1), (2, 4)]
+    stream = b"l3track\n" + _track_packet(summary) + summary.pack_slices(cube, cells) + b"Done\n"
+    radar = _track_radar(stream)
+
+    raw, noise, track = radar.read_tracked()
+
+    assert radar.ser.written == b"l3track\n"
+    assert track == parse_track(_track_packet(summary))[1]
+    assert noise == summary.noise_power
+    _meta, rebuilt = parse_dump(raw)
+    for frame, local in cells:
+        expected = np.clip(np.round(cube[frame, :, :, local]), -32768, 32767)
+        np.testing.assert_allclose(rebuilt[frame, :, :, local], expected)
+    untouched = np.ones(rebuilt.shape[-1], dtype=bool)
+    untouched[[1, 4]] = False
+    assert not np.any(rebuilt[1][..., untouched])
+
+
+def test_driver_track_with_zero_cells_is_an_empty_dump():
+    summary = vertical_loop_power(_cube(n_tx=2), n_tx=2)
+    no_ball = OnboardTrack(False, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    radar = _track_radar(_track_packet(summary, no_ball) + b"ILS1\x00\x00")
+
+    raw, _noise, track = radar.read_tracked()
+
+    assert not track.found
+    _meta, rebuilt = parse_dump(raw)
+    assert not np.any(rebuilt)
+
+
+def test_old_firmware_without_l3track_raises_unsupported():
+    radar = _track_radar(b"l3track\n'l3track' is not recognized as a CLI command\n")
+
+    with pytest.raises(UnsupportedCommand):
+        radar.read_tracked(timeout_s=0.2)
+
+
+def test_firmware_refusal_before_streaming_returns_none():
+    radar = _track_radar(b"l3track\nError: l3track needs trackCfg\n")
+
+    assert radar.read_tracked(timeout_s=0.2) is None
+
+
+def test_track_stream_that_breaks_mid_cells_raises():
+    """The ring is already rearmed, so the caller must not fall back."""
+    cube = _cube(n_tx=2)
+    summary = vertical_loop_power(cube, n_tx=2)
+    cells_packet = summary.pack_slices(cube, [(0, 1), (2, 4)])
+    radar = _track_radar(_track_packet(summary) + cells_packet[:-10])
+
+    with pytest.raises(RuntimeError, match="cell packet ended early"):
+        radar.read_tracked(timeout_s=0.2)
+
+
+def test_track_stream_that_breaks_in_header_raises():
+    summary = vertical_loop_power(_cube(n_tx=2), n_tx=2)
+    radar = _track_radar(_track_packet(summary)[:-3])
+
+    with pytest.raises(RuntimeError, match="packet ended early"):
+        radar.read_tracked(timeout_s=0.2)
+
+
+def test_read_sparse_still_returns_none_on_old_firmware():
+    radar = _track_radar(b"'l3sparse' is not recognized as a CLI command\n")
+
+    assert radar.read_sparse(lambda _summary: [], timeout_s=0.2) is None
+
+
+def test_plan_cells_without_club_gate_is_the_track_walk():
+    frames, loops, n_rx, bins = 8, 6, 4, 28
+    rng = np.random.default_rng(1)
+    chirps = loops * 2
+    values = rng.normal(size=(frames, chirps, n_rx, bins)) + 1j * rng.normal(
+        size=(frames, chirps, n_rx, bins)
+    )
+    cube = values.astype(np.complex64)
+    for frame in range(frames):
+        cube[frame, 0, :, 4 + 3 * frame] += 80
+        cube[frame, 1, :, 4 + 3 * frame] += 80
+    geometry = Geometry(
+        n_frames=8,
+        chirps_per_frame=12,
+        n_tx=2,
+        n_rx=4,
+        n_samples=28,
+        frame_period_s=0.003,
+        trigger_frame=0,
+        range_bin_start=50,
+        range_fft_size=128,
+    )
+    summary = vertical_loop_power(cube, n_tx=2, geometry=geometry)
+    track = find_ball(mti_filter(cube, range_domain=True), geometry)
+
+    assert track is not None
+    assert plan_cells(summary, max_range_m=None, club_gate_m=None) == track_cells(track, geometry)
+
+
+def test_error_bytes_inside_the_cell_payload_are_not_a_cli_error():
+    """Binary samples can spell 'Error'; only text before the magic counts."""
+    cube = _cube(n_tx=2)
+    summary = vertical_loop_power(cube, n_tx=2)
+    cells_packet = bytearray(summary.pack_slices(cube, [(0, 1)]))
+    cells_packet[10:15] = b"Error"
+    radar = _track_radar(_track_packet(summary) + bytes(cells_packet))
+
+    raw, _noise, _track = radar.read_tracked(timeout_s=0.5)
+
+    assert raw.startswith(b"ILD1")

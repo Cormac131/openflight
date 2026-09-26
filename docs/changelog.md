@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The IWR6843 can pick its own track cells (`l3track`).** The firmware now
+  runs the ball tracker and cell selection the Pi ran for `l3sparse`
+  (`firmware/iwr6843/track_select.c`). It streams only the chosen cells, so
+  the ~61 KB residual-power map and the host round trip are gone. At startup
+  the server sends the rig limits with `trackCfg`. Older firmware answers
+  "not recognized", and the Pi keeps planning cells as before.
+  `--no-iwr6843-onboard-track` forces host planning. Launch-angle maths still
+  runs on the Pi. `tests/test_iwr6843_track_select.py` builds the C file with
+  the host compiler and checks it names the same cells as the Python planner.
+  The prebuilt image in `firmware/releases/` has not been rebuilt yet.
+
 ### Changed
 - **Chromium fallback is reachable during Electron upgrades.** If `ui/dist`
   already exists, a missing Electron install no longer requires Node 22.12 and

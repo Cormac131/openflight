@@ -2,7 +2,8 @@
 
 l3_dump.c cannot build here (it needs the mmWave SDK); these pin the
 properties the host relies on. The detector itself is built and exercised
-in test_iwr6843_firmware_trigger.py. scripts/hardware-test/test_iwr_self_trigger.py checks them on a board.
+in test_iwr6843_firmware_trigger.py. scripts/hardware-test/test_iwr_firmware.py
+runs the readback section against a board.
 """
 
 from __future__ import annotations
@@ -51,9 +52,43 @@ def test_read_line_drains_an_overlong_line_instead_of_stopping_mid_line():
     read_line = _function("static int32_t l3_readLine(")
 
     assert "while (used + 1U < cap" not in read_line
-    assert "overflow = 1U;" in read_line
-    assert "return L3_READLINE_OVERFLOW;" in read_line
+    assert "while (drained < 4U * cap)" in read_line
+    assert "status = L3_READLINE_OVERFLOW;" in read_line
     assert "L3_SPARSE_REQUEST_TIMEOUT_MS" in read_line
+
+
+def test_latched_self_trigger_stops_the_front_end_before_rearm():
+    """HWA freeze leaves the BSS chirping. MMWave_start then returns
+    'RF restart failed' unless this wait stops the front end first."""
+    wait = _function("static int32_t l3_awaitFrozenRing(")
+    latched = wait.index("if (gSelfTriggerLatched)")
+    timeout_return = wait.index("return -1;", wait.index("self-trigger freeze timed out", latched))
+    stop = wait.index("return l3_finishCaptureStop();", timeout_return)
+    boundary = wait.index("l3_stopCaptureAtBoundary()", stop)
+
+    assert timeout_return < stop < boundary
+
+
+def test_release_rearms_without_reading_a_cell_line():
+    """A second CLI line cannot sit in the one-byte SCI receiver during the power dump."""
+    release = _function("static int32_t l3_cli_release(")
+
+    assert "l3_readLine" not in release
+    assert "l3_awaitFrozenRing()" in release
+    assert release.index("l3_awaitFrozenRing()") < release.index("l3_sparseRearm()")
+    assert 'tableEntry[16].cmd           = "l3release"' in _source()
+
+
+def test_blank_line_before_the_cell_request_is_not_a_missing_request():
+    """A stray CR/LF left in the FIFO must not reject the real cells line."""
+    sparse = _function("int32_t l3_cli_sparse(")
+    read_line = _function("static int32_t l3_readLine(")
+
+    assert "L3_READLINE_EMPTY" in read_line
+    retry = sparse.index("lineStatus == L3_READLINE_EMPTY")
+    missing = sparse.index('CLI_write("Error: sparse cell request missing')
+    assert retry < missing
+    assert sparse.count("l3_readLine(request") == 2
 
 
 def test_slice_count_is_the_number_of_cells_actually_parsed():
@@ -63,6 +98,24 @@ def test_slice_count_is_the_number_of_cells_actually_parsed():
     header = sparse.index('"ILS1"')
     count = sparse.index("l3_writeU16((uint16_t)cellCount);")
     assert parsed < header < count
+
+
+def test_self_trigger_reads_a_finished_slot_beside_capture():
+    """Detection runs after the slot is stored, not inside the HWA rearm task."""
+    rearm = _function("static void l3_hwaRearmTask")
+    detect = _function("static void l3_detectTask")
+    done = _function("static void l3_hwaOutputDoneCB")
+    packed = _function("static void l3_iq8EdmaDoneCB")
+    stats = _function("static int32_t l3_cli_stats")
+    consider = _function("static void l3_considerSelfTrigger(")
+
+    assert "l3_considerSelfTrigger" not in rearm
+    assert "l3_considerSelfTrigger(queuedSlot)" in detect
+    assert "l3detect_slot_live" in detect
+    assert "l3_publishDetectFrame" in done
+    assert "l3_publishDetectFrame" in packed
+    assert 'CLI_write("detect dropped=%u stale=%u\\n"' in stats
+    assert "gPreFramesCaptured < gCapturePlan.preFrames" in consider
 
 
 def test_trigger_scores_every_loop_not_just_loop_zero():
@@ -136,7 +189,7 @@ def test_trigger_log_command_is_registered_and_ends_with_done():
     source = _source()
     log = _function("static int32_t l3_cli_triggerLog(")
 
-    assert 'cliCfg.tableEntry[13].cmd           = "triggerLog";' in source
+    assert 'cliCfg.tableEntry[17].cmd           = "triggerLog";' in source
     assert "l3_trig_format_summary(&gTrig" in log
     assert "l3_trig_format_config(&gTrig" in log
     assert log.rindex('CLI_write("Done\\n");') > log.rindex("l3_trig_format_record(")
@@ -145,7 +198,9 @@ def test_trigger_log_command_is_registered_and_ends_with_done():
 def test_detector_source_is_built_into_the_firmware():
     makefile = (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
 
-    assert "SOURCES    = l3_dump.c l3_trigger.c" in makefile
+    assert "l3_trigger.c" in makefile
+    assert "live_selector.c" in makefile
+    assert "track_select.c" in makefile
     assert '#include "l3_trigger.h"' in _source()
 
 
@@ -190,3 +245,23 @@ def test_power_rows_go_out_in_one_write_per_loop():
 
     assert "l3_writeF32" not in power
     assert "UART_writePolling(gDataUart, (uint8_t *)&powerRow[loop * maxBins]" in power
+
+
+def test_read_line_uses_the_buffered_uart_receive_not_register_polling():
+    """The SCI receiver holds one byte. Polling SCIRD from the CLI task loses a
+    byte whenever the HWA rearm task (now above the CLI) preempts the poll, and
+    a 700-byte cell line spans several frames. On the Pi every l3sparse cell
+    request came back "missing" or truncated. UART_read moves the byte capture
+    into the driver's RX interrupt; echo must be off so that ISR does not spin
+    on TX between bytes."""
+    read_line = _function("static int32_t l3_readLine(")
+    source = _source()
+
+    assert "UART_read(gCliUart" in read_line
+    assert "SCIRD" not in read_line
+    assert "SCIFLR" not in read_line
+    assert "Task_sleep" not in read_line
+    assert "readTimeout = L3_SPARSE_REQUEST_TIMEOUT_MS" in read_line
+    init = " ".join(source.split())  # the open block aligns its '=' with spaces
+    assert "uartParams.readEcho = UART_ECHO_OFF;" in init
+    assert init.index("uartParams.readEcho = UART_ECHO_OFF;") < init.index("gCliUart = UART_open(0")

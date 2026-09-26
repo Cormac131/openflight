@@ -14,10 +14,17 @@ from pathlib import Path
 from typing import Callable
 
 from openflight.gpio_factory import ensure_lgpio_pin_factory
-from openflight.iwr6843.driver import IWR6843Radar
+from openflight.iwr6843.driver import IWR6843Radar, UnsupportedCommand
 from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
-from openflight.iwr6843.sparse import SlicePlanner
-from openflight.iwr6843.tracking import RANGE_SPAN_M
+from openflight.iwr6843.self_trigger import (
+    FLOOR_PAUSE_S,
+    FLOOR_PROBE_LEVEL,
+    FLOOR_SAMPLE_S,
+    level_above_floor,
+    tee_power_from_stats,
+)
+from openflight.iwr6843.sparse import OnboardTrack, SlicePlanner
+from openflight.iwr6843.tracking import RANGE_SPAN_M, same_tx_loop_period_s
 
 logger = logging.getLogger(__name__)
 
@@ -34,24 +41,57 @@ class CaptureConfigSummary:
     chirp_tx_masks: tuple[str, ...]
     first_window_start: int | None
     first_window_bins: int | None
+    chirp_period_s: float | None = None
+    loops: int | None = None
+    frame_period_s: float | None = None
+    capture_format: str | None = None
+
+    @property
+    def n_tx(self) -> int:
+        """Transmitters the chirp sequence enables, one chirp each per loop."""
+        return len(set(self.chirp_tx_masks))
+
+    @property
+    def loop_period_s(self) -> float | None:
+        """Same-TX chirp interval, or None when the cfg has no profile or chirps."""
+        if self.chirp_period_s is None or not self.n_tx:
+            return None
+        return same_tx_loop_period_s(self.n_tx, self.chirp_period_s)
 
 
 def read_capture_config(config_path: str | Path) -> CaptureConfigSummary:
-    """Parse chirp TX masks and the first saved range window from a cfg."""
+    """Parse chirp TX masks, physical timing, storage format and the first saved window."""
     masks: list[str] = []
     window: tuple[int, int] | None = None
+    chirp_period_s: float | None = None
+    loops: int | None = None
+    frame_period_s: float | None = None
+    capture_format: str | None = None
     with Path(config_path).open(encoding="utf-8") as handle:
         for raw_line in handle:
             line = raw_line.strip()
+            fields = line.split()
             if line.startswith("chirpCfg"):
-                masks.append(line.rsplit(maxsplit=1)[-1])
+                masks.append(fields[-1])
+            elif line.startswith("profileCfg"):
+                # idleTime + rampEndTime, both in microseconds.
+                chirp_period_s = (float(fields[3]) + float(fields[5])) * 1e-6
+            elif line.startswith("frameCfg"):
+                # numLoops, then framePeriodicity in milliseconds.
+                loops = int(fields[3])
+                frame_period_s = float(fields[5]) * 1e-3
+            elif line.startswith("captureFormat"):
+                capture_format = fields[1].lower()
             elif line.startswith("phaseCaptureCfg") and window is None:
-                fields = line.split()
                 window = (int(fields[1]), int(fields[2]))
     return CaptureConfigSummary(
         chirp_tx_masks=tuple(masks),
         first_window_start=window[0] if window else None,
         first_window_bins=window[1] if window else None,
+        chirp_period_s=chirp_period_s,
+        loops=loops,
+        frame_period_s=frame_period_s,
+        capture_format=capture_format,
     )
 
 
@@ -87,6 +127,16 @@ def tee_local_bin(tee_range_m: float, config_path: str | Path, fft_size: int = 1
     return local
 
 
+def _monotonic() -> float:
+    """Clock for the startup sample. Tests replace this so startup does not sleep."""
+    return time.monotonic()
+
+
+def _pause(seconds: float) -> None:
+    """Wait between background samples. Tests replace this so startup does not sleep."""
+    time.sleep(seconds)
+
+
 @dataclass(frozen=True)
 class SelfTriggerConfig:
     """Firmware ``triggerCfg``: freeze when a tracked clubhead reaches the tee.
@@ -120,8 +170,46 @@ class SelfTriggerConfig:
         return f"triggerCfg {self.local_bin} {self.snr} {self.track_frames}"
 
 
-# hits=0 disables the firmware trigger (see l3_cli_triggerCfg).
+# frames=0 disables the firmware trigger (see l3_cli_triggerCfg).
 SELF_TRIGGER_OFF_COMMAND = "triggerCfg 0 0 0"
+
+
+def measure_trigger_level(
+    radar: IWR6843Radar,
+    local_bin: int,
+    hits: int,
+    *,
+    clock: Callable[[], float] | None = None,
+    pause: Callable[[float], None] | None = None,
+) -> tuple[float, float]:
+    """Sample the empty-lane tee and return ``(p95 floor, armed level)``.
+
+    The probe level sits above any recorded residual, so the detector stays
+    below the threshold and still reports tee power. The lane must stay empty:
+    a latch during the sample is a failed startup, not a floor.
+    """
+    now = _monotonic if clock is None else clock
+    wait = _pause if pause is None else pause
+    probe = f"triggerCfg {local_bin} {FLOOR_PROBE_LEVEL:.0f} {hits}"
+    reply = radar.cmd(probe, 2.0)
+    if "Error" in reply or "Done" not in reply:
+        raise RuntimeError(f"IWR6843 background probe rejected: {reply.strip()}")
+    samples: list[float] = []
+    deadline = now() + FLOOR_SAMPLE_S
+    while now() < deadline:
+        health = radar.stats()
+        if "latched=1" in health:
+            raise RuntimeError(
+                "background sample latched the trigger; keep the lane empty and retry"
+            )
+        tee = tee_power_from_stats(health)
+        if tee is not None and tee > 0.0:
+            samples.append(tee)
+        wait(FLOOR_PAUSE_S)
+    try:
+        return level_above_floor(samples)
+    except ValueError as exc:
+        raise RuntimeError(f"IWR6843 background sample failed: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -148,6 +236,7 @@ class IWR6843Capture:
     error: str | None = None
     temperature_report: dict[str, int] | None = None
     noise_power: float | None = None
+    onboard_track: OnboardTrack | None = None
 
     @property
     def valid(self) -> bool:
@@ -182,6 +271,7 @@ class IWR6843CaptureMonitor:
         trigger_observers: list[Callable[[float], None]] | None = None,
         slice_planner: SlicePlanner | None = None,
         self_trigger: SelfTriggerConfig | None = None,
+        onboard_tracking: bool = False,
     ):
         self.config_path = Path(config_path)
         self.output_dir = Path(output_dir).expanduser()
@@ -205,7 +295,11 @@ class IWR6843CaptureMonitor:
         self._trigger_observers = list(trigger_observers or [])
         self.slice_planner = slice_planner
         self.self_trigger = self_trigger
+        # Firmware picks the cells itself (l3track). Cleared if it cannot.
+        self.onboard_tracking = onboard_tracking
         self._trigger_notice = b""
+        # A frozen ring nobody will read. Retried until the release succeeds.
+        self._release_pending = False
 
     @property
     def watch_self_trigger(self) -> bool:
@@ -217,12 +311,23 @@ class IWR6843CaptureMonitor:
         """Connected TI serial port."""
         return self.radar.port
 
-    def start(self, *, armed: bool = True) -> None:
-        """Configure the radar and GPIO, optionally arming trigger capture."""
+    def start(self, *, armed: bool = True, onboard_track_config: str | None = None) -> None:
+        """Configure the radar and GPIO, optionally arming trigger capture.
+
+        ``onboard_track_config`` is the ``trackCfg`` line for the firmware
+        tracker. It is sent here, before the worker thread owns the port,
+        because a command from another thread would race the self-trigger
+        listener's reads.
+        """
         if self._running:
             return
         if not self.config_path.is_file():
             raise FileNotFoundError(f"IWR6843 config not found: {self.config_path}")
+        if self.watch_self_trigger:
+            # The clubhead detector reads IQ16 residuals.
+            capture_format = read_capture_config(self.config_path).capture_format
+            if capture_format == "iq8":
+                raise ValueError("IQ8 capture does not support the IWR6843 self-trigger")
         if self.save_dumps:
             self.output_dir.mkdir(parents=True, exist_ok=True)
         configured = False
@@ -231,20 +336,14 @@ class IWR6843CaptureMonitor:
             configured = True
             # Before the worker starts: after that only the worker may talk
             # to the radar.
+            if onboard_track_config is not None:
+                self._configure_onboard_tracking(onboard_track_config)
             self._apply_self_trigger()
 
-            button_factory = self._button_factory
-            if button_factory is None:
-                # Must precede the first gpiozero device: on a Pi 5 gpiozero's
-                # own auto-detection fails outright. See gpio_factory.
-                ensure_lgpio_pin_factory()
-
-                from gpiozero import Button  # pylint: disable=import-error,import-outside-toplevel
-
-                button_factory = Button
-            # No gpiozero debounce: lgpio delays delivery by the debounce interval,
-            # which previously cost the first 50 ms of ball flight.
-            self._button = button_factory(self.gpio_pin, pull_up=False, bounce_time=None)
+            # The self-trigger listens for the firmware line; the pin stays
+            # free so a stray sound-gate edge cannot start a second capture.
+            if not self.watch_self_trigger:
+                self._button = self._open_button()
             self._running = True
             self._worker = threading.Thread(
                 target=self._capture_loop,
@@ -272,6 +371,43 @@ class IWR6843CaptureMonitor:
             ", armed" if self._armed else ", waiting for OPS",
             f", self-trigger {self.self_trigger.command!r}" if self.self_trigger else "",
         )
+
+    def _open_button(self):
+        """The trigger-pin input, from the injected factory or gpiozero."""
+        button_factory = self._button_factory
+        if button_factory is None:
+            # Must precede the first gpiozero device: on a Pi 5 gpiozero's
+            # own auto-detection fails outright. See gpio_factory.
+            ensure_lgpio_pin_factory()
+
+            from gpiozero import Button  # pylint: disable=import-error,import-outside-toplevel
+
+            button_factory = Button
+        # No gpiozero debounce: lgpio delays delivery by the debounce interval,
+        # which previously cost the first 50 ms of ball flight.
+        return button_factory(self.gpio_pin, pull_up=False, bounce_time=None)
+
+    def _configure_onboard_tracking(self, command: str) -> bool:
+        """Hand the rig limits to the firmware tracker; True when it accepts them.
+
+        Optional: older firmware has no ``trackCfg``, and any failure here only
+        means the host keeps planning cells over ``l3sparse``.
+        """
+        self.onboard_tracking = False
+        try:
+            reply = self.radar.cmd(command, 2.0)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.warning("[IWR6843] trackCfg failed (%s); the host will plan cells", error)
+            return False
+        if "Error" in reply or "Done" not in reply:
+            logger.info(
+                "[IWR6843] Firmware has no on-chip tracker (%s); the host will plan cells",
+                reply.strip() or "no reply",
+            )
+            return False
+        self.onboard_tracking = True
+        logger.info("[IWR6843] On-chip tracker armed: %s", command)
+        return True
 
     def _apply_self_trigger(self) -> None:
         """Send ``triggerCfg`` for the configured self-trigger, if any."""
@@ -380,20 +516,17 @@ class IWR6843CaptureMonitor:
         The read returns as soon as a byte arrives, so the trigger reaches the
         OPS within about a millisecond of the notice instead of a poll period.
         """
-        found, self._trigger_notice = self.radar.wait_trigger_notice(self._trigger_notice)
-        if not found:
-            return
-        if self._armed:
-            self.notify_trigger()
-            return
-        # The firmware froze its ring and waits for l3sparse. Nobody will ask
-        # for this one, so release it now; otherwise the stale notice would
-        # fire a phantom capture at arm time and the ring would stay frozen.
-        logger.info("[IWR6843] Self-trigger fired while disarmed; releasing the frozen ring")
-        try:
-            self.radar.release_sparse_freeze()
-        except Exception:  # pylint: disable=broad-exception-caught
-            logger.warning("[IWR6843] Could not release the frozen ring", exc_info=True)
+        if not self._release_pending:
+            found, self._trigger_notice = self.radar.wait_trigger_notice(self._trigger_notice)
+            if not found or self.notify_trigger():
+                return
+            # Disarmed, busy or a duplicate: the firmware froze its ring and
+            # waits for l3sparse, but no capture will ask for it.
+            logger.info("[IWR6843] Releasing an unaccepted self-trigger capture")
+            self._release_pending = True
+        # Raises on failure; the caller backs off and this retries next pass.
+        self.radar.release_sparse_freeze()
+        self._release_pending = False
 
     def _next_event(self):
         """Next queued edge/job/stop. Listens for the self-trigger while idle."""
@@ -411,6 +544,43 @@ class IWR6843CaptureMonitor:
                 logger.warning("[IWR6843] Self-trigger listener error", exc_info=True)
                 time.sleep(_LISTENER_ERROR_BACKOFF_S)
         return _STOP
+
+    def _read_capture(self) -> tuple[bytes, float | None, OnboardTrack | None]:
+        """Read one frozen capture, preferring the least serial traffic.
+
+        Firmware-tracked cells (``l3track``), then host-planned cells
+        (``l3sparse``), then the full ring (``l3dump``). Each step falls back
+        only when the firmware refused before streaming.
+        """
+        if self.onboard_tracking:
+            try:
+                tracked = self.radar.read_tracked()
+            except UnsupportedCommand:
+                logger.warning("[IWR6843] Firmware has no l3track; the host will plan cells")
+                self.onboard_tracking = False
+                tracked = None
+            if tracked is not None:
+                raw, noise_power, track = tracked
+                logger.info(
+                    "[IWR6843] Firmware track: %s",
+                    f"{track.slope_bins:.0f} bins/s, {track.n_inliers} inliers"
+                    if track.found
+                    else "no ball",
+                )
+                if noise_power is not None and noise_power <= 0:
+                    noise_power = None
+                return raw, noise_power, track
+        if self.slice_planner is not None:
+            sparse = self.radar.read_sparse(self.slice_planner)
+            if sparse is not None:
+                if sparse.truncated:
+                    logger.warning(
+                        "[IWR6843] Sparse capture carried %d of %d planned cells",
+                        sparse.sent_cells,
+                        sparse.requested_cells,
+                    )
+                return sparse.raw, sparse.noise_power, None
+        return self.radar.read_dump(), None, None
 
     def _capture_loop(self) -> None:
         while self._running:
@@ -438,20 +608,6 @@ class IWR6843CaptureMonitor:
                 "[IWR6843] Serial job %s finished in %.2fs", job.name, time.monotonic() - start
             )
 
-    def _read_capture(self) -> tuple[bytes, float | None]:
-        """Sparse transfer when the firmware has it, else the full ring."""
-        if self.slice_planner is not None:
-            sparse = self.radar.read_sparse(self.slice_planner)
-            if sparse is not None:
-                if sparse.truncated:
-                    logger.warning(
-                        "[IWR6843] Sparse capture carried %d of %d planned cells",
-                        sparse.sent_cells,
-                        sparse.requested_cells,
-                    )
-                return sparse.raw, sparse.noise_power
-        return self.radar.read_dump(), None
-
     def _capture(self, edge_timestamp: float) -> None:
         with self._condition:
             self._edge_pending = False
@@ -464,9 +620,10 @@ class IWR6843CaptureMonitor:
         error = None
         metadata = None
         noise_power = None
+        onboard_track = None
         try:
             logger.info("[IWR6843] Trigger #%d: reading track samples", sequence)
-            raw, noise_power = self._read_capture()
+            raw, noise_power, onboard_track = self._read_capture()
             metadata = self._validate_dump(raw)
             if self.save_dumps:
                 path = self._capture_path(sequence, edge_timestamp)
@@ -488,6 +645,7 @@ class IWR6843CaptureMonitor:
                 metadata.get("temperature_report") if metadata is not None else None
             ),
             noise_power=noise_power,
+            onboard_track=onboard_track,
         )
         with self._condition:
             self._capture_active = False
@@ -601,6 +759,7 @@ __all__ = [
     "IWR6843Capture",
     "IWR6843CaptureMonitor",
     "SelfTriggerConfig",
+    "measure_trigger_level",
     "read_capture_config",
     "tee_local_bin",
     "tx_order_from_config",

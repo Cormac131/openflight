@@ -88,6 +88,7 @@ def test_send_config_flushes_previous_mmwave_profile_when_config_omits_flush(tmp
     radar.send_config(str(config))
 
     assert commands == [
+        "debugCfg 0",
         "sensorStop",
         "flushCfg",
         "dfeDataOutputMode 1",
@@ -119,7 +120,15 @@ def test_send_config_waits_for_sensor_to_become_active(tmp_path, monkeypatch):
 
     radar.send_config(str(config))
 
-    assert commands == ["sensorStop", "flushCfg", "sensorStart", "stats", "stats", "stats"]
+    assert commands == [
+        "debugCfg 0",
+        "sensorStop",
+        "flushCfg",
+        "sensorStart",
+        "stats",
+        "stats",
+        "stats",
+    ]
 
 
 class FakeSerial:
@@ -268,3 +277,218 @@ def test_unrelated_cli_text_is_trimmed_to_a_split_word_tail():
 
     assert found is False
     assert len(pending) == len(b"Triggered") - 1
+
+
+class _ResettingSerial(FakeSerial):
+    """Like the real port: reset_input_buffer discards every unread byte."""
+
+    def __init__(self, payload: bytes, reply: bytes = b"Done\nl3dump:/>"):
+        super().__init__(payload)
+        self.reply = reply
+
+    def reset_input_buffer(self):
+        self.payload.clear()
+
+    def write(self, data: bytes):
+        super().write(data)
+        self.payload.extend(self.reply)
+
+
+def _command_radar(payload: bytes, reply: bytes = b"Done\nl3dump:/>") -> IWR6843Radar:
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = _ResettingSerial(payload, reply)
+    return radar
+
+
+def test_trigger_already_waiting_before_a_command_is_not_discarded():
+    """A notice queued before cmd() must still reach the listener; else the ring stays frozen."""
+    radar = _command_radar(b"Triggered\n")
+
+    assert "Done" in radar.cmd("stats")
+    assert radar.wait_trigger_notice()[0] is True
+
+
+@pytest.mark.parametrize("prefix,suffix", [(b"Triggered\n", b""), (b"Trig", b"gered\n")])
+def test_trigger_inside_a_command_reply_survives_until_the_listener(prefix, suffix):
+    radar = _command_radar(b"", reply=b"Done\nl3dump:/>" + prefix)
+
+    assert "Done" in radar.cmd("triggerCfg 14 1000 2")
+    radar.ser.payload.extend(suffix)
+    found, pending = radar.wait_trigger_notice()
+
+    assert found is True
+    assert radar.wait_trigger_notice(pending)[0] is False
+
+
+def test_a_remembered_trigger_is_reported_only_once():
+    radar = _command_radar(b"Triggered\n")
+    radar.cmd("stats")
+
+    assert radar.wait_trigger_notice()[0] is True
+    assert radar.wait_trigger_notice()[0] is False
+
+
+def test_stale_command_output_without_a_trigger_is_still_dropped():
+    radar = _command_radar(b"frames=1 active=1\nDone\n")
+
+    reply = radar.cmd("stats")
+
+    assert "frames=1" not in reply
+    assert radar.wait_trigger_notice()[0] is False
+
+
+def test_notice_arriving_with_the_dump_trailer_is_preserved():
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = FakeSerial(b"")
+
+    radar._wait_for_dump_cli_ready(b"Done\nl3dump:/>Trig", timeout_s=0.1)
+    radar.ser.payload.extend(b"gered\n")
+
+    assert radar.wait_trigger_notice()[0] is True
+
+
+def test_reconfiguring_forgets_a_trigger_from_the_previous_session(tmp_path, monkeypatch):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    radar = _command_radar(b"Triggered\n", reply=b"active=1\nDone\nl3dump:/>")
+    monkeypatch.setattr(radar, "drain_stale_output", lambda: 0)
+
+    radar.send_config(str(config))
+
+    assert radar.wait_trigger_notice()[0] is False
+
+
+def test_watch_script_releases_a_trigger_in_the_arming_reply(monkeypatch):
+    import runpy
+    import sys
+    from unittest.mock import Mock, PropertyMock
+
+    main = runpy.run_path("scripts/iwr6843/watch_trigger.py")["main"]
+    radar = Mock()
+    calls: list[str] = []
+
+    def _cmd(line, window=1.5):
+        del window
+        calls.append(line)
+        if line.startswith("triggerCfg"):
+            return "Done\nTriggered\n"
+        return "Done\n"
+
+    radar.cmd.side_effect = _cmd
+    radar.release_sparse_freeze.side_effect = lambda: calls.append("release")
+    type(radar.ser).in_waiting = PropertyMock(side_effect=KeyboardInterrupt)
+    monkeypatch.setitem(main.__globals__, "IWR6843Radar", lambda **_kwargs: radar)
+    monkeypatch.setitem(main.__globals__, "tee_local_bin", lambda *_args: 14)
+    monkeypatch.setattr(sys, "argv", ["watch_trigger.py", "--level", "1000"])
+
+    main()
+
+    assert calls == [
+        "debugCfg 1",
+        "triggerCfg 14 1000.0 2",
+        "debugCfg 0",
+        "release",
+        "debugCfg 1",
+        "debugCfg 0",
+    ]
+    radar.close.assert_called_once()
+
+
+def test_watch_script_arms_above_the_measured_tee_floor(monkeypatch):
+    """A person at the desk is ~2e5; level 1000 arms on them and fires."""
+    import runpy
+    import sys
+    from unittest.mock import Mock, PropertyMock
+
+    main = runpy.run_path("scripts/iwr6843/watch_trigger.py")["main"]
+    radar = Mock()
+    calls: list[str] = []
+
+    def _cmd(line, window=1.5):
+        del window
+        calls.append(line)
+        return "Done\n"
+
+    radar.cmd.side_effect = _cmd
+    type(radar.ser).in_waiting = PropertyMock(side_effect=KeyboardInterrupt)
+    monkeypatch.setitem(main.__globals__, "IWR6843Radar", lambda **_kwargs: radar)
+    monkeypatch.setitem(main.__globals__, "tee_local_bin", lambda *_args: 14)
+    monkeypatch.setitem(
+        main.__globals__, "measure_trigger_level", lambda *_args: (200000.0, 300000.0)
+    )
+    monkeypatch.setattr(sys, "argv", ["watch_trigger.py"])
+
+    main()
+
+    assert calls[:2] == ["debugCfg 1", "triggerCfg 14 300000.0 2"]
+
+
+class _PyserialShortRead:
+    """``read(n)`` waits out the port timeout unless ``n`` bytes are already buffered.
+
+    That is pyserial's contract. A stats reply is a few hundred bytes, so
+    ``read(512)`` costs the whole 0.3s even after ``Done`` has arrived.
+    """
+
+    def __init__(self, reply: bytes, timeout: float = 0.3):
+        self.reply = reply
+        self.timeout = timeout
+        self.pending = bytearray()
+        self.elapsed = 0.0
+
+    @property
+    def in_waiting(self) -> int:
+        return len(self.pending)
+
+    def write(self, data: bytes) -> None:
+        del data
+        self.pending = bytearray(self.reply)
+
+    def read(self, nbytes: int) -> bytes:
+        if nbytes > len(self.pending):
+            self.elapsed += self.timeout
+        nbytes = min(nbytes, len(self.pending))
+        chunk = bytes(self.pending[:nbytes])
+        del self.pending[:nbytes]
+        return chunk
+
+
+def test_background_floor_collects_eight_samples_inside_two_seconds():
+    """A 2s empty-lane sample must survive the 0.3s port timeout on each stats."""
+    from openflight.iwr6843.monitor import measure_trigger_level
+
+    port = _PyserialShortRead(b"trig phase=tee-low tee=180000 latched=0 enabled=1\nDone\n")
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = port
+    radar._trigger_pending = b""
+
+    def pause(seconds: float) -> None:
+        port.elapsed += seconds
+
+    floor, level = measure_trigger_level(
+        radar,
+        14,
+        2,
+        clock=lambda: port.elapsed,
+        pause=pause,
+    )
+
+    assert floor == pytest.approx(180000.0)
+    assert level == pytest.approx(270000.0)
+    # The 2s window is the pauses between readings. A timeout on each stats
+    # pushes the sixth sample past that window.
+    assert port.elapsed == pytest.approx(2.0)
+
+
+def test_reading_the_frozen_capture_consumes_its_remembered_trigger():
+    """The notice names the capture the readback takes; it must not fire again after rearm."""
+    radar = _command_radar(b"Triggered\n")
+    radar.cmd("stats")
+    radar.ser.reply = b""
+
+    try:
+        radar.read_dump(timeout_s=0.05, stall_tolerance_s=0.01)
+    except (RuntimeError, TimeoutError):
+        pass
+
+    assert radar.wait_trigger_notice()[0] is False

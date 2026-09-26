@@ -520,7 +520,9 @@ class TestIWR6843ShotIntegration:
                 captured.update(kwargs)
                 self.port = "/dev/ttyUSB0"
 
-            def start(self, *, armed=True):
+            def start(self, *, armed=True, onboard_track_config=None):
+                self.self_trigger = None
+                self.onboard_tracking = False
                 captured["armed"] = armed
                 return None
 
@@ -567,7 +569,9 @@ class TestIWR6843ShotIntegration:
             def __init__(self, **kwargs):
                 self.port = "/dev/ttyUSB0"
 
-            def start(self, *, armed=True):
+            def start(self, *, armed=True, onboard_track_config=None):
+                self.self_trigger = None
+                self.onboard_tracking = False
                 return None
 
             def stop(self):
@@ -4617,6 +4621,144 @@ class TestBallisticCarryPrecedence:
         resolved = server_module.resolve_shot(forwarded[0], server_module.SimPlayerState())
         assert resolved.carry_yards == pytest.approx(shot.carry_spin_adjusted)
         assert resolved.carry_yards > 135.0
+
+
+class TestIWR6843OnboardTracking:
+    """The firmware tracker is optional: it never blocks TI initialization."""
+
+    class _Radar:
+        def __init__(self, reply=None, error=None):
+            self.reply = reply
+            self.error = error
+            self.commands = []
+
+        def cmd(self, line, window):
+            self.commands.append((line, window))
+            if self.error is not None:
+                raise self.error
+            return self.reply
+
+    class _Runtime:
+        @staticmethod
+        def track_config_command():
+            return "trackCfg 9e-05 0.046875 3.8 0.8 1.45"
+
+    def _monitor(self, radar):
+        from openflight.iwr6843.monitor import IWR6843CaptureMonitor
+
+        monitor = IWR6843CaptureMonitor.__new__(IWR6843CaptureMonitor)
+        monitor.radar = radar
+        monitor.onboard_tracking = False
+        return monitor
+
+    def test_accepted_track_config_turns_on_firmware_tracking(self):
+        radar = self._Radar(reply="trackCfg 9e-05 0.046875 3.8 0.8 1.45\nDone\n")
+        monitor = self._monitor(radar)
+
+        assert monitor._configure_onboard_tracking(self._Runtime.track_config_command()) is True
+        assert monitor.onboard_tracking is True
+        assert radar.commands == [("trackCfg 9e-05 0.046875 3.8 0.8 1.45", 2.0)]
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            "'trackCfg' is not recognized as a CLI command\n",
+            "Error: trackCfg value\n",
+            "",
+        ],
+    )
+    def test_firmware_without_tracker_keeps_host_planning(self, reply):
+        monitor = self._monitor(self._Radar(reply=reply))
+
+        assert monitor._configure_onboard_tracking(self._Runtime.track_config_command()) is False
+        assert monitor.onboard_tracking is False
+
+    def test_serial_failure_keeps_host_planning(self):
+        monitor = self._monitor(self._Radar(error=OSError("port closed")))
+
+        assert monitor._configure_onboard_tracking(self._Runtime.track_config_command()) is False
+        assert monitor.onboard_tracking is False
+
+    def _init(self, monkeypatch, tmp_path, radar, **kwargs):
+        from openflight.iwr6843.monitor import IWR6843CaptureMonitor as RealMonitor
+
+        calibration = Calibration.identity()
+        monitors = []
+
+        class FakeCaptureMonitor:
+            def __init__(self, **_kwargs):
+                self.port = "/dev/ttyUSB0"
+                self.radar = radar
+                self.onboard_tracking = False
+                monitors.append(self)
+
+            def start(self, *, armed=True, onboard_track_config=None):
+                self.self_trigger = None
+                self.onboard_tracking = False
+                if onboard_track_config:
+                    RealMonitor._configure_onboard_tracking(self, onboard_track_config)
+                return None
+
+            def stop(self):
+                return None
+
+        monkeypatch.setattr(Calibration, "load", lambda _path: calibration)
+        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
+        monkeypatch.setattr(
+            "openflight.iwr6843.monitor.tx_order_from_config", lambda _path: "normal"
+        )
+        assert server_module.init_iwr6843(
+            port="/dev/ttyUSB0",
+            config_path="snapshot.cfg",
+            calibration_path="cal.json",
+            output_dir=tmp_path,
+            trigger_pin=17,
+            tee_range_m=1.4,
+            net_range_m=4.064,
+            tx_order="auto",
+            capture_timeout_s=12.0,
+            **kwargs,
+        )
+        return monitors[0]
+
+    def test_init_sends_runtime_limits_to_the_firmware(self, monkeypatch, tmp_path):
+        radar = self._Radar(reply="Done\n")
+
+        monitor = self._init(monkeypatch, tmp_path, radar)
+
+        expected = server_module.iwr6843_runtime.track_config_command()
+        assert radar.commands == [(expected, 2.0)]
+        assert monitor.onboard_tracking is True
+        assert server_module.iwr6843_runtime_config["onboard_tracking"] is True
+        server_module.iwr6843_runtime = None
+
+    def test_init_with_old_firmware_still_succeeds(self, monkeypatch, tmp_path):
+        radar = self._Radar(reply="'trackCfg' is not recognized as a CLI command\n")
+
+        monitor = self._init(monkeypatch, tmp_path, radar)
+
+        assert monitor.onboard_tracking is False
+        assert server_module.iwr6843_runtime_config["onboard_tracking"] is False
+        server_module.iwr6843_runtime = None
+
+    def test_opting_out_never_contacts_the_firmware_tracker(self, monkeypatch, tmp_path):
+        radar = self._Radar(reply="Done\n")
+
+        monitor = self._init(monkeypatch, tmp_path, radar, onboard_track=False)
+
+        assert radar.commands == []
+        assert monitor.onboard_tracking is False
+        assert server_module.iwr6843_runtime_config["onboard_tracking"] is False
+        server_module.iwr6843_runtime = None
+
+    def test_full_capture_bypasses_both_cell_selectors(self, monkeypatch, tmp_path):
+        radar = self._Radar(reply="Done\n")
+        monitor = self._init(monkeypatch, tmp_path, radar, full_capture=True)
+        assert radar.commands == []
+        assert monitor.slice_planner is None
+        assert not monitor.onboard_tracking
+        assert server_module.iwr6843_runtime_config["full_capture"] is True
+        server_module.iwr6843_runtime = None
 
 
 def _self_trigger_args(**overrides):

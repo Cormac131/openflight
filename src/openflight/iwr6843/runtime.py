@@ -338,6 +338,23 @@ class IWR6843Runtime:
             return replace(baseline, status="accepted_track_speed_warning")
         return baseline
 
+    def _ball_max_range_m(self) -> float | None:
+        """Ball-gate clamp just short of the net, or None in open flight."""
+        net = self.tracking_net_m
+        return (net - 0.25) if net else None
+
+    def _club_gate_m(self) -> tuple[float, float] | None:
+        """Range gate around the tee where the club approaches, or None."""
+        from openflight.iwr6843.club import (  # pylint: disable=import-outside-toplevel
+            CLUB_APPROACH_DEPTH_M,
+            CLUB_GATE_TEE_MARGIN_M,
+        )
+
+        tee = self.calibration.tee_range_m
+        if not tee:
+            return None
+        return (max(0.35, tee - CLUB_APPROACH_DEPTH_M), tee + CLUB_GATE_TEE_MARGIN_M)
+
     def plan_sparse_cells(self, summary: PowerSummary) -> SparsePlan:
         """Name the range cells LCMF, club path, and the noise floor need.
 
@@ -360,6 +377,48 @@ class IWR6843Runtime:
             peaks = [(int(row) // summary.n_loops, absolute) for row, absolute in zip(rows, bins)]
             cells.extend(cell for cell in expand_cells(peaks, geometry) if cell not in seen)
         return SparsePlan(cells=tuple(cells), noise_cells=tuple(noise_cells(summary, cells)))
+
+    def track_config_command(self) -> str:
+        """``trackCfg`` line that gives the firmware tracker this rig's limits.
+
+        Fields, all SI: loop period (s), range bin size (m), ball max range
+        (m), club gate low and high (m). A zero max range disables the net
+        clamp; a zero-width gate disables the club cells. 17 significant
+        digits let the firmware's strtod land on the host's exact doubles.
+        """
+        from openflight.iwr6843.sparse import (  # pylint: disable=import-outside-toplevel
+            RANGE_FFT_SIZE,
+        )
+        from openflight.iwr6843.tracking import (  # pylint: disable=import-outside-toplevel
+            LOOP_PRI_S,
+            RANGE_SPAN_M,
+        )
+
+        max_range = self._ball_max_range_m() or 0.0
+        club_lo, club_hi = self._club_gate_m() or (0.0, 0.0)
+        fields = (
+            self._loop_period_s() or LOOP_PRI_S,
+            RANGE_SPAN_M / RANGE_FFT_SIZE,
+            max_range,
+            club_lo,
+            club_hi,
+        )
+        return "trackCfg " + " ".join(f"{value:.17g}" for value in fields)
+
+    def _loop_period_s(self) -> float | None:
+        """Same-TX loop period of the loaded cfg; None without a capture monitor.
+
+        The host planner times rows from the ILP1 header's transmitter count,
+        so the firmware tracker must get the same physical period.
+        """
+        from openflight.iwr6843.monitor import (  # pylint: disable=import-outside-toplevel
+            read_capture_config,
+        )
+
+        config_path = getattr(self.capture_monitor, "config_path", None)
+        if config_path is None:
+            return None
+        return read_capture_config(config_path).loop_period_s
 
     def process_shot(  # pylint: disable=too-many-arguments
         self,
