@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import pytest
 
@@ -337,6 +339,89 @@ def test_stale_command_output_without_a_trigger_is_still_dropped():
     assert radar.wait_trigger_notice()[0] is False
 
 
+class _ChunkedReplySerial:
+    """Delivers the reply one chunk per read, like a byte-by-byte firmware write."""
+
+    def __init__(self, chunks: list[bytes]):
+        self.pending = [bytearray(chunk) for chunk in chunks]
+        self.chunks: list[bytearray] = []
+        self.writes = []
+
+    @property
+    def in_waiting(self):
+        return len(self.chunks[0]) if self.chunks else 0
+
+    def reset_input_buffer(self):
+        self.chunks.clear()
+
+    def write(self, data: bytes):
+        self.writes.append(data)
+        # The reply exists only once the command has been sent.
+        self.chunks.extend(self.pending)
+        self.pending = []
+
+    def read(self, nbytes: int):
+        if not self.chunks:
+            return b""
+        chunk = self.chunks[0]
+        out = bytes(chunk[:nbytes])
+        del chunk[:nbytes]
+        if not chunk:
+            self.chunks.pop(0)
+        return out
+
+
+def _chunked_radar(chunks: list[bytes]) -> IWR6843Radar:
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = _ChunkedReplySerial(chunks)
+    return radar
+
+
+def test_reply_split_inside_the_error_line_is_read_through_to_the_prompt():
+    """'Error: stop the senso' must not end the reply: the rest is not the next command's."""
+    radar = _chunked_radar(
+        [
+            b"captureFormat iq8\nError: stop the senso",
+            b"r before captureFormat\nError -1\nl3dump:/>",
+        ]
+    )
+
+    reply = radar.cmd("captureFormat iq8", 0.5)
+
+    assert reply.endswith("Error -1\nl3dump:/>")
+    assert "stop the sensor before captureFormat" in reply
+    assert radar.ser.in_waiting == 0
+
+
+def test_reply_ends_at_the_prompt_after_done_not_at_a_prompt_before_it():
+    radar = _chunked_radar([b"stats\nframes=1 active=1\nDone\n", b"l3dump:/>"])
+
+    reply = radar.cmd("stats", 0.5)
+
+    assert reply == "stats\nframes=1 active=1\nDone\nl3dump:/>"
+
+
+def test_debug_line_between_done_and_the_prompt_stays_in_the_reply():
+    radar = _chunked_radar(
+        [b"debugCfg 1\ntrig phase=watching tee=1 bin=14 latched=0\nDone\n", b"l3dump:/>"]
+    )
+
+    reply = radar.cmd("debugCfg 1", 0.5)
+
+    assert "trig phase=watching" in reply
+    assert reply.endswith("l3dump:/>")
+
+
+def test_reply_without_a_prompt_returns_after_a_quiet_period_not_the_window():
+    radar = _chunked_radar([b"'19' is not recognized as a CLI command\n"])
+    started = time.monotonic()
+
+    reply = radar.cmd("stats", 2.0)
+
+    assert "not recognized" in reply
+    assert 0.08 < time.monotonic() - started < 0.6
+
+
 def test_notice_arriving_with_the_dump_trailer_is_preserved():
     radar = IWR6843Radar.__new__(IWR6843Radar)
     radar.ser = FakeSerial(b"")
@@ -457,7 +542,7 @@ def test_background_floor_collects_eight_samples_inside_two_seconds():
     """A 2s empty-lane sample must survive the 0.3s port timeout on each stats."""
     from openflight.iwr6843.monitor import measure_trigger_level
 
-    port = _PyserialShortRead(b"trig phase=tee-low tee=180000 latched=0 enabled=1\nDone\n")
+    port = _PyserialShortRead(b"trig phase=tee-low tee=180000 latched=0 enabled=1\nDone\nl3dump:/>")
     radar = IWR6843Radar.__new__(IWR6843Radar)
     radar.ser = port
     radar._trigger_pending = b""

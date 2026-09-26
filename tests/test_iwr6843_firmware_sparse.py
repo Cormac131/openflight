@@ -52,7 +52,7 @@ def test_read_line_drains_an_overlong_line_instead_of_stopping_mid_line():
     read_line = _function("static int32_t l3_readLine(")
 
     assert "while (used + 1U < cap" not in read_line
-    assert "while (drained < 4U * cap)" in read_line
+    assert "while (drained < L3_READLINE_DRAIN_MAX)" in read_line
     assert "status = L3_READLINE_OVERFLOW;" in read_line
     assert "L3_SPARSE_REQUEST_TIMEOUT_MS" in read_line
 
@@ -114,7 +114,7 @@ def test_self_trigger_reads_a_finished_slot_beside_capture():
     assert "l3detect_slot_live" in detect
     assert "l3_publishDetectFrame" in done
     assert "l3_publishDetectFrame" in packed
-    assert 'CLI_write("detect dropped=%u stale=%u\\n"' in stats
+    assert 'CLI_write("detect dropped=%u stale=%u notice_dropped=%u\\n"' in stats
     assert "gPreFramesCaptured < gCapturePlan.preFrames" in consider
 
 
@@ -151,7 +151,7 @@ def test_trigger_freeze_request_is_unchanged_by_the_new_detector():
         "gHwaFreezeRequests++;",
     ):
         assert line in freeze, line
-    assert 'CLI_write("Triggered\\n");' in consider
+    assert 'l3_queueNotice("Triggered\\n");' in consider
 
 
 def test_trigger_config_waits_for_a_frame_in_progress_before_resetting():
@@ -193,6 +193,48 @@ def test_trigger_log_command_is_registered_and_ends_with_done():
     assert "l3_trig_format_summary(&gTrig" in log
     assert "l3_trig_format_config(&gTrig" in log
     assert log.rindex('CLI_write("Done\\n");') > log.rindex("l3_trig_format_record(")
+
+
+def test_detect_task_never_writes_the_cli_uart_itself():
+    """A host command mid-line would let the CLI task splice its reply into the notice."""
+    source = _source()
+    consider = _function("static void l3_considerSelfTrigger(")
+    note = _function("static void l3_noteTrigger(")
+
+    assert "CLI_write" not in consider
+    assert "CLI_write" not in note
+    assert 'l3_queueNotice("Triggered\\n");' in consider
+    assert consider.index('l3_queueNotice("Triggered') < consider.index(
+        "l3_noteTrigger(9U, gTrig.floor)"
+    )
+    assert "l3_queueNotice(line);" in note
+    assert "#define L3_NOTICE_TASK_PRIORITY L3_CLI_TASK_PRIORITY" in source
+    assert "Task_create(l3_noticeTask, &taskParams, NULL);" in source
+
+
+def test_debug_cfg_answers_with_the_current_line_before_done():
+    handler = _function("static int32_t l3_cli_debugCfg(")
+
+    assert handler.index("l3_formatTriggerDebug(gTriggerPhase") < handler.index('CLI_write("Done')
+    assert "l3_queueNotice" not in handler
+
+
+def test_notice_queue_writes_whole_lines_from_one_task():
+    task = _function("static void l3_noticeTask(")
+    queue = _function("static void l3_queueNotice(")
+
+    assert 'CLI_write("%s", gNoticeLines[gNoticeHead]);' in task
+    assert "gNoticeDropped++;" in queue
+    assert "Hwi_disable()" in queue and "Semaphore_post(gNoticeSemaphore);" in queue
+
+
+def test_overlong_request_drain_outlasts_a_four_times_oversized_request():
+    source = _source()
+    read_line = _function("static int32_t l3_readLine(")
+
+    assert "#define L3_READLINE_DRAIN_MAX (64U * L3_SPARSE_REQUEST_MAX)" in source
+    assert "while (drained < L3_READLINE_DRAIN_MAX)" in read_line
+    assert "4U * cap" not in read_line
 
 
 def test_detector_source_is_built_into_the_firmware():

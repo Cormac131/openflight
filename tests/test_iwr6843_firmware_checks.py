@@ -125,9 +125,10 @@ def test_scripted_serial_matches_full_line_then_first_token():
     port.write(b"bogus\n")
     unknown = port.read(port.in_waiting)
 
-    assert off == b"Done\n"
-    assert bad == b"Error: trigger bin\n"
+    assert off == b"Done\nl3dump:/>"
+    assert bad == b"Error: trigger bin\nl3dump:/>"
     assert b"not recognized" in unknown
+    assert unknown.endswith(b"l3dump:/>")
     assert port.written == ["triggerCfg 0 0 0", "triggerCfg x 1 2", "bogus"]
 
 
@@ -140,8 +141,8 @@ def test_scripted_serial_callable_replies_count_sends_and_inject_precedes_reads(
     port.write(b"stats\n")
     second = port.read(port.in_waiting)
 
-    assert first == b"Triggered\nframes=0 active=1\nDone\n"
-    assert second == b"frames=100 active=1\nDone\n"
+    assert first == b"Triggered\nframes=0 active=1\nDone\nl3dump:/>"
+    assert second == b"frames=100 active=1\nDone\nl3dump:/>"
 
 
 def test_scripted_serial_reset_drops_unread_bytes():

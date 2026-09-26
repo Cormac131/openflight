@@ -71,6 +71,11 @@
 #define L3_SNAPSHOT_TASK_PRIORITY 1
 /* Below rearm, so a slot read runs while the next frame is captured. */
 #define L3_DETECT_TASK_PRIORITY 1
+/* Writes the detect task's CLI lines. At the CLI task's own priority SYS/BIOS
+ * never preempts one for the other, so neither can splice a line into the
+ * other's; below it, a host command arriving mid-line would let the CLI
+ * task cut a "Triggered" notice or a debug line in two. */
+#define L3_NOTICE_TASK_PRIORITY L3_CLI_TASK_PRIORITY
 #define L3_CTRL_TASK_PRIORITY  5
 
 /* ASCII CAN is reserved as an out-of-band dump cancellation byte. The CLI
@@ -430,6 +435,7 @@ static void l3_considerSelfTrigger(uint32_t slot);
 static void l3_publishDetectFrame(uint32_t slot, uint32_t epoch);
 static void l3_resetDetectQueue(void);
 static void l3_detectTask(UArg arg0, UArg arg1);
+static void l3_noticeTask(UArg arg0, UArg arg1);
 static void l3_trigRearm(void);
 #endif
 
@@ -2471,6 +2477,9 @@ static void l3_writeF32(float value)
  * return, so UART_read completes at '\n' (a CR is folded into one). */
 #define L3_READLINE_OVERFLOW (-2)
 #define L3_READLINE_EMPTY (-3)
+/* Bytes of an overlong line drained before giving up: 48 KB, about 4 s at
+ * the CLI baud, far past any real request. */
+#define L3_READLINE_DRAIN_MAX (64U * L3_SPARSE_REQUEST_MAX)
 
 static int32_t l3_readLine(char *buf, uint32_t cap)
 {
@@ -2499,9 +2508,13 @@ static int32_t l3_readLine(char *buf, uint32_t cap)
         status = (count == 1) ? L3_READLINE_EMPTY : 0;
     } else {
         /* The buffer filled before a newline: the line does not fit. Drain
-         * the rest of it, bounded so a stream that never ends still returns. */
+         * the rest of it so none of it reaches the CLI parser as commands.
+         * Each read is bounded by the request timeout; the byte bound only
+         * stops a stream that never ends, and must cover any request a host
+         * could plausibly send (a 4x oversized cell line is ~4 KB, which the
+         * old 4 x cap bound left half of in the FIFO). */
         buf[cap - 1U] = '\0';
-        while (drained < 4U * cap) {
+        while (drained < L3_READLINE_DRAIN_MAX) {
             uint8_t scratch[32];
 
             count = UART_read(gCliUart, scratch, sizeof(scratch));
@@ -2618,6 +2631,52 @@ static void l3_verticalPowerLoops(uint32_t slot, uint32_t localBin, float *out)
     l3_verticalResidual(slot, localBin, out, NULL);
 }
 
+/* --- CLI notices from the detect task ----------------------------------------
+ * The detect task runs below the CLI task, so it must not write the CLI UART
+ * itself: a host command arriving mid-line preempts it and the CLI task's
+ * reply lands inside the notice (the host then sees half a debug line, or
+ * misses "Triggered" altogether). Lines are queued here and written by
+ * l3_noticeTask at the CLI task's priority, where each line goes out whole.
+ * A full queue drops the line and counts it; "Triggered" is queued ahead of
+ * the debug line that describes it. */
+#define L3_NOTICE_LINES      4U
+#define L3_NOTICE_LINE_BYTES 160U
+static char gNoticeLines[L3_NOTICE_LINES][L3_NOTICE_LINE_BYTES];
+static volatile uint32_t gNoticeHead;     /* next line the notice task writes */
+static volatile uint32_t gNoticeTail;     /* next slot to fill */
+static volatile uint32_t gNoticeDropped;
+static Semaphore_Handle  gNoticeSemaphore;
+
+static void l3_queueNotice(const char *text)
+{
+    uintptr_t key = Hwi_disable();
+    uint32_t next = (gNoticeTail + 1U) % L3_NOTICE_LINES;
+
+    if (gNoticeSemaphore == NULL || next == gNoticeHead) {
+        gNoticeDropped++;
+        Hwi_restore(key);
+        return;
+    }
+    strncpy(gNoticeLines[gNoticeTail], text, L3_NOTICE_LINE_BYTES - 1U);
+    gNoticeLines[gNoticeTail][L3_NOTICE_LINE_BYTES - 1U] = '\0';
+    gNoticeTail = next;
+    Hwi_restore(key);
+    Semaphore_post(gNoticeSemaphore);
+}
+
+static void l3_noticeTask(UArg arg0, UArg arg1)
+{
+    (void)arg0;
+    (void)arg1;
+    while (1) {
+        Semaphore_pend(gNoticeSemaphore, BIOS_WAIT_FOREVER);
+        while (gNoticeHead != gNoticeTail) {
+            CLI_write("%s", gNoticeLines[gNoticeHead]);
+            gNoticeHead = (gNoticeHead + 1U) % L3_NOTICE_LINES;
+        }
+    }
+}
+
 /* Stats and debugCfg still speak the phase names the host already parses.
  * The detector itself is l3_trigger.c; these names are only a readout. */
 static const char *l3_triggerPhaseName(uint8_t phase)
@@ -2633,16 +2692,20 @@ static const char *l3_triggerPhaseName(uint8_t phase)
     return names[phase];
 }
 
-static void l3_writeTriggerDebug(uint8_t phase)
+/* The debug line for a phase, or 0 when debug is off or the phase is
+ * unchanged. The CLI task writes it directly (debugCfg 1 answers with the
+ * current line before Done); the detect task queues it. */
+static int32_t l3_formatTriggerDebug(uint8_t phase, char *out, uint32_t cap)
 {
     if (!gTriggerDebug) {
-        return;
+        return 0;
     }
     if (phase == gTriggerDebugPhase) {
-        return;
+        return 0;
     }
     gTriggerDebugPhase = phase;
-    CLI_write(
+    (void)snprintf(
+        out, cap,
         "trig phase=%s tee=%u approach=%u ready=%u toward=%u away=%u "
         "run=%u peak=%u have=%u bin=%u level=%u latched=%u\n",
         l3_triggerPhaseName(phase),
@@ -2657,13 +2720,21 @@ static void l3_writeTriggerDebug(uint8_t phase)
         (unsigned)gTrigCfg.teeBin,
         (unsigned)gTrigCfg.snr,
         (unsigned)gSelfTriggerLatched);
+    return 1;
 }
 
+/* Detect task: record the phase and queue its debug line for the notice
+ * task. Static line buffer: the detect task's stack is small and only it
+ * runs this. */
 static void l3_noteTrigger(uint8_t phase, float tee)
 {
+    static char line[L3_NOTICE_LINE_BYTES];
+
     gTriggerPhase = phase;
     gTriggerTeePower = (uint32_t)tee;
-    l3_writeTriggerDebug(phase);
+    if (l3_formatTriggerDebug(phase, line, sizeof(line))) {
+        l3_queueNotice(line);
+    }
 }
 
 /* The ring was re-armed for the next shot: forget the track and any fired
@@ -2725,8 +2796,9 @@ static void l3_considerSelfTrigger(uint32_t slot)
     gSelfTriggerLatched = 1U;
     gHwaFreezeRequests++;
     Hwi_restore(key);
+    /* The notice first: the host's S! waits on it, the debug line does not. */
+    l3_queueNotice("Triggered\n");
     l3_noteTrigger(9U, gTrig.floor);
-    CLI_write("Triggered\n");
 }
 
 #ifdef HWA_CHAINED_SNAPSHOT_RING
@@ -3283,7 +3355,11 @@ static int32_t l3_cli_debugCfg(int32_t argc, char *argv[])
     if (!gTriggerDebug) {
         gTriggerDebugPhase = 0xFFU;
     } else {
-        l3_writeTriggerDebug(gTriggerPhase);
+        /* Static, not on the CLI task's small stack. */
+        static char line[L3_NOTICE_LINE_BYTES];
+        if (l3_formatTriggerDebug(gTriggerPhase, line, sizeof(line))) {
+            CLI_write("%s", line);
+        }
     }
     CLI_write("Done\n");
     return 0;
@@ -3373,9 +3449,10 @@ static int32_t l3_cli_stats(int32_t argc, char *argv[])
               (unsigned)gSelfTriggerLatched,
               (unsigned)gTriggerEnabled);
 #ifdef HWA_CHAINED_SNAPSHOT_RING
-    CLI_write("detect dropped=%u stale=%u\n",
+    CLI_write("detect dropped=%u stale=%u notice_dropped=%u\n",
               (unsigned)gDetectQueue.dropped,
-              (unsigned)gDetectStale);
+              (unsigned)gDetectStale,
+              (unsigned)gNoticeDropped);
     CLI_write("rearm_last_us=%u rearm_max_us=%u rearm_timed=%u\n",
               (unsigned)gHwaRearmLastUs,
               (unsigned)gHwaRearmMaxUs,
@@ -3991,6 +4068,14 @@ static void l3_initTask(UArg arg0, UArg arg1)
     taskParams.priority = L3_DETECT_TASK_PRIORITY;
     taskParams.stackSize = 3U * 1024U;
     Task_create(l3_detectTask, &taskParams, NULL);
+    gNoticeSemaphore = Semaphore_create(0, &semaphoreParams, NULL);
+    if (gNoticeSemaphore == NULL) {
+        return;
+    }
+    Task_Params_init(&taskParams);
+    taskParams.priority = L3_NOTICE_TASK_PRIORITY;
+    taskParams.stackSize = 2U * 1024U;
+    Task_create(l3_noticeTask, &taskParams, NULL);
 #endif
 
     /* CLI with the mmWave extension. */

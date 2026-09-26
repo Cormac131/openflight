@@ -461,7 +461,7 @@ def test_stats_reports_trigger_state_and_debug_prints_on_phase_change_only():
     )
     debug_write = _function_source(
         source,
-        "static void l3_writeTriggerDebug",
+        "static int32_t l3_formatTriggerDebug",
         "static void l3_noteTrigger",
     )
     debug_cfg = _function_source(
@@ -474,7 +474,10 @@ def test_stats_reports_trigger_state_and_debug_prints_on_phase_change_only():
     assert "l3_triggerPhaseName(gTriggerPhase)" in stats
     assert stats.index("trig phase=") < stats.index("return 0")
     assert "if (phase == gTriggerDebugPhase)" in debug_write
-    assert debug_write.index("gTriggerDebugPhase = phase") < debug_write.index("CLI_write(")
+    # The line is formatted, not written, here: the detect task queues it for
+    # the notice task and the CLI task writes it itself.
+    assert debug_write.index("gTriggerDebugPhase = phase") < debug_write.index("snprintf(")
+    assert "CLI_write(" not in debug_write
     assert "gTriggerDebugPhase = 0xFFU" in debug_cfg
 
 

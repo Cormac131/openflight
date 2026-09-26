@@ -151,6 +151,13 @@ configured statistic's units), apparent velocity, coherence, track age, and
 re-arm after `l3sparse` keeps the log, `triggerCfg` clears it.
 `scripts/hardware-test/test_iwr_self_trigger.py --swing` prints it for you.
 
+`Triggered` and the `debugCfg 1` phase lines are not written by the detect
+task itself. It queues them and a task at the CLI task's priority writes
+them, because a host command arriving mid-line would otherwise let the CLI
+task splice its reply into the notice. The host's `cmd()` in turn reads a
+reply through the prompt that ends it, not to the first `Done` or `Error`
+word, so a reply split across reads cannot leak into the next command's.
+
 The detector has no hardware dependencies, so
 `tests/test_iwr6843_firmware_trigger.py` builds it with the host C compiler
 and drives synthetic swings, walkers, backswings and noise steps through it.

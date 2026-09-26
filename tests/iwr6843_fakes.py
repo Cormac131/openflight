@@ -232,14 +232,21 @@ class FakeSparseSerial:
         return None
 
 
+# The firmware CLI writes this after every reply; IWR6843Radar.cmd reads
+# through it, so the fake must end each reply with it too.
+CLI_PROMPT = b"l3dump:/>"
+
+
 class ScriptedSerial:
     """Serial port that answers CLI lines from a reply table.
 
     A written line matches first by its full stripped text, then by its
     first token. A callable reply receives how many times that key was
     sent before (starting at 0), so ``stats`` can show counters advancing.
-    ``inject`` queues bytes ahead of the next read, the way a ``Triggered``
-    notice or a ``trig`` debug line arrives unasked.
+    Every reply, the unknown-command answer included, is followed by the
+    CLI prompt, as on the board. ``inject`` queues bytes ahead of the next
+    read, the way a ``Triggered`` notice or a ``trig`` debug line arrives
+    unasked.
 
     ``handler`` is consulted first with the stripped line for ports that need
     state (a validation table, a trigger state machine); returning ``None``
@@ -276,16 +283,16 @@ class ScriptedSerial:
         if self._handler is not None:
             handled = self._handler(line)
             if handled is not None:
-                self._buffer += handled
+                self._buffer += handled + CLI_PROMPT
                 return
         key = line if line in self._replies else line.split(" ", 1)[0]
         reply = self._replies.get(key)
         if reply is None:
-            self._buffer += self._unknown.replace(b"{cmd}", line.encode())
+            self._buffer += self._unknown.replace(b"{cmd}", line.encode()) + CLI_PROMPT
             return
         count = self._sent.get(key, 0)
         self._sent[key] = count + 1
-        self._buffer += reply(count) if callable(reply) else reply
+        self._buffer += (reply(count) if callable(reply) else reply) + CLI_PROMPT
 
     def inject(self, data: bytes) -> None:
         self._buffer += data

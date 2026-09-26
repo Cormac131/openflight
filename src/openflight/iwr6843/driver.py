@@ -46,6 +46,12 @@ from openflight.iwr6843.sparse import (
 BAUD = 1_041_667
 # Firmware CLI line written when the self-trigger freezes the ring.
 TRIGGER_NOTICE = b"Triggered"
+# The firmware CLI prompt, written after every reply (l3_dump.c cliPrompt).
+CLI_PROMPT = b"l3dump:/>"
+_REPLY_VERDICTS = (b"Done", b"Error", b"not recognized")
+# A reply whose prompt never comes is complete once its bytes stop for this
+# long after the verdict (the firmware writes a reply without pauses).
+_REPLY_QUIET_S = 0.1
 _NOTICE_TAIL_BYTES = len(TRIGGER_NOTICE) - 1
 _PORT_GLOBS = ("/dev/ttyUSB*", "/dev/tty.SLAB_USBtoUART*")
 
@@ -54,6 +60,12 @@ logger = logging.getLogger(__name__)
 
 class UnsupportedCommand(RuntimeError):
     """The firmware CLI does not know the command, so it is an older image."""
+
+
+def _reply_verdict_at(resp: bytes) -> int:
+    """Index just past the first Done/Error/not-recognized word, or -1."""
+    found = [(resp.index(word) + len(word)) for word in _REPLY_VERDICTS if word in resp]
+    return min(found) if found else -1
 
 
 def open_port(port: str, baud: int = BAUD, timeout: float = 0.3) -> serial.Serial:
@@ -141,8 +153,13 @@ class IWR6843Radar:
         self._trigger_pending = b""
 
     def cmd(self, line: str, window: float = 1.5) -> str:
-        """Send one CLI line; collect the response until Done/Error/timeout.
+        """Send one CLI line; collect the reply through the prompt that ends it.
 
+        The reply is complete at the CLI prompt that follows its Done, Error
+        or "not recognized" line, not at the first of those words: the
+        firmware writes a reply byte by byte, so a read can return
+        ``Error: stop the senso`` and the rest would otherwise arrive as the
+        next command's reply. Without a prompt the window bounds the wait.
         Stale bytes are dropped rather than taken as the reply, except a
         ``Triggered`` notice among them, which is kept for the listener.
         """
@@ -151,17 +168,22 @@ class IWR6843Radar:
             self._remember_trigger_notice(self.ser.read(waiting))
         self.ser.write((line + "\n").encode())
         resp = b""
+        verdict_at = -1
         deadline = time.time() + window
+        last_byte_at = time.time()
         while time.time() < deadline:
-            # read(512) waits out the port timeout whenever the reply is
-            # shorter than 512 bytes. A stats line is, so each call cost
-            # 0.3s and a 2s floor sample only kept 6 readings.
+            # in_waiting-sized reads, else read(1): read(512) would wait out
+            # the port timeout for every reply shorter than 512 bytes.
             waiting = self.ser.in_waiting
-            resp += self.ser.read(waiting if waiting else 1)
-            if b"Done" in resp or b"Error" in resp or b"not recognized" in resp:
-                waiting = self.ser.in_waiting
-                if waiting:
-                    resp += self.ser.read(waiting)
+            chunk = self.ser.read(waiting if waiting else 1)
+            if chunk:
+                resp += chunk
+                last_byte_at = time.time()
+            if verdict_at < 0:
+                verdict_at = _reply_verdict_at(resp)
+            if verdict_at < 0:
+                continue
+            if CLI_PROMPT in resp[verdict_at:] or time.time() - last_byte_at >= _REPLY_QUIET_S:
                 break
         self._remember_trigger_notice(resp)
         return resp.decode(errors="replace")
