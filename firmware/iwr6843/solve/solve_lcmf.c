@@ -16,39 +16,71 @@
  *       multipath.leave_one_channel_out_error + _frame_objective) ->
  *       combine_channels -> angle_deg/channels_used/single_channel.
  *   (b) the fast-time diagnostic models (_fast_estimates and its three
- *       helpers): computed AFTER (a) already decided angle_deg
- *       (lcmf.py:888 runs before lcmf.py:899-911), folded only into
- *       components_deg for the session log. Traced, not assumed: (a)'s
- *       combine_channels call at lcmf.py:921 reads channel_components/
- *       channel_evidence, which (b) never touches.
+ *       helpers): the actual fast-time NUMBERS never reach
+ *       channel_components/channel_evidence -- (a)'s combine_channels call
+ *       at lcmf.py:921 reads only those two dicts, which (b) never touches.
  *   (c) the horizontal TX2 proxy (_tx2_horizontal_proxy and its helpers):
  *       an entirely separate axis, its own output fields
- *       (horizontal_deg/horizontal_confidence/horizontal_status), no
- *       influence on (a).
+ *       (horizontal_deg/horizontal_confidence/horizontal_status), whose
+ *       NUMBER never influences (a) either.
  *
- * This file ports (a) only. Reused, not reinvented: solve_fft.c's window+
- * FFT primitive is NOT needed here at all -- _prepared_fft/_fast_design
- * (path (b)) are the only lcmf.py call sites that use it, and (b) is out
- * of this port's scope. tracking.BallTrack's fields feed in as
- * SolveLcmfTrack (already-found track, same convention solve_tracking.c's
- * caller supplies); nothing from solve_tracking.c itself is linked in
- * here because this stage takes the already-fitted slope/intercept
- * directly, not raw MTI rows to re-detect from.
+ * A PRIOR version of this banner claimed (b) and (c) run strictly after
+ * (a) decides `status`, and therefore cannot affect it. That ordering
+ * claim was WRONG, and it produced a real correctness bug: the actual
+ * control flow inside estimate_lcmf_v1's try block (lcmf.py:852-919) is
+ *
+ *   lcmf.py:856  _tx2_horizontal_proxy(...)          <- (c), runs FIRST
+ *   lcmf.py:864  _snapshot_cache(...)                <- (a)
+ *   lcmf.py:875  _balanced_indices(...)               <- (a)
+ *   lcmf.py:888  _channel_estimates(...)              <- (a)
+ *   lcmf.py:899  if not is_range_snapshot(meta):
+ *   lcmf.py:900      _fast_estimates(...)             <- (b), INSIDE the try
+ *   lcmf.py:912  except (ValueError, IndexError, np.linalg.LinAlgError) ...
+ *   lcmf.py:921  combine_channels(...)                <- AFTER the try
+ *
+ * (b) and (c) both run INSIDE the same try/except that produces `status`
+ * (lcmf.py:912), and BOTH before combine_channels (lcmf.py:921) even
+ * though neither's diagnostic RESULT reaches it. A raise from (b) or (c)
+ * is therefore caught by the SAME except that would otherwise let (a)
+ * proceed to combine_channels and accept -- e.g. lcmf.py:583-584 inside
+ * _fast_estimates:
+ *
+ *     if len(indices) < 6 or len(np.unique(frames)) < 2:
+ *         raise ValueError("insufficient late-flight snapshots")
+ *
+ * On a capture where this fires, the Python reference returns status
+ * "insufficient_late-flight_snapshots" -- a REJECT -- while a port that
+ * omits it (as this file previously did) returns "accepted" with an
+ * angle. That is the concrete mechanism: an omitted stage's REJECT GUARD,
+ * not its diagnostic math, changes `status`. This is not "provably"
+ * harmless; it is a real divergence, unreachable only in the sense that
+ * no case in this file's 18-case corpus happens to trip it -- which is not
+ * a reason a review can rely on (see the Task 6 report).
+ *
+ * This file ports (a) in full, PLUS the specific reject guards reachable
+ * from (b) and (c) that this port's own inputs can evaluate (see
+ * solve_lcmf.h's banner and the `isRangeSnapshot`-gated late-flight check
+ * below). It does NOT port (b) or (c)'s actual diagnostic computation --
+ * solve_fft.c's window+FFT primitive is still not needed here, since
+ * _prepared_fft/_fast_design (the rest of (b)) and _tx2_horizontal_proxy's
+ * own phase estimate ((c)) remain out of scope. Every raise site inside
+ * (b) and (c) was individually audited for reachability given this port's
+ * inputs; the ones not reproduced here are argued unreachable in the Task
+ * 6 report's full raise-site audit, not assumed so from an absent corpus
+ * case. tracking.BallTrack's fields feed in as SolveLcmfTrack
+ * (already-found track, same convention solve_tracking.c's caller
+ * supplies); nothing from solve_tracking.c itself is linked in here
+ * because this stage takes the already-fitted slope/intercept directly,
+ * not raw MTI rows to re-detect from.
  *
  * Genuinely new in this file (no existing solve_*.c precedent): the
  * doa.canonicalize_tx_blocks port, the Calibration.apply/true_range
  * ports, multipath.ballistic_trajectory_from_range (Newton iteration),
  * the DD/DG/GD/GG spatial dictionary construction, a complex generalized
  * pseudo-inverse via normal equations (multipath.leave_one_channel_out_
- * error), and the per-frame-median/log-mean objective + parabolic
- * grid refinement + channel combination.
- *
- * Verified empirically, not merely traced: running the Python reference
- * over all 18 corpus cases (see the task report) confirms every case
- * that reaches path (b) has it succeed with no exception -- so no corpus
- * case's status/angle_deg depends on anything this file omits. This is
- * checked into the report as measured evidence, not an assumption made
- * once and never revisited.
+ * error), the per-frame-median/log-mean objective + parabolic grid
+ * refinement + channel combination, and the late-flight snapshot-count
+ * guard ported from _fast_estimates (lcmf.py:580-584).
  * ------------------------------------------------------------------- */
 
 /* ---- module constants (lcmf.py's frozen module-level constants) ------- */
@@ -672,6 +704,99 @@ uint32_t solve_lcmf_estimate(const SolveLcmfInput *in, SolveLcmfWorkspace *ws,
         return SOLVE_LCMF_OK;
     }
 
+    /* ---- _fast_estimates' late-flight reject guard (lcmf.py:580-584) ----
+     * lcmf.py only calls _fast_estimates when `not is_range_snapshot(meta)`
+     * (lcmf.py:899); when it does, _fast_estimates re-sorts the SAME
+     * `indices` _channel_estimates just used (lcmf.py's `indices` ==
+     * ws->selected here) by snapshot time and keeps only the later half:
+     *
+     *   ordered = indices[np.argsort(cache["t"][indices])]
+     *   indices = ordered[len(ordered) // 2 :]
+     *   frames = cache["frame"][indices]
+     *   if len(indices) < 6 or len(np.unique(frames)) < 2:
+     *       raise ValueError("insufficient late-flight snapshots")
+     *
+     * That raise is caught by the same try/except that produces `status`
+     * (lcmf.py:912), so it is a REJECT, not a diagnostic-only computation
+     * -- see this file's banner: an omitted stage's REJECT GUARD can still
+     * change `status` even though its diagnostic math stays unported.
+     *
+     * PROVEN unreachable today, not merely untested by the corpus -- ported
+     * anyway because it is cheap and exact, and because the proof depends
+     * on two frozen module constants that could change independently of
+     * this file:
+     *   - _balanced_indices caps each frame at MAX_PER_FRAME=4 selections
+     *     (SOLVE_LCMF_MAX_PER_FRAME), so across the WHOLE `ws->selected`
+     *     array -- not just the late half -- no single frame contributes
+     *     more than 4 entries.
+     *   - `_fast_estimates` is only reached once `_channel_estimates`'s own
+     *     guard has already passed (nSelected >= 12, nUniqueFrames >= 3;
+     *     the "insufficient_channel_snapshots" check just above), and it
+     *     reuses that SAME `ws->selected` array, only reordered by time.
+     *   - The late half's SIZE is ceil(nSelected/2), which is >= 6 whenever
+     *     nSelected >= 12 -- so `lateCount < 6` cannot fire once the
+     *     channel guard has passed, independent of how the elements are
+     *     distributed across frames.
+     *   - For the late half's unique-frame count to be < 2, ALL of its
+     *     (>= 6) elements would have to share one frame value. But that
+     *     frame's total contribution to the WHOLE `ws->selected` array is
+     *     capped at 4 (< 6) by the bullet above -- a strict subset of an
+     *     array cannot contain more copies of a value than the array
+     *     itself does. Contradiction: `lateUniqueFrames < 2` also cannot
+     *     fire once the channel guard has passed.
+     * See the Task 6 report for the full write-up and
+     * test_iwr6843_solve_lcmf.py's
+     * test_late_flight_guard_is_unreachable_once_channel_guard_passes,
+     * which checks this invariant against a real corpus capture's `ws`
+     * output rather than only trusting the proof. If MAX_PER_FRAME or the
+     * channel guard's 12/3 thresholds ever change, this guard is exactly
+     * what re-protects `status` from the resulting exception. Only the
+     * reject GUARD is ported; _fast_estimates' actual FFT-based fast-time
+     * estimate stays out of scope (see solve_lcmf.h). */
+    if (!in->isRangeSnapshot) {
+        uint16_t lateOrder[SOLVE_LCMF_MAX_SELECTED];
+        uint16_t lateSeenFrames[SOLVE_LCMF_MAX_FRAMES];
+        uint32_t lateCount, lateHalfStart, lateUniqueFrames, s;
+
+        for (i = 0; i < ws->nSelected; i++) {
+            lateOrder[i] = ws->selected[i];
+        }
+        /* Stable insertion sort by snapshot time, ascending -- matches
+         * np.argsort's stable ordering closely enough for this guard: only
+         * the COUNT and unique-frame-count of the back half matter, and a
+         * tie-break swap cannot change either. */
+        for (i = 1; i < ws->nSelected; i++) {
+            uint16_t key = lateOrder[i];
+            double keyT = ws->t[key];
+            uint32_t j = i;
+            while (j > 0 && ws->t[lateOrder[j - 1]] > keyT) {
+                lateOrder[j] = lateOrder[j - 1];
+                j--;
+            }
+            lateOrder[j] = key;
+        }
+        lateHalfStart = ws->nSelected / 2U;
+        lateCount = ws->nSelected - lateHalfStart;
+        lateUniqueFrames = 0;
+        for (i = lateHalfStart; i < ws->nSelected; i++) {
+            uint16_t fr = ws->frame[lateOrder[i]];
+            uint8_t already = 0;
+            for (s = 0; s < lateUniqueFrames; s++) {
+                if (lateSeenFrames[s] == fr) {
+                    already = 1;
+                    break;
+                }
+            }
+            if (!already) {
+                lateSeenFrames[lateUniqueFrames++] = fr;
+            }
+        }
+        if (lateCount < 6U || lateUniqueFrames < 2U) {
+            set_status(result, "insufficient_late-flight_snapshots");
+            return SOLVE_LCMF_OK;
+        }
+    }
+
     /* ---- grid_deg = np.arange(-5, 45+step/2, step) ---------------------- */
     {
         double stop = LCMF_GRID_HI_DEG + in->gridStepDeg / 2.0;
@@ -805,5 +930,58 @@ uint32_t solve_lcmf_estimate(const SolveLcmfInput *in, SolveLcmfWorkspace *ws,
         result->nFrames = nUniqueFrames;
     }
 
+    return SOLVE_LCMF_OK;
+}
+
+/* ---- TEST-ONLY entry point: see solve_lcmf.h ---------------------------
+ * Re-derives one snapshot's spatial dictionary and normal-equations PRESS
+ * error, exactly as the production channel-estimate loop above does, for
+ * one (model, angle, range) point supplied directly by a test. */
+uint32_t solve_lcmf_debug_channel_error(int modelIsFour4PathTdm, double launchDeg, double rangeM,
+                                         double speedMs, double teeXM, double ballHeightM,
+                                         double radarHeightM, double tiltRad,
+                                         int txOrderReversed, double tdmTauS,
+                                         const double *yRe, const double *yIm,
+                                         double *errorOut, int *wasSingularOut) {
+    Cplx a[SOLVE_LCMF_N_ELEMENTS][SOLVE_LCMF_MAX_COEFFS];
+    Cplx y[SOLVE_LCMF_N_ELEMENTS];
+    LcmfModel model = modelIsFour4PathTdm ? LCMF_MODEL_FOUR4_PATH_TDM : LCMF_MODEL_TWO8;
+    double launchRad = launchDeg * LCMF_PI / 180.0;
+    uint32_t k, e;
+
+    k = spatial_dictionary(model, launchRad, rangeM, speedMs, teeXM, ballHeightM, radarHeightM,
+                            tiltRad, (uint8_t)(txOrderReversed != 0), tdmTauS, a);
+    for (e = 0; e < SOLVE_LCMF_N_ELEMENTS; e++) {
+        y[e] = c_make(yRe[e], yIm[e]);
+    }
+    if (leave_one_channel_out_error(a, k, y, errorOut) != 0) {
+        *errorOut = 1e3;
+        *wasSingularOut = 1;
+    } else {
+        *wasSingularOut = 0;
+    }
+    return SOLVE_LCMF_OK;
+}
+
+uint32_t solve_lcmf_debug_leave_one_channel_out_error(uint32_t k, const double *aRe,
+                                                       const double *aIm, const double *yRe,
+                                                       const double *yIm, double *errorOut,
+                                                       int *wasSingularOut) {
+    Cplx a[SOLVE_LCMF_N_ELEMENTS][SOLVE_LCMF_MAX_COEFFS];
+    Cplx y[SOLVE_LCMF_N_ELEMENTS];
+    uint32_t e, p;
+
+    for (e = 0; e < SOLVE_LCMF_N_ELEMENTS; e++) {
+        for (p = 0; p < k; p++) {
+            a[e][p] = c_make(aRe[e * k + p], aIm[e * k + p]);
+        }
+        y[e] = c_make(yRe[e], yIm[e]);
+    }
+    if (leave_one_channel_out_error(a, k, y, errorOut) != 0) {
+        *errorOut = 1e3;
+        *wasSingularOut = 1;
+    } else {
+        *wasSingularOut = 0;
+    }
     return SOLVE_LCMF_OK;
 }

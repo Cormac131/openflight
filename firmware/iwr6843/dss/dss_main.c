@@ -131,15 +131,15 @@ int main(void)
      * 12,288 B; the per-model rangeM/frameIds/errors scratch at
      * SOLVE_LCMF_MAX_SELECTED=256 = 2,048+512+2,048 B; smaller per-block
      * locals) sum to a conservative (no stack-slot reuse assumed, same
-     * methodology as the solve_fft derivation above) ~18.2 KiB. The
-     * deepest simultaneously-live call chain underneath that --
+     * methodology as the solve_fft derivation above) ~17.75 KiB (18,174 B).
+     * The deepest simultaneously-live call chain underneath that --
      * leave_one_channel_out_error() (gram/gramInv/pseudo/coefficients/
      * prediction/leverage, ~1.8 KiB) nesting into its own
-     * cmat_inverse() (~1.1 KiB) -- adds ~2.9 KiB (frame_objective's own
-     * ~2.2 KiB frame and spatial_dictionary's ~0.8 KiB frame run at
+     * cmat_inverse() (~1.1 KiB) -- adds ~2.8 KiB (2,866 B; frame_objective's
+     * own ~2.2 KiB frame and spatial_dictionary's ~0.8 KiB frame run at
      * DIFFERENT points in the same loop, never simultaneously with the
      * pinv chain or each other, so they are not summed here). Derived
-     * total: ~18.2 + 2.9 = ~21.1 KiB -- a source-level worst case, NOT a
+     * total: 18,174 + 2,866 = 21,040 B, ~20.5 KiB -- a source-level worst case, NOT a
      * compiler- or silicon-measured figure (no hardware was run for this
      * task). That is LESS than solve_fft's own ~21.5 KiB frame pair the
      * current 32 KiB was already sized against, and the two stages never

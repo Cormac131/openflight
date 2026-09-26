@@ -136,6 +136,7 @@ class Input(ctypes.Structure):
         ("tdmSign", ctypes.c_int32),
         ("tdmTauS", ctypes.c_double),
         ("gridStepDeg", ctypes.c_double),
+        ("isRangeSnapshot", ctypes.c_uint8),
     ]
 
 
@@ -185,7 +186,38 @@ def bound_lib(lib):
         ctypes.POINTER(Result),
     ]
     lib.solve_lcmf_estimate.restype = ctypes.c_uint32
+    lib.solve_lcmf_debug_leave_one_channel_out_error.argtypes = [
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_double),
+        ctypes.POINTER(ctypes.c_double),
+        ctypes.POINTER(ctypes.c_double),
+        ctypes.POINTER(ctypes.c_double),
+        ctypes.POINTER(ctypes.c_double),
+        ctypes.POINTER(ctypes.c_int),
+    ]
+    lib.solve_lcmf_debug_leave_one_channel_out_error.restype = ctypes.c_uint32
     return lib
+
+
+def _c_leave_one_channel_out_error(bound_lib, a: np.ndarray, y: np.ndarray) -> tuple[float, bool]:
+    """Call solve_lcmf.c's TEST-ONLY wrapper around its normal-equations pinv."""
+    k = a.shape[1]
+    a_re = np.ascontiguousarray(np.real(a), dtype=np.float64)
+    a_im = np.ascontiguousarray(np.imag(a), dtype=np.float64)
+    y_re = (ctypes.c_double * N_ELEMENTS)(*np.real(y))
+    y_im = (ctypes.c_double * N_ELEMENTS)(*np.imag(y))
+    err = ctypes.c_double(0.0)
+    singular = ctypes.c_int(0)
+    bound_lib.solve_lcmf_debug_leave_one_channel_out_error(
+        k,
+        a_re.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        a_im.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        y_re,
+        y_im,
+        ctypes.byref(err),
+        ctypes.byref(singular),
+    )
+    return err.value, bool(singular.value)
 
 
 def _derive_case(case: str):
@@ -230,7 +262,10 @@ def _derive_case(case: str):
 
     prepared = lcmf_mod.prepare_lcmf_capture(raw)
     vertical = prepared.vertical
+    from openflight.iwr6843.dump import is_range_snapshot
     from openflight.iwr6843.shot import process_dump
+
+    is_range = is_range_snapshot(prepared.full_metadata)
 
     shot = process_dump(
         raw,
@@ -260,10 +295,16 @@ def _derive_case(case: str):
         "tx_order": tx_order,
         "grid_step_deg": grid_step_deg,
         "_tdm_tau_s": prepared.tdm_tau_s,
+        "is_range_snapshot": is_range,
     }
 
 
 def _run(bound_lib, derived) -> Result:
+    result, _ws = _run_with_workspace(bound_lib, derived)
+    return result
+
+
+def _run_with_workspace(bound_lib, derived) -> tuple[Result, "Workspace"]:
     geo = derived["geo"]
     mti = derived["mti"]
     shot = derived["shot"]
@@ -323,13 +364,14 @@ def _run(bound_lib, derived) -> Result:
         tdmSign=tdm_sign,
         tdmTauS=derived["_tdm_tau_s"],
         gridStepDeg=derived["grid_step_deg"],
+        isRangeSnapshot=1 if derived["is_range_snapshot"] else 0,
     )
 
     ws = Workspace()
     result = Result()
     status = bound_lib.solve_lcmf_estimate(ctypes.byref(inp), ctypes.byref(ws), ctypes.byref(result))
     assert status == 0, "solve_lcmf_estimate reported an input-size error"
-    return result
+    return result, ws
 
 
 @pytest.mark.parametrize("case", golden_cases(STAGE))
@@ -344,6 +386,7 @@ def test_matches_the_python_reference(bound_lib, case):
         "rejected_track_quality",
         "rejected_missing_tdm_sign",
         "insufficient_channel_snapshots",
+        "insufficient_late-flight_snapshots",
         "rejected_no_conditioned_channel",
         "accepted",
     }
@@ -393,6 +436,243 @@ def test_matches_the_python_reference(bound_lib, case):
             tol=TOL_CHANNEL_DEG,
             label=f"{STAGE}/{case}/channel_four4_path_tdm_deg",
         )
+
+
+# --- the late-flight guard (lcmf.py:583-584), ported defensively ---------
+#
+# CRITICAL 1's review flagged this guard as a live divergence: an omitted
+# stage's reject can still change `status` since it runs inside the same
+# try/except (see solve_lcmf.c's banner). Closer analysis (see the guard's
+# own comment in solve_lcmf.c) proves it cannot currently fire: once
+# _channel_estimates' own guard has passed (nSelected >= 12, nUniqueFrames
+# >= 3), MAX_PER_FRAME=4 forces the late half (>= 6 elements) to span >= 2
+# frames. This is checked here against every corpus case that reaches
+# "accepted" or "rejected_no_conditioned_channel" (i.e. every case that got
+# past the channel guard) using the real `ws` the C port populated -- not
+# only trusting the arithmetic proof.
+
+
+@pytest.mark.parametrize("case", golden_cases(STAGE))
+def test_late_flight_guard_is_unreachable_once_channel_guard_passes(bound_lib, case):
+    derived = _derive_case(case)
+    if str(derived["vectors"]["status"][0]) not in ("accepted", "rejected_no_conditioned_channel"):
+        pytest.skip(f"{case}: never reaches the channel guard's pass side")
+
+    result, ws = _run_with_workspace(bound_lib, derived)
+    assert result.status.decode() != "insufficient_late-flight_snapshots"
+
+    n_selected = ws.nSelected
+    assert n_selected >= 12  # the channel guard already passed
+
+    selected = list(ws.selected[:n_selected])
+    ordered = sorted(selected, key=lambda idx: ws.t[idx])
+    late_half = ordered[len(ordered) // 2 :]
+    assert len(late_half) >= 6, f"{case}: late half smaller than lcmf.py's own 6-snapshot floor"
+    late_frames = {ws.frame[idx] for idx in late_half}
+    assert len(late_frames) >= 2, (
+        f"{case}: late half concentrated in a single frame -- MAX_PER_FRAME's cap should "
+        "prevent this once the channel guard has passed"
+    )
+
+
+# --- IMPORTANT 2: normal-equations pinv vs np.linalg.pinv under rank
+# deficiency -------------------------------------------------------------
+#
+# Python's leave_one_channel_out_error (multipath.py:173) uses
+# np.linalg.pinv -- SVD with a RELATIVE rcond cutoff -- and returns a finite
+# minimum-norm answer even for a badly ill-conditioned dictionary. The C
+# port's leave_one_channel_out_error (solve_lcmf.c) instead forms the normal
+# equations (gram = A^H A, which SQUARES the condition number) and inverts
+# via Gauss-Jordan with an ABSOLUTE 1e-24 pivot floor. These are different
+# estimators, not different precisions of the same one, and this measures
+# exactly where and how badly they diverge on a deliberately ill-conditioned
+# two-column dictionary (the "two8" DD/GG model's own shape) -- the regime a
+# real capture reaches when the direct and image multipath returns nearly
+# coincide, i.e. a very low launch angle.
+#
+# Measured here (see the Task 6 report for the full sweep and the
+# corpus-derived condition numbers): the two agree to within ~0.1% for
+# cond(A) below ~2e6; C's normal equations already return the clip ceiling
+# (1e3, "no information") by cond(A) ~ 3e6 -- squaring the condition number
+# through A^H*A destroys enough precision in forming the Gram matrix that
+# its computed pivot underflows 1e-24 there, well before the dictionary is
+# anywhere near truly singular -- while Python's SVD pinv keeps returning a
+# small, physically meaningful error all the way past cond(A) = 1e12. A
+# scan of the actual 18-case golden corpus's own grid search (every
+# angle/model/snapshot _channel_estimates evaluates) finds a REAL
+# cond(A) = 5.14e6 in wedge_speed_steep_launch(_ref_calibration) -- past
+# this divergence threshold already, at a grid-edge angle (0 deg) that
+# happens not to be that case's winning angle. The margin between what the
+# existing corpus already reaches and where the two solvers diverge is well
+# under 2x, not the several orders of magnitude a "not exercised" claim
+# would need -- see IMPORTANT 2's writeup in the Task 6 report for the
+# production-plausibility judgment.
+
+
+def _py_leave_one_channel_out_error(snapshot: np.ndarray, dictionary: np.ndarray) -> np.ndarray:
+    """Lazily-imported wrapper: matches _derive_case's own pattern of adding
+    src/ to sys.path before importing openflight, so this module still
+    collects in environments without an installed openflight package."""
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root / "src"))
+    from openflight.iwr6843.multipath import leave_one_channel_out_error
+
+    return leave_one_channel_out_error(snapshot, dictionary)
+
+
+def _ill_conditioned_two8_dictionary(eps: float, *, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """A synthetic 8x2 complex dictionary with two nearly-collinear columns.
+
+    ``eps`` controls how collinear: as eps -> 0, cond(A) -> inf. This is not
+    a re-derivation of the physical two8 model -- it directly manufactures
+    the failure MODE (near-collinear DD/GG columns) that a near-zero launch
+    angle produces there, so the test controls conditioning precisely
+    instead of hunting for a (launch_deg, range_m) pair that happens to.
+    """
+    rng = np.random.default_rng(seed)
+    col0 = rng.normal(size=N_ELEMENTS) + 1j * rng.normal(size=N_ELEMENTS)
+    col0 /= np.abs(col0).max()
+    direction = rng.normal(size=N_ELEMENTS) + 1j * rng.normal(size=N_ELEMENTS)
+    direction /= np.abs(direction).max()
+    col1 = col0 + eps * direction
+    a = np.stack([col0, col1], axis=-1)
+    coefficients = np.array([1.0 + 0.3j, 0.7 - 0.2j])
+    noise = (rng.normal(size=N_ELEMENTS) + 1j * rng.normal(size=N_ELEMENTS)) * 0.01
+    y = a @ coefficients + noise
+    return a, y
+
+
+@pytest.mark.parametrize("eps", [1.0, 1e-2, 1e-4, 1e-6])
+def test_normal_equations_pinv_matches_svd_pinv_below_the_divergence_threshold(bound_lib, eps):
+    """Below cond(A) ~ 2e6, the two estimators still agree closely."""
+    a, y = _ill_conditioned_two8_dictionary(eps)
+    cond = np.linalg.cond(a)
+    py_error = float(_py_leave_one_channel_out_error(y[None, :], a[None, :, :])[0])
+    c_error, c_singular = _c_leave_one_channel_out_error(bound_lib, a, y)
+    assert cond < 2e6, f"fixture drifted: cond(A)={cond:.3e} is already past the safe zone"
+    assert not c_singular
+    assert c_error == pytest.approx(py_error, rel=0.01)
+
+
+@pytest.mark.parametrize("eps", [1e-8, 1e-10, 1e-12, 0.0])
+def test_normal_equations_pinv_diverges_from_svd_pinv_past_the_threshold(bound_lib, eps):
+    """Past cond(A) ~ 3e6, the C port's normal equations report "singular"
+    (clip ceiling, 1e3) while Python's SVD pinv still returns a small,
+    finite, physically meaningful error. This is the divergence IMPORTANT 2
+    asked to be measured, locked in as a regression: if a future change to
+    solve_lcmf.c's inversion (e.g. switching to an SVD-based pinv) closes
+    this gap, this test's failure is the intended signal to update it, not
+    a sign something broke.
+    """
+    a, y = _ill_conditioned_two8_dictionary(eps)
+    cond = np.linalg.cond(a)
+    py_error = float(_py_leave_one_channel_out_error(y[None, :], a[None, :, :])[0])
+    c_error, c_singular = _c_leave_one_channel_out_error(bound_lib, a, y)
+    assert cond > 3e6, f"fixture drifted: cond(A)={cond:.3e} is not past the divergence threshold"
+    assert c_singular
+    assert c_error == pytest.approx(1e3)
+    assert py_error < 1.0, (
+        "the Python reference should still see a small, physically meaningful error"
+    )
+
+
+def test_corpus_grid_search_reaches_a_condition_number_past_the_divergence_threshold():
+    """Empirical grounding for the divergence being production-plausible,
+    not merely a synthetic worst case: scan every (model, grid angle,
+    snapshot) the real 18-case golden corpus's own _channel_estimates grid
+    search evaluates, and confirm the worst dictionary conditioning it
+    reaches is past this file's measured ~3e6 divergence threshold.
+    """
+    from openflight.iwr6843 import lcmf as lcmf_mod
+    from openflight.iwr6843.calibration import Calibration as PyCalibration
+    from openflight.iwr6843.shot import process_dump
+
+    worst_cond = 0.0
+    checked_any = False
+    for case in golden_cases(STAGE):
+        vectors = load_golden(STAGE, case)
+        if str(vectors["status"][0]) != "accepted":
+            continue
+        raw = bytes(vectors["raw_bytes"])
+        cal = PyCalibration(
+            elem_correction=vectors["cal_elem_correction_re"] + 1j * vectors["cal_elem_correction_im"],
+            tilt_rad=float(vectors["cal_tilt_rad"][0]),
+            range_bias_m=float(vectors["cal_range_bias_m"][0]),
+            tee_range_m=(
+                float(vectors["cal_tee_range_m"][0])
+                if not math.isnan(vectors["cal_tee_range_m"][0])
+                else None
+            ),
+            tee_ball_height_m=float(vectors["cal_tee_ball_height_m"][0]),
+        )
+        cal.meta["radar_height_m"] = float(vectors["cal_radar_height_m"][0])
+        ball_speed_mph = float(vectors["ball_speed_mph"][0])
+        net_range_m = (
+            float(vectors["net_range_m"][0]) if not math.isnan(vectors["net_range_m"][0]) else None
+        )
+        tx_order = str(vectors["tx_order"][0])
+        tdm_sign_policy = str(vectors["tdm_sign_policy"][0])
+        grid_step_deg = float(vectors["grid_step_deg"][0])
+        club_name = str(vectors["club"][0]) or None
+
+        prepared = lcmf_mod.prepare_lcmf_capture(raw)
+        vertical = prepared.vertical
+        shot = process_dump(
+            raw,
+            cal,
+            club=club_name,
+            net_range_m=net_range_m,
+            tx_order=tx_order,
+            tdm_sign_policy=tdm_sign_policy,
+            loop_period_s=prepared.loop_period_s,
+            tdm_tau_s=prepared.tdm_tau_s,
+            prepared=vertical,
+        )
+        if shot.track is None or shot.quality == "reject":
+            continue
+        cache, _geo, _cube = lcmf_mod._snapshot_cache(
+            raw,
+            shot,
+            cal,
+            tx_order,
+            shot.tdm_sign_used,
+            prepared.tdm_tau_s,
+            prepared.loop_period_s,
+            phase_velocity_ms=ball_speed_mph / lcmf_mod.MPH_PER_MS,
+            prepared=vertical,
+        )
+        indices = lcmf_mod._balanced_indices(cache)
+        if len(indices) < 12:
+            continue
+        checked_any = True
+        vertical_delta_m = cal.tee_ball_height_m - cal.radar_height_m
+        tee_x_m = math.sqrt(max(cal.tee_range_m**2 - vertical_delta_m**2, 0.25))
+        model_geometry = {
+            "speed_ms": ball_speed_mph / lcmf_mod.MPH_PER_MS,
+            "tee_x_m": tee_x_m,
+            "ball_height_m": cal.tee_ball_height_m,
+            "radar_height_m": cal.radar_height_m,
+            "tilt_rad": cal.tilt_rad,
+            "tx_order": tx_order,
+            "tdm_tau_s": prepared.tdm_tau_s,
+        }
+        range_m = cache["r"][indices]
+        grid_deg = np.arange(-5.0, 45.0 + grid_step_deg / 2.0, grid_step_deg)
+        for model in ("two8", "four4_path_tdm"):
+            for angle_deg in grid_deg:
+                dictionary = lcmf_mod._spatial_dictionary(
+                    model, math.radians(angle_deg), range_m, model_geometry, prepared.tdm_tau_s
+                )
+                worst_cond = max(worst_cond, float(np.max(np.linalg.cond(dictionary))))
+
+    assert checked_any, "no accepted corpus case reached the channel guard -- corpus regressed"
+    assert worst_cond > 3e6, (
+        f"worst corpus cond(A)={worst_cond:.3e} no longer reaches the measured divergence "
+        "threshold -- IMPORTANT 2's production-plausibility finding may need re-checking"
+    )
 
 
 # --- bounds: test this stage's own guards -------------------------------

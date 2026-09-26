@@ -17,21 +17,36 @@
  *     normal equations)
  *   - _frame_objective, _refine_grid, grid_curvature
  *   - measured_channels, combine_channels
+ *   - the "insufficient_late-flight_snapshots" REJECT GUARD at the top of
+ *     _fast_estimates (lcmf.py:583-584), when SolveLcmfInput.isRangeSnapshot
+ *     is 0. This is a status-changing guard, not diagnostic math: see the
+ *     NOT PORTED entry below for why it had to be added.
  *
  * NOT PORTED (read the traced control flow in lcmf.py before assuming this
- * matters -- it provably does not, for the fields above):
- *   - _fast_estimates/_prepared_fft/_fast_design/_fit_error/_quadratic_peak
- *     (the "fast_*" models). These are diagnostic-only: estimate_lcmf_v1
- *     computes raw_angle_deg/channels_used/single_channel from
- *     channel_components alone (lcmf.py:921), BEFORE the fast estimates are
- *     even computed (lcmf.py:899-911) and folds them into components_deg
- *     only for session-log diagnostics. Confirmed empirically across all 18
- *     corpus cases: every case where the fast stage would run either never
-     * reaches it (rejected earlier) or the fast stage never raises, so the
- *     status/angle path in this port is unaffected. See solve_lcmf.c.
- *   - _tx2_horizontal_proxy and its helpers (horizontal_deg/
- *     horizontal_confidence/horizontal_status are a separate, independent
- *     estimator on a different physical axis -- not this stage).
+ * is safe to omit -- an earlier version of this file claimed the ordering
+ * below made these provably harmless to status/angle_deg; that was WRONG,
+ * see solve_lcmf.c's file banner for the corrected trace and the concrete
+ * mechanism):
+ *   - _fast_estimates' actual fast-time diagnostic computation
+ *     (_prepared_fft/_fast_design/_fit_error/_quadratic_peak, the "fast_*"
+ *     models themselves) and _tx2_horizontal_proxy's actual horizontal
+ *     estimate (horizontal_deg/horizontal_confidence/horizontal_status, a
+ *     separate physical axis with its own output fields). Both are
+ *     diagnostic-only for the fields this port produces: neither's NUMERIC
+ *     RESULT ever reaches channel_components/channel_evidence, so neither
+ *     changes angle_deg/channels_used/single_channel/component_std_deg
+ *     once execution reaches combine_channels (lcmf.py:921).
+ *   - BUT: _tx2_horizontal_proxy runs BEFORE _snapshot_cache in
+ *     estimate_lcmf_v1's try block (lcmf.py:856 before lcmf.py:864), and
+ *     _fast_estimates runs after _channel_estimates but still inside that
+ *     same try (lcmf.py:899-911, closed by the except at lcmf.py:912). Any
+ *     ValueError/IndexError/LinAlgError raised by EITHER -- even though its
+ *     diagnostic computation is not ported -- changes `status` to a reject.
+ *     This port reproduces every such reject guard it can from its own
+ *     inputs (see above) and documents, per raise site, why each remaining
+ *     one cannot fire given this port's own input validation -- not because
+ *     "no corpus case hits it" (see the Task 6 report's full raise-site
+ *     audit for firmware/iwr6843/solve/solve_lcmf.c).
  *   - track_override / the "accepted_low_confidence_recovery" path: no
  *     corpus case exercises it (generate_lcmf_case never passes it).
  *   - the windowed-range-dump branch (Geometry.range_bin_starts non-NULL):
@@ -140,6 +155,13 @@ typedef struct {
     int32_t tdmSign;             /* shot.tdm_sign_used: must be -1 or +1 */
     double  tdmTauS;
     double  gridStepDeg;         /* lcmf.py's grid_step_deg, default 0.5 */
+    /* dump.is_range_snapshot(meta): True when the capture's payload is
+     * already-selected range-FFT bins rather than raw time-domain IQ.
+     * lcmf.py only runs _fast_estimates -- and therefore only risks its
+     * "insufficient_late-flight_snapshots" reject -- when this is False
+     * (lcmf.py:899: "if not is_range_snapshot(meta):"). Needed so this
+     * port's late-flight guard below fires under the identical condition. */
+    uint8_t isRangeSnapshot;
 } SolveLcmfInput;
 
 typedef struct {
@@ -190,5 +212,40 @@ typedef struct {
 uint32_t solve_lcmf_estimate(const SolveLcmfInput *in,
                               SolveLcmfWorkspace *ws,
                               SolveLcmfResult *result);
+
+/* TEST-ONLY: one snapshot's leave-one-channel-out PRESS error via this
+ * file's normal-equations complex pseudo-inverse (spatial_dictionary +
+ * leave_one_channel_out_error), exposed so a host-side test can compare it
+ * directly against numpy's SVD-based np.linalg.pinv on a deliberately
+ * ill-conditioned dictionary (see multipath.leave_one_channel_out_error and
+ * Task 6's report, IMPORTANT 2). Not called by solve_lcmf_estimate's own
+ * production path -- that call is inlined at solve_lcmf.c's channel-
+ * estimate loop for performance; this wrapper re-derives the identical
+ * dictionary and error for one (model, angle, range) point on demand.
+ * modelIsFour4PathTdm: 0 selects "two8", nonzero selects "four4_path_tdm".
+ * y{Re,Im}: the calibrated 8-element snapshot (SOLVE_LCMF_N_ELEMENTS).
+ * Returns SOLVE_LCMF_OK always; *wasSingularOut is 1 when the normal-
+ * equations Gram matrix was singular under this file's 1e-24 absolute
+ * pivot floor (matching the LCMF_ERRORS_CEILING clip solve_lcmf.c applies
+ * in that case), 0 otherwise. */
+uint32_t solve_lcmf_debug_channel_error(int modelIsFour4PathTdm, double launchDeg, double rangeM,
+                                         double speedMs, double teeXM, double ballHeightM,
+                                         double radarHeightM, double tiltRad,
+                                         int txOrderReversed, double tdmTauS,
+                                         const double *yRe, const double *yIm,
+                                         double *errorOut, int *wasSingularOut);
+
+/* TEST-ONLY: the same leave_one_channel_out_error PRESS error, but on a
+ * CALLER-SUPPLIED SOLVE_LCMF_N_ELEMENTS x k dictionary rather than one this
+ * file derives from physical launch geometry -- for constructing an
+ * arbitrarily ill-conditioned dictionary directly (Task 6's IMPORTANT 2),
+ * without needing a (launch_deg, range_m, ...) combination that happens to
+ * produce one. a{Re,Im}: row-major [SOLVE_LCMF_N_ELEMENTS][k], k <=
+ * SOLVE_LCMF_MAX_COEFFS. Same singular/error semantics as
+ * solve_lcmf_debug_channel_error above. */
+uint32_t solve_lcmf_debug_leave_one_channel_out_error(uint32_t k, const double *aRe,
+                                                       const double *aIm, const double *yRe,
+                                                       const double *yIm, double *errorOut,
+                                                       int *wasSingularOut);
 
 #endif /* L3_SOLVE_LCMF_H */
