@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from openflight.iwr6843 import firmware_checks as fc
+from openflight.iwr6843.driver import UnsupportedCommand
 from tests.iwr6843_fakes import ScriptedSerial, scripted_radar
 
 # Verbatim shape of the four lines l3_cli_stats writes (firmware/iwr6843/l3_dump.c).
@@ -192,3 +197,159 @@ def test_ensure_sensor_is_a_no_op_when_already_in_state(monkeypatch):
     fc.ensure_sensor(_ctx(radar), "active")
 
     assert calls == []
+
+
+def _section(name, sensor="any", *checks):
+    return fc.Section(name, sensor, tuple(checks))
+
+
+def _check(name, result=None, exc=None, needs_swing=False):
+    def run(_ctx):
+        if exc is not None:
+            raise exc
+        return result if result is not None else fc.passed(name)
+
+    return fc.Check(name, run, needs_swing)
+
+
+def _stoppedish_radar():
+    return scripted_radar(
+        {
+            "stats": STATS_STOPPED.encode(),
+            "triggerCfg": b"Done\n",
+            "debugCfg": b"Done\n",
+            "sensorStop": b"Done\n",
+        }
+    )
+
+
+def test_run_reports_results_in_catalogue_order_and_prints_them():
+    lines: list[str] = []
+    sections = (
+        _section("a", "any", _check("a/one"), _check("a/two", fc.failed("a/two", "boom"))),
+        _section("b", "any", _check("b/one")),
+    )
+
+    results = fc.run(_ctx(_stoppedish_radar(), out=lines.append), sections)
+
+    assert [(r.name, r.status) for r in results] == [
+        ("a/one", "PASS"),
+        ("a/two", "FAIL"),
+        ("b/one", "PASS"),
+    ]
+    assert "  PASS  a/one" in lines
+    assert "  FAIL  a/two: boom" in lines
+    assert "a: 1 pass, 1 fail, 0 skip" in lines
+    assert fc.exit_code(results) == 1
+
+
+def test_run_only_keeps_catalogue_order_and_rejects_unknown_section_names():
+    sections = (_section("a", "any", _check("a/one")), _section("b", "any", _check("b/one")))
+
+    results = fc.run(_ctx(_stoppedish_radar()), sections, only=("b", "a"))
+    assert [r.name for r in results] == ["a/one", "b/one"]
+
+    with pytest.raises(ValueError, match="unknown section: zzz"):
+        fc.select_sections(sections, ("zzz",))
+
+
+def test_swing_checks_skip_without_the_flag():
+    sections = (_section("t", "any", _check("t/swing", needs_swing=True)),)
+
+    without = fc.run(_ctx(_stoppedish_radar()), sections)
+    with_flag = fc.run(_ctx(_stoppedish_radar()), sections, swing=True)
+
+    assert (without[0].status, without[0].detail) == ("SKIP", "needs --swing")
+    assert with_flag[0].status == "PASS"
+    assert fc.exit_code(without) == 0
+
+
+def test_unsupported_command_becomes_skip_and_other_exceptions_become_fail():
+    sections = (
+        _section(
+            "a",
+            "any",
+            _check("a/old", exc=UnsupportedCommand("'l3track' is not recognized")),
+            _check("a/broken", exc=RuntimeError("wedged")),
+            _check("a/after"),
+        ),
+    )
+
+    results = fc.run(_ctx(_stoppedish_radar()), sections)
+
+    assert results[0].status == "SKIP" and "older firmware" in results[0].detail
+    assert results[1].status == "FAIL" and "wedged" in results[1].detail
+    assert results[2].status == "PASS"
+
+
+def test_fail_fast_stops_after_the_first_fail():
+    sections = (_section("a", "any", _check("a/bad", fc.failed("a/bad")), _check("a/never")),)
+
+    results = fc.run(_ctx(_stoppedish_radar()), sections, fail_fast=True)
+
+    assert [r.name for r in results] == ["a/bad"]
+
+
+def test_sections_reconcile_sensor_state_before_running(monkeypatch):
+    calls: list[str] = []
+    radar = _stoppedish_radar()
+    monkeypatch.setattr(radar, "send_config", lambda cfg: calls.append("start"))
+    sections = (_section("needs-active", "active", _check("needs-active/x")),)
+
+    fc.run(_ctx(radar), sections)
+
+    assert calls == ["start"]
+
+
+def test_reconciliation_failure_fails_every_check_in_the_section(monkeypatch):
+    radar = _stoppedish_radar()
+
+    def explode(_cfg):
+        raise RuntimeError("did not enter active capture mode")
+
+    monkeypatch.setattr(radar, "send_config", explode)
+    sections = (_section("s", "active", _check("s/one"), _check("s/two")),)
+
+    results = fc.run(_ctx(radar), sections)
+
+    assert [r.status for r in results] == ["FAIL", "FAIL"]
+    assert "did not enter active" in results[1].detail
+
+
+def test_cleanup_runs_after_a_raising_check(monkeypatch):
+    radar = _stoppedish_radar()
+    stopped: list[bool] = []
+    monkeypatch.setattr(radar, "stop_sensor", lambda: stopped.append(True))
+
+    results = fc.cleanup(_ctx(radar))
+
+    assert radar.ser.written[:2] == ["triggerCfg 0 0 0", "debugCfg 0"]
+    assert stopped == [True]
+    assert [r.status for r in results] == ["PASS", "PASS", "PASS"]
+
+
+def test_cleanup_failure_forces_exit_1(monkeypatch):
+    radar = _stoppedish_radar()
+
+    def explode():
+        raise RuntimeError("remained active")
+
+    monkeypatch.setattr(radar, "stop_sensor", explode)
+
+    results = fc.cleanup(_ctx(radar))
+
+    assert results[-1] == fc.CheckResult(
+        "cleanup/sensorStop", "FAIL", "remained active", results[-1].seconds
+    )
+    assert fc.exit_code(results) == 1
+
+
+def test_write_json_records_name_status_detail_seconds(tmp_path):
+    path = tmp_path / "out.json"
+
+    fc.write_json([fc.passed("a/one", "ok"), fc.skipped("b/two", "why")], path)
+
+    assert json.loads(path.read_text()) == [
+        {"name": "a/one", "status": "PASS", "detail": "ok", "seconds": 0.0},
+        {"name": "b/two", "status": "SKIP", "detail": "why", "seconds": 0.0},
+    ]

@@ -7,11 +7,13 @@ The checks talk to the firmware through ``IWR6843Radar`` only.
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Callable
 
-from openflight.iwr6843.driver import IWR6843Radar
+from openflight.iwr6843.driver import IWR6843Radar, UnsupportedCommand
 
 _INT_FIELD = re.compile(r"(\w+)=(\d+)")
 _USED = re.compile(r"used=(\d+)/(\d+)")
@@ -227,3 +229,112 @@ def ensure_sensor(ctx: Context, state: str) -> None:
         ctx.radar.send_config(ctx.config)
     elif state == "stopped" and active != 0:
         ctx.radar.stop_sensor()
+
+
+def format_result(result: CheckResult) -> str:
+    """``  PASS  name: detail`` — the line the operator reads."""
+    suffix = f": {result.detail}" if result.detail else ""
+    return f"  {result.status}  {result.name}{suffix}"
+
+
+def select_sections(
+    sections: tuple[Section, ...], only: tuple[str, ...] | None
+) -> tuple[Section, ...]:
+    """Sections named in ``only`` in catalogue order; all of them when ``only`` is None."""
+    if only is None:
+        return sections
+    known = {section.name for section in sections}
+    for name in only:
+        if name not in known:
+            raise ValueError(f"unknown section: {name} (choose from {', '.join(sorted(known))})")
+    wanted = set(only)
+    return tuple(section for section in sections if section.name in wanted)
+
+
+def run_check(ctx: Context, check: Check) -> CheckResult:
+    """Run one check under the suite's guard: exceptions become FAIL, unsupported commands SKIP."""
+    started = ctx.clock()
+    try:
+        result = check.run(ctx)
+    except UnsupportedCommand as exc:
+        result = skipped(check.name, f"older firmware: {exc}")
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        result = failed(check.name, f"{type(exc).__name__}: {exc}")
+    return CheckResult(result.name, result.status, result.detail, ctx.clock() - started)
+
+
+def _emit(ctx: Context, results: list[CheckResult], result: CheckResult) -> None:
+    results.append(result)
+    ctx.out(format_result(result))
+
+
+def _summarise(ctx: Context, section: Section, results: list[CheckResult]) -> None:
+    names = {check.name for check in section.checks}
+    mine = [r for r in results if r.name in names]
+    counts = {status: sum(1 for r in mine if r.status == status) for status in (PASS, FAIL, SKIP)}
+    ctx.out(f"{section.name}: {counts[PASS]} pass, {counts[FAIL]} fail, {counts[SKIP]} skip")
+
+
+def run(
+    ctx: Context,
+    sections: tuple[Section, ...],
+    *,
+    only: tuple[str, ...] | None = None,
+    swing: bool = False,
+    fail_fast: bool = False,
+) -> list[CheckResult]:
+    """Run the selected sections in catalogue order and return every result."""
+    results: list[CheckResult] = []
+    for section in select_sections(sections, only):
+        try:
+            ensure_sensor(ctx, section.sensor)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            for check in section.checks:
+                _emit(ctx, results, failed(check.name, f"sensor not {section.sensor}: {exc}"))
+            _summarise(ctx, section, results)
+            if fail_fast:
+                return results
+            continue
+        for check in section.checks:
+            if check.needs_swing and not swing:
+                _emit(ctx, results, skipped(check.name, "needs --swing"))
+                continue
+            _emit(ctx, results, run_check(ctx, check))
+            if fail_fast and results[-1].status == FAIL:
+                _summarise(ctx, section, results)
+                return results
+        _summarise(ctx, section, results)
+    return results
+
+
+def cleanup(ctx: Context) -> list[CheckResult]:
+    """Leave the radar disarmed, quiet and stopped; report each step, never raise."""
+    steps: tuple[tuple[str, Callable[[], None]], ...] = (
+        ("cleanup/triggerCfg off", lambda: ctx.radar.cmd("triggerCfg 0 0 0", 2.0)),
+        ("cleanup/debugCfg off", lambda: ctx.radar.cmd("debugCfg 0", 2.0)),
+        ("cleanup/sensorStop", ctx.radar.stop_sensor),
+    )
+    results: list[CheckResult] = []
+    for name, step in steps:
+        started = ctx.clock()
+        try:
+            step()
+            result = passed(name)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            result = failed(name, str(exc))
+        _emit(
+            ctx,
+            results,
+            CheckResult(result.name, result.status, result.detail, ctx.clock() - started),
+        )
+    return results
+
+
+def exit_code(results: list[CheckResult]) -> int:
+    """1 when any check failed, else 0. SKIP never fails the run."""
+    return 1 if any(r.status == FAIL for r in results) else 0
+
+
+def write_json(results: list[CheckResult], path: str | Path) -> None:
+    """Persist results as a list of {name, status, detail, seconds}."""
+    Path(path).write_text(json.dumps([asdict(r) for r in results], indent=2), encoding="utf-8")
