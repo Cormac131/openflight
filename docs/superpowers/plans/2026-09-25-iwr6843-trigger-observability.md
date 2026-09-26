@@ -128,6 +128,12 @@ CLI_write("trig phase=%s tee=%u latched=%u enabled=%u\n",
 
 `l3_triggerPhaseName` exists only under `CONFIGURABLE_CAPTURE`. Guard this write with `#ifdef CONFIGURABLE_CAPTURE` so the non-configurable build still compiles. Do not put the line inside only one of the IQ8 format branches.
 
+> **Note (2026-09-26):** `CONFIGURABLE_CAPTURE` no longer exists — a later task
+> (`2026-09-25-iwr6843-longer-movie`) collapsed it out of `l3_dump.c` and
+> dropped the define from `firmware/Makefile`. Do not add an `#ifdef
+> CONFIGURABLE_CAPTURE` guard; if this step is still relevant, write the
+> `CLI_write` unconditionally instead.
+
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `uv run pytest tests/test_iwr6843_firmware_rearm.py tests/test_iwr6843_firmware_sparse.py tests/test_iwr6843_self_trigger.py -q --tb=line`

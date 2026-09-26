@@ -210,7 +210,7 @@ def test_production_build_uses_configurable_compression_and_single_release():
     target = _function_source(source, "build-native:", "clean:")
 
     assert "--define=N_TX=3" in target
-    assert "--define=CONFIGURABLE_CAPTURE=1" in target
+    assert "--define=CONFIGURABLE_CAPTURE" not in target
     assert "--define=HYBRID_CADENCE_CAPTURE=1" in target
     assert "--define=L3_RING_IQ8=1" in target
     assert "--define=L3_IQ8_EDMA_PACK=1" in target

@@ -40,7 +40,7 @@
   pre-existing in-flight work in `tests/test_server.py::TestIWR6843OnboardTracking`
   (`FakeCaptureMonitor` lacks a `self_trigger` attribute). **Do not fix these** —
   they are outside this plan's scope.
-- Production firmware defines, from `firmware/Makefile:148`, must not change in this project: `N_TX=3 ENABLE_HWA_SMOKE=1 SNAPSHOT_DUMP=1 HWA_CHAINED_SNAPSHOT_RING=1 CONFIGURABLE_CAPTURE=1 HYBRID_CADENCE_CAPTURE=1 L3_RING_IQ8=1 L3_IQ8_EDMA_PACK=1`.
+- Production firmware defines, from `firmware/Makefile:148`, must not change in this project: `N_TX=3 ENABLE_HWA_SMOKE=1 SNAPSHOT_DUMP=1 HWA_CHAINED_SNAPSHOT_RING=1 HYBRID_CADENCE_CAPTURE=1 L3_RING_IQ8=1 L3_IQ8_EDMA_PACK=1`.
 - Inter-frame budget: 380 us. No change may exceed it.
 - Selective `l3track` readback must stay under 1.0 s.
 - Capture geometry stays 3 TX, 12 loops, 4 RX, 53 bins, IQ8 (2 B/complex) = 15,264 B per frame.
@@ -1220,7 +1220,28 @@ Expected: PASS.
 
 - [ ] **Step 6: Update the docs**
 
-In `docs/iwr6843/index.md`, add a column or row for the new profile: 51 frames at 2 ms, 53 bins, IQ8, complete dump 778,464 B, 102 ms movie, 66 ms ball phase. State plainly that it has not been validated against TrackMan. In `docs/reference/configuration.md:68`, add the matching table row.
+In `docs/iwr6843/index.md`, add a column or row for the new profile: 51 frames at
+2 ms, 53 bins, IQ8, **complete dump 778,814 B**, 102 ms movie, 66 ms ball phase.
+State plainly that it has not been validated against TrackMan. In
+`docs/reference/configuration.md:68`, add the matching table row.
+
+**The "Complete dump" column documents ON-THE-WIRE bytes, not raw sample
+arithmetic.** The convention, derived from the firmware and verified against all
+three pre-existing rows, is:
+
+```
+raw + 44 + 4*frames + (2*frames if IQ8)
+```
+
+- 44 B = `l3_dump_header_t` (sizeof 20, `dump_format.h:75`) plus
+  `l3_temperature_report_t` (sizeof 24, `dump_format.h:90`)
+- 4 B per frame = the per-frame descriptor (`l3_writeFrameDescriptor`,
+  `HYBRID_CADENCE_CAPTURE` arm, `l3_dump.c:2062`)
+- 2 B per frame = `gFrameIq8Scale`, IQ8 profiles only
+
+It reproduces 732,812 (wide 24f IQ16), 687,194 (dense 45f IQ8) and 549,764
+(wide-late 36f IQ8) exactly, and gives 778,464 + 44 + 204 + 102 = 778,814 here.
+An earlier revision of this step wrongly specified the raw 778,464.
 
 - [ ] **Step 7: Commit**
 
