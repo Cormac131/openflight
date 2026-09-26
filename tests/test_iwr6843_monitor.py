@@ -20,7 +20,6 @@ from openflight.iwr6843.monitor import (
     tee_local_bin,
     tx_order_from_config,
 )
-from openflight.iwr6843.self_trigger import FLOOR_PROBE_LEVEL
 from openflight.iwr6843.sparse import SparseCapture
 
 
@@ -524,9 +523,9 @@ def test_measure_trigger_level_reads_p95_and_stops_if_the_probe_is_rejected():
         pause=lambda seconds: clock.__setitem__("t", clock["t"] + seconds),
     )
 
-    assert radar.commands[0] == f"triggerCfg 14 {FLOOR_PROBE_LEVEL:.0f} 2"
+    assert radar.commands[0] == "triggerCfg 14 6.0 2", "the real arm, at the default snr"
     assert floor == pytest.approx(200000.0)
-    assert level == pytest.approx(300000.0)
+    assert level == pytest.approx(6.0 * 200000.0), "threshold = floor x snr"
 
     rejected = _Radar("Error: trigger power\n")
     with pytest.raises(RuntimeError, match="background probe rejected"):

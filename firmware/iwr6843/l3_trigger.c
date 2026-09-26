@@ -83,6 +83,68 @@ void l3_trig_init(l3_trig_t *trig, const l3_trig_cfg_t *cfg, float loopPeriodS)
     trig->trackBin = L3_TRIG_NO_BIN;
 }
 
+void l3_trig_trace_clear(l3_trig_t *trig)
+{
+    trig->traceQuiet = 0U;
+    trig->traceNext = 0U;
+    trig->traceCount = 0U;
+    trig->maxBins = 0U;
+    trig->maxFirstBin = 0U;
+    memset(trig->maxStat, 0, sizeof(trig->maxStat));
+    memset(trig->maxFrame, 0, sizeof(trig->maxFrame));
+}
+
+/* Every frame: the region's strongest bin into the max-hold, and into the
+ * trace when it clears the trace bar. Independent of the track, so the
+ * trace shows what the detector was offered, not what it took. */
+static void l3_trig_trace(l3_trig_t *trig, uint32_t frame, uint32_t firstBin,
+                          const l3_trig_obs_t *obs, uint32_t count)
+{
+    const l3_trig_cfg_t *cfg = &trig->cfg;
+    uint32_t strongest = 0U;
+    uint32_t i;
+    float strongestStat;
+
+    if (trig->maxFirstBin != firstBin || trig->maxBins != count) {
+        /* A different region (re-arm on another tee, another window). */
+        trig->maxFirstBin = firstBin;
+        trig->maxBins = count;
+        memset(trig->maxStat, 0, sizeof(trig->maxStat));
+        memset(trig->maxFrame, 0, sizeof(trig->maxFrame));
+    }
+    for (i = 0U; i < count; i++) {
+        float stat = l3_trig_stat(cfg, &obs[i]);
+        if (stat > trig->maxStat[i]) {
+            trig->maxStat[i] = stat;
+            trig->maxFrame[i] = frame;
+        }
+        if (stat > l3_trig_stat(cfg, &obs[strongest])) {
+            strongest = i;
+        }
+    }
+    strongestStat = l3_trig_stat(cfg, &obs[strongest]);
+    if (strongestStat < L3_TRIG_TRACE_RATIO * trig->floor) {
+        trig->traceQuiet++;
+        return;
+    }
+    {
+        l3_trig_trace_t *entry = &trig->trace[trig->traceNext];
+        entry->frame = frame;
+        entry->gap = (trig->traceQuiet > 0xFFFFU) ? 0xFFFFU : (uint16_t)trig->traceQuiet;
+        entry->bin = (uint8_t)(firstBin + strongest);
+        entry->state = trig->state;
+        entry->energy = obs[strongest].energy;
+        entry->peak = obs[strongest].peak;
+        entry->loop0 = obs[strongest].loop0;
+        entry->floor = trig->floor;
+    }
+    trig->traceNext = (trig->traceNext + 1U) % L3_TRIG_TRACE_DEPTH;
+    if (trig->traceCount < L3_TRIG_TRACE_DEPTH) {
+        trig->traceCount++;
+    }
+    trig->traceQuiet = 0U;
+}
+
 void l3_trig_rearm(l3_trig_t *trig)
 {
     l3_trig_dropTrack(trig);
@@ -239,6 +301,7 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t firstBin,
         trig->floor = L3_TRIG_FLOOR_MIN;
     }
     threshold = trig->floor * cfg->snr;
+    l3_trig_trace(trig, frame, firstBin, obs, count);
 
     /* An existing track is continued by the strongest bin above threshold
      * inside its continuation window, even when a stronger return sits
@@ -359,6 +422,23 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t firstBin,
      * test: that is exactly the case the tuner needs to see. */
     l3_trig_record(trig, frame, why, bin, best);
     return fired;
+}
+
+uint32_t l3_trig_trace_count(const l3_trig_t *trig)
+{
+    return trig->traceCount;
+}
+
+int32_t l3_trig_trace_get(const l3_trig_t *trig, uint32_t index, l3_trig_trace_t *out)
+{
+    uint32_t oldest;
+
+    if (index >= trig->traceCount) {
+        return 0;
+    }
+    oldest = (trig->traceNext + L3_TRIG_TRACE_DEPTH - trig->traceCount) % L3_TRIG_TRACE_DEPTH;
+    *out = trig->trace[(oldest + index) % L3_TRIG_TRACE_DEPTH];
+    return 1;
 }
 
 uint32_t l3_trig_log_count(const l3_trig_t *trig)
@@ -494,4 +574,65 @@ int32_t l3_trig_format_record(const l3_trig_record_t *record, char *out, uint32_
                     l3_trig_why_name(record->why), binText,
                     (unsigned)record->age, energyText, peakText, floorText,
                     velocityText, (unsigned)record->coherencePct);
+}
+
+int32_t l3_trig_format_trace_header(const l3_trig_t *trig, char *out, uint32_t cap)
+{
+    char floorText[16];
+    char ratioText[16];
+
+    l3_trig_fmtFixed(trig->floor, 0U, floorText, sizeof(floorText));
+    l3_trig_fmtFixed(L3_TRIG_TRACE_RATIO, 1U, ratioText, sizeof(ratioText));
+    return snprintf(out, cap,
+                    "trigtrace state=%s stat=%s floor=%s bar=%sx frames=%u "
+                    "region=%u+%u entries=%u",
+                    kStateNames[trig->state],
+                    (trig->cfg.stat == L3_TRIG_STAT_PEAK) ? "peak" : "energy",
+                    floorText, ratioText,
+                    (unsigned)trig->counters[L3_TRIG_COUNT_FRAMES],
+                    (unsigned)trig->maxFirstBin, (unsigned)trig->maxBins,
+                    (unsigned)trig->traceCount);
+}
+
+int32_t l3_trig_format_trace(const l3_trig_trace_t *entry, char *out, uint32_t cap)
+{
+    char energyText[16];
+    char peakText[16];
+    char loop0Text[16];
+    char floorText[16];
+
+    l3_trig_fmtFixed(entry->energy, 0U, energyText, sizeof(energyText));
+    l3_trig_fmtFixed(entry->peak, 0U, peakText, sizeof(peakText));
+    l3_trig_fmtFixed(entry->loop0, 0U, loop0Text, sizeof(loop0Text));
+    l3_trig_fmtFixed(entry->floor, 0U, floorText, sizeof(floorText));
+    return snprintf(out, cap,
+                    "t frame=%u gap=%u bin=%u state=%s energy=%s peak=%s loop0=%s floor=%s",
+                    (unsigned)entry->frame, (unsigned)entry->gap, (unsigned)entry->bin,
+                    (entry->state < 3U) ? kStateNames[entry->state] : "?",
+                    energyText, peakText, loop0Text, floorText);
+}
+
+int32_t l3_trig_format_maxhold(const l3_trig_t *trig, uint32_t start, uint32_t count,
+                               char *out, uint32_t cap)
+{
+    int32_t used = snprintf(out, cap, "trigmax");
+    uint32_t i;
+
+    for (i = start; i < start + count && i < trig->maxBins; i++) {
+        char statText[16];
+        int32_t written;
+
+        if (used < 0 || (uint32_t)used >= cap) {
+            break;
+        }
+        l3_trig_fmtFixed(trig->maxStat[i], 0U, statText, sizeof(statText));
+        written = snprintf(out + used, cap - (uint32_t)used, " %u:%s@%u",
+                           (unsigned)(trig->maxFirstBin + i), statText,
+                           (unsigned)trig->maxFrame[i]);
+        if (written < 0) {
+            break;
+        }
+        used += written;
+    }
+    return used;
 }

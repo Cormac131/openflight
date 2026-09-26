@@ -101,7 +101,7 @@ def _ctx(radar, **overrides) -> fc.Context:
         radar=radar,
         config="config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg",
         tee_m=1.575,
-        level=1000.0,
+        snr=6.0,
         hits=2,
         wait_s=5.0,
         shots=2,
@@ -1083,7 +1083,9 @@ def test_debug_stream_must_not_repeat_the_same_phase():
 def test_floor_measurement_uses_the_runtime_helper(monkeypatch):
     check = fc.trigger_section().checks[6]
     monkeypatch.setattr(
-        fc, "measure_trigger_level", lambda radar, local_bin, hits, clock, pause: (300.0, 450.0)
+        fc,
+        "measure_trigger_level",
+        lambda radar, local_bin, hits, snr, clock, pause: (300.0, 300.0 * snr),
     )
     assert check.run(_ctx(_trigger_radar())).status == "PASS"
 
@@ -1226,6 +1228,59 @@ def _swing_radar(
 
     radar.send_config = send_config
     return radar, state
+
+
+def test_complete_lines_drops_a_trailing_partial_line():
+    text = "trig phase=a bin=1\r\ntrig phase=b bin=2\ntrig phase=c bi"
+    assert fc.complete_lines(text) == ["trig phase=a bin=1", "trig phase=b bin=2"]
+    assert fc.complete_lines("") == []
+
+
+def test_debug_lines_ignore_a_line_still_arriving():
+    text = (
+        "trig phase=watching tee=1 approach=0 ready=0 toward=0 away=0 run=0 peak=0 have=0 "
+        "bin=14 level=6 latched=0\ntrig phase=tracking tee=1 approach=0 ready=0 toward=0 "
+    )
+    lines = fc._debug_lines(text)  # pylint: disable=protected-access
+    assert [fields["phase"] for fields in lines] == ["watching"]
+
+
+def test_arm_command_sends_the_snr_not_a_power_level():
+    ctx = _ctx(_trigger_radar())
+    assert fc.arm_command(ctx) == f"triggerCfg {fc._tee_bin(ctx)} 6.0 2"  # pylint: disable=protected-access
+
+
+def test_detector_evidence_collects_trace_and_log_lines_and_skips_missing_commands():
+    replies = {
+        "triggerLog trace": (
+            b"triggerLog trace\ntrigtrace state=idle stat=peak floor=812 bar=2.0x frames=40 "
+            b"region=2+16 entries=1\ntrigmax 2:900@3 3:812@1\n"
+            b"t frame=3 gap=2 bin=2 state=idle energy=9000 peak=1800 loop0=700 floor=812\nDone\n"
+        ),
+        "triggerLog": b"triggerLog\ntrig state=idle floor=812 frames=40 records=0\nDone\n",
+    }
+    radar = scripted_radar(replies)
+    lines = fc.detector_evidence(_ctx(radar))
+    assert lines[0].startswith("trigtrace ")
+    assert lines[1].startswith("trigmax ")
+    assert lines[2].startswith("t frame=3 ")
+    assert lines[3].startswith("trig state=idle")
+
+    old = scripted_radar({})  # every command unknown
+    assert fc.detector_evidence(_ctx(old)) == []
+
+
+def test_missed_swing_prints_the_detector_evidence_before_cleanup_can_clear_it(monkeypatch):
+    radar, _state = _swing_radar(_cube(), fire=False)
+    monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [])
+    printed: list[str] = []
+    ctx = _ctx(radar, wait_s=1.0, shots=1, out=printed.append)
+
+    fc.run(ctx, (fc.swing_section(1),), swing=True)
+
+    assert any("detector evidence (no Triggered within 1 s)" in line for line in printed)
+    assert "triggerLog trace" in radar.ser.written
+    assert "triggerLog clear" in radar.ser.written, "the trace starts with the swing"
 
 
 def test_swing_fake_fires_two_polls_after_watching():

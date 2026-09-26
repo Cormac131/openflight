@@ -393,6 +393,27 @@ def test_reply_split_inside_the_error_line_is_read_through_to_the_prompt():
     assert radar.ser.in_waiting == 0
 
 
+def test_bytes_after_the_prompt_are_not_part_of_the_reply():
+    """A debug line streaming right behind the prompt must not be returned half-arrived."""
+    radar = _chunked_radar(
+        [b"debugCfg 1\ntrig phase=watching tee=1 bin=14\nDone\nl3dump:/>trig phase=track"]
+    )
+
+    reply = radar.cmd("debugCfg 1", 0.5)
+
+    assert reply.endswith("l3dump:/>")
+    assert "phase=track" not in reply
+
+
+def test_notice_behind_the_prompt_is_still_remembered_for_the_listener():
+    radar = _chunked_radar([b"stats\nactive=1\nDone\nl3dump:/>Triggered\n"])
+
+    reply = radar.cmd("stats", 0.5)
+
+    assert "Triggered" not in reply
+    assert radar.wait_trigger_notice()[0] is True
+
+
 def test_reply_ends_at_the_prompt_after_done_not_at_a_prompt_before_it():
     radar = _chunked_radar([b"stats\nframes=1 active=1\nDone\n", b"l3dump:/>"])
 
@@ -464,13 +485,16 @@ def test_watch_script_releases_a_trigger_in_the_arming_reply(monkeypatch):
     type(radar.ser).in_waiting = PropertyMock(side_effect=KeyboardInterrupt)
     monkeypatch.setitem(main.__globals__, "IWR6843Radar", lambda **_kwargs: radar)
     monkeypatch.setitem(main.__globals__, "tee_local_bin", lambda *_args: 14)
-    monkeypatch.setattr(sys, "argv", ["watch_trigger.py", "--level", "1000"])
+    monkeypatch.setitem(
+        main.__globals__, "measure_trigger_level", lambda *_args, **_kwargs: (200000.0, 1200000.0)
+    )
+    monkeypatch.setattr(sys, "argv", ["watch_trigger.py", "--snr", "6"])
 
     main()
 
     assert calls == [
         "debugCfg 1",
-        "triggerCfg 14 1000.0 2",
+        "triggerCfg 14 6.0 2",
         "debugCfg 0",
         "release",
         "debugCfg 1",
@@ -499,13 +523,13 @@ def test_watch_script_arms_above_the_measured_tee_floor(monkeypatch):
     monkeypatch.setitem(main.__globals__, "IWR6843Radar", lambda **_kwargs: radar)
     monkeypatch.setitem(main.__globals__, "tee_local_bin", lambda *_args: 14)
     monkeypatch.setitem(
-        main.__globals__, "measure_trigger_level", lambda *_args: (200000.0, 300000.0)
+        main.__globals__, "measure_trigger_level", lambda *_args, **_kwargs: (200000.0, 1200000.0)
     )
     monkeypatch.setattr(sys, "argv", ["watch_trigger.py"])
 
     main()
 
-    assert calls[:2] == ["debugCfg 1", "triggerCfg 14 300000.0 2"]
+    assert calls[:2] == ["debugCfg 1", "triggerCfg 14 6.0 2"]
 
 
 class _PyserialShortRead:
@@ -559,7 +583,7 @@ def test_background_floor_collects_eight_samples_inside_two_seconds():
     )
 
     assert floor == pytest.approx(180000.0)
-    assert level == pytest.approx(270000.0)
+    assert level == pytest.approx(6.0 * 180000.0), "threshold is floor x the default snr"
     # The 2s window is the pauses between readings. A timeout on each stats
     # pushes the sixth sample past that window.
     assert port.elapsed == pytest.approx(2.0)

@@ -31,6 +31,12 @@
  * frames only count toward the next record's gap, so a missed swing stays
  * readable for as long as the player takes to ask for it. */
 #define L3_TRIG_LOG_DEPTH         128U
+/* Raw-input trace: the region's strongest bin, every frame it reaches
+ * L3_TRIG_TRACE_RATIO times the floor (well under any snr worth arming
+ * with), with its energy, strongest loop and loop-0 power. Answers "did the
+ * radar see anything at all" when the log stays empty. */
+#define L3_TRIG_TRACE_DEPTH       64U
+#define L3_TRIG_TRACE_RATIO       2.0F
 /* A track survives this many frames without a candidate. */
 #define L3_TRIG_MAX_MISSES        1U
 /* A candidate up to this many bins short of the last one still continues
@@ -121,9 +127,22 @@ typedef struct {
 typedef struct {
     float energy;
     float peak;
+    float loop0;            /* loop 0 alone: the probe the first detector used */
     float r1Re;
     float r1Im;
 } l3_trig_obs_t;
+
+/* One traced frame: the region's strongest bin by the configured statistic. */
+typedef struct {
+    uint32_t frame;
+    uint16_t gap;           /* untraced frames since the previous entry */
+    uint8_t  bin;
+    uint8_t  state;         /* detector state after the frame */
+    float    energy;
+    float    peak;
+    float    loop0;
+    float    floor;         /* in the configured statistic's units */
+} l3_trig_trace_t;
 
 typedef struct {
     uint32_t frame;
@@ -156,6 +175,15 @@ typedef struct {
     uint32_t logNext;       /* ring write index */
     uint32_t logCount;      /* records held, at most L3_TRIG_LOG_DEPTH */
     l3_trig_record_t log[L3_TRIG_LOG_DEPTH];
+    /* Raw-input trace and per-bin maximum since arming or the last clear. */
+    uint32_t traceQuiet;
+    uint32_t traceNext;
+    uint32_t traceCount;
+    l3_trig_trace_t trace[L3_TRIG_TRACE_DEPTH];
+    uint32_t maxFirstBin;   /* region start the max-hold indices refer to */
+    uint32_t maxBins;
+    float    maxStat[L3_TRIG_MAX_BINS];
+    uint32_t maxFrame[L3_TRIG_MAX_BINS];
 } l3_trig_t;
 
 /* Fill cfg with the defaults for the optional parameters. */
@@ -190,5 +218,15 @@ int32_t l3_trig_format_config(const l3_trig_t *trig, char *out, uint32_t cap);
 int32_t l3_trig_format_record(const l3_trig_record_t *record, char *out,
                               uint32_t cap);
 const char *l3_trig_why_name(uint8_t why);
+
+/* Raw-input trace. clear empties the trace and the max-hold only. */
+void l3_trig_trace_clear(l3_trig_t *trig);
+uint32_t l3_trig_trace_count(const l3_trig_t *trig);
+int32_t l3_trig_trace_get(const l3_trig_t *trig, uint32_t index, l3_trig_trace_t *out);
+int32_t l3_trig_format_trace_header(const l3_trig_t *trig, char *out, uint32_t cap);
+int32_t l3_trig_format_trace(const l3_trig_trace_t *entry, char *out, uint32_t cap);
+/* Max-hold for up to count region bins from index start: "trigmax b:stat@frame ...". */
+int32_t l3_trig_format_maxhold(const l3_trig_t *trig, uint32_t start, uint32_t count,
+                               char *out, uint32_t cap);
 
 #endif /* L3_TRIGGER_H */

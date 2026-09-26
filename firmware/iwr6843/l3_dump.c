@@ -2620,6 +2620,7 @@ static void l3_verticalResidual(uint32_t slot, uint32_t localBin,
     if (obs != NULL) {
         obs->energy = energy;
         obs->peak = peak;
+        obs->loop0 = loopPower[0];
         obs->r1Re = r1Re;
         obs->r1Im = r1Im;
     }
@@ -3305,10 +3306,41 @@ static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
     return 0;
 }
 
-/* CLI "triggerLog": the detector's state and counters, its configuration,
- * then one line per logged frame, oldest first. Only frames with a
- * candidate or an active track are logged; gap= counts the quiet frames
- * before each. Records keep accruing while this prints, so a frame logged
+/* "triggerLog trace": what the detector was offered. A header, the per-bin
+ * maximum of the detection statistic since arming (eight bins per line, each
+ * "bin:max@frame"), then one line per traced frame, oldest first: the
+ * region's strongest bin whenever it reached the trace bar, with its
+ * all-loop energy, strongest-loop power, loop-0 power and the floor. A swing
+ * that never becomes a candidate still shows up here, or shows up nowhere,
+ * which says whether the club is invisible or merely rejected. */
+static void l3_writeTriggerTrace(char *line, uint32_t cap)
+{
+    l3_trig_trace_t entry;
+    uint32_t count;
+    uint32_t index;
+
+    (void)l3_trig_format_trace_header(&gTrig, line, cap);
+    CLI_write("%s\n", line);
+    for (index = 0U; index < gTrig.maxBins; index += 8U) {
+        (void)l3_trig_format_maxhold(&gTrig, index, 8U, line, cap);
+        CLI_write("%s\n", line);
+    }
+    count = l3_trig_trace_count(&gTrig);
+    for (index = 0U; index < count; index++) {
+        if (!l3_trig_trace_get(&gTrig, index, &entry)) {
+            break;
+        }
+        (void)l3_trig_format_trace(&entry, line, cap);
+        CLI_write("%s\n", line);
+    }
+}
+
+/* CLI "triggerLog [trace|clear]". Bare: the detector's state and counters,
+ * its configuration, then one line per logged frame, oldest first. Only
+ * frames with a candidate or an active track are logged; gap= counts the
+ * quiet frames before each. "trace" prints the raw-input trace instead (see
+ * above); "clear" empties the trace and its maxima without touching the log
+ * or the arm. Records keep accruing while this prints, so a frame logged
  * mid-print can show twice or not at all. */
 static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
 {
@@ -3318,8 +3350,20 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
     uint32_t count;
     uint32_t index;
 
-    (void)argc;
-    (void)argv;
+    if (argc == 2 && strcmp(argv[1], "clear") == 0) {
+        l3_trig_trace_clear(&gTrig);
+        CLI_write("Done\n");
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "trace") == 0) {
+        l3_writeTriggerTrace(line, sizeof(line));
+        CLI_write("Done\n");
+        return 0;
+    }
+    if (argc != 1) {
+        CLI_write("Error: triggerLog [trace|clear]\n");
+        return -1;
+    }
     (void)l3_trig_format_summary(&gTrig, line, sizeof(line));
     CLI_write("%s\n", line);
     (void)l3_trig_format_config(&gTrig, line, sizeof(line));
@@ -4153,7 +4197,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[16].helpString    = "Rearm a self-trigger freeze without streaming";
     cliCfg.tableEntry[16].cmdHandlerFxn = l3_cli_release;
     cliCfg.tableEntry[17].cmd           = "triggerLog";
-    cliCfg.tableEntry[17].helpString    = "Print the self-trigger detector's frame log";
+    cliCfg.tableEntry[17].helpString    = "triggerLog [trace|clear]: detector frame log or raw-input trace";
     cliCfg.tableEntry[17].cmdHandlerFxn = l3_cli_triggerLog;
     CLI_open(&cliCfg);
 }

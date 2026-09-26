@@ -149,7 +149,19 @@ configured statistic's units), apparent velocity, coherence, track age, and
 (`acquired`, `advanced`, `jumped`, `missed`, `lost`, `lowcoh`, `young`,
 `slow`, `fired`). Read it after a missed swing before re-arming: the ring
 re-arm after `l3sparse` keeps the log, `triggerCfg` clears it.
-`scripts/hardware-test/test_iwr_self_trigger.py --swing` prints it for you.
+`triggerLog trace` answers the question the log cannot when it stays empty:
+did the radar see anything at all? Every frame, the detector notes the
+region's strongest bin in a per-bin maximum since arming, and records the
+frame whenever that bin reaches twice the floor (well under any usable
+`snr`), with its all-loop energy, strongest-loop power, loop-0 power and the
+floor. `triggerLog clear` empties the trace and the maxima without touching
+the log or the arm. `test_iwr_firmware.py --swing` prints both the trace and
+the log when a swing does not fire, or when it is interrupted, before its
+cleanup disarms and clears them. Read the trace against `floor x snr`: flat
+maxima and no entries mean the club was not seen; entries under the
+threshold mean it was seen and thresholded out; a large `peak` beside a
+modest `energy` means the club is in a bin for part of a frame and the
+strongest-loop statistic is the right one.
 
 `Triggered` and the `debugCfg 1` phase lines are not written by the detect
 task itself. It queues them and a task at the CLI task's priority writes

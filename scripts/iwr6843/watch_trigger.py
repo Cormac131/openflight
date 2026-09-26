@@ -12,7 +12,11 @@ import time
 
 from openflight.iwr6843.calibration import DEFAULT_TEE_RANGE_M
 from openflight.iwr6843.driver import TRIGGER_NOTICE, IWR6843Radar
-from openflight.iwr6843.monitor import measure_trigger_level, tee_local_bin
+from openflight.iwr6843.monitor import (
+    SELF_TRIGGER_DEFAULT_SNR,
+    measure_trigger_level,
+    tee_local_bin,
+)
 
 _DEFAULT_CFG = "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
 
@@ -23,36 +27,34 @@ def main() -> None:
     parser.add_argument("--config", default=_DEFAULT_CFG)
     parser.add_argument("--tee-m", type=float, default=DEFAULT_TEE_RANGE_M)
     parser.add_argument(
-        "--level",
+        "--snr",
         type=float,
-        default=None,
-        help="tee power threshold; omitted means 1.5x the measured tee floor",
+        default=SELF_TRIGGER_DEFAULT_SNR,
+        help="candidate threshold as a multiple of the firmware's running noise floor",
     )
-    parser.add_argument("--hits", type=int, default=2)
+    parser.add_argument(
+        "--hits", type=int, default=2, help="tracked frames before the gate may fire"
+    )
     args = parser.parse_args()
 
     local_bin = tee_local_bin(args.tee_m, args.config)
     radar = IWR6843Radar(port=args.port)
     try:
         radar.send_config(args.config)
-        # A fixed level of 1000 is below a person sitting in the beam (the tee
-        # return is ~2e5), so the detector arms on them and fires. Sample the
-        # live tee first unless the caller named a threshold.
-        if args.level is None:
-            floor, level = measure_trigger_level(radar, local_bin, args.hits)
-            print(f"tee p95 {floor:.0f}; arming at {level:.0f}", flush=True)
-        else:
-            level = args.level
+        # The firmware keeps its own noise floor; show it and the threshold
+        # it implies so a swing's triggerLog can be read against them.
+        floor, threshold = measure_trigger_level(radar, local_bin, args.hits, snr=args.snr)
+        print(f"floor p95 {floor:.0f}; threshold {threshold:.0f} at snr {args.snr:g}", flush=True)
         # Debug first so the frames right after arming are visible: a fire in
         # that window used to be swallowed by the next command's buffer reset.
         reply = radar.cmd("debugCfg 1")
         if "Done" not in reply:
             raise SystemExit(f"debugCfg rejected: {reply.strip()}")
         print(
-            f"watching local bin {local_bin}, level {level:g}, {args.hits} hits. Ctrl+C to stop.",
+            f"watching local bin {local_bin}, snr {args.snr:g}, {args.hits} frames. Ctrl+C to stop.",
             flush=True,
         )
-        reply = radar.cmd(f"triggerCfg {local_bin} {level} {args.hits}")
+        reply = radar.cmd(f"triggerCfg {local_bin} {args.snr} {args.hits}")
         if "Done" not in reply:
             raise SystemExit(f"triggerCfg rejected: {reply.strip()}")
         print(reply.replace("Done", "").strip(), flush=True)

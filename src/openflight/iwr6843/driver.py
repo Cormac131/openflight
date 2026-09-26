@@ -169,6 +169,7 @@ class IWR6843Radar:
         self.ser.write((line + "\n").encode())
         resp = b""
         verdict_at = -1
+        reply_end = -1
         deadline = time.time() + window
         last_byte_at = time.time()
         while time.time() < deadline:
@@ -183,9 +184,18 @@ class IWR6843Radar:
                 verdict_at = _reply_verdict_at(resp)
             if verdict_at < 0:
                 continue
-            if CLI_PROMPT in resp[verdict_at:] or time.time() - last_byte_at >= _REPLY_QUIET_S:
+            if CLI_PROMPT in resp[verdict_at:]:
+                reply_end = resp.index(CLI_PROMPT, verdict_at) + len(CLI_PROMPT)
                 break
+            if time.time() - last_byte_at >= _REPLY_QUIET_S:
+                break
+        # The whole read is scanned for a notice, split or not; only the reply
+        # is returned. Bytes after the prompt are the start of whatever
+        # streams next (a debug line, a notice), and a partial debug line
+        # handed back here would parse as one with fields missing.
         self._remember_trigger_notice(resp)
+        if reply_end >= 0:
+            resp = resp[:reply_end]
         return resp.decode(errors="replace")
 
     def drain_stale_output(
@@ -530,6 +540,22 @@ class IWR6843Radar:
         prints up to 128 records, so allow a few seconds at CLI baud.
         """
         return self.cmd("triggerLog", 6.0)
+
+    def trigger_trace(self) -> str:
+        """The detector's raw-input trace: what it was offered, not what it took.
+
+        A header, the per-bin maximum of the detection statistic since arming
+        (``bin:max@frame``), then one line per frame whose strongest bin
+        reached twice the floor, with all-loop energy, strongest-loop peak,
+        loop-0 power and the floor. Read it after a missed swing: an empty
+        trace with flat maxima means the club was not seen at all; entries
+        under ``floor x snr`` mean it was seen and thresholded out.
+        """
+        return self.cmd("triggerLog trace", 6.0)
+
+    def clear_trigger_trace(self) -> None:
+        """Empty the trace and its maxima; the arm and the log are untouched."""
+        self._require_done("triggerLog clear", self.cmd("triggerLog clear", 2.0))
 
     def stop_sensor(self) -> None:
         """Stop capture and verify the firmware returned to its idle CLI state."""

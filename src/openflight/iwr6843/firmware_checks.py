@@ -165,8 +165,8 @@ class Context:
     radar: IWR6843Radar
     config: str
     tee_m: float
-    level: float | None
-    hits: int
+    snr: float  # candidate threshold over the firmware's noise floor
+    hits: int  # tracked frames before the gate may fire
     wait_s: float
     shots: int
     profiles: tuple[str, ...]
@@ -255,7 +255,7 @@ def _measure_level(ctx: Context) -> tuple[tuple[float, float] | None, str | None
     """
     try:
         floor, level = measure_trigger_level(
-            ctx.radar, _tee_bin(ctx), ctx.hits, clock=ctx.clock, pause=ctx.sleep
+            ctx.radar, _tee_bin(ctx), ctx.hits, snr=ctx.snr, clock=ctx.clock, pause=ctx.sleep
         )
     except RuntimeError as exc:
         _disarm(ctx)
@@ -274,6 +274,16 @@ def wait_until(
         if ctx.clock() >= deadline:
             return False
         ctx.sleep(poll_s)
+
+
+def complete_lines(text: str) -> list[str]:
+    """The newline-terminated lines of ``text``; a trailing partial line is dropped.
+
+    Port reads end at arbitrary bytes, so the last line of a window may still
+    be arriving; parsed as-is it reads as a line with fields missing.
+    """
+    lines = text.splitlines(keepends=True)
+    return [line.rstrip("\r\n") for line in lines if line.endswith("\n")]
 
 
 def read_port_text(ctx: Context, seconds: float) -> str:
@@ -981,15 +991,40 @@ TRIG_DEBUG_FIELDS = (
 )
 
 
-def arm_command(ctx: Context, level: float) -> str:
-    """``triggerCfg`` for this rig's tee bin.
+def arm_command(ctx: Context) -> str:
+    """``triggerCfg`` for this rig's tee bin at ``ctx.snr`` over the firmware's floor.
 
-    ``level`` is sent as the SNR multiple and ``ctx.hits`` as the number of
-    tracked frames, the three-number command these checks already send.
+    The second number is an SNR multiple, not a power: the earlier suite sent
+    a measured absolute level (~3e7) there, which armed a threshold no swing
+    could reach and read as "the radar does not see the club".
     """
-    return SelfTriggerConfig(
-        local_bin=_tee_bin(ctx), snr=level, track_frames=ctx.hits
-    ).command
+    return SelfTriggerConfig(local_bin=_tee_bin(ctx), snr=ctx.snr, track_frames=ctx.hits).command
+
+
+def detector_evidence(ctx: Context) -> list[str]:
+    """What the detector saw: its raw-input trace, then its frame log.
+
+    For a swing that did not fire. Read before disarming: ``triggerCfg``
+    clears both. Empty on firmware without them.
+    """
+    lines: list[str] = []
+    for command in ("triggerLog trace", "triggerLog"):
+        reply = ctx.radar.cmd(command, 6.0)
+        if "not recognized" in reply:
+            continue
+        lines.extend(
+            line.strip()
+            for line in reply.splitlines()
+            if line.strip().startswith(("trig", "t frame=", "frame="))
+            and not line.strip().startswith("triggerLog")  # the command's echo
+        )
+    return lines
+
+
+def report_evidence(ctx: Context, why: str) -> None:
+    ctx.out(f"  detector evidence ({why}):")
+    for line in detector_evidence(ctx) or ["(none: firmware without triggerLog)"]:
+        ctx.out(f"    {line}")
 
 
 def _trig_state(snap: StatsSnapshot) -> str:
@@ -1013,7 +1048,7 @@ def _check_trigger_cfg_validation(ctx: Context) -> CheckResult:
 
 def _check_arming(ctx: Context) -> CheckResult:
     name = "trigger/arming starts the detector"
-    reply = cli(ctx, arm_command(ctx, FLOOR_PROBE_LEVEL))
+    reply = cli(ctx, arm_command(ctx))
     if "Done" not in reply:
         _disarm(ctx)
         return failed(name, f"arm rejected: {reply.strip()[:60]!r}")
@@ -1063,15 +1098,15 @@ def _check_disarm(ctx: Context) -> CheckResult:
 
 
 def _debug_lines(text: str) -> list[dict[str, str]]:
-    """Every ``trig`` line in ``text`` (the debug stream carries no other trig lines)."""
-    parsed = [parse_trig(line) for line in text.splitlines()]
+    """Every complete ``trig`` line in ``text`` (the stream carries no other trig lines)."""
+    parsed = [parse_trig(line) for line in complete_lines(text)]
     return [fields for fields in parsed if fields is not None]
 
 
 def _check_debug_cfg(ctx: Context) -> CheckResult:
     name = "trigger/debugCfg streams parsable lines"
     local_bin = _tee_bin(ctx)
-    cli(ctx, arm_command(ctx, FLOOR_PROBE_LEVEL))
+    cli(ctx, arm_command(ctx))
     try:
         reply = cli(ctx, "debugCfg 1")
         lines = _debug_lines(reply)
@@ -1083,7 +1118,7 @@ def _check_debug_cfg(ctx: Context) -> CheckResult:
             if missing:
                 problems.append(f"missing fields {missing}")
                 break
-            if fields["bin"] != str(local_bin) or fields["level"] != str(int(FLOOR_PROBE_LEVEL)):
+            if fields["bin"] != str(local_bin) or fields["level"] != str(int(ctx.snr)):
                 problems.append(
                     f"bin={fields['bin']} level={fields['level']} do not echo the armed values"
                 )
@@ -1104,12 +1139,12 @@ def _check_debug_cfg(ctx: Context) -> CheckResult:
             _disarm(ctx)
     if problems:
         return failed(name, "; ".join(problems))
-    return passed(name, f"{len(lines)} line(s), bin={local_bin} level={int(FLOOR_PROBE_LEVEL)}")
+    return passed(name, f"{len(lines)} line(s), bin={local_bin} snr={int(ctx.snr)}")
 
 
 def _check_debug_change_only(ctx: Context) -> CheckResult:
     name = "trigger/debug lines only change on phase change"
-    cli(ctx, arm_command(ctx, FLOOR_PROBE_LEVEL))
+    cli(ctx, arm_command(ctx))
     try:
         # The debugCfg 1 reply carries the first line; anything after Done streams on.
         lines = _debug_lines(cli(ctx, "debugCfg 1"))
@@ -1130,16 +1165,16 @@ def _check_floor(ctx: Context) -> CheckResult:
     measured, problem = _measure_level(ctx)
     if measured is None:
         return failed(name, problem or "floor measurement failed")
-    floor, level = measured
+    floor, threshold = measured
     _disarm(ctx)
-    if not floor > 0 or not level > floor:
-        return failed(name, f"floor={floor:.1f} level={level:.1f}")
-    return passed(name, f"floor={floor:.1f} level={level:.1f}")
+    if not floor > 0 or not threshold > floor:
+        return failed(name, f"floor={floor:.1f} threshold={threshold:.1f}")
+    return passed(name, f"floor={floor:.1f} threshold={threshold:.1f} at snr {ctx.snr:g}")
 
 
 def _check_reconfigure_clears_arm(ctx: Context) -> CheckResult:
     name = "trigger/reconfigure clears a previous arm"
-    cli(ctx, arm_command(ctx, FLOOR_PROBE_LEVEL))
+    cli(ctx, arm_command(ctx))
     load_config(ctx, ctx.config)
     snap = stats_snapshot(ctx)
     if (snap.enabled, snap.latched, snap.phase) != (0, 0, "off"):
@@ -1179,7 +1214,7 @@ READBACK_LIMIT_S = 1.0  # docs/iwr6843/verify.md: readback latency must stay und
 
 @dataclass
 class _SwingState:
-    level: float | None = None
+    threshold: float | None = None  # floor x snr, for the report and the host replay
     armed: bool = False
     last_dump: bytes | None = None
     fired: bool = False
@@ -1217,16 +1252,16 @@ def _arm_for_swing(ctx: Context, state: _SwingState) -> str | None:
     """Arm once; return an error string instead of arming when the lane is not empty."""
     if state.armed:
         return None
-    if ctx.level is None:
-        measured, problem = _measure_level(ctx)
-        if measured is None:
-            return f"floor measurement failed: {problem}"
-        state.level = measured[1]
-    else:
-        state.level = ctx.level
-    reply = cli(ctx, arm_command(ctx, state.level))
+    reply = cli(ctx, arm_command(ctx))
     if "Done" not in reply:
         return f"arm rejected: {reply.strip()[:60]!r}"
+    # The firmware owns the floor and reports it as tee= once armed; the
+    # threshold is read from that at the watching check. The trace is
+    # emptied so its first entries are the swing's.
+    try:
+        ctx.radar.clear_trigger_trace()
+    except RuntimeError:
+        pass  # firmware without the trace still runs the swing checks
     cli(ctx, track_config_command(ctx.config))
     state.armed = True
     return None
@@ -1250,7 +1285,12 @@ def _swing_checks(shot: int, state: _SwingState) -> tuple[Check, ...]:
 
         if not wait_until(ctx, watching, ctx.wait_s, poll_s=0.2):
             return failed(name, _trig_state(latest["snap"]))
-        return passed(name, f"level={state.level:.0f} {_trig_state(latest['snap'])}")
+        state.threshold = (latest["snap"].tee or 0) * ctx.snr
+        return passed(
+            name,
+            f"floor={latest['snap'].tee} threshold={state.threshold:.0f} at snr {ctx.snr:g} "
+            f"{_trig_state(latest['snap'])}",
+        )
 
     def swing_fires(ctx: Context) -> CheckResult:
         name = f"{prefix}: swing fires the trigger"
@@ -1258,8 +1298,14 @@ def _swing_checks(shot: int, state: _SwingState) -> tuple[Check, ...]:
             return skipped(name, "not armed")
         before = stats_snapshot(ctx)
         ctx.prompt(f"Shot {shot}: swing now. Waiting up to {ctx.wait_s:.0f} s.")
-        waited = wait_for_notice(ctx, ctx.wait_s)
+        try:
+            waited = wait_for_notice(ctx, ctx.wait_s)
+        except KeyboardInterrupt:
+            # Cleanup disarms, which clears the log and trace: show them now.
+            report_evidence(ctx, "interrupted while waiting")
+            raise
         if waited is None:
+            report_evidence(ctx, f"no Triggered within {ctx.wait_s:.0f} s")
             return failed(name, f"no Triggered within {ctx.wait_s:.0f} s")
         notice_at = ctx.clock()
         latest: dict[str, StatsSnapshot] = {}
@@ -1338,7 +1384,7 @@ def _swing_checks(shot: int, state: _SwingState) -> tuple[Check, ...]:
         observations = replay_dump(
             state.last_dump,
             tee_range_m=ctx.tee_m,
-            level=state.level or FLOOR_PROBE_LEVEL,
+            level=state.threshold or FLOOR_PROBE_LEVEL,
             hits=ctx.hits,
         )
         fired_at = next((i for i, obs in enumerate(observations) if obs.fired), None)

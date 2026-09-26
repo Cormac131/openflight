@@ -1081,13 +1081,8 @@ def init_camera_capture(
         return False
 
 
-# A moving return short of the tee counts as a clubhead candidate at this
-# multiple of the firmware's running noise floor. Tune with
-# --iwr6843-self-trigger-snr after reading the board's triggerLog.
-_SELF_TRIGGER_DEFAULT_SNR = 6.0
-# Frames a candidate must be tracked approaching before entering the impact
-# gate fires the capture.
-_SELF_TRIGGER_DEFAULT_TRACK_FRAMES = 2
+# The self-trigger defaults live with SelfTriggerConfig in iwr6843.monitor so
+# the hardware check suite and the watch script arm the same way.
 # OPS rolling-buffer split (S#n of 32 segments, ~4.27 ms each at 30 ksps).
 # The self-trigger reaches the OPS as S! a few ms to tens of ms after impact,
 # so keep more of the buffer before the request than the sound gate needs.
@@ -1103,7 +1098,12 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
     Raises ValueError for tuning flags without the switch, so a partial
     command line cannot silently change which trigger drives the shot.
     """
-    from .iwr6843.monitor import SelfTriggerConfig, tee_local_bin
+    from .iwr6843.monitor import (
+        SELF_TRIGGER_DEFAULT_SNR,
+        SELF_TRIGGER_DEFAULT_TRACK_FRAMES,
+        SelfTriggerConfig,
+        tee_local_bin,
+    )
 
     tuning = [
         flag
@@ -1125,8 +1125,8 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
     frames = args.iwr6843_self_trigger_frames
     return SelfTriggerConfig(
         local_bin=bin_index,
-        snr=_SELF_TRIGGER_DEFAULT_SNR if snr is None else snr,
-        track_frames=_SELF_TRIGGER_DEFAULT_TRACK_FRAMES if frames is None else frames,
+        snr=SELF_TRIGGER_DEFAULT_SNR if snr is None else snr,
+        track_frames=SELF_TRIGGER_DEFAULT_TRACK_FRAMES if frames is None else frames,
     )
 
 

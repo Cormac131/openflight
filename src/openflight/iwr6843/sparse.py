@@ -82,7 +82,6 @@ def track_packet_size(header: bytes) -> int:
     return _POWER_HEADER.size + frames * 2 + _TRACK_RECORD.size
 
 
-
 @dataclass(frozen=True)
 class CaptureLayout:
     """What the host needs to rebuild a dump from ILS1 cells."""

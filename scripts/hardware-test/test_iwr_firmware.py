@@ -27,6 +27,7 @@ sys.path.insert(0, "src")
 from openflight.iwr6843 import firmware_checks as fc  # noqa: E402
 from openflight.iwr6843.calibration import DEFAULT_TEE_RANGE_M  # noqa: E402
 from openflight.iwr6843.driver import IWR6843Radar  # noqa: E402
+from openflight.iwr6843.monitor import SELF_TRIGGER_DEFAULT_SNR  # noqa: E402
 
 DEFAULT_CONFIG = "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
 
@@ -55,9 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--shots", type=int, default=2, help="swings to validate with --swing")
     parser.add_argument("--tee-m", type=float, default=DEFAULT_TEE_RANGE_M)
     parser.add_argument(
-        "--level", type=float, default=None, help="trigger level; default measures the floor"
+        "--snr",
+        type=float,
+        default=SELF_TRIGGER_DEFAULT_SNR,
+        help="candidate threshold as a multiple of the firmware's running noise floor",
     )
-    parser.add_argument("--hits", type=int, default=2)
+    parser.add_argument(
+        "--hits", type=int, default=2, help="tracked frames before the gate may fire"
+    )
     parser.add_argument(
         "--wait-s", type=float, default=60.0, help="deadline for prompted and polled steps"
     )
@@ -112,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         radar=radar,
         config=args.config,
         tee_m=args.tee_m,
-        level=args.level,
+        snr=args.snr,
         hits=args.hits,
         wait_s=args.wait_s,
         shots=args.shots,

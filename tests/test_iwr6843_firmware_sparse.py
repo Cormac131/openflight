@@ -237,6 +237,21 @@ def test_overlong_request_drain_outlasts_a_four_times_oversized_request():
     assert "4U * cap" not in read_line
 
 
+def test_trigger_log_serves_the_raw_input_trace_and_its_clear():
+    """A missed swing must be readable: trace and clear ride the existing command."""
+    source = _source()
+    log = _function("static int32_t l3_cli_triggerLog(")
+    trace = _function("static void l3_writeTriggerTrace(")
+
+    assert 'strcmp(argv[1], "trace") == 0' in log and "l3_writeTriggerTrace(line" in log
+    assert 'strcmp(argv[1], "clear") == 0' in log and "l3_trig_trace_clear(&gTrig);" in log
+    assert "l3_trig_format_trace_header(&gTrig" in trace
+    assert "l3_trig_format_maxhold(&gTrig, index, 8U" in trace
+    assert "l3_trig_format_trace(&entry" in trace
+    assert "tableEntry[18]" not in source, "the CLI table is near the SDK's command limit"
+    assert "obs->loop0 = loopPower[0];" in _function("static void l3_verticalResidual(")
+
+
 def test_detector_source_is_built_into_the_firmware():
     makefile = (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
 

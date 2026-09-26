@@ -18,7 +18,6 @@ from openflight.iwr6843.driver import IWR6843Radar, UnsupportedCommand
 from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
 from openflight.iwr6843.self_trigger import (
     FLOOR_PAUSE_S,
-    FLOOR_PROBE_LEVEL,
     FLOOR_SAMPLE_S,
     level_above_floor,
     tee_power_from_stats,
@@ -137,6 +136,14 @@ def _pause(seconds: float) -> None:
     time.sleep(seconds)
 
 
+# A moving return short of the tee counts as a clubhead candidate at this
+# multiple of the firmware's running noise floor. The board's triggerLog
+# shows the snr real swings and idle frames reach; tune from that.
+SELF_TRIGGER_DEFAULT_SNR = 6.0
+# Frames a candidate must be tracked approaching before the gate may fire.
+SELF_TRIGGER_DEFAULT_TRACK_FRAMES = 2
+
+
 @dataclass(frozen=True)
 class SelfTriggerConfig:
     """Firmware ``triggerCfg``: freeze when a tracked clubhead reaches the tee.
@@ -179,18 +186,22 @@ def measure_trigger_level(
     local_bin: int,
     hits: int,
     *,
+    snr: float = SELF_TRIGGER_DEFAULT_SNR,
     clock: Callable[[], float] | None = None,
     pause: Callable[[float], None] | None = None,
 ) -> tuple[float, float]:
-    """Sample the empty-lane tee and return ``(p95 floor, armed level)``.
+    """Arm at ``snr`` over the firmware's floor and return ``(p95 floor, threshold)``.
 
-    The probe level sits above any recorded residual, so the detector stays
-    below the threshold and still reports tee power. The lane must stay empty:
-    a latch during the sample is a failed startup, not a floor.
+    The firmware owns the noise floor: once armed its ``stats`` report it as
+    ``tee=`` (in the detection statistic's units), so this samples that for
+    two seconds and reports the p95 with the ``floor x snr`` threshold the
+    detector applies. The arm is the real one, so the detector is left armed.
+    The lane must stay empty: a latch during the sample is a failed startup,
+    not a floor.
     """
     now = _monotonic if clock is None else clock
     wait = _pause if pause is None else pause
-    probe = f"triggerCfg {local_bin} {FLOOR_PROBE_LEVEL:.0f} {hits}"
+    probe = SelfTriggerConfig(local_bin=local_bin, snr=snr, track_frames=hits).command
     reply = radar.cmd(probe, 2.0)
     if "Error" in reply or "Done" not in reply:
         raise RuntimeError(f"IWR6843 background probe rejected: {reply.strip()}")
@@ -207,9 +218,10 @@ def measure_trigger_level(
             samples.append(tee)
         wait(FLOOR_PAUSE_S)
     try:
-        return level_above_floor(samples)
+        floor, _margin_level = level_above_floor(samples)
     except ValueError as exc:
         raise RuntimeError(f"IWR6843 background sample failed: {exc}") from exc
+    return floor, floor * snr
 
 
 @dataclass(frozen=True)
@@ -754,6 +766,8 @@ class IWR6843CaptureMonitor:
 
 
 __all__ = [
+    "SELF_TRIGGER_DEFAULT_SNR",
+    "SELF_TRIGGER_DEFAULT_TRACK_FRAMES",
     "SELF_TRIGGER_OFF_COMMAND",
     "CaptureConfigSummary",
     "IWR6843Capture",

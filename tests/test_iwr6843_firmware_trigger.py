@@ -23,6 +23,8 @@ SOURCE = FIRMWARE_DIR / "l3_trigger.c"
 # Mirror l3_trigger.h.
 MAX_BINS = 64
 LOG_DEPTH = 128
+TRACE_DEPTH = 64
+TRACE_RATIO = 2.0
 COUNT_TOTAL = 11
 NO_BIN = 0xFF
 STATE_IDLE, STATE_TRACKING, STATE_FIRED = 0, 1, 2
@@ -61,6 +63,8 @@ NOISE = 100.0
 # Strongest loop as a fraction of the 12-loop energy for a target present in
 # every loop, and for noise: 1/12 each, a little more for the maximum.
 PEAK_FRACTION = 0.25
+# Loop 0 alone, as the first detector probed it: one loop of twelve.
+LOOP0_FRACTION = 1.0 / 12.0
 
 
 class Cfg(ctypes.Structure):
@@ -83,8 +87,22 @@ class Obs(ctypes.Structure):
     _fields_ = [
         ("energy", ctypes.c_float),
         ("peak", ctypes.c_float),
+        ("loop0", ctypes.c_float),
         ("r1Re", ctypes.c_float),
         ("r1Im", ctypes.c_float),
+    ]
+
+
+class Trace(ctypes.Structure):
+    _fields_ = [
+        ("frame", ctypes.c_uint32),
+        ("gap", ctypes.c_uint16),
+        ("bin", ctypes.c_uint8),
+        ("state", ctypes.c_uint8),
+        ("energy", ctypes.c_float),
+        ("peak", ctypes.c_float),
+        ("loop0", ctypes.c_float),
+        ("floor", ctypes.c_float),
     ]
 
 
@@ -120,6 +138,14 @@ class Trig(ctypes.Structure):
         ("logNext", ctypes.c_uint32),
         ("logCount", ctypes.c_uint32),
         ("log", Record * LOG_DEPTH),
+        ("traceQuiet", ctypes.c_uint32),
+        ("traceNext", ctypes.c_uint32),
+        ("traceCount", ctypes.c_uint32),
+        ("trace", Trace * TRACE_DEPTH),
+        ("maxFirstBin", ctypes.c_uint32),
+        ("maxBins", ctypes.c_uint32),
+        ("maxStat", ctypes.c_float * MAX_BINS),
+        ("maxFrame", ctypes.c_uint32 * MAX_BINS),
     ]
 
 
@@ -187,6 +213,35 @@ def lib(tmp_path_factory):
     library.l3_trig_format_record.restype = ctypes.c_int32
     library.l3_trig_why_name.argtypes = [ctypes.c_uint8]
     library.l3_trig_why_name.restype = ctypes.c_char_p
+    library.l3_trig_trace_clear.argtypes = [ctypes.POINTER(Trig)]
+    library.l3_trig_trace_count.argtypes = [ctypes.POINTER(Trig)]
+    library.l3_trig_trace_count.restype = ctypes.c_uint32
+    library.l3_trig_trace_get.argtypes = [
+        ctypes.POINTER(Trig),
+        ctypes.c_uint32,
+        ctypes.POINTER(Trace),
+    ]
+    library.l3_trig_trace_get.restype = ctypes.c_int32
+    library.l3_trig_format_trace_header.argtypes = [
+        ctypes.POINTER(Trig),
+        ctypes.c_char_p,
+        ctypes.c_uint32,
+    ]
+    library.l3_trig_format_trace_header.restype = ctypes.c_int32
+    library.l3_trig_format_trace.argtypes = [
+        ctypes.POINTER(Trace),
+        ctypes.c_char_p,
+        ctypes.c_uint32,
+    ]
+    library.l3_trig_format_trace.restype = ctypes.c_int32
+    library.l3_trig_format_maxhold.argtypes = [
+        ctypes.POINTER(Trig),
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.c_uint32,
+    ]
+    library.l3_trig_format_maxhold.restype = ctypes.c_int32
     return library
 
 
@@ -235,6 +290,7 @@ class Detector:
         velocity_mps: float = 0.0,
         peak_fraction: float = PEAK_FRACTION,
         target_peak_fraction: float | None = None,
+        loop0_fraction: float = LOOP0_FRACTION,
     ) -> bool:
         """One frame: noise everywhere, plus targets {local_bin: energy}.
 
@@ -251,6 +307,7 @@ class Detector:
         for index in range(self.count):
             obs[index].energy = noise * (1.0 + 0.04 * ((index * 7 + self.frame) % 5 - 2))
             obs[index].peak = obs[index].energy * peak_fraction
+            obs[index].loop0 = obs[index].energy * loop0_fraction
             obs[index].r1Re = 0.0
             obs[index].r1Im = 0.0
         phase = 4.0 * math.pi * velocity_mps * LOOP_PERIOD_S / WAVELENGTH_M
@@ -259,6 +316,7 @@ class Detector:
             assert 0 <= index < self.count, f"bin {local_bin} outside the region"
             obs[index].energy = energy
             obs[index].peak = energy * target_peak_fraction
+            obs[index].loop0 = energy * loop0_fraction
             obs[index].r1Re = coherence * energy * math.cos(phase)
             obs[index].r1Im = coherence * energy * math.sin(phase)
         self.frame += 1
@@ -267,6 +325,31 @@ class Detector:
                 ctypes.byref(self.trig), self.frame, self.first, obs, self.count
             )
         )
+
+    def traces(self) -> list[Trace]:
+        out = []
+        for index in range(self.lib.l3_trig_trace_count(ctypes.byref(self.trig))):
+            entry = Trace()
+            assert (
+                self.lib.l3_trig_trace_get(ctypes.byref(self.trig), index, ctypes.byref(entry)) == 1
+            )
+            out.append(entry)
+        return out
+
+    def trace_header(self) -> str:
+        buf = ctypes.create_string_buffer(256)
+        self.lib.l3_trig_format_trace_header(ctypes.byref(self.trig), buf, len(buf))
+        return buf.value.decode()
+
+    def trace_line(self, entry: Trace) -> str:
+        buf = ctypes.create_string_buffer(256)
+        self.lib.l3_trig_format_trace(ctypes.byref(entry), buf, len(buf))
+        return buf.value.decode()
+
+    def maxhold_line(self, start: int, count: int) -> str:
+        buf = ctypes.create_string_buffer(256)
+        self.lib.l3_trig_format_maxhold(ctypes.byref(self.trig), start, count, buf, len(buf))
+        return buf.value.decode()
 
     def records(self) -> list[Record]:
         out = []
@@ -752,6 +835,102 @@ def test_record_carries_energy_floor_state_and_age(lib):
     assert record.peak == pytest.approx(CLUB * PEAK_FRACTION)
     assert record.floor == pytest.approx(NOISE * PEAK_FRACTION, rel=0.05)
     assert (record.state, record.age, record.bin) == (STATE_TRACKING, 2, 15)
+
+
+# --- raw-input trace ---------------------------------------------------------
+
+
+def test_trace_records_the_strongest_bin_of_frames_the_log_never_sees(lib):
+    """A club at 3x the floor is no candidate at snr 6, but the trace shows it was offered."""
+    det = detector(lib, snr=6.0)
+    for _ in range(10):
+        det.feed()
+    for local_bin in [10, 12, 15]:
+        assert det.feed({local_bin: 3.0 * NOISE}) is False
+    assert det.records() == [], "below snr: nothing in the log"
+    traces = det.traces()
+    assert [entry.bin for entry in traces] == [10, 12, 15]
+    assert traces[0].gap == 10
+    assert traces[0].energy == pytest.approx(3.0 * NOISE)
+    assert traces[0].peak == pytest.approx(3.0 * NOISE * PEAK_FRACTION)
+    assert traces[0].loop0 == pytest.approx(3.0 * NOISE * LOOP0_FRACTION)
+    assert traces[0].floor == pytest.approx(NOISE * PEAK_FRACTION, rel=0.05)
+
+
+def test_trace_bar_is_twice_the_floor_so_noise_stays_out(lib):
+    det = detector(lib)
+    for _ in range(50):
+        det.feed()
+    assert det.traces() == []
+    det.feed({12: 1.9 * NOISE})
+    assert det.traces() == []
+    det.feed({12: 2.2 * NOISE})
+    assert [entry.bin for entry in det.traces()] == [12]
+
+
+def test_trace_follows_the_regions_strongest_bin_not_the_track(lib):
+    det = detector(lib)
+    det.feed({10: CLUB})
+    det.feed({12: CLUB})
+    det.feed({15: CLUB, 9: 3 * CLUB})  # the track keeps 15; the trace reports 9
+    assert det.records()[-1].bin == 15
+    assert det.traces()[-1].bin == 9
+
+
+def test_max_hold_keeps_the_largest_statistic_per_bin_with_its_frame(lib):
+    det = detector(lib)
+    for _ in range(5):
+        det.feed()
+    det.feed({12: 4.0 * NOISE})  # frame 6
+    det.feed({12: 3.0 * NOISE, 13: 2.6 * NOISE})  # frame 7
+    trig = det.trig
+    assert trig.maxFirstBin == det.first
+    assert trig.maxBins == det.count
+    index = 12 - det.first
+    assert trig.maxStat[index] == pytest.approx(4.0 * NOISE * PEAK_FRACTION)
+    assert trig.maxFrame[index] == 6
+    assert trig.maxStat[index + 1] == pytest.approx(2.6 * NOISE * PEAK_FRACTION)
+    assert trig.maxFrame[index + 1] == 7
+    line = det.maxhold_line(index, 2)
+    assert (
+        line
+        == f"trigmax 12:{4.0 * NOISE * PEAK_FRACTION:.0f}@6 13:{2.6 * NOISE * PEAK_FRACTION:.0f}@7"
+    )
+
+
+def test_trace_clear_empties_trace_and_maxima_but_keeps_the_log_and_arm(lib):
+    det = detector(lib)
+    det.feed({12: CLUB})
+    assert det.traces() and det.records()
+    lib.l3_trig_trace_clear(ctypes.byref(det.trig))
+    assert det.traces() == []
+    assert det.trig.maxBins == 0
+    assert len(det.records()) == 1
+    assert det.trig.state == STATE_TRACKING
+    det.feed({15: CLUB})
+    assert [entry.bin for entry in det.traces()] == [15]
+
+
+def test_trace_keeps_the_newest_frames_when_full(lib):
+    det = detector(lib, minStepBins=0.0, trackFrames=200)
+    for _ in range(TRACE_DEPTH + 10):
+        det.feed({12: CLUB})
+    traces = det.traces()
+    assert len(traces) == TRACE_DEPTH
+    assert traces[0].frame == 11
+    assert traces[-1].frame == TRACE_DEPTH + 10
+
+
+def test_trace_header_and_lines_read_without_float_printf(lib):
+    det = detector(lib)
+    for _ in range(3):
+        det.feed()
+    det.feed({12: 4.0 * NOISE})
+    header = det.trace_header()
+    assert header.startswith("trigtrace state=idle stat=peak floor=")
+    assert f"bar=2.0x frames=4 region={det.first}+{det.count} entries=1" in header
+    line = det.trace_line(det.traces()[0])
+    assert line.startswith("t frame=4 gap=3 bin=12 state=idle energy=400 peak=100 loop0=33 floor=")
 
 
 # --- text output (integer-only printf) --------------------------------------
