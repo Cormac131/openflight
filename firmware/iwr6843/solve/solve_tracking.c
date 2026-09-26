@@ -12,28 +12,57 @@
  * what is genuinely new. Every divergence found during the audit, and
  * whether it matters for this stage:
  *
- * 1. REUSED UNCHANGED: l3track_rng_seed()/l3track_rng_pair() (the xorshift32
- *    pair source) and l3track_inlier_tol() (n_samples>=128 ? 1.2 : 0.8).
- *    Both are pure and independent of track_select.h's buffer-size macros,
- *    so they call directly into track_select.c with no wrapper -- reusing
- *    this, rather than inventing a second RNG, is what the plan's
- *    correction called for.
- *    IMPORTANT CAVEAT, found empirically while writing this stage's test:
- *    l3track_rng_pair does NOT reproduce numpy's exact draw sequence for
- *    the same integer seed -- it is xorshift32, not numpy's PCG64/Generator
- *    algorithm. tracking.find_ball()'s golden output (the RANSAC candidate
- *    numpy's default_rng(1).choice() draws actually land on) can only be
- *    reproduced bit-for-bit by driving the SAME numpy draw sequence through
- *    the C RANSAC loop -- exactly what tests/test_iwr6843_solve_tracking.py
- *    does for its equivalence assertions, and what
- *    tests/test_iwr6843_track_select.py's own `_numpy_pairs` mock already
- *    did for track_select.c's parity tests, for the identical reason. Using
- *    l3track_rng_pair instead mismatched n_inliers by 1 on 3 of the 15
- *    corpus cases: still a plausible RANSAC winner (this stage's own
- *    test_firmware_rng_ball_is_close_enough asserts that), just not the
- *    exact one. l3track_rng_pair's role here is the ON-CHIP draw source
- *    (deterministic and dependency-free for when this runs on the DSS with
- *    no numpy available), not a bit-exact stand-in for the host's RNG.
+ * 1. REUSED UNCHANGED: l3track_inlier_tol() (n_samples>=128 ? 1.2 : 0.8), a
+ *    pure function independent of track_select.h's buffer-size macros, so
+ *    it calls directly into track_select.c with no wrapper.
+ *    l3track_rng_seed()/l3track_rng_pair() (the xorshift32 pair source) were
+ *    ALSO reused unchanged in this stage's first draft, on the assumption
+ *    that reusing track_select.c's RNG rather than inventing a second one
+ *    would give bit-exact parity with tracking.find_ball()'s numpy-driven
+ *    reference. Running the corpus proved that assumption wrong: xorshift32
+ *    is not numpy's PCG64/Generator algorithm, and l3track_rng_pair
+ *    mismatched n_inliers by 1 on 3 of the 15 corpus cases when used as the
+ *    on-chip draw source -- a plausible RANSAC winner, just not the exact
+ *    one. That gap (up to rel=0.05 on speed_ms/n_inliers, per the corpus's
+ *    borderline cases) is far outside any launch-monitor spec, so it is not
+ *    an acceptable "on-chip matches the reference" story by itself.
+ *    THE FIX, not just a caveat: solve_numpy_rng.c (new, this task) is a
+ *    from-scratch port of numpy's SeedSequence + PCG64 + Generator.choice(n,
+ *    2, replace=False) -- the exact algorithm tracking.py's RANSAC loop
+ *    calls -- verified bit-for-bit identical to numpy 2.4.6 across 7 seeds,
+ *    15 n values spanning this stage's real nOrder range (78-249) and
+ *    beyond, and full 2500-iteration draw sequences (see
+ *    tests/test_iwr6843_solve_numpy_rng.py). solve_numpy_rng_pair() is now
+ *    THIS STAGE'S RECOMMENDED on-chip pairFn -- not l3track_rng_pair -- and
+ *    Tasks 6-8's stages (which port the same find_ball_from_power()-style
+ *    RANSAC pattern) should use it too, not re-derive or reuse xorshift32.
+ *    l3track_rng_pair remains exactly what it always was for
+ *    track_select.c's OWN caller (the l3track CLI): a deterministic,
+ *    dependency-free draw source that does not claim bit-exactness. This
+ *    stage no longer includes it via track_select.h's RNG entry points for
+ *    correctness reasons, only l3track_inlier_tol -- see the updated build
+ *    wiring below and test_iwr6843_solve_tracking.py's own two RNG tests
+ *    (the bit-exact one against solve_numpy_rng, and a separate,
+ *    still-approximate one that keeps exercising l3track_rng_pair for
+ *    whoever might still want a numpy-free fallback).
+ *    A SEPARATE, NARROWER CORRECTION, found during this same review: this
+ *    banner previously called n_inliers exactness (in the numpy-draws
+ *    equivalence test) a guaranteed consequence of "both sides run the
+ *    identical median/argmax/parabola arithmetic in float64". That is
+ *    wrong. loop_power() is NOT bit-identical to numpy's reference even at
+ *    identical draws: numpy's np.abs() on complex128 computes hypot(re,im)
+ *    then squares it, this port computes re*re+im*im directly, and numpy
+ *    reduces the TX/RX sum pairwise over two array axes while this port
+ *    accumulates it in a single sequential loop -- both real, structural
+ *    floating-point divergences (see solve_tracking_loop_power() below),
+ *    not summation-order noise alone. n_inliers landing exactly right is
+ *    therefore MEASURED across the corpus's 15 cases (it does, for both the
+ *    exact-numpy-draws test and the new bit-exact-RNG test below), not
+ *    something the arithmetic *guarantees* -- the inlier count is a hard
+ *    `< tol` boundary test, so a detection sitting close enough to that
+ *    boundary could in principle flip under this divergence. See
+ *    tests/test_iwr6843_solve_tracking.py's own tolerance-table comment for
+ *    the matching correction on the test side.
  *
  * 2. NOT REUSABLE AS-IS: track_select.h's fixed buffers (L3T_MAX_BINS=64,
  *    float32 row/scratch/detBin arrays) do not fit this stage. L3T_MAX_BINS

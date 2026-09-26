@@ -26,19 +26,37 @@ TRACK_SELECT_SOURCE = ROOT / "firmware" / "iwr6843" / "track_select.c"
 
 # --- per-field tolerances ----------------------------------------------------
 #
-# bin positions and inlier counts are exact: both sides run the identical
-# median/argmax/parabola arithmetic in float64 (numpy's default, and this
-# port's own double throughout -- see the audit's item 2), so there is no
-# rounding budget to allocate. slope/intercept/rms come out of a
-# least-squares refit (sxy/sxx, a division of two accumulated sums); the
-# accumulation ORDER in this port (a single forward pass over ws->order,
-# ported directly from track_select.c's l3track_refit) is identical to
-# numpy's polyfit/lstsq internals only up to summation-order rounding, so a
-# tight but non-zero tolerance is used rather than bit-exact equality.
-# Measured worst case across every found=True case in the corpus (driven
-# with _numpy_pairs, i.e. the exact-draw path this tolerance actually
-# guards): slope_bins 1.2e-7, intercept_bins 2.9e-9, rms_bins 9.4e-10,
-# speed_ms 5.7e-9 -- all ~4 orders of magnitude inside 1e-6.
+# CORRECTED (a prior draft of this comment overclaimed): bin positions and
+# inlier counts are NOT structurally guaranteed to be exact. Both sides do
+# run median/argmax/parabola arithmetic in float64, but loop_power() is NOT
+# bit-identical between the two: numpy's np.abs() on complex128 computes
+# hypot(re, im) then squares it, while this port's C computes re*re+im*im
+# directly, and numpy reduces the TX/RX power sum pairwise over two array
+# axes while the C accumulates it in one sequential loop (see
+# solve_tracking.c's solve_tracking_loop_power() and its file banner, item
+# 1). Both are real floating-point divergences, not just summation-order
+# noise. n_inliers is decided by a hard `< tol` boundary test on those
+# power-derived bin positions, so a detection sitting close enough to that
+# boundary could in principle flip. What TOL_EXACT below actually rests on
+# is MEASUREMENT, not a proof: across all 15 corpus cases, at both the
+# exact-numpy-draws path (this file's _numpy_pairs) and the bit-exact
+# on-chip RNG path (solve_numpy_rng, see test_bitexact_rng_matches_the_python_reference
+# below), n_inliers/t_first/t_last come out exactly equal. If a future
+# corpus case flips this, that is new information about the size of the
+# divergence, not evidence the test is broken -- widen TOL_EXACT
+# deliberately then, with the measured delta stated, rather than assuming a
+# regression.
+#
+# slope/intercept/rms come out of a least-squares refit (sxy/sxx, a division
+# of two accumulated sums); the accumulation ORDER in this port (a single
+# forward pass over ws->order, ported directly from track_select.c's
+# l3track_refit) is identical to numpy's polyfit/lstsq internals only up to
+# summation-order rounding, so a tight but non-zero tolerance is used rather
+# than bit-exact equality. Measured worst case across every found=True case
+# in the corpus (driven with _numpy_pairs, i.e. the exact-draw path this
+# tolerance actually guards): slope_bins 1.2e-7, intercept_bins 2.9e-9,
+# rms_bins 9.4e-10, speed_ms 5.7e-9 -- all ~4 orders of magnitude inside
+# 1e-6.
 TOL_EXACT = 0.0
 TOL_FIT = 1e-6  # slope_bins/intercept_bins/rms_bins: refit accumulation order
 
@@ -47,7 +65,7 @@ TOL_FIT = 1e-6  # slope_bins/intercept_bins/rms_bins: refit accumulation order
 def lib(tmp_path_factory):
     return build_solve_lib(
         tmp_path_factory,
-        [SOLVE_DIR / "solve_tracking.c", TRACK_SELECT_SOURCE],
+        [SOLVE_DIR / "solve_tracking.c", TRACK_SELECT_SOURCE, SOLVE_DIR / "solve_numpy_rng.c"],
         "solve_tracking",
     )
 
@@ -136,6 +154,21 @@ class Rng(ctypes.Structure):
     _fields_ = [("state", ctypes.c_uint32)]
 
 
+class SolveNumpyRng(ctypes.Structure):
+    """The bit-exact numpy-PCG64 pair source (solve_numpy_rng.c) -- see its
+    header for what it ports and tests/test_iwr6843_solve_numpy_rng.py for
+    the equivalence tests this stage's on-chip-fidelity claim rests on."""
+
+    _fields_ = [
+        ("stateHi", ctypes.c_uint64),
+        ("stateLo", ctypes.c_uint64),
+        ("incHi", ctypes.c_uint64),
+        ("incLo", ctypes.c_uint64),
+        ("hasUint32", ctypes.c_uint8),
+        ("uinteger", ctypes.c_uint32),
+    ]
+
+
 MTI_ROW_FN = ctypes.CFUNCTYPE(
     None,
     ctypes.c_void_p,
@@ -171,6 +204,15 @@ def bound_lib(lib):
     lib.solve_tracking_find_ball.restype = ctypes.c_uint32
     lib.l3track_rng_seed.argtypes = [ctypes.POINTER(Rng), ctypes.c_uint32]
     lib.l3track_rng_seed.restype = None
+    lib.solve_numpy_rng_seed.argtypes = [ctypes.POINTER(SolveNumpyRng), ctypes.c_uint64]
+    lib.solve_numpy_rng_seed.restype = None
+    lib.solve_numpy_rng_pair.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_uint32),
+    ]
+    lib.solve_numpy_rng_pair.restype = None
     return lib
 
 
@@ -207,7 +249,14 @@ def _numpy_pairs(seed: int = 1) -> "PAIR_FN":
 
 
 def _run(
-    bound_lib, vectors, *, seed=1, params_overrides=None, layout_overrides=None, firmware_rng=False
+    bound_lib,
+    vectors,
+    *,
+    seed=1,
+    params_overrides=None,
+    layout_overrides=None,
+    firmware_rng=False,
+    bitexact_rng=False,
 ):
     mti_re = vectors["mti_re"].astype(np.float64)  # [nf, 2, nloops, nrx, nbins]
     mti_im = vectors["mti_im"].astype(np.float64)
@@ -252,6 +301,11 @@ def _run(
         bound_lib.l3track_rng_seed(ctypes.byref(rng), seed)
         pair_fn = ctypes.cast(bound_lib.l3track_rng_pair, PAIR_FN)
         pair_ctx = ctypes.cast(ctypes.byref(rng), ctypes.c_void_p)
+    elif bitexact_rng:
+        numpy_rng = SolveNumpyRng()
+        bound_lib.solve_numpy_rng_seed(ctypes.byref(numpy_rng), seed)
+        pair_fn = ctypes.cast(bound_lib.solve_numpy_rng_pair, PAIR_FN)
+        pair_ctx = ctypes.cast(ctypes.byref(numpy_rng), ctypes.c_void_p)
     else:
         pair_fn = _numpy_pairs(seed)
         pair_ctx = None
@@ -309,15 +363,94 @@ def test_matches_the_python_reference(bound_lib, case):
 
 
 @pytest.mark.parametrize("case", golden_cases(STAGE))
+def test_bitexact_rng_matches_the_python_reference(bound_lib, case):
+    """THE fix for this stage's main design gap: solve_numpy_rng_pair (a
+    from-scratch port of numpy's SeedSequence+PCG64+Generator.choice(n, 2,
+    replace=False) -- see solve_numpy_rng.h) draws the SAME RANSAC sequence
+    tracking.find_ball_from_power() actually uses, with NO Python numpy call
+    in the loop (unlike test_matches_the_python_reference's _numpy_pairs,
+    which injects numpy's draws from the host side to isolate the fit
+    arithmetic). This is the test that stands in for "what actually happens
+    on silicon": solve_numpy_rng_seed(1) + solve_numpy_rng_pair, driven
+    entirely in C, against the exact same golden values
+    test_matches_the_python_reference checks (generate_golden_vectors.py
+    calls find_ball() at its default seed=1 -- see that script's
+    generate_tracking_case()).
+
+    Per-field tolerance derivation (why these numbers, not test_matches_the_
+    python_reference's TOL_FIT reused verbatim): with draws now bit-exact,
+    the only remaining divergence source is loop_power()'s floating-point
+    arithmetic (see the corrected comment above TOL_EXACT/TOL_FIT) --
+    close to identical to, the refit-accumulation-order divergence TOL_FIT
+    already budgets for above -- measuring this path directly across the
+    same 15 corpus cases gives the SAME worst-case deltas, to 3 significant
+    figures, as _numpy_pairs's own measurement (slope_bins 1.226e-7,
+    intercept_bins 2.95e-9, rms_bins 9.4e-10, speed_ms 5.75e-9, all at
+    short_capture_six_frames). That is not a coincidence to paper over: it
+    means loop_power()'s hypot-vs-direct-square and pairwise-vs-sequential
+    divergence perturbs the detected bin positions by an amount so far
+    below the refit's own summation-order noise floor that it does not
+    show up as a SEPARATE, larger source of error here -- the refit
+    arithmetic, not loop_power, is what actually sets this stage's
+    numerical floor. n_inliers/t_first/t_last still come out EXACTLY equal
+    in every case (not assumed -- see the corrected banner comment on why
+    that is not guaranteed a priori). Both effects are utterly negligible
+    next to the 0.86 degree launch-angle MAE the shipped LCMF solve already
+    carries end to end (docs/iwr6843/index.md): an error at the 1e-6-scale
+    relative to a several-hundred-bin slope/intercept value could not
+    plausibly move a downstream launch-angle estimate by any measurable
+    fraction of that 0.86 degree budget. TOL_FIT itself is reused here,
+    not a separate, looser number invented for this test -- the measured
+    divergence does not call for one.
+    """
+    vectors = load_golden(STAGE, case)
+    status, result = _run(bound_lib, vectors, bitexact_rng=True)
+
+    assert status == 0  # SOLVE_TRACKING_OK
+    expected_found = bool(vectors["found"][0])
+    assert bool(result.found) == expected_found, f"{STAGE}/{case}: found mismatch"
+    if not expected_found:
+        return
+    tol_bitexact = TOL_FIT
+    assert_close(
+        result.nInliers, vectors["n_inliers"][0], tol=TOL_EXACT, label=f"{STAGE}/{case}/n_inliers"
+    )
+    assert_close(
+        result.slopeBins, vectors["slope_bins"][0], tol=tol_bitexact, label=f"{STAGE}/{case}/slope_bins"
+    )
+    assert_close(
+        result.interceptBins,
+        vectors["intercept_bins"][0],
+        tol=tol_bitexact,
+        label=f"{STAGE}/{case}/intercept_bins",
+    )
+    assert_close(
+        result.rmsBins, vectors["rms_bins"][0], tol=tol_bitexact, label=f"{STAGE}/{case}/rms_bins"
+    )
+    assert_close(
+        result.tFirstS, vectors["t_first"][0], tol=TOL_EXACT, label=f"{STAGE}/{case}/t_first"
+    )
+    assert_close(result.tLastS, vectors["t_last"][0], tol=TOL_EXACT, label=f"{STAGE}/{case}/t_last")
+    assert_close(
+        result.speedMs, vectors["speed_ms"][0], tol=tol_bitexact, label=f"{STAGE}/{case}/speed_ms"
+    )
+    assert bool(result.lowConfidence) == bool(vectors["low_confidence"][0]), (
+        f"{STAGE}/{case}: low_confidence mismatch"
+    )
+
+
+@pytest.mark.parametrize("case", golden_cases(STAGE))
 def test_firmware_rng_ball_is_close_enough(bound_lib, case):
-    """l3track_rng_pair (the on-chip xorshift32 pair source, reused
-    unchanged from track_select.c) does NOT reproduce numpy's exact RANSAC
-    draws -- see _numpy_pairs's docstring above. This is the on-chip
-    analogue of test_iwr6843_track_select.py's own
-    test_firmware_rng_finds_the_same_ball: the firmware RNG must still
-    settle on a statistically equivalent track (same ballpark speed, a
-    close inlier count) given the same 2500 iterations, even though it is
-    not the bit-identical candidate the exact test above requires."""
+    """l3track_rng_pair (track_select.c's own xorshift32 pair source) does
+    NOT reproduce numpy's exact RANSAC draws -- see _numpy_pairs's docstring
+    above. Since solve_numpy_rng_pair now exists and IS bit-exact (see
+    test_bitexact_rng_matches_the_python_reference above), l3track_rng_pair
+    is no longer this stage's recommended on-chip draw source -- but it is
+    still a legitimate numpy-free fallback (deterministic, no PCG64/
+    SeedSequence port required) for a build that cannot carry
+    solve_numpy_rng.c, so this test keeps exercising the bound it actually
+    offers: statistically close, not bit-exact. This is the on-chip analogue
+    of test_iwr6843_track_select.py's own test_firmware_rng_finds_the_same_ball."""
     vectors = load_golden(STAGE, case)
     expected_found = bool(vectors["found"][0])
 
@@ -338,10 +471,16 @@ def test_firmware_rng_ball_is_close_enough(bound_lib, case):
 
 
 def test_max_range_clamped_case_is_low_confidence(bound_lib):
-    """driver_speed_max_range_clamped is the corpus's one low_confidence=True
-    ball track (tracking.py:423's rms/span thresholds). Confirmed directly,
-    not just via the parametrized sweep above, per the plan's instruction to
-    verify this specific flip."""
+    """driver_speed_max_range_clamped is one of THREE low_confidence=True
+    ball tracks in the corpus (tracking.py:423's rms/span thresholds) --
+    slow_ball_shallow_launch_normal_tx and slow_ball_shallow_launch_reversed_tx
+    also have it set (a prior draft of this docstring miscounted this as
+    the corpus's only one; verify with
+    `for f in golden_cases("tracking"): load_golden("tracking", f)["low_confidence"]`).
+    driver_speed_max_range_clamped is still worth confirming directly, not
+    just via the parametrized sweep above, per the plan's instruction to
+    verify this specific flip -- it is the only one of the three low
+    confidence cases coming from a range clamp rather than a slow launch."""
     vectors = load_golden(STAGE, "driver_speed_max_range_clamped")
 
     assert bool(vectors["low_confidence"][0]) is True
@@ -499,3 +638,94 @@ def test_rejects_over_limit_requests_without_truncating(bound_lib, overrides):
     assert status == 1  # SOLVE_TRACKING_ERROR
     assert result.found == 0
     assert result.nInliers == 0
+
+
+def test_rejects_too_many_gates(bound_lib):
+    """params->nGates > SOLVE_TRACKING_MAX_GATES (solve_tracking.c's
+    `params->nGates > SOLVE_TRACKING_MAX_GATES` guard) had no test before
+    this: test_rejects_over_limit_requests_without_truncating above covers
+    every *layout* field but never varies nGates. Params.gates is a fixed
+    MAX_GATES-element array; requesting more must be rejected before the
+    scan/order/fit passes ever index past it."""
+    layout = _base_layout()
+    params = Params()
+    bound_lib.solve_tracking_default_params(ctypes.byref(params))
+    params.nGates = MAX_GATES + 1
+    rng = Rng()
+    bound_lib.l3track_rng_seed(ctypes.byref(rng), 1)
+    workspace = Workspace()
+    result = Result()
+    result.found = 1
+    result.nInliers = 999
+
+    status = bound_lib.solve_tracking_find_ball(
+        ctypes.byref(layout),
+        ctypes.byref(params),
+        MTI_ROW_FN(_null_row_fn),
+        None,
+        ctypes.cast(bound_lib.l3track_rng_pair, PAIR_FN),
+        ctypes.cast(ctypes.byref(rng), ctypes.c_void_p),
+        ctypes.byref(workspace),
+        ctypes.byref(result),
+    )
+
+    assert status == 1  # SOLVE_TRACKING_ERROR
+    assert result.found == 0
+    assert result.nInliers == 0
+
+
+def test_rejects_a_stored_bin_count_over_nbins(bound_lib):
+    """layout->binCounts[frame] > layout->nBins (solve_tracking.c's
+    per-frame `binCounts[frame] > nBins` guard, checked only when binCounts
+    is non-NULL) had no test before this: every other test in this file
+    leaves binCounts NULL (the uniform-layout case), so the guard's actual
+    bounds check on a windowed dump's stored per-frame counts was dead code
+    as far as the test suite could tell. A stored count above nBins would
+    make solve_tracking_scan/solve_tracking_detect read past
+    ws->row[nBins]/ws->scratch[nBins] if it were not rejected here."""
+    n_frames = 4
+    layout = _base_layout(n_frames=n_frames)
+    bin_counts = (ctypes.c_uint32 * n_frames)(*([layout.nBins] * n_frames))
+    bin_counts[1] = layout.nBins + 1  # one frame claims more bins than nBins
+    layout.binCounts = bin_counts
+    params = Params()
+    bound_lib.solve_tracking_default_params(ctypes.byref(params))
+    rng = Rng()
+    bound_lib.l3track_rng_seed(ctypes.byref(rng), 1)
+    workspace = Workspace()
+    result = Result()
+    result.found = 1
+    result.nInliers = 999
+
+    status = bound_lib.solve_tracking_find_ball(
+        ctypes.byref(layout),
+        ctypes.byref(params),
+        MTI_ROW_FN(_null_row_fn),
+        None,
+        ctypes.cast(bound_lib.l3track_rng_pair, PAIR_FN),
+        ctypes.cast(ctypes.byref(rng), ctypes.c_void_p),
+        ctypes.byref(workspace),
+        ctypes.byref(result),
+    )
+
+    assert status == 1  # SOLVE_TRACKING_ERROR
+    assert result.found == 0
+    assert result.nInliers == 0
+
+
+# --- Review Focus: the windowed-dump branch has no corpus coverage ---------
+#
+# solve_tracking_windowed()/the row-major detection-order branch in
+# solve_tracking_order() (audit item 4 in solve_tracking.c's file banner) is
+# read-verified against tracking.py directly, but UNEXERCISED by any golden
+# vector: every case under tests/golden/iwr6843/tracking/ has an empty
+# geo_range_bin_starts, so layout->binStarts is always NULL in every test in
+# this file. This is a real gap, not an oversight to silently work around --
+# fabricating a synthetic windowed-dump golden case without validating it
+# against a real windowed capture would just be a second, unverified guess
+# at the same behavior. Whoever next touches a windowed dump on this stage
+# (Task 8, most likely, since it is the first stage expected to read
+# per-frame geo.range_bin_start{s,counts}) should add a real corpus case
+# for this branch rather than assuming solve_tracking_order()'s binStarts
+# ordering is already covered because SOMETHING with a similar name
+# (l3track_order's uniformity heuristic) has tests.
