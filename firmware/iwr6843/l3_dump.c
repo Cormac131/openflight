@@ -47,6 +47,7 @@
 #include <ti/control/mmwavelink/mmwavelink.h>
 #include <ti/control/mmwave/mmwave.h>
 #include <ti/utils/cli/cli.h>
+#include <ti/utils/cycleprofiler/cycle_profiler.h>
 
 #include "dump_format.h"
 #include "detect_queue.h"
@@ -333,6 +334,12 @@ static volatile uint32_t gHwaOutputDone;
 static volatile uint32_t gHwaRearms;
 static volatile uint32_t gHwaRearmErrors;
 static volatile uint32_t gHwaMissedFrameStarts;
+/* Frame completion queued -> next HWA arm, in microseconds. */
+static volatile uint32_t gHwaRearmQueuedCycles;
+static volatile uint8_t  gHwaRearmQueuedValid;
+static volatile uint32_t gHwaRearmLastUs;
+static volatile uint32_t gHwaRearmMaxUs;
+static volatile uint32_t gHwaRearmTimed;
 static volatile uint8_t  gHwaArmedForFrame;
 static volatile uint8_t  gHwaDoneSeen;
 static volatile uint8_t  gHwaOutputSeen;
@@ -994,6 +1001,10 @@ static void l3_hwaMaybeQueueRearm(void)
         }
 #endif
         }
+    }
+    if (queue) {
+        gHwaRearmQueuedCycles = Cycleprofiler_getTimeStamp();
+        gHwaRearmQueuedValid = 1U;
     }
     Hwi_restore(key);
     if (freeze && gHwaFreezeSemaphore != NULL) {
@@ -1893,6 +1904,8 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
             uint32_t pendingEpoch = 0U;
 #endif
             int32_t errCode;
+            uint32_t queuedCycles;
+            uint8_t timed;
 
             key = Hwi_disable();
             if (gCaptureActive) {
@@ -1991,7 +2004,21 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
                 gIq8ActiveScratch = nextScratch;
             }
 #endif
+            key = Hwi_disable();
+            queuedCycles = gHwaRearmQueuedCycles;
+            timed = gHwaRearmQueuedValid;
+            gHwaRearmQueuedValid = 0U;
+            Hwi_restore(key);
             errCode = l3_restartCompletedHwaFrame();
+            if (timed) {
+                uint32_t elapsedUs = (Cycleprofiler_getTimeStamp() - queuedCycles) /
+                                     (gCpuClock / 1000000U);
+                gHwaRearmLastUs = elapsedUs;
+                if (elapsedUs > gHwaRearmMaxUs) {
+                    gHwaRearmMaxUs = elapsedUs;
+                }
+                gHwaRearmTimed++;
+            }
             if (errCode == 0) {
                 gHwaRearms++;
             } else {
@@ -3229,6 +3256,10 @@ static int32_t l3_cli_stats(int32_t argc, char *argv[])
     CLI_write("detect dropped=%u stale=%u\n",
               (unsigned)gDetectQueue.dropped,
               (unsigned)gDetectStale);
+    CLI_write("rearm_last_us=%u rearm_max_us=%u rearm_timed=%u\n",
+              (unsigned)gHwaRearmLastUs,
+              (unsigned)gHwaRearmMaxUs,
+              (unsigned)gHwaRearmTimed);
 #endif
     return 0;
 }
@@ -3580,6 +3611,10 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     gHwaRearms         = 0U;
     gHwaRearmErrors    = 0U;
     gHwaMissedFrameStarts = 0U;
+    gHwaRearmQueuedValid = 0U;
+    gHwaRearmLastUs    = 0U;
+    gHwaRearmMaxUs     = 0U;
+    gHwaRearmTimed     = 0U;
     gHwaArmedForFrame  = 0U;
     gHwaDoneSeen       = 0U;
     gHwaOutputSeen     = 0U;
@@ -3683,6 +3718,8 @@ static void l3_initTask(UArg arg0, UArg arg1)
 
     (void)arg0; (void)arg1;
 
+    /* Starts the R4F PMU cycle counter behind Cycleprofiler_getTimeStamp. */
+    Cycleprofiler_init();
     UART_init();
     Pinmux_Set_FuncSel(SOC_XWR68XX_PINN5_PADBE, SOC_XWR68XX_PINN5_PADBE_MSS_UARTA_TX);
     Pinmux_Set_OverrideCtrl(SOC_XWR68XX_PINN5_PADBE,

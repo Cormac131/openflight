@@ -66,6 +66,22 @@ def parse_stats(text: str) -> dict[str, int]:
     return {key: int(value) for key, value in re.findall(r"(\w+)=(\d+)", text)}
 
 
+def rearm_summary(stats: dict[str, int], period_s: float) -> str | None:
+    """Queue-to-rearm latency against the frame period, or None on older firmware.
+
+    Reported, not judged: no deadline has been measured yet, and a late
+    rearm already shows up as ``hwa_missed``.
+    """
+    if "rearm_max_us" not in stats:
+        return None
+    period_us = period_s * 1e6
+    share = stats["rearm_max_us"] / period_us
+    return (
+        f"rearm_last_us={stats['rearm_last_us']} rearm_max_us={stats['rearm_max_us']} "
+        f"({share:.1%} of the {period_us:.0f} us frame) timed={stats['rearm_timed']}"
+    )
+
+
 def frame_period_s(cfg_path: str) -> float:
     """Read the frameCfg periodicity (ms) out of a .cfg file.
 
@@ -115,6 +131,9 @@ def main() -> int:
         f"frames={frames} missed={missed} rate={rate:.6%} "
         f"iq8_overrun={stats['iq8_overrun']} iq8_edma_err={stats['iq8_edma_err']}"
     )
+
+    rearm = rearm_summary(stats, period_s)
+    print(rearm or "rearm latency: not reported by this firmware")
 
     ok = True
     if frames < args.frames * MIN_FRAME_COVERAGE:

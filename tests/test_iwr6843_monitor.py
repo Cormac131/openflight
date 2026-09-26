@@ -1101,6 +1101,21 @@ def test_cadence_soak_parses_firmware_stats():
     assert stats["iq8_edma_err"] == 0
 
 
+def test_cadence_soak_reports_rearm_latency_against_the_frame_period():
+    soak = _load_cadence_soak()
+    stats = soak.parse_stats("hwa_frames=10 rearm_last_us=120 rearm_max_us=310 rearm_timed=9\n")
+
+    summary = soak.rearm_summary(stats, 0.002)
+
+    assert summary == "rearm_last_us=120 rearm_max_us=310 (15.5% of the 2000 us frame) timed=9"
+
+
+def test_cadence_soak_rearm_latency_is_optional_for_older_firmware():
+    soak = _load_cadence_soak()
+
+    assert soak.rearm_summary(soak.parse_stats("hwa_frames=10\n"), 0.003) is None
+
+
 def test_cadence_soak_fails_closed_on_missing_field():
     """A firmware image that doesn't report a required counter (e.g. an
     older build without L3_IQ8_EDMA_PACK) must not be silently treated as
