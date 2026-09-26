@@ -32,7 +32,8 @@ def _leave_power(n_loops: int = 1) -> np.ndarray:
         _row({TEE_BIN: LEVEL}),
         _row({TEE_BIN: LEVEL, 2: LEVEL}),
         _row({TEE_BIN: LEVEL, 6: LEVEL + 1}),
-        _row({TEE_BIN: LEVEL, 3: LEVEL + 2}),
+        _row({TEE_BIN: LEVEL, TEE_BIN + 2: LEVEL + 2}),
+        _row({TEE_BIN: LEVEL, TEE_BIN + 4: LEVEL + 3}),
     ]
     rows = []
     for frame in frames:
@@ -90,9 +91,9 @@ def test_replay_uses_loop0_and_reports_the_fire_frame():
     observations = swing_trigger.replay_loop0(_leave_power(n_loops=2), 2, TEE_BIN, LEVEL, 2)
 
     assert observations[-1].fired
-    assert observations[-1].frame == 4
+    assert observations[-1].frame == 5
     text = swing_trigger.format_swing(observations)
-    assert "PASS  replay fired at frame 4" in text
+    assert "PASS  replay fired at frame 5" in text
     assert "toward" in text
 
 

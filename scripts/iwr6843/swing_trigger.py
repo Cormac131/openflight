@@ -100,13 +100,22 @@ def replay_loop0(
     level: float,
     hits: int,
     frame_bins: list[int] | None = None,
+    frame_period_s: float | None = None,
 ) -> list[TriggerObservation]:
-    """Replay loop-0 residual power, the same probe the firmware uses."""
+    """Replay loop-0 residual power, the same probe the firmware uses.
+
+    ``frame_period_s`` times the detector's motion timeout; None keeps the
+    wide profile's default.
+    """
     rows, bins = np.asarray(power).shape
     if n_loops < 1 or rows % n_loops:
         raise ValueError(f"power rows {rows} are not a multiple of {n_loops} loops")
     loop0 = np.asarray(power).reshape(rows // n_loops, n_loops, bins)[:, 0, :]
-    detector = BallLeaveDetector(level=level, hits=hits)
+    detector = BallLeaveDetector(
+        level=level,
+        hits=hits,
+        **({} if frame_period_s is None else {"frame_period_s": frame_period_s}),
+    )
     observations: list[TriggerObservation] = []
     for frame, row in enumerate(loop0):
         count = bins if frame_bins is None else frame_bins[frame]
@@ -208,7 +217,15 @@ def _read_swing(radar: IWR6843Radar, tee_bin: int, tee_m: float, level: float, h
         counts = [
             summary.geometry.frame_bin_count(frame) for frame in range(summary.geometry.n_frames)
         ]
-        observations = replay_loop0(summary.power, summary.n_loops, tee_bin, level, hits, counts)
+        observations = replay_loop0(
+            summary.power,
+            summary.n_loops,
+            tee_bin,
+            level,
+            hits,
+            counts,
+            summary.geometry.frame_period_s,
+        )
         return observations, _fire_hotspot(summary, tee_bin, level, observations)
     print("  sparse read unavailable, reading the full ring...", flush=True)
     raw = radar.read_dump()

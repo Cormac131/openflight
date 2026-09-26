@@ -61,7 +61,9 @@
 /* --- task priorities (mirror the mmw demo): ctrl > CLI. -------------------- */
 #define L3_INIT_TASK_PRIORITY  2
 #define L3_CLI_TASK_PRIORITY   3
-#define L3_HWA_REARM_TASK_PRIORITY (L3_CLI_TASK_PRIORITY - 1U)
+/* Above the CLI: a stats or debug write must never delay the next HWA arm
+ * past the ~380 us gap a 2 ms frame leaves after its chirps. */
+#define L3_HWA_REARM_TASK_PRIORITY (L3_CLI_TASK_PRIORITY + 1U)
 /* Keep the live snapshot worker below CLI. SYS/BIOS Task_yield does not allow
  * lower-priority tasks to run, and a priority-4 snapshot loop starved l3dump
  * so the host only saw the echoed 7-byte "l3dump\n" command. */
@@ -357,6 +359,15 @@ static volatile uint8_t  gTriggerToward;
 static volatile uint8_t  gTriggerAway;
 static volatile uint32_t gTriggerPeakBin;
 static volatile uint8_t  gTriggerHavePeak;
+/* Loudest bin past the tee on the last frame that had one; a later frame
+ * must move it farther out to fire. */
+static volatile uint32_t gTriggerDepartureBin;
+static volatile uint8_t  gTriggerHaveDeparture;
+/* Frames since approach motion began; the swing must resolve within
+ * L3_TRIGGER_MOTION_TIMEOUT_US or the state is a waggle and resets. */
+static volatile uint32_t gTriggerMotionFrames;
+/* Consecutive approach-less frames tolerated (hands or shaft hiding the head). */
+static volatile uint32_t gTriggerMissedFrames;
 static volatile uint8_t  gTriggerPhase;
 static volatile uint32_t gTriggerTeePower;
 static volatile uint32_t gTriggerApproachPower;
@@ -2570,6 +2581,10 @@ static float l3_verticalPowerAt(uint32_t slot, uint32_t localBin)
 
 /* Clubhead is short of the ball. Twelve bins is about 0.6 m at the wide profile. */
 #define L3_TRIGGER_APPROACH_BINS 12U
+/* Approach motion older than this without a departure is a waggle, not a swing. */
+#define L3_TRIGGER_MOTION_TIMEOUT_US 60000U
+/* Approach frames the clubhead may vanish for before the motion resets. */
+#define L3_TRIGGER_MAX_MISSED_FRAMES 2U
 
 static void l3_clearTriggerMotion(void)
 {
@@ -2579,6 +2594,10 @@ static void l3_clearTriggerMotion(void)
     gTriggerRun = 0U;
     gTriggerPeakBin = 0U;
     gTriggerHavePeak = 0U;
+    gTriggerDepartureBin = 0U;
+    gTriggerHaveDeparture = 0U;
+    gTriggerMotionFrames = 0U;
+    gTriggerMissedFrames = 0U;
 }
 
 static const char *l3_triggerPhaseName(uint8_t phase)
@@ -2670,29 +2689,73 @@ static void l3_considerSelfTrigger(uint32_t slot)
         return;
     }
     if (gTriggerBin >= gFrameBinCount[0] && gTriggerBin >= gCapturePlan.preBins) {
+        l3_clearTriggerMotion();
         l3_noteTrigger(2U, 0.0F, 0.0F);
         return;
     }
     if (gTriggerBin >= gFrameBinCount[slot]) {
+        l3_clearTriggerMotion();
         l3_noteTrigger(2U, 0.0F, 0.0F);
         return;
     }
     tee = l3_verticalPowerAt(slot, gTriggerBin);
-    /* A real hit keeps the tee bin loud. Waiting for it to fall below the
-     * level never fires: the ball has already moved past the tee. */
-    if (tee < gTriggerPower) {
+    if (gTriggerToward) {
+        gTriggerMotionFrames++;
+        if (gTriggerMotionFrames * (uint32_t)gFramePeriodUs > L3_TRIGGER_MOTION_TIMEOUT_US) {
+            l3_clearTriggerMotion();
+        }
+    }
+    /* Once motion is under way the tee bin may already be quiet: the ball
+     * is gone and only the departure check below can settle the swing. */
+    if (tee < gTriggerPower && !gTriggerToward) {
         l3_clearTriggerMotion();
         l3_noteTrigger(3U, tee, 0.0F);
         return;
     }
-    gTriggerRun++;
     if (!gTriggerReady) {
+        gTriggerRun++;
         if (gTriggerRun >= gTriggerHits) {
             gTriggerReady = 1U;
         }
         l3_noteTrigger(gTriggerReady ? 5U : 4U, tee, 0.0F);
         return;
     }
+    if (gTriggerToward) {
+        /* Fire on outward progression: the loudest return past the tee must
+         * sit farther out than it did on the last frame that had one. */
+        uint32_t pastEnd = gTriggerBin + 1U + L3_TRIGGER_APPROACH_BINS;
+        uint32_t pastBin = 0U;
+        float pastPeak = 0.0F;
+
+        if (pastEnd > gFrameBinCount[slot]) {
+            pastEnd = gFrameBinCount[slot];
+        }
+        for (bin = gTriggerBin + 1U; bin < pastEnd; bin++) {
+            float past = l3_verticalPowerAt(slot, bin);
+            if (past > pastPeak) {
+                pastPeak = past;
+                pastBin = bin;
+            }
+        }
+        if (pastPeak >= gTriggerPower) {
+            if (gTriggerHaveDeparture && pastBin > gTriggerDepartureBin) {
+                l3_latchSelfTrigger(tee, pastPeak);
+                return;
+            }
+            if (gTriggerHaveDeparture && pastBin < gTriggerDepartureBin) {
+                /* Walking back toward the tee is the club, not the ball. */
+                l3_clearTriggerMotion();
+                l3_noteTrigger(5U, tee, 0.0F);
+                return;
+            }
+            gTriggerDepartureBin = pastBin;
+            gTriggerHaveDeparture = 1U;
+            gTriggerMissedFrames = 0U;
+            l3_noteTrigger(8U, tee, pastPeak);
+            return;
+        }
+    }
+    gTriggerHaveDeparture = 0U;
     first = (gTriggerBin > L3_TRIGGER_APPROACH_BINS) ? (gTriggerBin - L3_TRIGGER_APPROACH_BINS) : 0U;
     for (bin = first; bin < gTriggerBin; bin++) {
         float power;
@@ -2707,39 +2770,23 @@ static void l3_considerSelfTrigger(uint32_t slot)
         }
     }
     if (!havePeak) {
+        gTriggerMissedFrames++;
+        if (gTriggerMissedFrames > L3_TRIGGER_MAX_MISSED_FRAMES) {
+            l3_clearTriggerMotion();
+        }
         l3_noteTrigger(6U, tee, 0.0F);
         return;
     }
+    gTriggerMissedFrames = 0U;
     /* gTriggerHavePeak, not gTriggerPeakBin != 0: bin 0 is a real bin. */
     if (gTriggerHavePeak && peakBin > gTriggerPeakBin) {
         gTriggerToward = 1U;
     } else if (gTriggerToward && gTriggerHavePeak && peakBin < gTriggerPeakBin) {
-        gTriggerAway = 1U;
+        /* The approach peak walked back without anything passing the tee. */
+        l3_clearTriggerMotion();
     }
     gTriggerPeakBin = peakBin;
     gTriggerHavePeak = 1U;
-    if (gTriggerAway) {
-        l3_latchSelfTrigger(tee, peak);
-        return;
-    }
-    if (gTriggerToward) {
-        uint32_t pastEnd = gTriggerBin + L3_TRIGGER_APPROACH_BINS;
-        float pastPeak = 0.0F;
-
-        if (pastEnd > gFrameBinCount[slot]) {
-            pastEnd = gFrameBinCount[slot];
-        }
-        for (bin = gTriggerBin + 1U; bin < pastEnd; bin++) {
-            float past = l3_verticalPowerAt(slot, bin);
-            if (past > pastPeak) {
-                pastPeak = past;
-            }
-        }
-        if (pastPeak >= gTriggerPower && pastPeak > peak) {
-            l3_latchSelfTrigger(tee, pastPeak);
-            return;
-        }
-    }
     l3_noteTrigger(gTriggerToward ? 7U : 5U, tee, peak);
 }
 

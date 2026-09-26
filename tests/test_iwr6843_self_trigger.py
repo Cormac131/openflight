@@ -69,7 +69,7 @@ def test_level_above_floor_ignores_zeros_and_requires_a_full_sample():
         level_above_floor([180_000.0] * (FLOOR_MIN_SAMPLES - 1))
 
 
-def test_toward_then_away_then_a_quiet_tee_fires():
+def test_approach_reversal_then_a_quiet_tee_does_not_fire():
     detector = BallLeaveDetector(level=LEVEL, hits=DEFAULT_HITS)
     frames = [
         _row({TEE_BIN: LEVEL}),
@@ -87,11 +87,11 @@ def test_toward_then_away_then_a_quiet_tee_fires():
         "watching",
         "watching",
         "toward",
-        "fired",
-        "fired",
+        "watching",
+        "tee-low",
     ]
-    assert steps[-1].fired
-    assert detector.step(6, _row({TEE_BIN: LEVEL}), TEE_BIN, 53).phase == "fired"
+    assert not any(step.fired for step in steps)
+    assert detector.step(6, _row({TEE_BIN: LEVEL}), TEE_BIN, 53).phase == "occupying"
 
 
 def test_energy_past_the_tee_fires_while_the_tee_stays_loud():
@@ -102,7 +102,8 @@ def test_energy_past_the_tee_fires_while_the_tee_stays_loud():
     detector.step(2, _row({TEE_BIN: LEVEL, 8: LEVEL}), TEE_BIN, 53)
     fired = detector.step(3, _row({TEE_BIN: LEVEL, 8: LEVEL, TEE_BIN + 3: LEVEL + 1}), TEE_BIN, 53)
 
-    assert fired.phase == "fired"
+    assert fired.phase == "away"
+    assert detector.step(4, _row({TEE_BIN + 5: LEVEL + 1}), TEE_BIN, 53).fired
 
 
 def test_tee_drop_before_the_club_returns_resets():
@@ -111,11 +112,12 @@ def test_tee_drop_before_the_club_returns_resets():
     detector.step(1, _row({TEE_BIN: LEVEL}), TEE_BIN, 53)
     detector.step(2, _row({TEE_BIN: LEVEL, 4: LEVEL}), TEE_BIN, 53)
     toward = detector.step(3, _row({TEE_BIN: LEVEL, 8: LEVEL}), TEE_BIN, 53)
-    reset = detector.step(4, _row({TEE_BIN: LEVEL - 1}), TEE_BIN, 53)
-    again = detector.step(5, _row({TEE_BIN: LEVEL}), TEE_BIN, 53)
+    for frame in range(4, 7):
+        reset = detector.step(frame, _row({}), TEE_BIN, 53)
+    again = detector.step(7, _row({TEE_BIN: LEVEL}), TEE_BIN, 53)
 
     assert toward.phase == "toward"
-    assert reset.phase == "tee-low"
+    assert reset.phase == "no-approach"
     assert not reset.ready and not reset.toward
     assert again.phase == "occupying"
 
@@ -134,7 +136,7 @@ def test_bin_zero_is_a_real_approach_peak():
     assert moved.phase == "toward"
 
 
-def test_missing_tee_bin_does_not_clear_motion():
+def test_missing_tee_bin_clears_motion():
     detector = BallLeaveDetector(level=LEVEL, hits=1)
     detector.step(0, _row({TEE_BIN: LEVEL}), TEE_BIN, 53)
     detector.step(1, _row({TEE_BIN: LEVEL, 2: LEVEL}), TEE_BIN, 53)
@@ -143,14 +145,15 @@ def test_missing_tee_bin_does_not_clear_motion():
     away = detector.step(4, _row({TEE_BIN: LEVEL, 3: LEVEL}), TEE_BIN, 53)
 
     assert outside.phase == "bin-outside"
-    assert away.phase == "fired"
+    assert away.phase == "watching"
+    assert not away.toward
 
 
 def _moving_cube() -> bytes:
     """Range snapshot whose loop-0 residual walks in, then leaves the tee."""
     n_frames, loops, n_tx, n_rx, bins = 6, 4, 2, 4, 53
     cube = np.zeros((n_frames, loops * n_tx, n_rx, bins), dtype=np.complex128)
-    occupied = {0: {}, 1: {}, 2: {2: 1}, 3: {6: 1}, 4: {3: 1}, 5: {}}
+    occupied = {0: {}, 1: {}, 2: {2: 1}, 3: {6: 1}, 4: {16: 1}, 5: {18: 1}}
     for frame, peaks in occupied.items():
         if frame < 5:
             peaks = {TEE_BIN: 1, **peaks}
@@ -168,7 +171,7 @@ def _moving_cube() -> bytes:
     )
 
 
-def test_replay_of_a_leaving_ball_fires_on_the_quiet_frame():
+def test_replay_of_a_leaving_ball_fires_on_outward_progression():
     steps = replay_dump(
         _moving_cube(),
         tee_range_m=DEFAULT_TEE_RANGE_M,
@@ -181,7 +184,7 @@ def test_replay_of_a_leaving_ball_fires_on_the_quiet_frame():
         "watching",
         "watching",
         "toward",
-        "fired",
+        "away",
         "fired",
     ], _trace(steps)
 
@@ -208,3 +211,46 @@ def test_saved_dumps_fire_when_the_ball_leaves():
         last = visible[-1] if visible else steps[-1]
         failures.append(f"{path.name}: last {last.phase} at frame {last.frame}, tee={last.tee:.0f}")
     assert not failures, f"{len(failures)}/{len(dumps)} never fired\n" + "\n".join(failures)
+
+
+def test_reversal_without_a_departing_ball_does_not_fire():
+    detector = BallLeaveDetector()
+    peaks = [None, None, 2, 6, 3]
+    steps = [
+        detector.step(
+            i, _row({TEE_BIN: LEVEL, **({p: LEVEL + 1} if p is not None else {})}), TEE_BIN, 53
+        )
+        for i, p in enumerate(peaks)
+    ]
+    assert not any(step.fired for step in steps)
+
+
+def test_motion_gap_discards_the_previous_approach():
+    detector = BallLeaveDetector()
+    frames = [
+        _row({TEE_BIN: LEVEL}),
+        _row({TEE_BIN: LEVEL}),
+        _row({TEE_BIN: LEVEL, 2: LEVEL + 1}),
+        _row({TEE_BIN: LEVEL, 6: LEVEL + 1}),
+    ]
+    frames += [_row({TEE_BIN: LEVEL}) for _ in range(300)]
+    frames += [
+        _row({TEE_BIN: LEVEL, 3: LEVEL + 1, TEE_BIN + 2: LEVEL + 2}),
+        _row({TEE_BIN: LEVEL, 3: LEVEL + 1, TEE_BIN + 4: LEVEL + 2}),
+    ]
+    assert not any(detector.step(i, row, TEE_BIN, 53).fired for i, row in enumerate(frames))
+
+
+def test_departing_ball_requires_progression_and_can_leave_a_quiet_tee():
+    detector = BallLeaveDetector()
+    frames = [
+        _row({TEE_BIN: LEVEL}),
+        _row({TEE_BIN: LEVEL}),
+        _row({TEE_BIN: LEVEL, 2: LEVEL}),
+        _row({TEE_BIN: LEVEL, 6: LEVEL}),
+        _row({TEE_BIN + 2: LEVEL}),
+        _row({TEE_BIN + 4: LEVEL}),
+    ]
+    steps = [detector.step(i, row, TEE_BIN, 53) for i, row in enumerate(frames)]
+    assert not any(step.fired for step in steps[:-1])
+    assert steps[-1].fired
