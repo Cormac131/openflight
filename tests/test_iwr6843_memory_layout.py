@@ -1,4 +1,26 @@
-"""The IQ16 scratch must live outside L3 so capture owns the whole arena."""
+"""The IQ16 scratch must live outside L3 so capture owns the whole arena.
+
+Map-file coverage in this file comes in three tiers, because `*.map` is
+gitignored (it is a fresh build artifact) and CI never runs a firmware build:
+
+* `MAP` (`firmware/iwr6843/l3_dump_mss.map`) is the live map from whatever
+  build last ran on this machine. Tests keyed off it (`test_data_ram_keeps_a_
+  working_margin`, `test_l3_is_fully_claimed_by_the_capture_ring`,
+  `test_derived_arena_matches_the_linker_region`) `pytest.skip` when it is
+  absent, which is always true in CI. That skip is deliberate, not a gap.
+* `BASELINE_MAP` (`baseline/l3_dump_mss.map.baseline`) is tracked in git and
+  captures the geometry from *before* the scratch relocation. It always
+  runs, but only proves the relocation had room to happen.
+* `CURRENT_MAP` (`baseline/l3_dump_mss.map.current`) is also tracked and
+  captures the geometry from *after* the relocation (and after the
+  CONFIGURABLE_CAPTURE removal / designated-initializer change in this same
+  fix wave, which the build confirmed move nothing). This is the one that
+  actually guards the ~20,947 B DATA_RAM margin in CI:
+  `test_tracked_reference_map_keeps_the_data_ram_margin` always runs against
+  it, and `test_tracked_reference_map_agrees_with_the_live_map` cross-checks
+  it against `MAP` whenever a live map happens to be present, so the tracked
+  reference cannot silently drift from reality on a machine that does build.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +33,7 @@ ROOT = Path(__file__).parents[1]
 FIRMWARE = ROOT / "firmware" / "iwr6843" / "l3_dump.c"
 MAP = ROOT / "firmware" / "iwr6843" / "l3_dump_mss.map"
 BASELINE_MAP = ROOT / "firmware" / "iwr6843" / "baseline" / "l3_dump_mss.map.baseline"
+CURRENT_MAP = ROOT / "firmware" / "iwr6843" / "baseline" / "l3_dump_mss.map.current"
 MIN_DATA_RAM_FREE_BYTES = 16 * 1024
 
 
@@ -93,4 +116,51 @@ def test_baseline_map_geometry_is_intact():
     assert baseline_data_ram_free >= 98_304 + MIN_DATA_RAM_FREE_BYTES, (
         "the pre-relocation baseline no longer has room for a 98,304 B scratch "
         "plus the required margin; the relocation premise is broken"
+    )
+
+
+def test_tracked_reference_map_keeps_the_data_ram_margin():
+    """Always runs: this is the real DATA_RAM margin guard in CI.
+
+    The live-map tests above are the ones a developer's local build actually
+    exercises, but they skip in CI because `*.map` is gitignored. This test
+    reads the tracked post-relocation reference map instead, so the ~20,947 B
+    margin the relocation was meant to protect is checked on every run, not
+    only on a machine that happens to have the TI toolchain.
+    """
+    rows = _memory_rows(CURRENT_MAP)
+    used, unused = rows["DATA_RAM"]
+    assert unused >= MIN_DATA_RAM_FREE_BYTES, (
+        f"tracked reference DATA_RAM free margin is {unused} B, below "
+        f"{MIN_DATA_RAM_FREE_BYTES} B"
+    )
+    assert used + unused == 0x30000
+
+    l3_used, l3_unused = rows["L3_RAM"]
+    assert l3_unused == 0
+    assert l3_used == 786_432
+
+
+def test_tracked_reference_map_agrees_with_the_live_map():
+    """Guards against the tracked reference map going stale.
+
+    Skips when there is no live map to compare against (the normal CI case);
+    on a machine that just built, it fails loudly if `l3_dump_mss.map.current`
+    no longer matches reality, so nobody has to notice a silent drift by hand.
+    """
+    if not MAP.exists():
+        pytest.skip(
+            f"no live linker map at {MAP} to compare against the tracked "
+            f"reference; see the plan's Global Constraints for the docker "
+            f"build command."
+        )
+    live_rows = _memory_rows(MAP)
+    reference_rows = _memory_rows(CURRENT_MAP)
+    assert live_rows["L3_RAM"] == reference_rows["L3_RAM"], (
+        "live L3_RAM geometry no longer matches the tracked reference map; "
+        "regenerate baseline/l3_dump_mss.map.current from a fresh build"
+    )
+    assert live_rows["DATA_RAM"] == reference_rows["DATA_RAM"], (
+        "live DATA_RAM geometry no longer matches the tracked reference map; "
+        "regenerate baseline/l3_dump_mss.map.current from a fresh build"
     )

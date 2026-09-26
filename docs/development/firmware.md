@@ -14,15 +14,14 @@ startup, use the [IWR6843 Operator Guide](../iwr6843/index.md).
 
 ## Current Release
 
-One firmware image supports two runtime capture profiles. Flash the image once,
-then choose a profile by passing its `.cfg` to OpenFlight.
+One firmware image supports multiple runtime capture profiles (see
+[Choose A Capture Profile](#choose-a-capture-profile) below). Flash the image
+once, then choose a profile by passing its `.cfg` to OpenFlight.
 
 | Component | Current value |
 |---|---|
 | Flash image | `firmware/releases/l3_dump_configurable_capture_20260818.bin` |
-| Default config | `config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` |
-| Dense config | `config/iwr6843_l3dump_dense_45f2ms_53bin_iq8.cfg` |
-| Dense/wide-late config | `config/iwr6843_l3dump_dense_36f2ms_53bin_iq8_wide_late.cfg` |
+| Runtime configs | See [Choose A Profile](../iwr6843/index.md#choose-a-profile) |
 | Reference calibration | `config/iwr6843_calibration_reference.json` |
 | Native build | `make -C firmware build-native` |
 | Container build | `make -C firmware docker-build` |
@@ -38,39 +37,13 @@ sha256sum firmware/releases/l3_dump_configurable_capture_20260818.bin
 
 ## Choose A Capture Profile
 
-| Profile | Wide/default | Dense/advanced | Dense/wide-late experimental |
-|---|---:|---:|---:|
-| Config | `iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` | `iwr6843_l3dump_dense_45f2ms_53bin_iq8.cfg` | `iwr6843_l3dump_dense_36f2ms_53bin_iq8_wide_late.cfg` |
-| Frames | 24 | 45 | 36 |
-| Frame spacing | 3 ms | 2 ms | 2 ms |
-| Movie duration | 72 ms | 90 ms | 72 ms |
-| Saved bins per frame | 53 | 53 | 53 |
-| Stored sample format | IQ16 | Fixed-scale IQ8 | Fixed-scale IQ8 |
-| Payload bytes | 732,672 | 686,880 | 549,504 |
-| Primary goal | Robust ball flight | 2 ms ball phase long enough for a coarse spin tone | Isolate late-window coverage |
-
-Use **wide/default** unless you are deliberately testing dense impact data. Its
-53-bin windows tolerate more variation in tee distance, launch speed, and setup
-geometry, while IQ16 retains the HWA output without quantization. Hardware tests
-held the requested 3 ms cadence without RF or HWA faults. In an August 9
-TrackMan session, its live inclinometer-adjusted LCMF output covered all 59
-matched 9-iron and 7-iron shots with 0.86 degree MAE, 0.70 degree P50, and 1.75
-degree P90 absolute error.
-
-Use **dense/advanced** when the ball echo has to be sampled for long enough to
-estimate spin. It keeps 2 ms frames and the same 53-bin range span as the wide
-profile. Eight pre-impact frames (16 ms) remain for the club approach, and the
-spare IQ8 capacity is spent on 27 ball frames (54 ms) at stride 1. Fixed-scale
-IQ8 is what makes those 45 frames fit in L3. Its EDMA packing path sustained
-99.9911% HWA frame coverage in hardware cadence testing, with zero IQ8 overruns
-or EDMA errors. The 53-bin dense profile still needs source-of-truth TrackMan
-validation; horizontal launch and club metrics remain experimental.
-
-The dense/wide-late profile keeps the earlier 36-frame, 72 ms dense movie and
-keeps every ball frame in bins 47-99. The standard dense profile's first 13
-ball frames stay in bins 47-99, and its last 14 shift outward to bins 64-116.
-
-All profiles use 3 TX, 4 RX, 12 TDM loops, and 128 acquired ADC samples.
+The full set of runtime capture profiles (config file, frame count, spacing,
+payload size, and when to use each) is maintained in one place:
+[Choose A Profile](../iwr6843/index.md#choose-a-profile) in the IWR6843
+Operator Guide. This firmware doc previously kept its own copy of that table;
+it went stale (two new profiles landed there and were never mirrored here), so
+this section now points at that single source of truth instead of duplicating
+it. All profiles use 3 TX, 4 RX, 12 TDM loops, and 128 acquired ADC samples.
 Changing profiles does not require reflashing.
 
 The supported normal-TX profiles use a fixed positive TDM sign. This physical
