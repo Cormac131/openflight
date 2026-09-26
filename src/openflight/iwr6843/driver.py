@@ -69,6 +69,10 @@ def open_port(port: str, baud: int = BAUD, timeout: float = 0.3) -> serial.Seria
 class IWR6843Radar:
     """CLI + dump transport for the custom L3-dump firmware."""
 
+    # A ``Triggered`` notice (or its split head) read by a command, kept for
+    # the listener: the firmware stays frozen until someone releases it.
+    _trigger_pending = b""
+
     def __init__(self, port: str | None = None, baud: int = BAUD):
         if port is None:
             port = self.detect_port(baud)
@@ -76,6 +80,7 @@ class IWR6843Radar:
                 raise RuntimeError("no IWR6843 CLI found — board on, flashed, single-port fw?")
         self.port = port
         self.ser = open_port(port, baud)
+        self._trigger_pending = b""
 
     @staticmethod
     def detect_port(baud: int = BAUD) -> str | None:
@@ -108,15 +113,41 @@ class IWR6843Radar:
         within about a millisecond. ``pending`` carries a partial line
         between calls; the tail kept is long enough to hold a split word.
         """
-        waiting = self.ser.in_waiting
-        pending += self.ser.read(waiting if waiting else 1)
+        pending = self._trigger_pending + pending
+        self._trigger_pending = b""
+        if TRIGGER_NOTICE not in pending:
+            waiting = self.ser.in_waiting
+            pending += self.ser.read(waiting if waiting else 1)
         if TRIGGER_NOTICE in pending:
             return True, b""
         return False, pending[-_NOTICE_TAIL_BYTES:]
 
-    def cmd(self, line: str, window: float = 1.5) -> str:
-        """Send one CLI line; collect the response until Done/Error/timeout."""
+    def _remember_trigger_notice(self, data: bytes) -> None:
+        """Keep a notice (or its split head) that a command read off the port."""
+        pending = self._trigger_pending + data
+        if TRIGGER_NOTICE in pending:
+            self._trigger_pending = TRIGGER_NOTICE
+        else:
+            self._trigger_pending = pending[-_NOTICE_TAIL_BYTES:]
+
+    def _discard_before_readback(self) -> None:
+        """Drop stale input before reading the frozen capture out.
+
+        A notice pending here belongs to the capture this readback consumes,
+        so keeping it would fire a phantom capture once the ring rearms.
+        """
         self.ser.reset_input_buffer()
+        self._trigger_pending = b""
+
+    def cmd(self, line: str, window: float = 1.5) -> str:
+        """Send one CLI line; collect the response until Done/Error/timeout.
+
+        Stale bytes are dropped rather than taken as the reply, except a
+        ``Triggered`` notice among them, which is kept for the listener.
+        """
+        waiting = self.ser.in_waiting
+        if waiting:
+            self._remember_trigger_notice(self.ser.read(waiting))
         self.ser.write((line + "\n").encode())
         resp = b""
         deadline = time.time() + window
@@ -124,6 +155,7 @@ class IWR6843Radar:
             resp += self.ser.read(512)
             if b"Done" in resp or b"Error" in resp:
                 break
+        self._remember_trigger_notice(resp)
         return resp.decode(errors="replace")
 
     def drain_stale_output(
@@ -184,6 +216,7 @@ class IWR6843Radar:
         self.drain_stale_output()
         self._require_done("sensorStop", self.cmd("sensorStop", 3.0))
         self._require_done("flushCfg", self.cmd("flushCfg", 1.5))
+        self._trigger_pending = b""
         with open(cfg_path, encoding="utf-8") as cfg:
             for rawline in cfg:
                 line = rawline.strip()
@@ -213,7 +246,7 @@ class IWR6843Radar:
         Syncs on the ILD1 magic past the CLI echo and sizes the read from the
         dump's own header, so any firmware geometry works.
         """
-        self.ser.reset_input_buffer()
+        self._discard_before_readback()
         self.ser.write(b"l3dump\n")
         buf = bytearray()
         expected: int | None = None
@@ -293,7 +326,7 @@ class IWR6843Radar:
         RuntimeError when the stream breaks after it starts: the ring has
         already been rearmed, so a fallback would capture the wrong window.
         """
-        self.ser.reset_input_buffer()
+        self._discard_before_readback()
         self.ser.write(b"l3track\n")
         try:
             read = self._read_packet(TRACK_MAGIC, track_packet_size, timeout_s)
@@ -329,7 +362,7 @@ class IWR6843Radar:
         timeout_s: float,
     ) -> tuple[PowerSummary, SparsePlan, int, bytes] | None:
         """Run one l3sparse round trip. None when rejected before the freeze."""
-        self.ser.reset_input_buffer()
+        self._discard_before_readback()
         self.ser.write(b"l3sparse\n")
         read = self._read_packet(POWER_MAGIC, power_packet_size, timeout_s)
         if read is None:
@@ -423,6 +456,7 @@ class IWR6843Radar:
             chunk = self.ser.read(waiting if waiting else 1)
             if chunk:
                 response.extend(chunk)
+        self._remember_trigger_notice(bytes(response))
         return bytes(response)
 
     def stats(self) -> str:

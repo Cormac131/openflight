@@ -396,8 +396,29 @@ class IWR6843Runtime:
 
         max_range = self._ball_max_range_m() or 0.0
         club_lo, club_hi = self._club_gate_m() or (0.0, 0.0)
-        fields = (LOOP_PRI_S, RANGE_SPAN_M / RANGE_FFT_SIZE, max_range, club_lo, club_hi)
+        fields = (
+            self._loop_period_s() or LOOP_PRI_S,
+            RANGE_SPAN_M / RANGE_FFT_SIZE,
+            max_range,
+            club_lo,
+            club_hi,
+        )
         return "trackCfg " + " ".join(f"{value:.17g}" for value in fields)
+
+    def _loop_period_s(self) -> float | None:
+        """Same-TX loop period of the loaded cfg; None without a capture monitor.
+
+        The host planner times rows from the ILP1 header's transmitter count,
+        so the firmware tracker must get the same physical period.
+        """
+        from openflight.iwr6843.monitor import (  # pylint: disable=import-outside-toplevel
+            read_capture_config,
+        )
+
+        config_path = getattr(self.capture_monitor, "config_path", None)
+        if config_path is None:
+            return None
+        return read_capture_config(config_path).loop_period_s
 
     def process_shot(  # pylint: disable=too-many-arguments
         self,

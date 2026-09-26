@@ -511,3 +511,68 @@ def test_wide_iq16_profile_still_fits_the_arena():
     wide_bytes = tx * loops * rx * 24 * 53 * 4
     assert wide_bytes == 732_672
     assert wide_bytes <= 786_432
+
+
+MSS_CFG = FIRMWARE.parent / "mss.cfg"
+
+
+def _rearm_task(source: str) -> str:
+    return _function_source(
+        source, "static void l3_hwaRearmTask(UArg arg0, UArg arg1)\n{", "static void l3_fill_header"
+    )
+
+
+def test_rearm_latency_is_timed_from_the_queue_to_the_next_hwa_arm():
+    """rearm_*_us must cover EDMA waits and the restart, the part that has to beat the frame gap."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    queue = _function_source(
+        source, "static void l3_hwaMaybeQueueRearm(void)\n{", "static void l3_hwaChainDoneCB"
+    )
+    task = _rearm_task(source)
+
+    stamp = queue.index("gHwaRearmQueuedCycles = Cycleprofiler_getTimeStamp();")
+    assert queue.index("key = Hwi_disable();") < stamp < queue.index("Hwi_restore(key);")
+    assert "gHwaRearmQueuedValid = 1U;" in queue
+
+    restart = task.index("errCode = l3_restartCompletedHwaFrame();")
+    consume = task.index("gHwaRearmQueuedValid = 0U;")
+    assert consume < restart
+    assert task.rindex("Hwi_disable()", 0, consume) > task.rindex("Hwi_restore(key)", 0, consume)
+    assert task.index("gHwaRearmLastUs = ", restart) > restart
+    assert "if (timed)" in task
+
+
+def test_rearm_latency_never_reuses_or_invents_a_start_time():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    task = _rearm_task(source)
+
+    assert "== 0U) {\n                rearmStartCycles = Cycleprofiler_getTimeStamp()" not in task
+    assert task.count("Cycleprofiler_getTimeStamp()") == 1
+
+
+def test_stats_report_rearm_latency_on_their_own_line():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    stats = _function_source(
+        source, "static int32_t l3_cli_stats", "static int32_t l3_cli_hwaStats"
+    )
+
+    line = stats.index('CLI_write("rearm_last_us=%u rearm_max_us=%u rearm_timed=%u\\n"')
+    assert stats.index("trig phase=") < line < stats.index("return 0")
+
+
+def test_sensor_start_resets_rearm_latency_and_the_counter_runs():
+    source = FIRMWARE.read_text(encoding="utf-8")
+    start = _function_source(
+        source,
+        "static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])\n{",
+        "static int32_t l3_cli_sensorStop(int32_t argc, char *argv[])\n{",
+    )
+    init = _function_source(
+        source, "static void l3_initTask(UArg arg0, UArg arg1)\n{", "int32_t main(void)"
+    )
+
+    for name in ("gHwaRearmLastUs", "gHwaRearmMaxUs", "gHwaRearmTimed", "gHwaRearmQueuedValid"):
+        assert re.search(rf"\b{name}\s*=\s*0U;", start), name
+    assert "#include <ti/utils/cycleprofiler/cycle_profiler.h>" in source
+    assert init.index("Cycleprofiler_init();") < init.index("UART_init();")
+    assert "xdc.useModule('ti.sysbios.family.arm.v7a.Pmu')" in MSS_CFG.read_text(encoding="utf-8")

@@ -246,3 +246,115 @@ def test_unrelated_cli_text_is_trimmed_to_a_split_word_tail():
 
     assert found is False
     assert len(pending) == len(b"Triggered") - 1
+
+
+class _ResettingSerial(FakeSerial):
+    """Like the real port: reset_input_buffer discards every unread byte."""
+
+    def __init__(self, payload: bytes, reply: bytes = b"Done\nl3dump:/>"):
+        super().__init__(payload)
+        self.reply = reply
+
+    def reset_input_buffer(self):
+        self.payload.clear()
+
+    def write(self, data: bytes):
+        super().write(data)
+        self.payload.extend(self.reply)
+
+
+def _command_radar(payload: bytes, reply: bytes = b"Done\nl3dump:/>") -> IWR6843Radar:
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = _ResettingSerial(payload, reply)
+    return radar
+
+
+def test_trigger_already_waiting_before_a_command_is_not_discarded():
+    """A notice queued before cmd() must still reach the listener; else the ring stays frozen."""
+    radar = _command_radar(b"Triggered\n")
+
+    assert "Done" in radar.cmd("stats")
+    assert radar.wait_trigger_notice()[0] is True
+
+
+@pytest.mark.parametrize("prefix,suffix", [(b"Triggered\n", b""), (b"Trig", b"gered\n")])
+def test_trigger_inside_a_command_reply_survives_until_the_listener(prefix, suffix):
+    radar = _command_radar(b"", reply=b"Done\nl3dump:/>" + prefix)
+
+    assert "Done" in radar.cmd("triggerCfg 14 1000 2")
+    radar.ser.payload.extend(suffix)
+    found, pending = radar.wait_trigger_notice()
+
+    assert found is True
+    assert radar.wait_trigger_notice(pending)[0] is False
+
+
+def test_a_remembered_trigger_is_reported_only_once():
+    radar = _command_radar(b"Triggered\n")
+    radar.cmd("stats")
+
+    assert radar.wait_trigger_notice()[0] is True
+    assert radar.wait_trigger_notice()[0] is False
+
+
+def test_stale_command_output_without_a_trigger_is_still_dropped():
+    radar = _command_radar(b"frames=1 active=1\nDone\n")
+
+    reply = radar.cmd("stats")
+
+    assert "frames=1" not in reply
+    assert radar.wait_trigger_notice()[0] is False
+
+
+def test_notice_arriving_with_the_dump_trailer_is_preserved():
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = FakeSerial(b"")
+
+    radar._wait_for_dump_cli_ready(b"Done\nl3dump:/>Trig", timeout_s=0.1)
+    radar.ser.payload.extend(b"gered\n")
+
+    assert radar.wait_trigger_notice()[0] is True
+
+
+def test_reconfiguring_forgets_a_trigger_from_the_previous_session(tmp_path, monkeypatch):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    radar = _command_radar(b"Triggered\n", reply=b"active=1\nDone\nl3dump:/>")
+    monkeypatch.setattr(radar, "drain_stale_output", lambda: 0)
+
+    radar.send_config(str(config))
+
+    assert radar.wait_trigger_notice()[0] is False
+
+
+def test_watch_script_releases_a_trigger_in_the_arming_reply(monkeypatch):
+    import runpy
+    import sys
+    from unittest.mock import Mock, PropertyMock
+
+    main = runpy.run_path("scripts/iwr6843/watch_trigger.py")["main"]
+    radar = Mock()
+    radar.cmd.side_effect = ["Done\n", "Done\nTriggered\n", "Done\n"]
+    type(radar.ser).in_waiting = PropertyMock(side_effect=KeyboardInterrupt)
+    monkeypatch.setitem(main.__globals__, "IWR6843Radar", lambda **_kwargs: radar)
+    monkeypatch.setitem(main.__globals__, "tee_local_bin", lambda *_args: 14)
+    monkeypatch.setattr(sys, "argv", ["watch_trigger.py"])
+
+    main()
+
+    radar.release_sparse_freeze.assert_called_once()
+    radar.close.assert_called_once()
+
+
+def test_reading_the_frozen_capture_consumes_its_remembered_trigger():
+    """The notice names the capture the readback takes; it must not fire again after rearm."""
+    radar = _command_radar(b"Triggered\n")
+    radar.cmd("stats")
+    radar.ser.reply = b""
+
+    try:
+        radar.read_dump(timeout_s=0.05, stall_tolerance_s=0.01)
+    except (RuntimeError, TimeoutError):
+        pass
+
+    assert radar.wait_trigger_notice()[0] is False

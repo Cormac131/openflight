@@ -47,6 +47,7 @@
 #include <ti/control/mmwavelink/mmwavelink.h>
 #include <ti/control/mmwave/mmwave.h>
 #include <ti/utils/cli/cli.h>
+#include <ti/utils/cycleprofiler/cycle_profiler.h>
 
 #include "dump_format.h"
 #include "detect_queue.h"
@@ -333,6 +334,12 @@ static volatile uint32_t gHwaOutputDone;
 static volatile uint32_t gHwaRearms;
 static volatile uint32_t gHwaRearmErrors;
 static volatile uint32_t gHwaMissedFrameStarts;
+/* Frame completion queued -> next HWA arm, in microseconds. */
+static volatile uint32_t gHwaRearmQueuedCycles;
+static volatile uint8_t  gHwaRearmQueuedValid;
+static volatile uint32_t gHwaRearmLastUs;
+static volatile uint32_t gHwaRearmMaxUs;
+static volatile uint32_t gHwaRearmTimed;
 static volatile uint8_t  gHwaArmedForFrame;
 static volatile uint8_t  gHwaDoneSeen;
 static volatile uint8_t  gHwaOutputSeen;
@@ -994,6 +1001,10 @@ static void l3_hwaMaybeQueueRearm(void)
         }
 #endif
         }
+    }
+    if (queue) {
+        gHwaRearmQueuedCycles = Cycleprofiler_getTimeStamp();
+        gHwaRearmQueuedValid = 1U;
     }
     Hwi_restore(key);
     if (freeze && gHwaFreezeSemaphore != NULL) {
@@ -1893,6 +1904,8 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
             uint32_t pendingEpoch = 0U;
 #endif
             int32_t errCode;
+            uint32_t queuedCycles;
+            uint8_t timed;
 
             key = Hwi_disable();
             if (gCaptureActive) {
@@ -1991,7 +2004,21 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
                 gIq8ActiveScratch = nextScratch;
             }
 #endif
+            key = Hwi_disable();
+            queuedCycles = gHwaRearmQueuedCycles;
+            timed = gHwaRearmQueuedValid;
+            gHwaRearmQueuedValid = 0U;
+            Hwi_restore(key);
             errCode = l3_restartCompletedHwaFrame();
+            if (timed) {
+                uint32_t elapsedUs = (Cycleprofiler_getTimeStamp() - queuedCycles) /
+                                     (gCpuClock / 1000000U);
+                gHwaRearmLastUs = elapsedUs;
+                if (elapsedUs > gHwaRearmMaxUs) {
+                    gHwaRearmMaxUs = elapsedUs;
+                }
+                gHwaRearmTimed++;
+            }
             if (errCode == 0) {
                 gHwaRearms++;
             } else {
@@ -2631,7 +2658,10 @@ static void l3_considerSelfTrigger(uint32_t slot)
         l3_noteTrigger(9U, (float)gTriggerTeePower, (float)gTriggerApproachPower);
         return;
     }
-    if (gPreFramesCaptured == 0U || gCapturePlan.preFrames == 0U || gCapturePlan.loops == 0U) {
+    /* Freezing before the ring has wrapped would hand the host pre-trigger
+     * slots this session never wrote. */
+    if (gCapturePlan.preFrames == 0U || gCapturePlan.loops == 0U ||
+        gPreFramesCaptured < gCapturePlan.preFrames) {
         l3_noteTrigger(1U, 0.0F, 0.0F);
         return;
     }
@@ -3108,12 +3138,7 @@ static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
     gTriggerBin = (uint32_t)bin;
     gTriggerPower = power;
     gTriggerHits = (uint32_t)hits;
-    gTriggerRun = 0U;
-    gTriggerReady = 0U;
-    gTriggerToward = 0U;
-    gTriggerAway = 0U;
-    gTriggerPeakBin = 0U;
-    gTriggerHavePeak = 0U;
+    l3_clearTriggerMotion();
     gTriggerEnabled = (hits > 0U) ? 1U : 0U;
     CLI_write("Done\n");
     return 0;
@@ -3231,6 +3256,10 @@ static int32_t l3_cli_stats(int32_t argc, char *argv[])
     CLI_write("detect dropped=%u stale=%u\n",
               (unsigned)gDetectQueue.dropped,
               (unsigned)gDetectStale);
+    CLI_write("rearm_last_us=%u rearm_max_us=%u rearm_timed=%u\n",
+              (unsigned)gHwaRearmLastUs,
+              (unsigned)gHwaRearmMaxUs,
+              (unsigned)gHwaRearmTimed);
 #endif
     return 0;
 }
@@ -3582,6 +3611,10 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     gHwaRearms         = 0U;
     gHwaRearmErrors    = 0U;
     gHwaMissedFrameStarts = 0U;
+    gHwaRearmQueuedValid = 0U;
+    gHwaRearmLastUs    = 0U;
+    gHwaRearmMaxUs     = 0U;
+    gHwaRearmTimed     = 0U;
     gHwaArmedForFrame  = 0U;
     gHwaDoneSeen       = 0U;
     gHwaOutputSeen     = 0U;
@@ -3601,6 +3634,12 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     gActiveFrameIsPost = 0U;
     gActiveFrameShouldKeep = 1U;
     l3_resetDetectQueue();
+    /* A new session starts untriggered: a latch or enable left by a host that
+     * died mid-shot must not freeze or self-trigger this one. triggerCfg
+     * re-enables it. */
+    gSelfTriggerLatched = 0U;
+    gTriggerEnabled = 0U;
+    l3_clearTriggerMotion();
 #ifdef L3_RING_IQ8
     gIq8Pending = 0U;
     gIq8PendingDetect = 0U;
@@ -3679,6 +3718,8 @@ static void l3_initTask(UArg arg0, UArg arg1)
 
     (void)arg0; (void)arg1;
 
+    /* Starts the R4F PMU cycle counter behind Cycleprofiler_getTimeStamp. */
+    Cycleprofiler_init();
     UART_init();
     Pinmux_Set_FuncSel(SOC_XWR68XX_PINN5_PADBE, SOC_XWR68XX_PINN5_PADBE_MSS_UARTA_TX);
     Pinmux_Set_OverrideCtrl(SOC_XWR68XX_PINN5_PADBE,

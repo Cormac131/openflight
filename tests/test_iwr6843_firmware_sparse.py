@@ -86,7 +86,7 @@ def test_trigger_peak_tracks_bin_zero_with_an_explicit_flag():
     assert "gTriggerPeakBin != 0U" not in consider
     assert consider.count("gTriggerHavePeak") >= 3
     assert "gTriggerHavePeak = 0U;" in _function("static void l3_clearTriggerMotion(")
-    assert "gTriggerHavePeak = 0U;" in _function("static int32_t l3_cli_triggerCfg(")
+    assert "l3_clearTriggerMotion();" in _function("static int32_t l3_cli_triggerCfg(")
 
 
 def test_loop_means_are_computed_once_per_bin():
