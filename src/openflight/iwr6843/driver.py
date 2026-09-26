@@ -153,8 +153,15 @@ class IWR6843Radar:
         resp = b""
         deadline = time.time() + window
         while time.time() < deadline:
-            resp += self.ser.read(512)
+            # read(512) waits out the port timeout whenever the reply is
+            # shorter than 512 bytes. A stats line is, so each call cost
+            # 0.3s and a 2s floor sample only kept 6 readings.
+            waiting = self.ser.in_waiting
+            resp += self.ser.read(waiting if waiting else 1)
             if b"Done" in resp or b"Error" in resp or b"not recognized" in resp:
+                waiting = self.ser.in_waiting
+                if waiting:
+                    resp += self.ser.read(waiting)
                 break
         self._remember_trigger_notice(resp)
         return resp.decode(errors="replace")

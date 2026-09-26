@@ -401,6 +401,63 @@ def test_watch_script_arms_above_the_measured_tee_floor(monkeypatch):
     assert calls[:2] == ["debugCfg 1", "triggerCfg 14 300000.0 2"]
 
 
+class _PyserialShortRead:
+    """``read(n)`` waits out the port timeout unless ``n`` bytes are already buffered.
+
+    That is pyserial's contract. A stats reply is a few hundred bytes, so
+    ``read(512)`` costs the whole 0.3s even after ``Done`` has arrived.
+    """
+
+    def __init__(self, reply: bytes, timeout: float = 0.3):
+        self.reply = reply
+        self.timeout = timeout
+        self.pending = bytearray()
+        self.elapsed = 0.0
+
+    @property
+    def in_waiting(self) -> int:
+        return len(self.pending)
+
+    def write(self, data: bytes) -> None:
+        del data
+        self.pending = bytearray(self.reply)
+
+    def read(self, nbytes: int) -> bytes:
+        if nbytes > len(self.pending):
+            self.elapsed += self.timeout
+        nbytes = min(nbytes, len(self.pending))
+        chunk = bytes(self.pending[:nbytes])
+        del self.pending[:nbytes]
+        return chunk
+
+
+def test_background_floor_collects_eight_samples_inside_two_seconds():
+    """A 2s empty-lane sample must survive the 0.3s port timeout on each stats."""
+    from openflight.iwr6843.monitor import measure_trigger_level
+
+    port = _PyserialShortRead(b"trig phase=tee-low tee=180000 latched=0 enabled=1\nDone\n")
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = port
+    radar._trigger_pending = b""
+
+    def pause(seconds: float) -> None:
+        port.elapsed += seconds
+
+    floor, level = measure_trigger_level(
+        radar,
+        14,
+        2,
+        clock=lambda: port.elapsed,
+        pause=pause,
+    )
+
+    assert floor == pytest.approx(180000.0)
+    assert level == pytest.approx(270000.0)
+    # The 2s window is the pauses between readings. A timeout on each stats
+    # pushes the sixth sample past that window.
+    assert port.elapsed == pytest.approx(2.0)
+
+
 def test_reading_the_frozen_capture_consumes_its_remembered_trigger():
     """The notice names the capture the readback takes; it must not fire again after rearm."""
     radar = _command_radar(b"Triggered\n")
