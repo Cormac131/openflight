@@ -31,11 +31,11 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tests"))
 
+from iwr6843_synth import FRAME_PERIOD_S as CLUB_FRAME_PERIOD_S, synth_club_dump  # noqa: E402
 from test_iwr6843_pipeline import synth_shot  # noqa: E402
 
 from openflight.iwr6843 import (  # noqa: E402
     club,
-    doa,
     late_window as lw,  # noqa: E402
     lcmf as lcmf_mod,  # noqa: E402
     tracking,
@@ -100,6 +100,22 @@ def _reference_cal(*, tee_range_m: float = 1.5, tilt_deg: float = 10.4) -> Calib
     radar_height_m = 0.152
     cal.tee_ball_height_m = radar_height_m
     cal.meta["radar_height_m"] = radar_height_m
+    return cal
+
+
+def _ref_cal(*, tee_range_m: float = 1.5) -> Calibration:
+    """The real shipped array calibration (config/iwr6843_calibration_reference.json).
+
+    Every other case in this corpus uses ``Calibration.identity()``, whose
+    ``elem_correction`` is all-ones -- so a C port that omits the per-element
+    calibration correction entirely (``lcmf.py:592``, consumed via
+    ``Calibration.apply`` at ``calibration.py:81``) is indistinguishable from
+    a correct one on every one of those cases. The ``*_ref_calibration``
+    cases built with this loader close that gap: see their generation sites
+    for the measured before/after deltas this was confirmed to catch.
+    """
+    cal = Calibration.load()
+    cal.tee_range_m = tee_range_m
     return cal
 
 
@@ -278,66 +294,10 @@ def generate_lcmf_case(
 # so it cannot exercise estimate_club_path's positive path (there is nothing
 # pre-impact for find_club to lock onto; every synth_shot capture rejects
 # with "rejected_no_club_track"). club.py needs its own synthetic capture, so
-# this reimplements test_iwr6843_club_path.py's ``_synth_club`` fixture
-# (straight-line Cartesian club motion crossing the tee at the moment of
-# impact, exact TDM + Doppler phase per TX) rather than importing a private
-# test helper from another test module.
-
-_CLUB_FRAME_PERIOD_S = 4e-3
-
-
-def synth_club_dump(
-    path_deg: float,
-    *,
-    club_speed_ms: float = 22.0,
-    tee_range_m: float = 1.372,
-    n_samples: int = 128,
-    n_frames: int = 18,
-    loops: int = 12,
-    t_impact_s: float | None = None,
-    phase_bias_rad: float = 0.0,
-) -> bytes:
-    """A club head on a straight Cartesian line through the tee at impact.
-
-    Adapted from tests/test_iwr6843_club_path.py's ``_synth_club``; see that
-    fixture's docstring for the exact geometry/phase derivation this mirrors.
-    """
-    n_tx, n_rx = 3, 4
-    res = 6.0 / n_samples
-    t_impact = (club.PRE_IMPACT_FRAMES * _CLUB_FRAME_PERIOD_S) if t_impact_s is None else t_impact_s
-    path_rad = math.radians(path_deg)
-    v_x = club_speed_ms * math.cos(path_rad)
-    v_y = club_speed_ms * math.sin(path_rad)
-    tdm_offsets = (0.0, doa.TDM_TAU_S, doa.TX2_VERTICAL_TDM_TAU_S)
-    cube = np.zeros((n_frames, loops * n_tx, n_rx, n_samples), dtype=complex)
-    for frame in range(n_frames):
-        for loop in range(loops):
-            t = frame * _CLUB_FRAME_PERIOD_S + loop * lcmf_mod.TX2_LOOP_PERIOD_S
-            s = t - t_impact
-            x = tee_range_m + s * v_x
-            y = s * v_y
-            range_m = math.hypot(x, y)
-            bin_at = int(range_m / res)
-            if not 0 <= bin_at < n_samples:
-                continue
-            az_rad = math.atan2(y, x)
-            phase_az = -math.pi * math.sin(az_rad) + phase_bias_rad
-            v_r = (x * v_x + y * v_y) / range_m
-            doppler_phase = 4.0 * math.pi * range_m / doa.LAM
-            for tx in range(n_tx):
-                amp = 1000.0
-                az_factor = 1.0 if tx != 1 else np.exp(1j * phase_az)
-                tdm_phase = 4.0 * np.pi * v_r * tdm_offsets[tx] / doa.LAM
-                value = amp * az_factor * np.exp(1j * (tdm_phase + doppler_phase))
-                cube[frame, loop * n_tx + tx, :, bin_at] = value
-    return pack_dump(
-        cube,
-        n_tx=n_tx,
-        version=3,
-        frame_period_us=int(_CLUB_FRAME_PERIOD_S * 1e6),
-        trigger_frame=0,
-        sample_fmt=SAMPLE_RANGE_FFT_IQ16,
-    )
+# this uses tests/iwr6843_synth.py's ``synth_club_dump`` -- the SAME function
+# tests/test_iwr6843_club_path.py runs its assertions against (straight-line
+# Cartesian club motion crossing the tee at the moment of impact, exact TDM +
+# Doppler phase per TX) -- rather than a second, driftable copy of it.
 
 
 def _club_result_fields(result: club.ClubPathResult) -> dict[str, np.ndarray]:
@@ -387,11 +347,20 @@ def generate_club_case(  # pylint: disable=too-many-arguments
     tdm_sign: int = 1,
     empty: bool = False,
     n_frames: int = 18,
+    cal: Calibration | None = None,
 ):
-    """Record one club-stage golden vector from a synthetic club capture."""
-    cal = Calibration.identity()
+    """Record one club-stage golden vector from a synthetic club capture.
+
+    ``cal`` defaults to identity (no-op array correction) when unset. Pass
+    the real reference calibration (``Calibration.load(...)``) for a case
+    that must catch a C port omitting the per-element correction entirely --
+    see the ``*_ref_calibration`` cases below, which record
+    ``candidate_attack_angle_deg``/``attack_fit_rms_m`` values that visibly
+    differ from the identity-calibration run of the same capture.
+    """
+    cal = cal or Calibration.identity()
     cal.tee_range_m = tee_range_m
-    t_impact = (club.PRE_IMPACT_FRAMES * _CLUB_FRAME_PERIOD_S) if impact_t_s is None else impact_t_s
+    t_impact = (club.PRE_IMPACT_FRAMES * CLUB_FRAME_PERIOD_S) if impact_t_s is None else impact_t_s
     if empty:
         cube = np.zeros((n_frames, 12 * 3, 4, 128), dtype=complex)
         raw = pack_dump(
@@ -518,13 +487,15 @@ FLIGHT_CASES: dict[str, dict] = {
         noise=50.0,
         seed=11,
     ),
-    "low_amp_high_noise_no_ball_2": dict(
-        speed_ms=45.0,
-        launch_deg=18.0,
-        amp=1.0,
-        noise=50.0,
-        seed=22,
-    ),
+    # A second seed of the SAME low-amp/high-noise no-ball case used to live
+    # here (seed=22 vs seed=11) -- identical failure mode, recorded twice.
+    # Finding 7's genuinely distinct no-ball mechanism ("ball beyond
+    # max_range_m") needs a stage-specific clamp param that this shared
+    # synth_shot() table cannot carry for both stages at once (tracking's
+    # max_range_m and lcmf's net_range_m are different parameters with no
+    # common synth_shot()-only equivalent) -- see the standalone
+    # "driver_speed_beyond_{max,net}_range_no_ball" cases added in main()
+    # below instead, which cover both stages without warping this table.
     "short_capture_six_frames": dict(
         speed_ms=45.0,
         launch_deg=18.0,
@@ -650,6 +621,232 @@ def main() -> None:
 
     for name, kwargs in LATE_WINDOW_CASES.items():
         written.append(generate_late_window_case(late_window_dir, name, **kwargs))
+
+    # --- extra cases: real calibration + previously-unvaried parameters ----
+    #
+    # See the module docstrings on _ref_cal / generate_club_case's ``cal``
+    # param, and the review findings this corpus wave closed, for why each of
+    # these exists and what it proves the corpus can now catch.
+
+    # Finding 1: at least two lcmf and two club cases run with the real
+    # shipped array calibration instead of identity, so a C port that omits
+    # Calibration.apply entirely produces a visibly wrong angle_deg /
+    # candidate_attack_angle_deg rather than an accidentally-correct one.
+    written.append(
+        generate_lcmf_case(
+            lcmf_dir,
+            "driver_speed_mid_launch_ref_calibration",
+            ball_speed_mph=55.0 * 2.23694,
+            launch_deg=12.0,
+            n_tx=3,
+            tx_order="normal",
+            noise=6.0,
+            amp=400.0,
+            cal=_ref_cal(),
+        )
+    )
+    written.append(
+        generate_lcmf_case(
+            lcmf_dir,
+            "wedge_speed_steep_launch_ref_calibration",
+            ball_speed_mph=30.0 * 2.23694,
+            launch_deg=40.0,
+            n_tx=3,
+            tx_order="normal",
+            noise=6.0,
+            amp=400.0,
+            cal=_ref_cal(),
+        )
+    )
+    written.append(
+        generate_club_case(
+            club_dir,
+            "club_path_square_slow_ref_calibration",
+            path_deg=0.0,
+            club_speed_ms=18.0,
+            cal=_ref_cal(tee_range_m=1.372),
+        )
+    )
+    written.append(
+        generate_club_case(
+            club_dir,
+            "club_path_out_to_in_shallow_ref_calibration",
+            path_deg=8.0,
+            club_speed_ms=20.0,
+            cal=_ref_cal(tee_range_m=1.372),
+        )
+    )
+
+    # Finding 6: parameter dimensions that were plumbed but never varied.
+    written.append(
+        # tdm_sign_policy="negative" -> tdm_sign_used=-1 at lcmf.py:813/843,
+        # flowing through _tx2_horizontal_proxy and _snapshot_cache with the
+        # opposite Doppler-phase sign from every other lcmf case.
+        generate_lcmf_case(
+            lcmf_dir,
+            "driver_speed_tdm_sign_negative",
+            ball_speed_mph=55.0 * 2.23694,
+            launch_deg=12.0,
+            n_tx=3,
+            tx_order="normal",
+            noise=6.0,
+            amp=400.0,
+            tdm_sign_policy="negative",
+        )
+    )
+    written.append(
+        # n_tx=2: the capture already IS the vertical pair, so process_dump's
+        # 3TX-to-2TX projection (project_tx_pair, lcmf.py:165) never runs --
+        # the only case in the corpus that exercises the no-projection path.
+        generate_lcmf_case(
+            lcmf_dir,
+            "driver_speed_n_tx2_direct",
+            ball_speed_mph=55.0 * 2.23694,
+            launch_deg=12.0,
+            n_tx=2,
+            tx_order="normal",
+            noise=6.0,
+            amp=400.0,
+        )
+    )
+    written.append(
+        # net_range_m=4.0 clamps tracking.track_max_range_m to 3.75 m, well
+        # inside this flight's ~4.7 m of travel: still accepted, but with a
+        # different angle_deg/track_inliers than the unclamped case above --
+        # proof the clamp is actually reaching the RANSAC gate, not just
+        # being accepted and ignored.
+        generate_lcmf_case(
+            lcmf_dir,
+            "driver_speed_net_range_clamped",
+            ball_speed_mph=55.0 * 2.23694,
+            launch_deg=12.0,
+            n_tx=3,
+            tx_order="normal",
+            noise=6.0,
+            amp=400.0,
+            net_range_m=4.0,
+        )
+    )
+    written.append(
+        # grid_step_deg=2.0 (vs. the 0.5 every other case uses) coarsens the
+        # LCMF search grid; angle_deg measurably shifts (~12.15 -> ~12.45 deg
+        # in manual verification), proving the grid resolution is actually
+        # wired into the search rather than dead-plumbed.
+        generate_lcmf_case(
+            lcmf_dir,
+            "driver_speed_grid_step_coarse",
+            ball_speed_mph=55.0 * 2.23694,
+            launch_deg=12.0,
+            n_tx=3,
+            tx_order="normal",
+            noise=6.0,
+            amp=400.0,
+            grid_step_deg=2.0,
+        )
+    )
+    written.append(
+        # max_range_m=3.5 clamps the second BALL_GATES_M gate well short of
+        # this flight's full travel: track is still found but with far fewer
+        # inliers (73 vs 160 unclamped) and rms_bins >= 0.45, so
+        # low_confidence=True is recorded here too -- the corpus's only
+        # low-confidence-but-found case (see README).
+        generate_tracking_case(
+            tracking_dir,
+            "driver_speed_max_range_clamped",
+            speed_ms=55.0,
+            launch_deg=12.0,
+            n_tx=3,
+            tx_order="normal",
+            noise=6.0,
+            amp=400.0,
+            max_range_m=3.5,
+        )
+    )
+    written.append(
+        # min_ball_ms=55.0 (vs. the FAST_TRACK_MS=26.5 default) sits just
+        # above this flight's ~54.7 m/s "fastest-credible" candidate, so the
+        # find_ball selection logic actually picks a different candidate
+        # (55.0 m/s / 152 inliers vs 54.68 m/s / 160 unclamped) rather than
+        # silently reproducing the default.
+        generate_tracking_case(
+            tracking_dir,
+            "driver_speed_min_ball_ms_override",
+            speed_ms=55.0,
+            launch_deg=12.0,
+            n_tx=3,
+            tx_order="normal",
+            noise=6.0,
+            amp=400.0,
+            min_ball_ms=55.0,
+        )
+    )
+    written.append(
+        # n_tx=2 direct capture for the tracking stage: _tracking_inputs
+        # skips project_tx_pair entirely (generate_golden_vectors.py's own
+        # n_tx==3 branch), the tracking-side twin of the lcmf n_tx=2 case
+        # above.
+        generate_tracking_case(
+            tracking_dir,
+            "driver_speed_n_tx2_direct",
+            speed_ms=55.0,
+            launch_deg=12.0,
+            n_tx=2,
+            tx_order="normal",
+            noise=6.0,
+            amp=400.0,
+        )
+    )
+    written.append(
+        # Finding 7: a genuinely distinct no-ball failure mode from the
+        # amp/noise-driven low_amp_high_noise_no_ball_1 case -- normal SNR,
+        # but max_range_m=2.0 clamps BOTH BALL_GATES_M gates to an empty
+        # (lo > hi) interval, so there are zero detections at all. Verified:
+        # find_ball returns None here for a reason that has nothing to do
+        # with signal quality.
+        generate_tracking_case(
+            tracking_dir,
+            "driver_speed_beyond_max_range_no_ball",
+            speed_ms=55.0,
+            launch_deg=12.0,
+            n_tx=3,
+            tx_order="normal",
+            noise=6.0,
+            amp=400.0,
+            max_range_m=2.0,
+        )
+    )
+    written.append(
+        # lcmf's twin of the above: net_range_m=2.25 clamps
+        # tracking.track_max_range_m to 2.0 via the same path, giving
+        # estimate_lcmf_v1 a clean "rejected_by_ball_tracker" for the
+        # distinct max-range reason (confirmed: process_dump's find_ball
+        # call sees zero detections, not a broken/low-quality track).
+        generate_lcmf_case(
+            lcmf_dir,
+            "driver_speed_beyond_net_range_no_ball",
+            ball_speed_mph=55.0 * 2.23694,
+            launch_deg=12.0,
+            n_tx=3,
+            tx_order="normal",
+            noise=6.0,
+            amp=400.0,
+            net_range_m=2.25,
+        )
+    )
+    written.append(
+        # tdm_sign=-1 for the club stage: synth_club_dump's phase model is
+        # built assuming tdm_sign=+1 (see its docstring), so telling the
+        # estimator to remove the OPPOSITE Doppler-phase sign exercises the
+        # tdm_sign=-1 branch of doa.tx2_reference_phases_at/tx2_phase_at with
+        # a deliberately mismatched, verifiably-different result.
+        generate_club_case(
+            club_dir,
+            "club_path_tdm_sign_negative",
+            path_deg=4.0,
+            club_speed_ms=20.0,
+            tdm_sign=-1,
+        )
+    )
 
     def _display(path: Path) -> Path:
         try:
