@@ -434,11 +434,27 @@ def test_oversized_plan_is_trimmed_and_reported():
 
 def test_release_requests_no_cells():
     cube = _cube(n_tx=2)
-    serial = FakeSparseSerial(cube=cube, n_tx=2, summary=vertical_loop_power(cube, n_tx=2))
+    serial = FakeSparseSerial(cube=cube, n_tx=2, summary=vertical_loop_power(cube, n_tx=2), chunk=7)
 
     _radar(serial).release_sparse_freeze()
 
     assert serial.written == [b"l3sparse\n", b"cells 0\n"]
+    # Queued once ILP1 is visible, while the power payload is still unread.
+    assert serial.unread_at_request > 0
+
+
+def test_release_reports_the_firmware_error_text():
+    cube = _cube(n_tx=2)
+    serial = FakeSparseSerial(
+        cube=cube,
+        n_tx=2,
+        summary=vertical_loop_power(cube, n_tx=2),
+        after_request=b"Error: sparse cell request missing\n",
+        chunk=7,
+    )
+
+    with pytest.raises(RuntimeError, match="request missing"):
+        _radar(serial).release_sparse_freeze()
 
 
 def test_release_on_firmware_without_sparse_raises():

@@ -66,6 +66,7 @@ def test_send_config_flushes_previous_mmwave_profile_when_config_omits_flush(tmp
     radar.send_config(str(config))
 
     assert commands == [
+        "debugCfg 0",
         "sensorStop",
         "flushCfg",
         "dfeDataOutputMode 1",
@@ -97,7 +98,15 @@ def test_send_config_waits_for_sensor_to_become_active(tmp_path, monkeypatch):
 
     radar.send_config(str(config))
 
-    assert commands == ["sensorStop", "flushCfg", "sensorStart", "stats", "stats", "stats"]
+    assert commands == [
+        "debugCfg 0",
+        "sensorStop",
+        "flushCfg",
+        "sensorStart",
+        "stats",
+        "stats",
+        "stats",
+    ]
 
 
 class FakeSerial:
@@ -334,7 +343,17 @@ def test_watch_script_releases_a_trigger_in_the_arming_reply(monkeypatch):
 
     main = runpy.run_path("scripts/iwr6843/watch_trigger.py")["main"]
     radar = Mock()
-    radar.cmd.side_effect = ["Done\n", "Done\nTriggered\n", "Done\n"]
+    calls: list[str] = []
+
+    def _cmd(line, window=1.5):
+        del window
+        calls.append(line)
+        if line.startswith("triggerCfg"):
+            return "Done\nTriggered\n"
+        return "Done\n"
+
+    radar.cmd.side_effect = _cmd
+    radar.release_sparse_freeze.side_effect = lambda: calls.append("release")
     type(radar.ser).in_waiting = PropertyMock(side_effect=KeyboardInterrupt)
     monkeypatch.setitem(main.__globals__, "IWR6843Radar", lambda **_kwargs: radar)
     monkeypatch.setitem(main.__globals__, "tee_local_bin", lambda *_args: 14)
@@ -342,7 +361,14 @@ def test_watch_script_releases_a_trigger_in_the_arming_reply(monkeypatch):
 
     main()
 
-    radar.release_sparse_freeze.assert_called_once()
+    assert calls == [
+        "debugCfg 1",
+        "triggerCfg 14 1000.0 2",
+        "debugCfg 0",
+        "release",
+        "debugCfg 1",
+        "debugCfg 0",
+    ]
     radar.close.assert_called_once()
 
 

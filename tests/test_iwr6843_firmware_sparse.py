@@ -55,6 +55,18 @@ def test_read_line_drains_an_overlong_line_instead_of_stopping_mid_line():
     assert "L3_SPARSE_REQUEST_TIMEOUT_MS" in read_line
 
 
+def test_blank_line_before_the_cell_request_is_not_a_missing_request():
+    """A stray CR/LF left in the FIFO must not reject the real cells line."""
+    sparse = _function("int32_t l3_cli_sparse(")
+    read_line = _function("static int32_t l3_readLine(")
+
+    assert "return L3_READLINE_EMPTY;" in read_line
+    retry = sparse.index("lineStatus == L3_READLINE_EMPTY")
+    missing = sparse.index('CLI_write("Error: sparse cell request missing')
+    assert retry < missing
+    assert sparse.count("l3_readLine(request") == 2
+
+
 def test_slice_count_is_the_number_of_cells_actually_parsed():
     sparse = _function("int32_t l3_cli_sparse(")
 

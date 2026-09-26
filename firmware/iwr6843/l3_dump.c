@@ -2456,10 +2456,11 @@ static void l3_writeF32(float value)
     UART_writePolling(gDataUart, bytes, sizeof(bytes));
 }
 
-/* Read one CLI line into buf. Returns 0 on a line, -1 on timeout or an empty
- * line, and -2 when the line does not fit: the rest of it is then read and
- * discarded so none of it reaches the CLI parser as a command. */
+/* Read one CLI line into buf. Returns 0 on a line, -1 on timeout, -3 on an
+ * empty line, and -2 when the line does not fit: the rest of it is then read
+ * and discarded so none of it reaches the CLI parser as a command. */
 #define L3_READLINE_OVERFLOW (-2)
+#define L3_READLINE_EMPTY (-3)
 
 static int32_t l3_readLine(char *buf, uint32_t cap)
 {
@@ -2490,7 +2491,10 @@ static int32_t l3_readLine(char *buf, uint32_t cap)
             if (overflow) {
                 return L3_READLINE_OVERFLOW;
             }
-            return (used > 0U) ? 0 : -1;
+            if (used == 0U) {
+                return L3_READLINE_EMPTY;
+            }
+            return 0;
         }
         if (used + 1U < cap) {
             buf[used++] = (char)value;
@@ -2949,6 +2953,16 @@ int32_t l3_cli_sparse(int32_t argc, char *argv[])
         }
     }
     lineStatus = l3_readLine(request, sizeof(request));
+    /* A stray CR/LF in the FIFO is not the cell request. "\r\n" is two empty
+     * reads; skip those and take the line that follows. A timeout is not
+     * retried, so a missing request still fails in one 5s wait. */
+    if (lineStatus == L3_READLINE_EMPTY) {
+        uint32_t emptyReads = 1U;
+        while (lineStatus == L3_READLINE_EMPTY && emptyReads < 3U) {
+            emptyReads++;
+            lineStatus = l3_readLine(request, sizeof(request));
+        }
+    }
     if (lineStatus == L3_READLINE_OVERFLOW) {
         CLI_write("Error: sparse cell request longer than L3_SPARSE_REQUEST_MAX\n");
         return l3_sparseRearm();

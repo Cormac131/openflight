@@ -49,7 +49,13 @@ def main() -> None:
         while True:
             if TRIGGER_NOTICE in pending:
                 pending = b""
+                # Debug text shares this UART with the binary release. Silence
+                # it for the exchange, then turn it back on to keep watching.
+                radar.cmd("debugCfg 0", window=1.0)
                 radar.release_sparse_freeze()
+                reply = radar.cmd("debugCfg 1")
+                if "Done" not in reply:
+                    raise SystemExit(f"debugCfg rejected: {reply.strip()}")
                 print("\n-- fired: released the frozen ring, watching again --", flush=True)
             else:
                 pending = pending[-(len(TRIGGER_NOTICE) - 1) :]
