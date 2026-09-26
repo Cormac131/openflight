@@ -56,7 +56,7 @@ CONFIGPKG  = dss_configPkg_$(MMWAVE_SDK_DEVICE_TYPE)
 MAP        = $(APPNAME).map
 OUT        = $(APPNAME).$(C674_EXE_EXT)
 APP_CMD    = dss_linker.cmd
-SOURCES    = dss_main.c solve_fft.c solve_tracking.c solve_numpy_rng.c track_select.c
+SOURCES    = dss_main.c solve_fft.c solve_tracking.c solve_numpy_rng.c solve_lcmf.c track_select.c
 DEPENDS    = $(addprefix $(PLATFORM_OBJDIR)/, $(SOURCES:.c=.$(C674_DEP_EXT)))
 OBJECTS    = $(addprefix $(PLATFORM_OBJDIR)/, $(SOURCES:.c=.$(C674_OBJ_EXT)))
 

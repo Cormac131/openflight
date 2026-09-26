@@ -123,6 +123,33 @@ int main(void)
      * consume), so it costs zero L2 today; whoever wires the real mailbox
      * dispatch (Task 6+) must budget ~42 KB of static workspace against the
      * L2 headroom at that point -- see the Task 5 report.
+     *
+     * Task 6 (lcmf stage, solve_lcmf.c): no change needed, but for a
+     * different reason than Task 5 -- solve_lcmf_estimate()'s own stack
+     * frame is NOT small. Its named locals (gridDeg/objectiveTwo8/
+     * objectiveF4 at SOLVE_LCMF_MAX_GRID=512 doubles each = 4,096 B x 3 =
+     * 12,288 B; the per-model rangeM/frameIds/errors scratch at
+     * SOLVE_LCMF_MAX_SELECTED=256 = 2,048+512+2,048 B; smaller per-block
+     * locals) sum to a conservative (no stack-slot reuse assumed, same
+     * methodology as the solve_fft derivation above) ~18.2 KiB. The
+     * deepest simultaneously-live call chain underneath that --
+     * leave_one_channel_out_error() (gram/gramInv/pseudo/coefficients/
+     * prediction/leverage, ~1.8 KiB) nesting into its own
+     * cmat_inverse() (~1.1 KiB) -- adds ~2.9 KiB (frame_objective's own
+     * ~2.2 KiB frame and spatial_dictionary's ~0.8 KiB frame run at
+     * DIFFERENT points in the same loop, never simultaneously with the
+     * pinv chain or each other, so they are not summed here). Derived
+     * total: ~18.2 + 2.9 = ~21.1 KiB -- a source-level worst case, NOT a
+     * compiler- or silicon-measured figure (no hardware was run for this
+     * task). That is LESS than solve_fft's own ~21.5 KiB frame pair the
+     * current 32 KiB was already sized against, and the two stages never
+     * run simultaneously (one task, one stage at a time), so no change to
+     * DSS_SOLVE_TASK_STACK_SIZE is needed. Unlike Task 5's workspace,
+     * solve_lcmf's SolveLcmfWorkspace (~1 MB at SOLVE_LCMF_MAX_* sizes,
+     * dominated by the ~1 MB vecRe/vecIm snapshot cache) is ALSO a
+     * caller-owned pointer, not a stack local -- whoever wires the real
+     * mailbox dispatch must budget that separately against L2/L3, same
+     * caveat as Task 5's workspace.
      */
     taskParams.stack = dss_solveTaskStack;
     taskParams.stackSize = sizeof(dss_solveTaskStack);
