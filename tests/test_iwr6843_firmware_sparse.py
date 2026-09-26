@@ -55,6 +55,18 @@ def test_read_line_drains_an_overlong_line_instead_of_stopping_mid_line():
     assert "L3_SPARSE_REQUEST_TIMEOUT_MS" in read_line
 
 
+def test_latched_self_trigger_stops_the_front_end_before_rearm():
+    """HWA freeze leaves the BSS chirping. MMWave_start then returns
+    'RF restart failed' unless this wait stops the front end first."""
+    wait = _function("static int32_t l3_awaitFrozenRing(")
+    latched = wait.index("if (gSelfTriggerLatched)")
+    timeout_return = wait.index("return -1;", wait.index("self-trigger freeze timed out", latched))
+    stop = wait.index("return l3_finishCaptureStop();", timeout_return)
+    boundary = wait.index("l3_stopCaptureAtBoundary()", stop)
+
+    assert timeout_return < stop < boundary
+
+
 def test_release_rearms_without_reading_a_cell_line():
     """A second CLI line cannot sit in the one-byte SCI receiver during the power dump."""
     release = _function("static int32_t l3_cli_release(")

@@ -2775,7 +2775,9 @@ typedef struct {
 } l3_sparse_window_t;
 
 /* Wait until a self-trigger freeze has landed, or stop at the next frame
- * boundary. Does not stream and does not read a follow-up CLI line. */
+ * boundary. Does not stream and does not read a follow-up CLI line.
+ * The HWA freeze only stops re-arm; the BSS keeps chirping until
+ * l3_finishCaptureStop, and MMWave_start refuses a sensor that is still running. */
 static int32_t l3_awaitFrozenRing(void)
 {
     if (!gCaptureActive && !gSelfTriggerLatched) {
@@ -2789,7 +2791,9 @@ static int32_t l3_awaitFrozenRing(void)
             return -1;
         }
         gSelfTriggerLatched = 0U;
-    } else if (l3_stopCaptureAtBoundary() != 0) {
+        return l3_finishCaptureStop();
+    }
+    if (l3_stopCaptureAtBoundary() != 0) {
         return -1;
     }
     return 0;
