@@ -50,8 +50,8 @@ def test_read_line_drains_an_overlong_line_instead_of_stopping_mid_line():
     read_line = _function("static int32_t l3_readLine(")
 
     assert "while (used + 1U < cap" not in read_line
-    assert "overflow = 1U;" in read_line
-    assert "return L3_READLINE_OVERFLOW;" in read_line
+    assert "while (drained < 4U * cap)" in read_line
+    assert "status = L3_READLINE_OVERFLOW;" in read_line
     assert "L3_SPARSE_REQUEST_TIMEOUT_MS" in read_line
 
 
@@ -82,7 +82,7 @@ def test_blank_line_before_the_cell_request_is_not_a_missing_request():
     sparse = _function("int32_t l3_cli_sparse(")
     read_line = _function("static int32_t l3_readLine(")
 
-    assert "return L3_READLINE_EMPTY;" in read_line
+    assert "L3_READLINE_EMPTY" in read_line
     retry = sparse.index("lineStatus == L3_READLINE_EMPTY")
     missing = sparse.index('CLI_write("Error: sparse cell request missing')
     assert retry < missing
@@ -138,3 +138,23 @@ def test_power_rows_go_out_in_one_write_per_loop():
 
     assert "l3_writeF32" not in power
     assert "UART_writePolling(gDataUart, (uint8_t *)&powerRow[loop * maxBins]" in power
+
+
+def test_read_line_uses_the_buffered_uart_receive_not_register_polling():
+    """The SCI receiver holds one byte. Polling SCIRD from the CLI task loses a
+    byte whenever the HWA rearm task (now above the CLI) preempts the poll, and
+    a 700-byte cell line spans several frames. On the Pi every l3sparse cell
+    request came back "missing" or truncated. UART_read moves the byte capture
+    into the driver's RX interrupt; echo must be off so that ISR does not spin
+    on TX between bytes."""
+    read_line = _function("static int32_t l3_readLine(")
+    source = _source()
+
+    assert "UART_read(gCliUart" in read_line
+    assert "SCIRD" not in read_line
+    assert "SCIFLR" not in read_line
+    assert "Task_sleep" not in read_line
+    assert "readTimeout = L3_SPARSE_REQUEST_TIMEOUT_MS" in read_line
+    init = " ".join(source.split())  # the open block aligns its '=' with spaces
+    assert "uartParams.readEcho = UART_ECHO_OFF;" in init
+    assert init.index("uartParams.readEcho = UART_ECHO_OFF;") < init.index("gCliUart = UART_open(0")

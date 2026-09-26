@@ -2467,54 +2467,65 @@ static void l3_writeF32(float value)
     UART_writePolling(gDataUart, bytes, sizeof(bytes));
 }
 
-/* Read one CLI line into buf. Returns 0 on a line, -1 on timeout, -3 on an
- * empty line, and -2 when the line does not fit: the rest of it is then read
- * and discarded so none of it reaches the CLI parser as a command. */
+/* Read one CLI line into buf through the UART driver's interrupt receive.
+ * Returns 0 on a line, -1 on timeout, -3 on an empty line, and -2 when the
+ * line does not fit: the rest of it is then read and discarded so none of it
+ * reaches the CLI parser as a command.
+ *
+ * The SCI receiver holds one byte. Polling it from this task lost bytes
+ * whenever the HWA rearm task (above the CLI) ran mid-line, and a host cell
+ * line spans several frames; the driver's RX interrupt captures each byte
+ * regardless of which task is running. The CLI handle reads TEXT with newline
+ * return, so UART_read completes at '\n' (a CR is folded into one). */
 #define L3_READLINE_OVERFLOW (-2)
 #define L3_READLINE_EMPTY (-3)
 
 static int32_t l3_readLine(char *buf, uint32_t cap)
 {
-    uint32_t used = 0U;
-    uint32_t spins = 0U;
-    uint32_t seen = 0U;
-    uint8_t overflow = 0U;
+    UART_Config *uartConfig = (UART_Config *)gCliUart;
+    UartSci_Driver *driver;
+    uint32_t savedTimeout;
+    uint32_t drained = 0U;
+    int32_t count;
+    int32_t status;
 
-    /* spins bounds an idle line; seen bounds one that never ends. */
-    while (spins < L3_SPARSE_REQUEST_TIMEOUT_MS && seen < 4U * cap) {
-        uint8_t value = 0U;
-        UART_Config *uartConfig = (UART_Config *)gCliUart;
-        UartSci_HwCfg *hwCfg;
-
-        if (uartConfig == NULL || uartConfig->hwAttrs == NULL) {
-            return -1;
-        }
-        hwCfg = (UartSci_HwCfg *)uartConfig->hwAttrs;
-        if (CSL_FEXTR(hwCfg->ptrSCIRegs->SCIFLR, 9U, 9U) == 0U) {
-            Task_sleep(1);
-            spins++;
-            continue;
-        }
-        value = (uint8_t)CSL_FEXTR(hwCfg->ptrSCIRegs->SCIRD, 7U, 0U);
-        seen++;
-        if (value == (uint8_t)'\n' || value == (uint8_t)'\r') {
-            buf[used] = '\0';
-            if (overflow) {
-                return L3_READLINE_OVERFLOW;
-            }
-            if (used == 0U) {
-                return L3_READLINE_EMPTY;
-            }
-            return 0;
-        }
-        if (used + 1U < cap) {
-            buf[used++] = (char)value;
-        } else {
-            overflow = 1U;
-        }
+    if (uartConfig == NULL || uartConfig->object == NULL || cap < 2U) {
+        return -1;
     }
-    buf[used] = '\0';
-    return overflow ? L3_READLINE_OVERFLOW : -1;
+    /* The handle's read timeout is the CLI's (forever). A missing request
+     * must not freeze the ring for good, so bound this one read. */
+    driver = (UartSci_Driver *)uartConfig->object;
+    savedTimeout = driver->params.readTimeout;
+    driver->params.readTimeout = L3_SPARSE_REQUEST_TIMEOUT_MS;
+
+    count = UART_read(gCliUart, (uint8_t *)buf, cap - 1U);
+    if (count <= 0) {
+        buf[0] = '\0';
+        status = -1;
+    } else if (buf[count - 1] == '\n') {
+        buf[count - 1] = '\0';
+        status = (count == 1) ? L3_READLINE_EMPTY : 0;
+    } else {
+        /* The buffer filled before a newline: the line does not fit. Drain
+         * the rest of it, bounded so a stream that never ends still returns. */
+        buf[cap - 1U] = '\0';
+        while (drained < 4U * cap) {
+            uint8_t scratch[32];
+
+            count = UART_read(gCliUart, scratch, sizeof(scratch));
+            if (count <= 0) {
+                break;
+            }
+            drained += (uint32_t)count;
+            if (scratch[count - 1] == '\n') {
+                break;
+            }
+        }
+        status = L3_READLINE_OVERFLOW;
+    }
+
+    driver->params.readTimeout = savedTimeout;
+    return status;
 }
 
 static const int16_t *l3_iq16Sample(
@@ -3829,6 +3840,12 @@ static void l3_initTask(UArg arg0, UArg arg1)
     uartParams.writeDataMode  = UART_DATA_BINARY;
     uartParams.baudRate       = 1041667;
     uartParams.isPinMuxDone    = 1;
+    /* No echo: the driver echoes from inside its RX interrupt, spinning on
+     * TX-free between bytes. A host cell line arrives back to back at wire
+     * rate, and the one-byte SCI receiver overruns while the ISR waits to
+     * echo. Nothing on the host reads the echo; it syncs on Done/Error and
+     * the packet magics. */
+    uartParams.readEcho       = UART_ECHO_OFF;
     gCliUart = UART_open(0, &uartParams);
 
     UART_Params_init(&uartParams);

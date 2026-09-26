@@ -25,8 +25,8 @@ once, then choose a profile by passing its `.cfg` to OpenFlight.
 | Reference calibration | `config/iwr6843_calibration_reference.json` |
 | Native build | `make -C firmware build-native` |
 | Container build | `make -C firmware docker-build` |
-| Flash image size | 346,820 bytes |
-| Flash SHA-256 | `823ddd18a231d0004020de6262160d6863384cccac6674bae6f7d0fcea58f955` |
+| Flash image size | 430,916 bytes |
+| Flash SHA-256 | `664b2360dc7d6f8e7300eb53f980faf5294d25d7c1e8c93692f8756a62ea8dde` |
 | Validate on hardware | `uv run python scripts/hardware-test/test_iwr_firmware.py` (see [Firmware Feature Check](../iwr6843/verify.md#firmware-feature-check)) |
 | Dump format | Variable-width, timed complex range-FFT snapshots |
 
