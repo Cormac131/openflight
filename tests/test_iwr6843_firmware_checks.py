@@ -1180,11 +1180,13 @@ def test_readback_slower_than_the_limit_fails(monkeypatch):
     slow = {"now": 0.0}
 
     def clock():
-        slow["now"] += 0.6
+        slow["now"] += 1.2
         return slow["now"]
 
     monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [type("Obs", (), {"fired": True})()])
-    results = fc.run(_ctx(radar, clock=clock, shots=1), (fc.swing_section(1),), swing=True)
+    results = fc.run(
+        _ctx(radar, clock=clock, shots=1, wait_s=30.0), (fc.swing_section(1),), swing=True
+    )
 
     readback = next(r for r in results if r.name.endswith("frozen ring reads back"))
     assert readback.status == "FAIL" and "1.0 s" in readback.detail

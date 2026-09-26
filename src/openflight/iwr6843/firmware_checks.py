@@ -1106,16 +1106,18 @@ def _swing_checks(shot: int, state: _SwingState) -> tuple[Check, ...]:
             if capture is None:
                 return failed(name, "both l3track and l3sparse refused")
             raw = capture.raw
-        # A separate checkpoint for the wire transfer, distinct from host-side
-        # parsing below, so a slow radio link and a slow parse are told apart.
+        # The judged window is the wire transfer only (read_tracked/read_sparse),
+        # not host-side parsing below, so a slow parser can't mask a hung radio
+        # link or, conversely, get blamed for one.
         read_done = ctx.clock()
         state.last_dump = raw
         meta = parse_header(raw)
         elapsed = ctx.clock() - started
+        wire_elapsed = read_done - started
         want_frames = (plan.plan_pre or 0) + (plan.plan_post or 0)
         problems = []
-        if elapsed >= READBACK_LIMIT_S:
-            problems.append(f"readback {elapsed:.2f} s >= {READBACK_LIMIT_S:.1f} s")
+        if wire_elapsed >= READBACK_LIMIT_S:
+            problems.append(f"readback {wire_elapsed:.2f} s >= {READBACK_LIMIT_S:.1f} s")
         if meta["n_frames"] != want_frames:
             problems.append(f"n_frames={meta['n_frames']} want {want_frames}")
         if (
