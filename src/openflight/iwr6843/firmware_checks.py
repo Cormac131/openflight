@@ -338,3 +338,85 @@ def exit_code(results: list[CheckResult]) -> int:
 def write_json(results: list[CheckResult], path: str | Path) -> None:
     """Persist results as a list of {name, status, detail, seconds}."""
     Path(path).write_text(json.dumps([asdict(r) for r in results], indent=2), encoding="utf-8")
+
+
+_CONFIG_WHILE_ACTIVE = (
+    "captureCfg 20 53 32 53 47 8",
+    "phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1",
+    "captureFormat iq16",
+    "iq8Scale 64",
+)
+
+
+def _check_config_accepted(ctx: Context) -> CheckResult:
+    name = "lifecycle/config accepted"
+    ctx.radar.send_config(ctx.config)
+    snap = stats_snapshot(ctx)
+    faults = parse_stats(snap.raw).get("rf_faults")
+    if snap.active != 1 or faults != 0:
+        return failed(name, f"active={snap.active} rf_faults={faults}")
+    return passed(
+        name,
+        f"active=1 rf_faults=0 format={snap.format} plan={snap.plan_pre}pre/{snap.plan_post}post",
+    )
+
+
+def _check_frames_advance(ctx: Context) -> CheckResult:
+    name = "lifecycle/frames advance"
+    before = stats_snapshot(ctx).frames
+    ctx.sleep(0.5)
+    after = stats_snapshot(ctx).frames
+    if before is None or after is None or after <= before:
+        return failed(name, f"frames {before} -> {after} over 0.5 s")
+    return passed(name, f"frames {before} -> {after} over 0.5 s")
+
+
+def _check_config_refused_while_active(ctx: Context) -> CheckResult:
+    name = "lifecycle/config commands refused while active"
+    leaked = []
+    for line in _CONFIG_WHILE_ACTIVE:
+        reply = ctx.radar.cmd(line, 2.0)
+        if "Error" not in reply or "stop the sensor" not in reply:
+            leaked.append(f"{line.split()[0]}: {reply.strip()[:60]!r}")
+    if leaked:
+        return failed(name, "; ".join(leaked))
+    return passed(name, f"{len(_CONFIG_WHILE_ACTIVE)} commands refused")
+
+
+def _check_sensor_stop(ctx: Context) -> CheckResult:
+    name = "lifecycle/sensorStop idles the sensor"
+    try:
+        ctx.radar.stop_sensor()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return failed(name, str(exc))
+    snap = stats_snapshot(ctx)
+    if snap.active != 0:
+        return failed(name, f"active={snap.active} after sensorStop")
+    return passed(name, "active=0")
+
+
+def _check_restart_resets(ctx: Context) -> CheckResult:
+    name = "lifecycle/restart resets counters"
+    before = stats_snapshot(ctx).frames
+    ctx.radar.send_config(ctx.config)
+    after = stats_snapshot(ctx)
+    if after.active != 1 or before is None or after.frames is None or after.frames >= before:
+        return failed(name, f"active={after.active} frames {before} -> {after.frames}")
+    return passed(name, f"frames {before} -> {after.frames}, latched={after.latched}")
+
+
+def lifecycle_section() -> Section:
+    """sensorStart/sensorStop/stats behave; the section ends with the sensor active."""
+    return Section(
+        "lifecycle",
+        "active",
+        (
+            Check("lifecycle/config accepted", _check_config_accepted),
+            Check("lifecycle/frames advance", _check_frames_advance),
+            Check(
+                "lifecycle/config commands refused while active", _check_config_refused_while_active
+            ),
+            Check("lifecycle/sensorStop idles the sensor", _check_sensor_stop),
+            Check("lifecycle/restart resets counters", _check_restart_resets),
+        ),
+    )

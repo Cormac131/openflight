@@ -353,3 +353,107 @@ def test_write_json_records_name_status_detail_seconds(tmp_path):
         {"name": "a/one", "status": "PASS", "detail": "ok", "seconds": 0.0},
         {"name": "b/two", "status": "SKIP", "detail": "why", "seconds": 0.0},
     ]
+
+
+def _stats_counting(active=1, start=1000, step=500, phase="off", enabled=0, latched=0):
+    def reply(n):
+        return (
+            f"frames={start + n * step} wraps=0 active={active} calib=0x0 rf_faults=0 "
+            "hwa_frames=1 hwa_out=1 hwa_rearms=1 hwa_rearm_err=0 hwa_missed=0 "
+            "freeze_req=0 freeze_done=0 freeze_to=0 format=iq16 plan=16pre/8post "
+            "loops=12 used=100/200\n"
+            "iq8_packed=0 iq8_overrun=0 iq8_clipped=0 pending=0 pre_seen=999 post_kept=0 "
+            "post_seen=0 stride=1\n"
+            f"trig phase={phase} tee=0 latched={latched} enabled={enabled}\n"
+            "detect dropped=0 stale=0\nrearm_last_us=1 rearm_max_us=2 rearm_timed=3\nDone\n"
+        ).encode()
+
+    return reply
+
+
+def _lifecycle_radar(**overrides):
+    replies = {
+        "stats": _stats_counting(),
+        "captureCfg": b"Error: stop the sensor before captureCfg\n",
+        "phaseCaptureCfg": b"Error: stop the sensor before phaseCaptureCfg\n",
+        "captureFormat": b"Error: stop the sensor before captureFormat\n",
+        "iq8Scale": b"Error: stop the sensor before iq8Scale\n",
+        "sensorStop": b"Done\n",
+    }
+    replies.update(overrides)
+    return scripted_radar(replies)
+
+
+def _names(section):
+    return [check.name for check in section.checks]
+
+
+def test_lifecycle_section_names_match_the_spec():
+    assert _names(fc.lifecycle_section()) == [
+        "lifecycle/config accepted",
+        "lifecycle/frames advance",
+        "lifecycle/config commands refused while active",
+        "lifecycle/sensorStop idles the sensor",
+        "lifecycle/restart resets counters",
+    ]
+
+
+def test_lifecycle_config_accepted_reads_active_and_faults(monkeypatch):
+    radar = _lifecycle_radar()
+    monkeypatch.setattr(radar, "send_config", lambda cfg: None)
+    check = fc.lifecycle_section().checks[0]
+
+    assert check.run(_ctx(radar)).status == "PASS"
+
+    faulty = _lifecycle_radar(stats=lambda n: b"frames=1 active=1 rf_faults=3\nDone\n")
+    monkeypatch.setattr(faulty, "send_config", lambda cfg: None)
+    result = check.run(_ctx(faulty))
+    assert result.status == "FAIL" and "rf_faults=3" in result.detail
+
+
+def test_lifecycle_frames_advance_fails_when_the_counter_is_stuck():
+    moving = fc.lifecycle_section().checks[1].run(_ctx(_lifecycle_radar()))
+    stuck = (
+        fc.lifecycle_section().checks[1].run(_ctx(_lifecycle_radar(stats=_stats_counting(step=0))))
+    )
+
+    assert moving.status == "PASS"
+    assert stuck.status == "FAIL"
+
+
+def test_lifecycle_config_commands_must_be_refused_while_active():
+    check = fc.lifecycle_section().checks[2]
+
+    assert check.run(_ctx(_lifecycle_radar())).status == "PASS"
+
+    leaky = _lifecycle_radar(captureFormat=b"Capture format: iq16\nDone\n")
+    result = check.run(_ctx(leaky))
+    assert result.status == "FAIL" and "captureFormat" in result.detail
+
+
+def test_lifecycle_sensor_stop_requires_active_zero(monkeypatch):
+    check = fc.lifecycle_section().checks[3]
+    radar = _lifecycle_radar(stats=_stats_counting(active=0))
+    monkeypatch.setattr(radar, "stop_sensor", lambda: None)
+    assert check.run(_ctx(radar)).status == "PASS"
+
+    still = _lifecycle_radar()
+
+    def refuse():
+        raise RuntimeError("IWR6843 remained active after sensorStop")
+
+    monkeypatch.setattr(still, "stop_sensor", refuse)
+    result = check.run(_ctx(still))
+    assert result.status == "FAIL" and "remained active" in result.detail
+
+
+def test_lifecycle_restart_resets_counters(monkeypatch):
+    check = fc.lifecycle_section().checks[4]
+    # First stats: high frame count from the old session; after send_config the count restarts low.
+    radar = _lifecycle_radar(stats=lambda n: _stats_counting(start=50000 if n == 0 else 10)(0))
+    monkeypatch.setattr(radar, "send_config", lambda cfg: None)
+    assert check.run(_ctx(radar)).status == "PASS"
+
+    same = _lifecycle_radar(stats=_stats_counting(start=50000, step=100))
+    monkeypatch.setattr(same, "send_config", lambda cfg: None)
+    assert check.run(_ctx(same)).status == "FAIL"
