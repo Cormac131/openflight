@@ -1,6 +1,7 @@
 """Test doubles for the IWR6843 runtime and the l3sparse firmware.
 
-``FakeIWRRuntime`` stands in for ``IWR6843Runtime`` in server tests.
+``FakeIWRRuntime`` stands in for ``IWR6843Runtime`` in server tests and
+``FakeCaptureMonitor`` for ``IWR6843CaptureMonitor``.
 ``test_iwr6843_fakes.py`` checks every public member here still exists on the
 real class with the same parameters, so the double cannot drift silently.
 
@@ -17,6 +18,7 @@ from typing import Callable
 
 import numpy as np
 
+from openflight.iwr6843.monitor import SelfTriggerConfig
 from openflight.iwr6843.sparse import POWER_MAGIC, SLICE_MAGIC, PowerSummary
 from openflight.iwr6843.tracking import Geometry, mti_filter
 
@@ -81,6 +83,89 @@ class FakeIWRRuntime:
 
     def stop(self):
         """Nothing to release."""
+
+
+class FakeCaptureMonitor:
+    """Minimal ``IWR6843CaptureMonitor`` for server tests.
+
+    ``init_iwr6843`` reads the trigger surface straight off the monitor it
+    builds, so this double mirrors it rather than approximating it:
+    ``self_trigger`` holds the config and is ``None`` when the feature is off,
+    and ``watch_self_trigger`` derives from it exactly as on the real class.
+
+    Construction keywords are recorded in ``kwargs`` and the ``armed`` flag
+    ``start`` was given in ``started_armed``, so tests can assert on how the
+    server wired the monitor up.
+    """
+
+    def __init__(
+        self,
+        *,
+        port: str = "/dev/ttyUSB0",
+        radar=None,
+        self_trigger: SelfTriggerConfig | None = None,
+        slice_planner=None,
+        onboard_tracking: bool = False,
+        trigger_observers: list[Callable[[float], None]] | None = None,
+        **other,
+    ):
+        self.port = port
+        self.radar = radar
+        self.self_trigger = self_trigger
+        self.slice_planner = slice_planner
+        self.onboard_tracking = onboard_tracking
+        self._trigger_observers = list(trigger_observers or [])
+        self.started_armed: bool | None = None
+        self.armed = False
+        self.stopped = False
+        self.kwargs = {
+            "port": port,
+            "radar": radar,
+            "self_trigger": self_trigger,
+            "slice_planner": slice_planner,
+            "onboard_tracking": onboard_tracking,
+            "trigger_observers": trigger_observers,
+            **other,
+        }
+
+    @property
+    def watch_self_trigger(self) -> bool:
+        """True when the firmware trigger replaces the GPIO edge."""
+        return self.self_trigger is not None
+
+    def start(self, *, armed: bool = True) -> None:
+        """Record the arming decision; no hardware is touched."""
+        self.started_armed = armed
+
+    def arm(self) -> None:
+        """Accept trigger edges."""
+        self.armed = True
+
+    def add_trigger_observer(self, observer: Callable[[float], None]) -> None:
+        """Register a trigger observer the way the real monitor does."""
+        self._trigger_observers.append(observer)
+
+    def stop(self) -> None:
+        """Nothing to release."""
+        self.stopped = True
+
+
+def capture_monitor_factory(**defaults):
+    """Return ``(monitors, factory)`` for patching ``IWR6843CaptureMonitor``.
+
+    Patch ``factory`` over the real class and read ``monitors`` afterwards: it
+    collects every monitor the code under test built, in construction order.
+    ``defaults`` supplies keywords the production caller does not pass, such as
+    a fake ``radar``.
+    """
+    monitors: list[FakeCaptureMonitor] = []
+
+    def factory(**kwargs) -> FakeCaptureMonitor:
+        monitor = FakeCaptureMonitor(**{**defaults, **kwargs})
+        monitors.append(monitor)
+        return monitor
+
+    return monitors, factory
 
 
 def vertical_cube(cube: np.ndarray, n_tx: int) -> np.ndarray:

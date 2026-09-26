@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from iwr6843_fakes import FakeIWRRuntime
+from iwr6843_fakes import FakeIWRRuntime, capture_monitor_factory
 
 from openflight import server as server_module
 from openflight.camera.replay import ReplayNotFoundError, ReplayPreparationError
@@ -512,25 +512,13 @@ class TestIWR6843ShotIntegration:
 
     def test_init_iwr6843_has_no_host_freeze_delay(self, monkeypatch, tmp_path):
         """Production capture must always request the firmware-frozen boundary ring immediately."""
-        captured = {}
         calibration = Calibration.identity()
-
-        class FakeCaptureMonitor:
-            def __init__(self, **kwargs):
-                captured.update(kwargs)
-                self.port = "/dev/ttyUSB0"
-
-            def start(self, *, armed=True):
-                captured["armed"] = armed
-                return None
-
-            def stop(self):
-                return None
+        monitors, capture_monitor = capture_monitor_factory()
 
         monkeypatch.setattr(Calibration, "load", lambda _path: calibration)
         monkeypatch.setattr(
             "openflight.iwr6843.monitor.IWR6843CaptureMonitor",
-            FakeCaptureMonitor,
+            capture_monitor,
         )
         monkeypatch.setattr(
             "openflight.iwr6843.monitor.tx_order_from_config",
@@ -549,8 +537,8 @@ class TestIWR6843ShotIntegration:
             capture_timeout_s=12.0,
         )
 
-        assert "freeze_delay_s" not in captured
-        assert captured["armed"] is False
+        assert "freeze_delay_s" not in monitors[0].kwargs
+        assert monitors[0].started_armed is False
         assert server_module.iwr6843_runtime.tdm_sign_policy == "positive"
         assert server_module.iwr6843_runtime_config["tdm_sign_policy"] == "positive"
         server_module.iwr6843_runtime = None
@@ -562,21 +550,12 @@ class TestIWR6843ShotIntegration:
         club path relative to boresight instead of the target line.
         """
         calibration = Calibration.identity()
-
-        class FakeCaptureMonitor:
-            def __init__(self, **kwargs):
-                self.port = "/dev/ttyUSB0"
-
-            def start(self, *, armed=True):
-                return None
-
-            def stop(self):
-                return None
+        _monitors, capture_monitor = capture_monitor_factory()
 
         monkeypatch.setattr(Calibration, "load", lambda _path: calibration)
         monkeypatch.setattr(
             "openflight.iwr6843.monitor.IWR6843CaptureMonitor",
-            FakeCaptureMonitor,
+            capture_monitor,
         )
         monkeypatch.setattr(
             "openflight.iwr6843.monitor.tx_order_from_config",
@@ -4672,23 +4651,10 @@ class TestIWR6843OnboardTracking:
 
     def _init(self, monkeypatch, tmp_path, radar, **kwargs):
         calibration = Calibration.identity()
-        monitors = []
-
-        class FakeCaptureMonitor:
-            def __init__(self, **_kwargs):
-                self.port = "/dev/ttyUSB0"
-                self.radar = radar
-                self.onboard_tracking = False
-                monitors.append(self)
-
-            def start(self, *, armed=True):
-                return None
-
-            def stop(self):
-                return None
+        monitors, capture_monitor = capture_monitor_factory(radar=radar)
 
         monkeypatch.setattr(Calibration, "load", lambda _path: calibration)
-        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
+        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", capture_monitor)
         monkeypatch.setattr(
             "openflight.iwr6843.monitor.tx_order_from_config", lambda _path: "normal"
         )
