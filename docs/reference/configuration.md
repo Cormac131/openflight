@@ -68,8 +68,9 @@ firmware. Selected with `--iwr6843-config`.
 | `iwr6843_l3dump_dense_45f2ms_53bin_iq8.cfg` | Dense, 45 frames × 2 ms, 53 bins, IQ8, 54 ms ball phase |
 | `iwr6843_l3dump_dense_36f2ms_53bin_iq8_wide_late.cfg` | Experimental dense IQ8 profile that keeps the wide profile's late-flight window |
 | `iwr6843_l3dump_dense_51f2ms_53bin_iq8.cfg` | Experimental dense IQ8 profile, 51 frames × 2 ms, 53 bins, 66 ms ball phase. Not validated against TrackMan. |
+| `iwr6843_l3dump_dense_54f2ms_32prebin_iq8.cfg` | Experimental dense IQ8 profile, 54 frames × 2 ms, 32-bin pre window (53-bin impact/ball), 72 ms ball phase. Opt-in only: narrows the pre-impact leave-detector range coverage and may reduce trigger reliability. Not validated against TrackMan; not promoted to default until a range session confirms trigger reliability. |
 
-All four work with the same flashed image — the profile is selected at runtime, not
+All five work with the same flashed image — the profile is selected at runtime, not
 at flash time. See
 [choosing a profile](../iwr6843/index.md#choose-a-profile).
 

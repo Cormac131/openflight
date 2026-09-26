@@ -12,6 +12,7 @@ WIDE_CONFIG = CONFIG_DIR / "iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
 DENSE_CONFIG = CONFIG_DIR / "iwr6843_l3dump_dense_45f2ms_53bin_iq8.cfg"
 DENSE_WIDE_LATE_CONFIG = CONFIG_DIR / "iwr6843_l3dump_dense_36f2ms_53bin_iq8_wide_late.cfg"
 DENSE_51_CONFIG = CONFIG_DIR / "iwr6843_l3dump_dense_51f2ms_53bin_iq8.cfg"
+DENSE_54_CONFIG = CONFIG_DIR / "iwr6843_l3dump_dense_54f2ms_32prebin_iq8.cfg"
 
 
 def _function_source(source: str, name: str, next_name: str) -> str:
@@ -266,6 +267,18 @@ def test_dense_51_profile_extends_the_ball_phase_at_2ms():
     assert sum((int(phase[3]), int(phase[6]), int(phase[10]))) == 51
     # every window is 53 bins
     assert [int(phase[2]), int(phase[5]), int(phase[8])] == [53, 53, 53]
+
+
+def test_narrow_pre_profile_is_opt_in_and_fits():
+    commands = {line.split()[0]: line.split() for line in _config_lines(DENSE_54_CONFIG)}
+    phase = commands["phaseCaptureCfg"]
+    assert int(phase[2]) == 32, "pre window should be narrowed"
+    assert [int(phase[5]), int(phase[8])] == [53, 53], "impact and ball stay wide"
+    assert sum((int(phase[3]), int(phase[6]), int(phase[10]))) == 54
+    tx, loops, rx = 3, 12, 4
+    pre = tx * loops * rx * 8 * 32 * 2
+    rest = tx * loops * rx * (10 + 36) * 53 * 2
+    assert pre + rest <= 786_432
 
 
 def test_supported_profiles_keep_their_capture_duration():
