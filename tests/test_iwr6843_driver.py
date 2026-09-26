@@ -357,7 +357,7 @@ def test_watch_script_releases_a_trigger_in_the_arming_reply(monkeypatch):
     type(radar.ser).in_waiting = PropertyMock(side_effect=KeyboardInterrupt)
     monkeypatch.setitem(main.__globals__, "IWR6843Radar", lambda **_kwargs: radar)
     monkeypatch.setitem(main.__globals__, "tee_local_bin", lambda *_args: 14)
-    monkeypatch.setattr(sys, "argv", ["watch_trigger.py"])
+    monkeypatch.setattr(sys, "argv", ["watch_trigger.py", "--level", "1000"])
 
     main()
 
@@ -370,6 +370,35 @@ def test_watch_script_releases_a_trigger_in_the_arming_reply(monkeypatch):
         "debugCfg 0",
     ]
     radar.close.assert_called_once()
+
+
+def test_watch_script_arms_above_the_measured_tee_floor(monkeypatch):
+    """A person at the desk is ~2e5; level 1000 arms on them and fires."""
+    import runpy
+    import sys
+    from unittest.mock import Mock, PropertyMock
+
+    main = runpy.run_path("scripts/iwr6843/watch_trigger.py")["main"]
+    radar = Mock()
+    calls: list[str] = []
+
+    def _cmd(line, window=1.5):
+        del window
+        calls.append(line)
+        return "Done\n"
+
+    radar.cmd.side_effect = _cmd
+    type(radar.ser).in_waiting = PropertyMock(side_effect=KeyboardInterrupt)
+    monkeypatch.setitem(main.__globals__, "IWR6843Radar", lambda **_kwargs: radar)
+    monkeypatch.setitem(main.__globals__, "tee_local_bin", lambda *_args: 14)
+    monkeypatch.setitem(
+        main.__globals__, "measure_trigger_level", lambda *_args: (200000.0, 300000.0)
+    )
+    monkeypatch.setattr(sys, "argv", ["watch_trigger.py"])
+
+    main()
+
+    assert calls[:2] == ["debugCfg 1", "triggerCfg 14 300000.0 2"]
 
 
 def test_reading_the_frozen_capture_consumes_its_remembered_trigger():

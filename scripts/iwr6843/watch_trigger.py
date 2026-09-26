@@ -12,7 +12,7 @@ import time
 
 from openflight.iwr6843.calibration import DEFAULT_TEE_RANGE_M
 from openflight.iwr6843.driver import TRIGGER_NOTICE, IWR6843Radar
-from openflight.iwr6843.monitor import tee_local_bin
+from openflight.iwr6843.monitor import measure_trigger_level, tee_local_bin
 
 _DEFAULT_CFG = "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
 
@@ -22,7 +22,12 @@ def main() -> None:
     parser.add_argument("--port", default=None)
     parser.add_argument("--config", default=_DEFAULT_CFG)
     parser.add_argument("--tee-m", type=float, default=DEFAULT_TEE_RANGE_M)
-    parser.add_argument("--level", type=float, default=1000.0)
+    parser.add_argument(
+        "--level",
+        type=float,
+        default=None,
+        help="tee power threshold; omitted means 1.5x the measured tee floor",
+    )
     parser.add_argument("--hits", type=int, default=2)
     args = parser.parse_args()
 
@@ -30,17 +35,24 @@ def main() -> None:
     radar = IWR6843Radar(port=args.port)
     try:
         radar.send_config(args.config)
+        # A fixed level of 1000 is below a person sitting in the beam (the tee
+        # return is ~2e5), so the detector arms on them and fires. Sample the
+        # live tee first unless the caller named a threshold.
+        if args.level is None:
+            floor, level = measure_trigger_level(radar, local_bin, args.hits)
+            print(f"tee p95 {floor:.0f}; arming at {level:.0f}", flush=True)
+        else:
+            level = args.level
         # Debug first so the frames right after arming are visible: a fire in
         # that window used to be swallowed by the next command's buffer reset.
         reply = radar.cmd("debugCfg 1")
         if "Done" not in reply:
             raise SystemExit(f"debugCfg rejected: {reply.strip()}")
         print(
-            f"watching local bin {local_bin}, level {args.level:g}, "
-            f"{args.hits} hits. Ctrl+C to stop.",
+            f"watching local bin {local_bin}, level {level:g}, {args.hits} hits. Ctrl+C to stop.",
             flush=True,
         )
-        reply = radar.cmd(f"triggerCfg {local_bin} {args.level} {args.hits}")
+        reply = radar.cmd(f"triggerCfg {local_bin} {level} {args.hits}")
         if "Done" not in reply:
             raise SystemExit(f"triggerCfg rejected: {reply.strip()}")
         print(reply.replace("Done", "").strip(), flush=True)

@@ -2774,16 +2774,10 @@ typedef struct {
     uint32_t maxBins;
 } l3_sparse_window_t;
 
-/* Freeze the ring for l3sparse or l3track. A self-trigger has already
- * requested the freeze; otherwise stop at the next frame boundary. */
-static int32_t l3_sparseFreeze(void)
+/* Wait until a self-trigger freeze has landed, or stop at the next frame
+ * boundary. Does not stream and does not read a follow-up CLI line. */
+static int32_t l3_awaitFrozenRing(void)
 {
-#ifdef L3_RING_IQ8
-    if (l3_captureUsesIq8()) {
-        CLI_write("Error: sparse dump requires IQ16 storage\n");
-        return -1;
-    }
-#endif
     if (!gCaptureActive && !gSelfTriggerLatched) {
         return -1;
     }
@@ -2799,6 +2793,19 @@ static int32_t l3_sparseFreeze(void)
         return -1;
     }
     return 0;
+}
+
+/* Freeze the ring for l3sparse or l3track. A self-trigger has already
+ * requested the freeze; otherwise stop at the next frame boundary. */
+static int32_t l3_sparseFreeze(void)
+{
+#ifdef L3_RING_IQ8
+    if (l3_captureUsesIq8()) {
+        CLI_write("Error: sparse dump requires IQ16 storage\n");
+        return -1;
+    }
+#endif
+    return l3_awaitFrozenRing();
 }
 
 static void l3_sparseWindow(l3_sparse_window_t *window)
@@ -2911,6 +2918,19 @@ static int32_t l3_sparseRearm(void)
         return -1;
     }
     return 0;
+}
+
+/* CLI "l3release": rearm after a self-trigger without streaming the power
+ * map. The SCI receiver holds one byte, so a cell line written while that
+ * map is going out is lost before l3_readLine runs. */
+static int32_t l3_cli_release(int32_t argc, char *argv[])
+{
+    (void)argc;
+    (void)argv;
+    if (l3_awaitFrozenRing() != 0) {
+        return -1;
+    }
+    return l3_sparseRearm();
 }
 
 int32_t l3_cli_sparse(int32_t argc, char *argv[])
@@ -3944,6 +3964,9 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[15].cmd           = "debugCfg";
     cliCfg.tableEntry[15].helpString    = "debugCfg <0|1> stream trigger decisions";
     cliCfg.tableEntry[15].cmdHandlerFxn = l3_cli_debugCfg;
+    cliCfg.tableEntry[16].cmd           = "l3release";
+    cliCfg.tableEntry[16].helpString    = "Rearm a self-trigger freeze without streaming";
+    cliCfg.tableEntry[16].cmdHandlerFxn = l3_cli_release;
     CLI_open(&cliCfg);
 }
 

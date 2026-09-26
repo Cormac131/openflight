@@ -55,6 +55,16 @@ def test_read_line_drains_an_overlong_line_instead_of_stopping_mid_line():
     assert "L3_SPARSE_REQUEST_TIMEOUT_MS" in read_line
 
 
+def test_release_rearms_without_reading_a_cell_line():
+    """A second CLI line cannot sit in the one-byte SCI receiver during the power dump."""
+    release = _function("static int32_t l3_cli_release(")
+
+    assert "l3_readLine" not in release
+    assert "l3_awaitFrozenRing()" in release
+    assert release.index("l3_awaitFrozenRing()") < release.index("l3_sparseRearm()")
+    assert 'tableEntry[16].cmd           = "l3release"' in _source()
+
+
 def test_blank_line_before_the_cell_request_is_not_a_missing_request():
     """A stray CR/LF left in the FIFO must not reject the real cells line."""
     sparse = _function("int32_t l3_cli_sparse(")

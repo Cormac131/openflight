@@ -432,38 +432,58 @@ def test_oversized_plan_is_trimmed_and_reported():
     assert capture.truncated
 
 
-def test_release_requests_no_cells():
-    cube = _cube(n_tx=2)
-    serial = FakeSparseSerial(cube=cube, n_tx=2, summary=vertical_loop_power(cube, n_tx=2), chunk=7)
+class _CliSerial:
+    """One CLI reply, delivered when the host writes."""
 
-    _radar(serial).release_sparse_freeze()
+    def __init__(self, reply: bytes):
+        self.reply = reply
+        self.written: list[bytes] = []
+        self._buffer = bytearray()
 
-    assert serial.written == [b"l3sparse\n", b"cells 0\n"]
-    # Queued once ILP1 is visible, while the power payload is still unread.
-    assert serial.unread_at_request > 0
+    @property
+    def in_waiting(self) -> int:
+        return len(self._buffer)
+
+    def read(self, count: int) -> bytes:
+        count = min(count, len(self._buffer))
+        chunk = bytes(self._buffer[:count])
+        del self._buffer[:count]
+        return chunk
+
+    def write(self, data: bytes) -> None:
+        self.written.append(data)
+        self._buffer += self.reply
+
+    def reset_input_buffer(self) -> None:
+        self._buffer.clear()
+
+
+def test_release_is_one_command_with_no_cell_line():
+    serial = _CliSerial(b"Done\n")
+    radar = _radar(serial)
+    radar._trigger_pending = b""
+
+    radar.release_sparse_freeze()
+
+    assert serial.written == [b"l3release\n"]
 
 
 def test_release_reports_the_firmware_error_text():
-    cube = _cube(n_tx=2)
-    serial = FakeSparseSerial(
-        cube=cube,
-        n_tx=2,
-        summary=vertical_loop_power(cube, n_tx=2),
-        after_request=b"Error: sparse cell request missing\n",
-        chunk=7,
-    )
+    serial = _CliSerial(b"Error: self-trigger freeze timed out\n")
+    radar = _radar(serial)
+    radar._trigger_pending = b""
 
-    with pytest.raises(RuntimeError, match="request missing"):
-        _radar(serial).release_sparse_freeze()
+    with pytest.raises(RuntimeError, match="freeze timed out"):
+        radar.release_sparse_freeze()
 
 
-def test_release_on_firmware_without_sparse_raises():
-    serial = FakeSparseSerial(
-        cube=None, n_tx=2, summary=None, before_power=b"'l3sparse' is not recognized\n"
-    )
+def test_release_on_firmware_without_the_command_raises():
+    serial = _CliSerial(b"'l3release' is not recognized as a CLI command\n")
+    radar = _radar(serial)
+    radar._trigger_pending = b""
 
-    with pytest.raises(RuntimeError, match="not released"):
-        _radar(serial).release_sparse_freeze(timeout_s=0.5)
+    with pytest.raises(RuntimeError, match="no l3release"):
+        radar.release_sparse_freeze()
 
 
 # --- runtime planner ---------------------------------------------------------------

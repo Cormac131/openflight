@@ -154,7 +154,7 @@ class IWR6843Radar:
         deadline = time.time() + window
         while time.time() < deadline:
             resp += self.ser.read(512)
-            if b"Done" in resp or b"Error" in resp:
+            if b"Done" in resp or b"Error" in resp or b"not recognized" in resp:
                 break
         self._remember_trigger_notice(resp)
         return resp.decode(errors="replace")
@@ -315,21 +315,23 @@ class IWR6843Radar:
         return assemble_capture(summary, slice_packet, plan, requested_cells=requested)
 
     def release_sparse_freeze(self, timeout_s: float = 8.0) -> None:
-        """Request no cells, so a self-triggered freeze nobody wants re-arms."""
-        try:
-            exchange = self._sparse_exchange(
-                lambda _summary: SparsePlan(cells=()),
-                timeout_s,
-                early_request=format_cell_request([]),
+        """Rearm a self-triggered freeze.
+
+        ``l3sparse`` reads its cell line only after streaming the power map.
+        The SCI receiver holds one byte, so a line written during that stream
+        is overwritten, and writing it afterwards loses to the 5s firmware
+        wait when the CP2105 stalls. Release asks for no cells, so it is one
+        command.
+        """
+        self._discard_before_readback()
+        reply = self.cmd("l3release", timeout_s)
+        if "not recognized" in reply:
+            raise RuntimeError(
+                "IWR6843 has no l3release; flash the current firmware to clear a self-trigger"
             )
-        except UnsupportedCommand:
-            exchange = None
-        if exchange is None:
-            detail = self._last_cli_error
-            message = "IWR6843 rejected l3sparse; the frozen ring was not released"
-            if detail:
-                message = f"{message}: {detail}"
-            raise RuntimeError(message)
+        if "Error" in reply or "Done" not in reply:
+            detail = reply.strip() or "no acknowledgement"
+            raise RuntimeError(f"IWR6843 did not release the frozen ring: {detail}")
 
     def read_tracked(self, timeout_s: float = 8.0) -> tuple[bytes, float, OnboardTrack] | None:
         """Freeze and read the cells the firmware tracker chose (``l3track``).
@@ -375,33 +377,12 @@ class IWR6843Radar:
         self,
         planner: SlicePlanner,
         timeout_s: float,
-        early_request: bytes | None = None,
     ) -> tuple[PowerSummary, SparsePlan, int, bytes] | None:
-        """Run one l3sparse round trip. None when rejected before the freeze.
-
-        ``early_request`` is written as soon as the ILP1 magic is visible.
-        That is only safe for a short line: the SCI RX FIFO is 16 bytes, and
-        the firmware does not read it until the power payload has finished.
-        Queuing ``cells 0`` then survives a CP2105 stall between the payload
-        and a later write. Longer plans are still sent after the payload.
-        """
+        """Run one l3sparse round trip. None when rejected before the freeze."""
         self._discard_before_readback()
         self._last_cli_error = ""
         self.ser.write(b"l3sparse\n")
-        queued = False
-
-        def _queue_early() -> None:
-            nonlocal queued
-            if early_request is not None and not queued:
-                self.ser.write(early_request)
-                queued = True
-
-        read = self._read_packet(
-            POWER_MAGIC,
-            power_packet_size,
-            timeout_s,
-            on_magic=_queue_early if early_request is not None else None,
-        )
+        read = self._read_packet(POWER_MAGIC, power_packet_size, timeout_s)
         if read is None:
             return None
         packet, rest = read
@@ -411,20 +392,18 @@ class IWR6843Radar:
         except Exception:
             # The firmware is frozen and reading its next CLI line as the
             # cell request. Answer it, or the next command would be eaten.
-            if not queued:
-                self.ser.write(format_cell_request([]))
+            self.ser.write(format_cell_request([]))
             raise
         ordered = plan.request_order()
         request, sent = fit_cell_request(ordered)
-        if not queued:
-            if sent < len(ordered):
-                logger.warning(
-                    "[IWR6843] Sparse request trimmed to %d of %d cells (%d-byte limit)",
-                    sent,
-                    len(ordered),
-                    SPARSE_REQUEST_MAX_BYTES,
-                )
-            self.ser.write(request)
+        if sent < len(ordered):
+            logger.warning(
+                "[IWR6843] Sparse request trimmed to %d of %d cells (%d-byte limit)",
+                sent,
+                len(ordered),
+                SPARSE_REQUEST_MAX_BYTES,
+            )
+        self.ser.write(request)
         read = self._read_packet(
             SLICE_MAGIC,
             lambda header: slice_packet_size(header, summary),
@@ -452,7 +431,6 @@ class IWR6843Radar:
         packet_size: Callable[[bytes], int],
         timeout_s: float,
         pending: bytes = b"",
-        on_magic: Callable[[], None] | None = None,
     ) -> tuple[bytes, bytes] | None:
         """Read one ``magic`` packet sized by its own header.
 
@@ -465,7 +443,6 @@ class IWR6843Radar:
         buf = bytearray(pending)
         deadline = time.monotonic() + timeout_s
         start: int | None = None
-        notified = False
         while time.monotonic() < deadline:
             if start is None:
                 idx = buf.find(magic)
@@ -479,9 +456,6 @@ class IWR6843Radar:
                         return None
                 else:
                     start = idx
-            if start is not None and on_magic is not None and not notified:
-                on_magic()
-                notified = True
             if start is not None:
                 body = bytes(buf[start:])
                 if len(body) >= header_size:
