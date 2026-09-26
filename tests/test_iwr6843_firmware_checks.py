@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -1212,3 +1214,49 @@ def test_rearm_and_reconfigure_failures_are_reported(monkeypatch):
     sticky, _ = _swing_radar(_cube(), clear_on_reconfigure=False)
     results = fc.run(_ctx(sticky, shots=1), (fc.swing_section(1),), swing=True)
     assert results[-1].status == "FAIL" and "latched=1" in results[-1].detail
+
+
+FIRMWARE = Path(__file__).resolve().parents[1] / "firmware" / "iwr6843" / "l3_dump.c"
+
+
+def test_solve_section_is_an_explicit_skip():
+    section = fc.solve_section()
+
+    result = section.checks[0].run(_ctx(scripted_radar({})))
+
+    assert section.name == "solve" and section.sensor == "any"
+    assert result == fc.CheckResult(
+        "solve/on-chip solve", "SKIP", "no CLI entry point in this firmware image"
+    )
+
+
+def test_build_sections_orders_the_catalogue():
+    sections = fc.build_sections(("a.cfg",), shots=1)
+
+    assert [s.name for s in sections] == [
+        "lifecycle",
+        "profiles",
+        "readback",
+        "trigger",
+        "trigger-swing",
+        "solve",
+    ]
+
+
+def test_every_registered_firmware_cli_command_has_a_check():
+    """A new tableEntry[n].cmd in l3_dump.c without a check must fail CI (HWA smoke commands excluded)."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+    table = source[source.index("cliCfg.tableEntry[0].cmd") : source.index("CLI_open(&cliCfg)")]
+    smoke_free = re.sub(r"#ifdef ENABLE_HWA_SMOKE.*?#endif", "", table, flags=re.S)
+    registered = set(re.findall(r'\.cmd\s*=\s*"(\w+)"', smoke_free))
+
+    assert registered == fc.COMMANDS_COVERED
+
+
+def test_default_profiles_are_the_shipped_cfgs():
+    profiles = fc.default_profiles()
+
+    assert profiles and all(
+        Path(p).name.startswith("iwr6843_") and p.endswith(".cfg") for p in profiles
+    )
+    assert profiles == tuple(sorted(profiles))

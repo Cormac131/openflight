@@ -1203,3 +1203,51 @@ def swing_section(shots: int) -> Section:
         checks.extend(_swing_checks(shot, state))
     checks.append(_latched_cleared(state))
     return Section("trigger-swing", "active", tuple(checks))
+
+
+def _check_solve(_ctx: Context) -> CheckResult:
+    return skipped("solve/on-chip solve", "no CLI entry point in this firmware image")
+
+
+def solve_section() -> Section:
+    """The DSS solve ships in the image but the MSS exposes no command for it yet."""
+    return Section("solve", "any", (Check("solve/on-chip solve", _check_solve),))
+
+
+# Every firmware CLI command some check sends; test_every_registered_firmware_cli_command_has_a_check
+# compares this with the CLI table in firmware/iwr6843/l3_dump.c.
+COMMANDS_COVERED = frozenset(
+    {
+        "sensorStart",  # through IWR6843Radar.send_config
+        "sensorStop",
+        "l3dump",
+        "stats",
+        "captureCfg",
+        "phaseCaptureCfg",
+        "captureFormat",
+        "iq8Scale",
+        "l3sparse",
+        "triggerCfg",
+        "l3track",
+        "trackCfg",
+        "debugCfg",
+    }
+)
+
+
+def default_profiles() -> tuple[str, ...]:
+    """Every shipped IWR6843 capture profile as a repo-relative path, sorted."""
+    root = Path(__file__).resolve().parents[3]  # src/openflight/iwr6843 -> repo root
+    return tuple(f"config/{path.name}" for path in sorted((root / "config").glob("iwr6843_*.cfg")))
+
+
+def build_sections(profiles: tuple[str, ...], shots: int) -> tuple[Section, ...]:
+    """The full catalogue in run order."""
+    return (
+        lifecycle_section(),
+        profiles_section(profiles),
+        readback_section(),
+        trigger_section(),
+        swing_section(shots),
+        solve_section(),
+    )
