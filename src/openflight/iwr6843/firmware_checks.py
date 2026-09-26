@@ -846,6 +846,7 @@ def _check_arming(ctx: Context) -> CheckResult:
     name = "trigger/arming starts the detector"
     reply = ctx.radar.cmd(arm_command(ctx, FLOOR_PROBE_LEVEL), 2.0)
     if "Done" not in reply:
+        ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
         return failed(name, f"arm rejected: {reply.strip()[:60]!r}")
     latest: dict[str, StatsSnapshot] = {}
 

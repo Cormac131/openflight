@@ -961,3 +961,49 @@ def test_reconfigure_must_clear_a_previous_arm():
     sticky.send_config = lambda cfg: None
     result = check.run(_ctx(sticky))
     assert result.status == "FAIL" and "enabled=1" in result.detail
+
+
+def test_arming_rejected_still_disarms():
+    """A rejected arm reply must not skip the ``triggerCfg 0 0 0`` disarm."""
+    check = fc.trigger_section().checks[2]
+
+    def trigger_cfg(count):
+        return b"Error: trigger bin\n" if count == 0 else b"Done\n"
+
+    radar = scripted_radar(
+        {
+            "triggerCfg": trigger_cfg,
+            "stats": b"active=1\ntrig phase=off tee=0 latched=0 enabled=0\nDone\n",
+        }
+    )
+
+    result = check.run(_ctx(radar))
+
+    assert result.status == "FAIL"
+    arm_index = next(i for i, line in enumerate(radar.ser.written) if line.startswith("triggerCfg"))
+    assert "triggerCfg 0 0 0" in radar.ser.written[arm_index + 1 :]
+
+
+def test_trigger_cfg_validation_fails_when_everything_is_accepted():
+    """A lax firmware that answers ``Done`` to every ``triggerCfg`` line must FAIL."""
+    check = fc.trigger_section().checks[1]
+    radar = scripted_radar({"triggerCfg": b"Done\n"})
+
+    result = check.run(_ctx(radar))
+
+    assert result.status == "FAIL" and "accepted" in result.detail
+
+
+def test_disarm_fails_when_stats_still_reports_enabled():
+    """``triggerCfg 0 0 0`` must leave ``enabled=0``; a stale ``enabled=1`` is a FAIL."""
+    check = fc.trigger_section().checks[3]
+    radar = scripted_radar(
+        {
+            "triggerCfg": b"Done\n",
+            "stats": b"active=1\ntrig phase=tee-low tee=400 latched=0 enabled=1\nDone\n",
+        }
+    )
+
+    result = check.run(_ctx(radar))
+
+    assert result.status == "FAIL" and "enabled=1" in result.detail
