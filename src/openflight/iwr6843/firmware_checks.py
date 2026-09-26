@@ -14,6 +14,20 @@ from pathlib import Path
 from typing import Callable
 
 from openflight.iwr6843.driver import IWR6843Radar, UnsupportedCommand
+from openflight.iwr6843.dump import parse_header
+from openflight.iwr6843.monitor import read_capture_config
+from openflight.iwr6843.sparse import (
+    POWER_MAGIC,
+    RANGE_FFT_SIZE,
+    SPARSE_REQUEST_MAX_BYTES,
+    PowerSummary,
+    SparsePlan,
+    fit_cell_request,
+    format_cell_request,
+    parse_power,
+    power_packet_size,
+)
+from openflight.iwr6843.tracking import LOOP_PRI_S, RANGE_SPAN_M
 
 _INT_FIELD = re.compile(r"(\w+)=(\d+)")
 _USED = re.compile(r"used=(\d+)/(\d+)")
@@ -560,3 +574,211 @@ def profiles_section(profiles: tuple[str, ...]) -> Section:
     ]
     checks.extend(_profile_check(path) for path in profiles)
     return Section("profiles", "stopped", tuple(checks))
+
+
+# Mirrors L3_SPARSE_REQUEST_TIMEOUT_MS in firmware/iwr6843/dump_format.h.
+SPARSE_REQUEST_TIMEOUT_S = 5.0
+
+TRACK_CFG_CASES: tuple[tuple[str, bool], ...] = (
+    ("trackCfg 9e-05 0.046875 0 0 0", True),
+    ("trackCfg 9e-05 0.046875 0 0", False),
+    ("trackCfg -1 0.046875 0 0 0", False),
+    ("trackCfg 0 0.046875 0 0 0", False),
+    ("trackCfg 9e-05 0 0 0 0", False),
+)
+
+
+def _every_cell(summary) -> list[tuple[int, int]]:
+    geometry = summary.geometry
+    return [
+        (frame, local)
+        for frame in range(geometry.n_frames)
+        for local in range(geometry.frame_bin_count(frame))
+    ]
+
+
+def _check_l3dump(ctx: Context) -> CheckResult:
+    name = "readback/l3dump streams a valid dump"
+    plan = stats_snapshot(ctx)
+    raw = ctx.radar.read_dump()
+    meta = parse_header(raw)
+    after = stats_snapshot(ctx)
+    problems = []
+    want_frames = (plan.plan_pre or 0) + (plan.plan_post or 0)
+    if meta["n_frames"] != want_frames:
+        problems.append(f"n_frames={meta['n_frames']} want {want_frames}")
+    loops = parse_stats(plan.raw).get("loops")
+    if loops is not None and meta["chirps_per_frame"] != meta["n_tx"] * loops:
+        problems.append(
+            f"chirps_per_frame={meta['chirps_per_frame']} want n_tx*loops={meta['n_tx'] * loops}"
+        )
+    if after.active != 1:
+        problems.append(f"active={after.active} after l3dump")
+    if problems:
+        return failed(name, "; ".join(problems))
+    return passed(name, f"{len(raw)} bytes, v{meta['version']}, {meta['n_frames']} frames")
+
+
+def _check_sparse_limit(ctx: Context) -> CheckResult:
+    name = "readback/l3sparse returns every cell at the limit"
+    seen: dict[str, int] = {}
+
+    def plan(summary):
+        cells = _every_cell(summary)
+        _request, sent = fit_cell_request(cells)
+        seen["sent"] = sent
+        # The first cell doubles as the noise cell; the rest fill the budget.
+        return SparsePlan(cells=tuple(cells[1:sent]), noise_cells=(cells[0],))
+
+    capture = ctx.radar.read_sparse(plan)
+    if capture is None:
+        return failed(name, "firmware refused l3sparse before freezing")
+    detail = f"{capture.sent_cells}/{seen['sent']} cells, noise {capture.noise_power:.1f}"
+    if capture.sent_cells != seen["sent"] or not capture.noise_power or capture.noise_power <= 0:
+        return failed(name, detail)
+    return passed(name, detail)
+
+
+def _start_sparse(ctx: Context) -> tuple[PowerSummary, bytes]:
+    """Read the ILP1 power packet; also return whatever arrived right behind it.
+
+    ``_read_packet`` reads everything the port already has waiting, which can
+    include CLI text the firmware sent immediately after the packet (a scripted
+    test posts it in the same batch; on hardware it is whatever beat the next
+    poll). Callers that need that trailing text must not drop it.
+    """
+    ctx.radar.ser.reset_input_buffer()
+    ctx.radar.ser.write(b"l3sparse\n")
+    read = ctx.radar._read_packet(POWER_MAGIC, power_packet_size, 8.0)  # pylint: disable=protected-access
+    if read is None:
+        raise RuntimeError("firmware refused l3sparse")
+    packet, rest = read
+    return parse_power(packet), rest
+
+
+def _cli_reply(ctx: Context, window_s: float, prefix: bytes = b"") -> str:
+    deadline = ctx.clock() + window_s
+    reply = bytearray(prefix)
+    while ctx.clock() < deadline:
+        if b"Error" in reply and b"\n" in reply.split(b"Error", 1)[1]:
+            break
+        waiting = ctx.radar.ser.in_waiting
+        reply += ctx.radar.ser.read(waiting if waiting else 1)
+        if not waiting:
+            ctx.sleep(0.02)
+    return bytes(reply).decode(errors="replace")
+
+
+def _check_sparse_oversized(ctx: Context) -> CheckResult:
+    name = "readback/l3sparse refuses an oversized request"
+    summary, rest = _start_sparse(ctx)
+    request = format_cell_request(_every_cell(summary) * 4)
+    if len(request) <= SPARSE_REQUEST_MAX_BYTES:
+        return failed(name, f"test request only {len(request)} bytes; cannot exceed the limit")
+    ctx.radar.ser.write(request)
+    reply = _cli_reply(ctx, 3.0, prefix=rest)
+    health = ctx.radar.stats()
+    problems = []
+    if "longer than" not in reply:
+        problems.append(f"not refused: {reply.strip()[-60:]!r}")
+    if "Done" not in health or "not recognized" in health:
+        problems.append(f"CLI dirty afterwards: {health.strip()[-60:]!r}")
+    if problems:
+        return failed(name, "; ".join(problems))
+    return passed(name, f"{len(request)}-byte request refused, CLI clean")
+
+
+def _check_sparse_late(ctx: Context) -> CheckResult:
+    name = "readback/l3sparse refuses a late request, then works"
+    _summary, rest = _start_sparse(ctx)
+    ctx.sleep(SPARSE_REQUEST_TIMEOUT_S + 0.5)
+    reply = _cli_reply(ctx, 2.0, prefix=rest)
+    capture = ctx.radar.read_sparse(
+        lambda summary: SparsePlan(cells=(), noise_cells=(_every_cell(summary)[0],))
+    )
+    problems = []
+    if "request missing" not in reply:
+        problems.append(f"late request not refused: {reply.strip()[-60:]!r}")
+    if capture is None or not capture.noise_power or capture.noise_power <= 0:
+        problems.append("next l3sparse did not work")
+    if problems:
+        return failed(name, "; ".join(problems))
+    return passed(name, "late request refused, next exchange worked")
+
+
+def _check_track_needs_cfg(ctx: Context) -> CheckResult:
+    name = "readback/l3track without trackCfg is refused"
+    before = stats_snapshot(ctx)
+    reply = ctx.radar.cmd("l3track", 3.0)
+    after = stats_snapshot(ctx)
+    problems = []
+    if "needs trackCfg" not in reply:
+        problems.append(f"reply {reply.strip()[:60]!r}")
+    if before.freeze_req != after.freeze_req:
+        problems.append(f"freeze_req moved {before.freeze_req} -> {after.freeze_req}")
+    if after.active != 1:
+        problems.append(f"active={after.active}")
+    if problems:
+        return failed(name, "; ".join(problems))
+    return passed(name, "refused without freezing")
+
+
+def _check_track_cfg_validation(ctx: Context) -> CheckResult:
+    return _run_validation_table(ctx, "readback/trackCfg validation", TRACK_CFG_CASES)
+
+
+def track_config_command(cfg_path: str | Path) -> str:
+    """``trackCfg`` with this cfg's loop period, the shared range resolution, and no clamps."""
+    loop_period = read_capture_config(cfg_path).loop_period_s or LOOP_PRI_S
+    fields = (loop_period, RANGE_SPAN_M / RANGE_FFT_SIZE, 0.0, 0.0, 0.0)
+    return "trackCfg " + " ".join(f"{value:.17g}" for value in fields)
+
+
+def _check_track_streams(ctx: Context) -> CheckResult:
+    name = "readback/l3track streams the tracked cells"
+    reply = ctx.radar.cmd(track_config_command(ctx.config), 2.0)
+    if "Done" not in reply or "Error" in reply:
+        return failed(name, f"trackCfg rejected: {reply.strip()[:60]!r}")
+    before = stats_snapshot(ctx)
+    started = ctx.clock()
+    result = ctx.radar.read_tracked()
+    elapsed = ctx.clock() - started
+    if result is None:
+        if before.format == "iq8":
+            return skipped(name, "IQ8 profile: l3track not available")
+        return failed(name, "firmware refused l3track before streaming")
+    raw, noise, track = result
+    after = stats_snapshot(ctx)
+    problems = []
+    if (
+        after.freeze_done is None
+        or before.freeze_done is None
+        or after.freeze_done != before.freeze_done + 1
+    ):
+        problems.append(f"freeze_done {before.freeze_done} -> {after.freeze_done}")
+    if after.active != 1:
+        problems.append(f"active={after.active}")
+    detail = (
+        f"{len(raw)} bytes, noise {noise:.1f}, "
+        f"found={track.found} inliers={track.n_inliers}, {elapsed:.2f}s"
+    )
+    if problems:
+        return failed(name, detail + "; " + "; ".join(problems))
+    return passed(name, detail)
+
+
+def readback_section() -> Section:
+    """l3dump, l3sparse and l3track all stream and rearm on the default profile."""
+    return Section(
+        "readback",
+        "active",
+        (
+            Check("readback/l3dump streams a valid dump", _check_l3dump),
+            Check("readback/l3sparse returns every cell at the limit", _check_sparse_limit),
+            Check("readback/l3sparse refuses an oversized request", _check_sparse_oversized),
+            Check("readback/l3sparse refuses a late request, then works", _check_sparse_late),
+            Check("readback/l3track without trackCfg is refused", _check_track_needs_cfg),
+            Check("readback/trackCfg validation", _check_track_cfg_validation),
+            Check("readback/l3track streams the tracked cells", _check_track_streams),
+        ),
+    )

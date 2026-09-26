@@ -4,11 +4,21 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pytest
 
 from openflight.iwr6843 import firmware_checks as fc
-from openflight.iwr6843.driver import UnsupportedCommand
-from tests.iwr6843_fakes import ScriptedSerial, scripted_radar
+from openflight.iwr6843.driver import IWR6843Radar, UnsupportedCommand
+from openflight.iwr6843.dump import pack_dump
+from openflight.iwr6843.sparse import OnboardTrack
+from tests.iwr6843_fakes import (
+    ScriptedSerial,
+    parse_cell_request,
+    power_packet,
+    scripted_radar,
+    slice_packet,
+    vertical_loop_power,
+)
 
 # Verbatim shape of the four lines l3_cli_stats writes (firmware/iwr6843/l3_dump.c).
 STATS_ACTIVE = (
@@ -577,3 +587,197 @@ def test_profile_load_check_compares_format_stride_and_capacity(tmp_path, monkey
     assert check.run(_ctx(radar_with("iq8", 1, 100, 200))).status == "FAIL"
     assert check.run(_ctx(radar_with("iq16", 2, 100, 200))).status == "FAIL"
     assert check.run(_ctx(radar_with("iq16", 1, 300, 200))).status == "FAIL"
+
+
+WIDE_CFG = "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
+
+
+def _cube(frames=4, loops=2, n_tx=3, n_rx=4, bins=6):
+    rng = np.random.default_rng(1)
+    shape = (frames, loops * n_tx, n_rx, bins)
+    return rng.normal(size=shape) + 1j * rng.normal(size=shape)
+
+
+def _summary(cube, n_tx=3):
+    return vertical_loop_power(cube, n_tx=n_tx)
+
+
+def _dump_bytes(cube, n_tx=3):
+    return pack_dump(cube, n_tx=n_tx, version=3)
+
+
+def _stats_for(cube, n_tx=3, freeze=(1, 1), fmt="iq16"):
+    frames, chirps = cube.shape[0], cube.shape[1]
+
+    def reply(_n):
+        return (
+            f"frames=100 active=1 rf_faults=0 freeze_req={freeze[0]} freeze_done={freeze[1]} "
+            f"format={fmt} plan={frames - 1}pre/1post loops={chirps // n_tx} used=1/2\n"
+            "stride=1\ntrig phase=off tee=0 latched=0 enabled=0\nDone\n"
+        ).encode()
+
+    return reply
+
+
+def test_readback_section_names_match_the_spec():
+    assert _names(fc.readback_section()) == [
+        "readback/l3dump streams a valid dump",
+        "readback/l3sparse returns every cell at the limit",
+        "readback/l3sparse refuses an oversized request",
+        "readback/l3sparse refuses a late request, then works",
+        "readback/l3track without trackCfg is refused",
+        "readback/trackCfg validation",
+        "readback/l3track streams the tracked cells",
+    ]
+
+
+def test_l3dump_check_validates_the_header_against_the_plan():
+    cube = _cube()
+    good = scripted_radar({"l3dump": _dump_bytes(cube) + b"Done\n", "stats": _stats_for(cube)})
+    check = fc.readback_section().checks[0]
+
+    assert check.run(_ctx(good)).status == "PASS"
+
+    wrong_plan = scripted_radar(
+        {"l3dump": _dump_bytes(cube) + b"Done\n", "stats": _stats_for(_cube(frames=9))}
+    )
+    result = check.run(_ctx(wrong_plan))
+    assert result.status == "FAIL" and "n_frames" in result.detail
+
+
+def _sparse_radar(cube, *, after_request=None, trailer=b"Done\n", late_first=False):
+    """Plays l3sparse exchanges: ILP1 power, then the cells the host asks for.
+
+    ``after_request`` replaces the ILS1 reply (to script a refusal).
+    ``late_first`` makes the first l3sparse time out with the firmware's
+    "request missing" error instead of waiting for cells.
+    """
+    summary = _summary(cube)
+    stats = _stats_for(cube)
+    state = {"sparse": 0}
+
+    class Port(ScriptedSerial):
+        def write(self, data):
+            line = data.decode(errors="replace").strip()
+            self.written.append(line)
+            if line == "l3sparse":
+                state["sparse"] += 1
+                self.inject(b"l3sparse\n" + power_packet(summary))
+                if late_first and state["sparse"] == 1:
+                    self.inject(b"Error: sparse cell request missing\nDone\n")
+            elif line.startswith("cells"):
+                if after_request is not None:
+                    self.inject(after_request)
+                else:
+                    self.inject(slice_packet(cube, 3, parse_cell_request(data)) + trailer)
+            elif line == "stats":
+                self.inject(stats(0))
+            else:
+                self.inject(b"Done\n")
+
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = Port({})
+    radar.port = "scripted"
+    radar._trigger_pending = b""
+    return radar
+
+
+def test_l3sparse_limit_check_requires_every_cell_and_a_noise_floor():
+    check = fc.readback_section().checks[1]
+
+    assert check.run(_ctx(_sparse_radar(_cube()))).status == "PASS"
+
+    empty = _sparse_radar(_cube(), after_request=b"ILS1\x00\x00Done\n")
+    assert fc.run_check(_ctx(empty), check).status == "FAIL"  # driver may raise on missing cells
+
+
+def test_l3sparse_oversized_check_expects_the_firmware_refusal():
+    check = fc.readback_section().checks[2]
+    refusing = _sparse_radar(
+        _cube(frames=8, bins=40),
+        after_request=b"Error: sparse cell request longer than L3_SPARSE_REQUEST_MAX\nDone\n",
+    )
+
+    assert check.run(_ctx(refusing)).status == "PASS"
+
+    lenient = _sparse_radar(_cube(frames=8, bins=40), after_request=b"Done\n")
+    assert check.run(_ctx(lenient)).status == "FAIL"
+
+
+def test_l3sparse_late_check_waits_out_the_timeout_then_reads_again():
+    slept: list[float] = []
+    radar = _sparse_radar(_cube(), late_first=True)
+    check = fc.readback_section().checks[3]
+
+    result = check.run(_ctx(radar, sleep=slept.append))
+
+    assert result.status == "PASS", result.detail
+    assert any(s >= fc.SPARSE_REQUEST_TIMEOUT_S for s in slept)
+    assert radar.ser.written.count("l3sparse") == 2
+
+
+def test_l3track_without_trackcfg_must_be_refused():
+    cube = _cube()
+    check = fc.readback_section().checks[4]
+    refusing = scripted_radar(
+        {"l3track": b"Error: l3track needs trackCfg\n", "stats": _stats_for(cube)}
+    )
+    assert check.run(_ctx(refusing)).status == "PASS"
+
+    # Wrong error text AND freeze_req climbing on every stats call: the ring froze.
+    freezing = scripted_radar(
+        {
+            "l3track": b"Error: something else\n",
+            "stats": lambda n: _stats_for(cube, freeze=(1 + n, 1 + n))(0),
+        }
+    )
+    result = check.run(_ctx(freezing))
+    assert result.status == "FAIL" and "freeze_req moved" in result.detail
+
+
+def test_track_cfg_cases_and_command_builder():
+    lines = dict(fc.TRACK_CFG_CASES)
+    assert lines["trackCfg 9e-05 0.046875 0 0 0"] is True
+    assert lines["trackCfg 9e-05 0.046875 0 0"] is False
+    assert lines["trackCfg -1 0.046875 0 0 0"] is False
+    assert lines["trackCfg 0 0.046875 0 0 0"] is False
+    assert lines["trackCfg 9e-05 0 0 0 0"] is False
+
+    command = fc.track_config_command(WIDE_CFG)
+    assert command.startswith("trackCfg ")
+    fields = command.split()[1:]
+    assert len(fields) == 5 and float(fields[1]) == 6.0 / 128 and fields[2:] == ["0", "0", "0"]
+
+
+def test_l3track_streams_and_rearms():
+    cube = _cube()
+    summary = _summary(cube)
+    track = OnboardTrack(True, 3, 1.0, 2.0, 0.1, 0.0, 0.01)
+    packet = (
+        summary.header_bytes(b"ILT1")
+        + track.to_bytes()
+        + slice_packet(cube, 3, [(0, 1), (1, 2)])
+        + b"Done\n"
+    )
+    radar = scripted_radar(
+        {
+            "trackCfg": b"Done\n",
+            "l3track": packet,
+            "stats": lambda n: _stats_for(cube, freeze=(1 + (n > 0), 1 + (n > 0)))(0),
+        }
+    )
+    check = fc.readback_section().checks[6]
+
+    result = check.run(_ctx(radar))
+
+    assert result.status == "PASS", result.detail
+    assert "found=True" in result.detail
+
+    iq8 = scripted_radar(
+        {
+            "trackCfg": b"Done\n",
+            "l3track": b"Error: l3track needs IQ16\n",
+            "stats": _stats_for(cube, fmt="iq8"),
+        }
+    )
+    assert check.run(_ctx(iq8)).status == "SKIP"
