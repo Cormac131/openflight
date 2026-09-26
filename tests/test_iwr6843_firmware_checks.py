@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from openflight.iwr6843 import firmware_checks as fc
-from openflight.iwr6843.driver import IWR6843Radar, UnsupportedCommand
+from openflight.iwr6843.driver import UnsupportedCommand
 from openflight.iwr6843.dump import pack_dump
 from openflight.iwr6843.sparse import OnboardTrack
 from tests.iwr6843_fakes import (
@@ -205,10 +205,34 @@ def test_ensure_sensor_is_a_no_op_when_already_in_state(monkeypatch):
     calls: list[str] = []
     radar = scripted_radar({"stats": STATS_ACTIVE.encode()})
     monkeypatch.setattr(radar, "send_config", lambda cfg: calls.append("start"))
+    ctx = _ctx(radar, config="wide.cfg", loaded="wide.cfg")
 
-    fc.ensure_sensor(_ctx(radar), "active")
+    fc.ensure_sensor(ctx, "active")
 
     assert calls == []
+
+
+def test_ensure_sensor_reloads_when_another_profile_is_active(monkeypatch):
+    """A dense profile left running by a profile check must not be reused."""
+    calls: list[str] = []
+    radar = scripted_radar({"stats": STATS_ACTIVE.encode()})
+    monkeypatch.setattr(radar, "send_config", lambda cfg: calls.append(cfg))
+    ctx = _ctx(radar, config="wide.cfg", loaded="dense.cfg")
+
+    fc.ensure_sensor(ctx, "active")
+
+    assert calls == ["wide.cfg"]
+    assert ctx.loaded == "wide.cfg"
+
+
+def test_load_config_records_the_loaded_profile(monkeypatch):
+    radar = scripted_radar({"stats": STATS_ACTIVE.encode()})
+    monkeypatch.setattr(radar, "send_config", lambda cfg: None)
+    ctx = _ctx(radar, config="wide.cfg")
+
+    fc.load_config(ctx, "dense.cfg")
+
+    assert ctx.loaded == "dense.cfg"
 
 
 def _section(name, sensor="any", *checks):
@@ -294,6 +318,29 @@ def test_unsupported_command_becomes_skip_and_other_exceptions_become_fail():
     assert results[2].status == "PASS"
 
 
+def test_cli_raises_unsupported_command_for_a_line_the_image_lacks():
+    radar = scripted_radar({})  # every line answers "not recognized"
+
+    with pytest.raises(UnsupportedCommand, match="l3track"):
+        fc.cli(_ctx(radar), "l3track", 0.05)
+
+
+def test_interrupt_keeps_finished_results_and_prints_the_section_summary():
+    """Ctrl+C must not throw away the checks that already ran."""
+    lines: list[str] = []
+    sections = (
+        _section("a", "any", _check("a/one"), _check("a/stop", exc=KeyboardInterrupt())),
+        _section("b", "any", _check("b/never")),
+    )
+    results: list[fc.CheckResult] = []
+
+    with pytest.raises(KeyboardInterrupt):
+        fc.run(_ctx(_stoppedish_radar(), out=lines.append), sections, results=results)
+
+    assert [(r.name, r.status) for r in results] == [("a/one", "PASS")]
+    assert "a: 1 pass, 0 fail, 0 skip" in lines
+
+
 def test_fail_fast_stops_after_the_first_fail():
     sections = (_section("a", "any", _check("a/bad", fc.failed("a/bad")), _check("a/never")),)
 
@@ -354,6 +401,19 @@ def test_cleanup_failure_forces_exit_1(monkeypatch):
         "cleanup/sensorStop", "FAIL", "remained active", results[-1].seconds
     )
     assert fc.exit_code(results) == 1
+
+
+def test_cleanup_reports_a_missing_command_as_pass(monkeypatch):
+    """An image without ``debugCfg`` has nothing to turn off; that is a clean state."""
+    radar = scripted_radar({"triggerCfg": b"Done\n", "sensorStop": b"Done\n"})
+    monkeypatch.setattr(radar, "stop_sensor", lambda: None)
+
+    results = fc.cleanup(_ctx(radar))
+
+    by_name = {r.name: (r.status, r.detail) for r in results}
+    assert by_name["cleanup/triggerCfg off"] == ("PASS", "")
+    assert by_name["cleanup/debugCfg off"] == ("PASS", "not supported by this firmware")
+    assert fc.exit_code(results) == 0
 
 
 def test_write_json_records_name_status_detail_seconds(tmp_path):
@@ -481,23 +541,13 @@ def _validating(prefix, ok_reply):
     }[prefix]
     expected = dict(table)
 
-    class Port(ScriptedSerial):
-        def write(self, data):
-            line = data.decode().strip()
-            self.written.append(line)
-            if line.startswith(prefix):
-                good = expected.get(line, False)
-                self.inject(ok_reply(line) if good else f"Error: {prefix} rejected\n".encode())
-            else:
-                self.inject(b"Done\n")
+    def handler(line):
+        if line.startswith(prefix):
+            good = expected.get(line, False)
+            return ok_reply(line) if good else f"Error: {prefix} rejected\n".encode()
+        return b"Done\n"
 
-    from openflight.iwr6843.driver import IWR6843Radar
-
-    radar = IWR6843Radar.__new__(IWR6843Radar)
-    radar.ser = Port({})
-    radar.port = "scripted"
-    radar._trigger_pending = b""
-    return radar
+    return scripted_radar({}, handler=handler)
 
 
 def test_profiles_section_names_match_the_spec():
@@ -658,30 +708,22 @@ def _sparse_radar(cube, *, after_request=None, trailer=b"Done\n", late_first=Fal
     stats = _stats_for(cube)
     state = {"sparse": 0}
 
-    class Port(ScriptedSerial):
-        def write(self, data):
-            line = data.decode(errors="replace").strip()
-            self.written.append(line)
-            if line == "l3sparse":
-                state["sparse"] += 1
-                self.inject(b"l3sparse\n" + power_packet(summary))
-                if late_first and state["sparse"] == 1:
-                    self.inject(b"Error: sparse cell request missing\nDone\n")
-            elif line.startswith("cells"):
-                if after_request is not None:
-                    self.inject(after_request)
-                else:
-                    self.inject(slice_packet(cube, 3, parse_cell_request(data)) + trailer)
-            elif line == "stats":
-                self.inject(stats(0))
-            else:
-                self.inject(b"Done\n")
+    def handler(line):
+        if line == "l3sparse":
+            state["sparse"] += 1
+            reply = b"l3sparse\n" + power_packet(summary)
+            if late_first and state["sparse"] == 1:
+                reply += b"Error: sparse cell request missing\nDone\n"
+            return reply
+        if line.startswith("cells"):
+            if after_request is not None:
+                return after_request
+            return slice_packet(cube, 3, parse_cell_request(line.encode())) + trailer
+        if line == "stats":
+            return stats(0)
+        return b"Done\n"
 
-    radar = IWR6843Radar.__new__(IWR6843Radar)
-    radar.ser = Port({})
-    radar.port = "scripted"
-    radar._trigger_pending = b""
-    return radar
+    return scripted_radar({}, handler=handler)
 
 
 def test_l3sparse_limit_check_requires_every_cell_and_a_noise_floor():
@@ -735,6 +777,32 @@ def test_l3track_without_trackcfg_must_be_refused():
     )
     result = check.run(_ctx(freezing))
     assert result.status == "FAIL" and "freeze_req moved" in result.detail
+
+
+def test_l3track_refusal_skips_once_trackcfg_is_configured():
+    """Second run after a power-up: l3track streams instead of refusing, so SKIP, not FAIL."""
+    cube = _cube()
+    summary = _summary(cube)
+    track = OnboardTrack(True, 3, 1.0, 2.0, 0.1, 0.0, 0.01)
+    packet = (
+        summary.header_bytes(b"ILT1")
+        + track.to_bytes()
+        + slice_packet(cube, 3, [(0, 1)])
+        + b"Done\n"
+    )
+    radar = scripted_radar(
+        {
+            "l3track": packet,
+            # freeze counters advance once, then stay settled with the sensor active
+            "stats": lambda n: _stats_for(cube, freeze=(1, 1) if n == 0 else (2, 2))(0),
+        }
+    )
+    check = fc.readback_section().checks[4]
+
+    result = check.run(_ctx(radar))
+
+    assert result.status == "SKIP", result.detail
+    assert "power-cycle" in result.detail
 
 
 def test_track_cfg_cases_and_command_builder():
@@ -833,25 +901,16 @@ def _trigger_radar(
             return "".join(lines).encode() + b"Done\n"
         return b"Done\n"
 
-    class Port(ScriptedSerial):
-        def write(self, data):
-            line = data.decode(errors="replace").strip()
-            self.written.append(line)
-            if line.startswith("triggerCfg"):
-                self.inject(trigger_cfg(line))
-            elif line.startswith("debugCfg"):
-                self.inject(debug_cfg(line))
-            elif line == "stats":
-                self.inject(stats(0))
-            else:
-                self.inject(b"Done\n")
+    def handler(line):
+        if line.startswith("triggerCfg"):
+            return trigger_cfg(line)
+        if line.startswith("debugCfg"):
+            return debug_cfg(line)
+        if line == "stats":
+            return stats(0)
+        return b"Done\n"
 
-    from openflight.iwr6843.driver import IWR6843Radar
-
-    radar = IWR6843Radar.__new__(IWR6843Radar)
-    radar.ser = Port({})
-    radar.port = "scripted"
-    radar._trigger_pending = b""
+    radar = scripted_radar({}, handler=handler)
     radar.send_config = lambda cfg: state.update(enabled=0, phase="off")  # type: ignore[method-assign]
     return radar
 
@@ -925,6 +984,23 @@ def test_debug_cfg_lines_parse_and_echo_the_armed_values():
     missing_field = _trigger_radar(debug_lines=["trig phase=tee-low tee=1 latched=0\n"])
     result = check.run(_ctx(missing_field))
     assert result.status == "FAIL" and "fields" in result.detail
+
+
+def test_debug_cfg_check_skips_on_an_image_without_debugcfg():
+    """Older firmware: an unknown command must SKIP, not blame the firmware with a FAIL."""
+    check = fc.trigger_section().checks[4]
+    radar = scripted_radar(
+        {
+            "triggerCfg": b"Done\n",
+            "stats": b"active=1\ntrig phase=tee-low tee=400 latched=0 enabled=1\nDone\n",
+        }
+    )
+
+    result = fc.run_check(_ctx(radar), check)
+
+    assert result.status == "SKIP"
+    assert "older firmware" in result.detail and "debugCfg" in result.detail
+    assert "triggerCfg 0 0 0" in radar.ser.written  # the arm is still undone
 
 
 def test_debug_stream_must_not_repeat_the_same_phase():
@@ -1058,35 +1134,26 @@ def _swing_radar(
         ).encode()
         return prefix + body
 
-    class Port(ScriptedSerial):
-        def write(self, data):
-            line = data.decode(errors="replace").strip()
-            self.written.append(line)
-            if line == "stats":
-                self.inject(stats(0))
-            elif line.startswith("triggerCfg"):
-                state["armed"] = not line.endswith(" 0 0 0")
-                state["enabled"] = 1 if state["armed"] else 0
-                state["phase"], state["since_watching"], state["stats"] = "tee-low", None, 0
-                self.inject(b"Done\n")
-            elif line == "l3track":
-                self.inject(track_packet)
-                if rearm:  # the firmware rearms: unlatched, back to watching the tee
-                    state["latched"], state["phase"], state["since_watching"], state["stats"] = (
-                        0,
-                        "tee-low",
-                        None,
-                        0,
-                    )
-            else:
-                self.inject(b"Done\n")
+    def handler(line):
+        if line == "stats":
+            return stats(0)
+        if line.startswith("triggerCfg"):
+            state["armed"] = not line.endswith(" 0 0 0")
+            state["enabled"] = 1 if state["armed"] else 0
+            state["phase"], state["since_watching"], state["stats"] = "tee-low", None, 0
+            return b"Done\n"
+        if line == "l3track":
+            if rearm:  # the firmware rearms: unlatched, back to watching the tee
+                state["latched"], state["phase"], state["since_watching"], state["stats"] = (
+                    0,
+                    "tee-low",
+                    None,
+                    0,
+                )
+            return track_packet
+        return b"Done\n"
 
-    from openflight.iwr6843.driver import IWR6843Radar
-
-    radar = IWR6843Radar.__new__(IWR6843Radar)
-    radar.ser = Port({})
-    radar.port = "scripted"
-    radar._trigger_pending = b""
+    radar = scripted_radar({}, handler=handler)
 
     def send_config(_cfg):
         if clear_on_reconfigure:
@@ -1141,6 +1208,42 @@ def test_swing_notice_inside_a_stats_reply_is_seen():
 
     assert waited is not None
     assert radar.ser.written.count("stats") >= 2
+
+
+def _notice_stats(latched=0, phase="watching"):
+    return (
+        f"active=1 freeze_req=1 freeze_done=1 format=iq16 plan=16pre/8post\n"
+        f"trig phase={phase} tee=500 latched={latched} enabled=1\nDone\n"
+    ).encode()
+
+
+def test_wait_for_notice_reassembles_a_notice_split_across_a_stats_poll():
+    """``T`` read by the listener, ``riggered`` drained by the poll: still one notice."""
+
+    def stats(n):
+        return (b"riggered\n" if n == 0 else b"") + _notice_stats()
+
+    radar = scripted_radar({"stats": stats})
+    radar.ser.inject(b"T")
+
+    waited = fc.wait_for_notice(_ctx(radar), timeout_s=5.0)
+
+    assert isinstance(waited, float)
+    assert radar.ser.written.count("stats") >= 1
+
+
+def test_wait_for_notice_accepts_a_latched_stats_reply_with_no_notice_text():
+    """A notice lost on the wire still shows up as ``latched=1`` in the polled reply."""
+
+    def stats(n):
+        return _notice_stats() if n == 0 else _notice_stats(latched=1, phase="fired")
+
+    radar = scripted_radar({"stats": stats})
+
+    waited = fc.wait_for_notice(_ctx(radar), timeout_s=5.0)
+
+    assert isinstance(waited, float)
+    assert radar.ser.written.count("stats") == 2
 
 
 def test_wait_for_notice_times_out_to_none():

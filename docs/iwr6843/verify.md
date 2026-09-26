@@ -115,6 +115,10 @@ It exercises every command the firmware registers on its CLI and prints one
 | `trigger-swing` | with `--swing`: a ball on the tee reaches `watching`, a swing fires `Triggered` (the notice must survive a `stats` reply), the frozen ring reads back in under 1.0 s, the host detector replay agrees, the ring rearms, and a latched session is cleared by reconfigure | no, prompts you |
 | `solve` | always `SKIP`: the on-chip DSS solve is in the image but the MSS exposes no CLI entry point for it yet | yes |
 
+The `l3track without trackCfg` check can only prove the refusal on the first run
+after a power cycle; on later runs it reports `SKIP` (the firmware never clears
+`gTrackConfigured`, so `l3track` streams instead of refusing).
+
 Run only one section, or add the prompted swing checks:
 
 ```bash

@@ -238,6 +238,10 @@ class ScriptedSerial:
     sent before (starting at 0), so ``stats`` can show counters advancing.
     ``inject`` queues bytes ahead of the next read, the way a ``Triggered``
     notice or a ``trig`` debug line arrives unasked.
+
+    ``handler`` is consulted first with the stripped line for ports that need
+    state (a validation table, a trigger state machine); returning ``None``
+    falls through to the reply table.
     """
 
     def __init__(
@@ -245,9 +249,11 @@ class ScriptedSerial:
         replies: dict[str, bytes | Callable[[int], bytes]],
         *,
         unknown: bytes = b"'{cmd}' is not recognized as a CLI command\n",
+        handler: Callable[[str], bytes | None] | None = None,
     ):
         self._replies = dict(replies)
         self._unknown = unknown
+        self._handler = handler
         self._buffer = bytearray()
         self._sent: dict[str, int] = {}
         self.written: list[str] = []
@@ -265,6 +271,11 @@ class ScriptedSerial:
     def write(self, data: bytes) -> None:
         line = data.decode(errors="replace").strip()
         self.written.append(line)
+        if self._handler is not None:
+            handled = self._handler(line)
+            if handled is not None:
+                self._buffer += handled
+                return
         key = line if line in self._replies else line.split(" ", 1)[0]
         reply = self._replies.get(key)
         if reply is None:
@@ -282,7 +293,10 @@ class ScriptedSerial:
 
 
 def scripted_radar(replies: dict, **kwargs) -> "IWR6843Radar":
-    """An ``IWR6843Radar`` on a ``ScriptedSerial`` without opening a port."""
+    """An ``IWR6843Radar`` on a ``ScriptedSerial`` without opening a port.
+
+    ``handler=`` is forwarded to ``ScriptedSerial`` for stateful ports.
+    """
     from openflight.iwr6843.driver import IWR6843Radar  # pylint: disable=import-outside-toplevel
 
     radar = IWR6843Radar.__new__(IWR6843Radar)

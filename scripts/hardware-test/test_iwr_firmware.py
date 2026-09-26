@@ -20,6 +20,8 @@ import argparse
 import sys
 import time
 
+import serial
+
 sys.path.insert(0, "src")
 
 from openflight.iwr6843 import firmware_checks as fc  # noqa: E402
@@ -80,6 +82,9 @@ def _prompt(text: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     """Entry point; returns the process exit code."""
     args = build_parser().parse_args(argv)
+    if args.shots < 1:
+        print(f"error: --shots must be at least 1, got {args.shots}", file=sys.stderr)
+        return 2
     sections = fc.build_sections(fc.default_profiles(), args.shots)
     if args.list:
         print_catalogue(sections)
@@ -98,7 +103,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {problem}", file=sys.stderr)
         return 2
 
-    radar = IWR6843Radar(args.port)
+    try:
+        radar = IWR6843Radar(args.port)
+    except (RuntimeError, serial.SerialException) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     ctx = fc.Context(
         radar=radar,
         config=args.config,
@@ -114,15 +123,25 @@ def main(argv: list[str] | None = None) -> int:
         out=print,
     )
     print(f"IWR6843 on {radar.port}, default profile {args.config}")
+    # fc.run appends into this list, so an interrupt keeps every finished result.
     results: list[fc.CheckResult] = []
     interrupted = False
     try:
-        results = fc.run(ctx, sections, only=only, swing=args.swing, fail_fast=args.fail_fast)
-    except KeyboardInterrupt:
-        print("\ninterrupted", file=sys.stderr)
-        interrupted = True
-    results.extend(fc.cleanup(ctx))
-    radar.close()
+        try:
+            fc.run(
+                ctx,
+                sections,
+                only=only,
+                swing=args.swing,
+                fail_fast=args.fail_fast,
+                results=results,
+            )
+        except KeyboardInterrupt:
+            print("\ninterrupted", file=sys.stderr)
+            interrupted = True
+        results.extend(fc.cleanup(ctx))
+    finally:
+        radar.close()
     if args.json:
         fc.write_json(results, args.json)
     if interrupted:

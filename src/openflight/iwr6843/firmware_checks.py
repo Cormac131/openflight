@@ -174,6 +174,9 @@ class Context:
     sleep: Callable[[float], None]
     clock: Callable[[], float]
     out: Callable[[str], None]
+    # The .cfg this suite last loaded, so a section can tell "sensor active" from
+    # "sensor active with the profile I asked for". None means "never loaded here".
+    loaded: str | None = None
 
 
 @dataclass(frozen=True)
@@ -209,9 +212,55 @@ def skipped(name: str, detail: str = "") -> CheckResult:
     return CheckResult(name, SKIP, detail)
 
 
+def cli(ctx: Context, line: str, window: float = 2.0) -> str:
+    """Send one CLI line and return the reply; an unknown command raises.
+
+    ``IWR6843Radar.cmd`` cannot tell a missing command from a silent one: an
+    older image answers ``'<cmd>' is not recognized as a CLI command`` with no
+    Done/Error, so ``cmd`` just waits out its window and hands back that text.
+    Raising ``UnsupportedCommand`` here lets ``run_check`` report SKIP instead
+    of blaming the firmware for a check it cannot run.
+    """
+    reply = ctx.radar.cmd(line, window)
+    if "not recognized" in reply:
+        raise UnsupportedCommand(f"{line.split()[0]}: {reply.strip()[:60]}")
+    return reply
+
+
 def stats_snapshot(ctx: Context) -> StatsSnapshot:
     """One ``stats`` round trip."""
     return parse_snapshot(ctx.radar.stats())
+
+
+def _tee_bin(ctx: Context) -> int:
+    """The capture-local range bin the tee sits in for this rig and profile."""
+    return tee_local_bin(ctx.tee_m, ctx.config)
+
+
+def _disarm(ctx: Context) -> str:
+    """``triggerCfg 0 0 0`` — the one command that always leaves the detector off."""
+    return cli(ctx, SELF_TRIGGER_OFF_COMMAND)
+
+
+def _plan_frames(snap: StatsSnapshot) -> int:
+    """Frames the loaded plan promises: pre + post."""
+    return (snap.plan_pre or 0) + (snap.plan_post or 0)
+
+
+def _measure_level(ctx: Context) -> tuple[tuple[float, float] | None, str | None]:
+    """``((floor, level), None)`` from an empty-lane sample, or ``(None, error)``.
+
+    Always leaves the detector disarmed on failure: the probe arm that
+    ``measure_trigger_level`` sends must not outlive a failed measurement.
+    """
+    try:
+        floor, level = measure_trigger_level(
+            ctx.radar, _tee_bin(ctx), ctx.hits, clock=ctx.clock, pause=ctx.sleep
+        )
+    except RuntimeError as exc:
+        _disarm(ctx)
+        return None, str(exc)
+    return (floor, level), None
 
 
 def wait_until(
@@ -241,13 +290,24 @@ def read_port_text(ctx: Context, seconds: float) -> str:
     return collected.decode(errors="replace")
 
 
+def load_config(ctx: Context, path: str) -> None:
+    """Stream ``path`` into the radar and record it as the loaded profile."""
+    ctx.radar.send_config(path)
+    ctx.loaded = path
+
+
 def ensure_sensor(ctx: Context, state: str) -> None:
-    """Bring the sensor to ``state`` ("active", "stopped", "any") if it is not there."""
+    """Bring the sensor to ``state`` ("active", "stopped", "any") if it is not there.
+
+    "active" means active *on ``ctx.config``*: a profile check that leaves a
+    dense capture running (or a board left over from another run) must not make
+    the later sections judge a plan they never asked for.
+    """
     if state == "any":
         return
     active = stats_snapshot(ctx).active
-    if state == "active" and active != 1:
-        ctx.radar.send_config(ctx.config)
+    if state == "active" and (active != 1 or ctx.loaded != ctx.config):
+        load_config(ctx, ctx.config)
     elif state == "stopped" and active != 0:
         ctx.radar.stop_sensor()
 
@@ -303,36 +363,46 @@ def run(
     only: tuple[str, ...] | None = None,
     swing: bool = False,
     fail_fast: bool = False,
+    results: list[CheckResult] | None = None,
 ) -> list[CheckResult]:
-    """Run the selected sections in catalogue order and return every result."""
-    results: list[CheckResult] = []
+    """Run the selected sections in catalogue order and return every result.
+
+    Pass ``results`` to append into a list the caller already holds: a
+    ``KeyboardInterrupt`` then leaves every completed result with the caller
+    (the suite prints the interrupted section's summary and re-raises).
+    """
+    results = [] if results is None else results
     for section in select_sections(sections, only):
         try:
-            ensure_sensor(ctx, section.sensor)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            for check in section.checks:
-                _emit(ctx, results, failed(check.name, f"sensor not {section.sensor}: {exc}"))
-            _summarise(ctx, section, results)
-            if fail_fast:
-                return results
-            continue
-        for check in section.checks:
-            if check.needs_swing and not swing:
-                _emit(ctx, results, skipped(check.name, "needs --swing"))
-                continue
-            _emit(ctx, results, run_check(ctx, check))
-            if fail_fast and results[-1].status == FAIL:
+            try:
+                ensure_sensor(ctx, section.sensor)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                for check in section.checks:
+                    _emit(ctx, results, failed(check.name, f"sensor not {section.sensor}: {exc}"))
                 _summarise(ctx, section, results)
-                return results
-        _summarise(ctx, section, results)
+                if fail_fast:
+                    return results
+                continue
+            for check in section.checks:
+                if check.needs_swing and not swing:
+                    _emit(ctx, results, skipped(check.name, "needs --swing"))
+                    continue
+                _emit(ctx, results, run_check(ctx, check))
+                if fail_fast and results[-1].status == FAIL:
+                    _summarise(ctx, section, results)
+                    return results
+            _summarise(ctx, section, results)
+        except KeyboardInterrupt:
+            _summarise(ctx, section, results)
+            raise
     return results
 
 
 def cleanup(ctx: Context) -> list[CheckResult]:
     """Leave the radar disarmed, quiet and stopped; report each step, never raise."""
     steps: tuple[tuple[str, Callable[[], None]], ...] = (
-        ("cleanup/triggerCfg off", lambda: ctx.radar.cmd("triggerCfg 0 0 0", 2.0)),
-        ("cleanup/debugCfg off", lambda: ctx.radar.cmd("debugCfg 0", 2.0)),
+        ("cleanup/triggerCfg off", lambda: cli(ctx, "triggerCfg 0 0 0")),
+        ("cleanup/debugCfg off", lambda: cli(ctx, "debugCfg 0")),
         ("cleanup/sensorStop", ctx.radar.stop_sensor),
     )
     results: list[CheckResult] = []
@@ -341,6 +411,9 @@ def cleanup(ctx: Context) -> list[CheckResult]:
         try:
             step()
             result = passed(name)
+        except UnsupportedCommand:
+            # Nothing to undo: an image without the command never armed anything.
+            result = passed(name, "not supported by this firmware")
         except Exception as exc:  # pylint: disable=broad-exception-caught
             result = failed(name, str(exc))
         _emit(
@@ -371,7 +444,7 @@ _CONFIG_WHILE_ACTIVE = (
 
 def _check_config_accepted(ctx: Context) -> CheckResult:
     name = "lifecycle/config accepted"
-    ctx.radar.send_config(ctx.config)
+    load_config(ctx, ctx.config)
     snap = stats_snapshot(ctx)
     faults = parse_stats(snap.raw).get("rf_faults")
     if snap.active != 1 or faults != 0:
@@ -396,7 +469,7 @@ def _check_config_refused_while_active(ctx: Context) -> CheckResult:
     name = "lifecycle/config commands refused while active"
     leaked = []
     for line in _CONFIG_WHILE_ACTIVE:
-        reply = ctx.radar.cmd(line, 2.0)
+        reply = cli(ctx, line)
         if "Error" not in reply or "stop the sensor" not in reply:
             leaked.append(f"{line.split()[0]}: {reply.strip()[:60]!r}")
     if leaked:
@@ -419,7 +492,7 @@ def _check_sensor_stop(ctx: Context) -> CheckResult:
 def _check_restart_resets(ctx: Context) -> CheckResult:
     name = "lifecycle/restart resets counters"
     before = stats_snapshot(ctx).frames
-    ctx.radar.send_config(ctx.config)
+    load_config(ctx, ctx.config)
     after = stats_snapshot(ctx)
     if after.active != 1 or before is None or after.frames is None or after.frames >= before:
         return failed(name, f"active={after.active} frames {before} -> {after.frames}")
@@ -491,7 +564,7 @@ def _run_validation_table(
     """Send each line; accepted ones must not Error (and must ``echo``), refused ones must."""
     wrong: list[str] = []
     for line, expect_ok in cases:
-        reply = ctx.radar.cmd(line, 2.0)
+        reply = cli(ctx, line)
         refused = "Error" in reply
         if expect_ok and refused:
             wrong.append(f"refused {line!r}")
@@ -547,7 +620,7 @@ def _profile_check(cfg_path: str) -> Check:
 
     def run(ctx: Context) -> CheckResult:
         want_fmt, want_stride = expected_profile_shape(cfg_path)
-        ctx.radar.send_config(cfg_path)
+        load_config(ctx, cfg_path)
         try:
             snap = stats_snapshot(ctx)
         finally:
@@ -611,7 +684,7 @@ def _check_l3dump(ctx: Context) -> CheckResult:
     meta = parse_header(raw)
     after = stats_snapshot(ctx)
     problems = []
-    want_frames = (plan.plan_pre or 0) + (plan.plan_post or 0)
+    want_frames = _plan_frames(plan)
     if meta["n_frames"] != want_frames:
         problems.append(f"n_frames={meta['n_frames']} want {want_frames}")
     loops = parse_stats(plan.raw).get("loops")
@@ -713,11 +786,46 @@ def _check_sparse_late(ctx: Context) -> CheckResult:
     return passed(name, "late request refused, next exchange worked")
 
 
+TRACK_ALREADY_CONFIGURED = (
+    "trackCfg already configured since power-up; power-cycle the radar to test the refusal"
+)
+
+
+def _drain_track_stream(ctx: Context, name: str) -> CheckResult:
+    """SKIP for an ``l3track`` that streamed: wait the stream out, then check the CLI is clean.
+
+    ``gTrackConfigured`` is never cleared in the firmware (not by sensorStop,
+    sensorStart or flushCfg), so after any earlier ``trackCfg`` — this suite's
+    own later checks, or the kiosk runtime — ``l3track`` freezes the ring and
+    streams instead of refusing. The refusal is only provable on the first run
+    after a power cycle.
+    """
+
+    def settled() -> bool:
+        snap = stats_snapshot(ctx)
+        return snap.freeze_done is not None and snap.freeze_done == snap.freeze_req
+
+    wait_until(ctx, settled, SPARSE_REQUEST_TIMEOUT_S)
+    snap = stats_snapshot(ctx)
+    if snap.active != 1:
+        return failed(name, f"active={snap.active} after an unrequested l3track stream")
+    return skipped(name, TRACK_ALREADY_CONFIGURED)
+
+
 def _check_track_needs_cfg(ctx: Context) -> CheckResult:
     name = "readback/l3track without trackCfg is refused"
     before = stats_snapshot(ctx)
-    reply = ctx.radar.cmd("l3track", 3.0)
+    reply = cli(ctx, "l3track", 3.0)
     after = stats_snapshot(ctx)
+    froze = (
+        before.freeze_req is not None
+        and after.freeze_req is not None
+        and after.freeze_req > before.freeze_req
+    )
+    # An ILT1 magic in the reply, or a ring that froze with no error, means the
+    # firmware streamed: trackCfg is still configured from an earlier run.
+    if "ILT1" in reply or (froze and "Error" not in reply):
+        return _drain_track_stream(ctx, name)
     problems = []
     if "needs trackCfg" not in reply:
         problems.append(f"reply {reply.strip()[:60]!r}")
@@ -743,7 +851,7 @@ def track_config_command(cfg_path: str | Path) -> str:
 
 def _check_track_streams(ctx: Context) -> CheckResult:
     name = "readback/l3track streams the tracked cells"
-    reply = ctx.radar.cmd(track_config_command(ctx.config), 2.0)
+    reply = cli(ctx, track_config_command(ctx.config))
     if "Done" not in reply or "Error" in reply:
         return failed(name, f"trackCfg rejected: {reply.strip()[:60]!r}")
     before = stats_snapshot(ctx)
@@ -818,9 +926,7 @@ TRIG_DEBUG_FIELDS = (
 
 def arm_command(ctx: Context, level: float) -> str:
     """``triggerCfg`` for this rig's tee bin at ``level``."""
-    return SelfTriggerConfig(
-        local_bin=tee_local_bin(ctx.tee_m, ctx.config), level=level, hits=ctx.hits
-    ).command
+    return SelfTriggerConfig(local_bin=_tee_bin(ctx), level=level, hits=ctx.hits).command
 
 
 def _trig_state(snap: StatsSnapshot) -> str:
@@ -829,7 +935,7 @@ def _trig_state(snap: StatsSnapshot) -> str:
 
 def _check_fresh_session(ctx: Context) -> CheckResult:
     name = "trigger/fresh session untriggered"
-    ctx.radar.send_config(ctx.config)
+    load_config(ctx, ctx.config)
     snap = stats_snapshot(ctx)
     if (snap.phase, snap.latched, snap.enabled) != ("off", 0, 0):
         return failed(name, _trig_state(snap))
@@ -838,15 +944,15 @@ def _check_fresh_session(ctx: Context) -> CheckResult:
 
 def _check_trigger_cfg_validation(ctx: Context) -> CheckResult:
     result = _run_validation_table(ctx, "trigger/triggerCfg validation", TRIGGER_CFG_CASES)
-    ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+    _disarm(ctx)
     return result
 
 
 def _check_arming(ctx: Context) -> CheckResult:
     name = "trigger/arming starts the detector"
-    reply = ctx.radar.cmd(arm_command(ctx, FLOOR_PROBE_LEVEL), 2.0)
+    reply = cli(ctx, arm_command(ctx, FLOOR_PROBE_LEVEL))
     if "Done" not in reply:
-        ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+        _disarm(ctx)
         return failed(name, f"arm rejected: {reply.strip()[:60]!r}")
     latest: dict[str, StatsSnapshot] = {}
 
@@ -857,7 +963,7 @@ def _check_arming(ctx: Context) -> CheckResult:
 
     reached = wait_until(ctx, live, ctx.wait_s)
     snap = latest["snap"]
-    ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+    _disarm(ctx)
     problems = []
     if snap.enabled != 1:
         problems.append(f"enabled={snap.enabled}")
@@ -874,7 +980,7 @@ def _check_arming(ctx: Context) -> CheckResult:
 
 def _check_disarm(ctx: Context) -> CheckResult:
     name = "trigger/triggerCfg 0 0 0 disarms"
-    ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+    _disarm(ctx)
     snap = stats_snapshot(ctx)
     if (snap.enabled, snap.phase, snap.latched) != (0, "off", 0):
         return failed(name, _trig_state(snap))
@@ -889,10 +995,10 @@ def _debug_lines(text: str) -> list[dict[str, str]]:
 
 def _check_debug_cfg(ctx: Context) -> CheckResult:
     name = "trigger/debugCfg streams parsable lines"
-    local_bin = tee_local_bin(ctx.tee_m, ctx.config)
-    ctx.radar.cmd(arm_command(ctx, FLOOR_PROBE_LEVEL), 2.0)
+    local_bin = _tee_bin(ctx)
+    cli(ctx, arm_command(ctx, FLOOR_PROBE_LEVEL))
     try:
-        reply = ctx.radar.cmd("debugCfg 1", 2.0)
+        reply = cli(ctx, "debugCfg 1")
         lines = _debug_lines(reply)
         problems = []
         if not lines:
@@ -907,17 +1013,20 @@ def _check_debug_cfg(ctx: Context) -> CheckResult:
                     f"bin={fields['bin']} level={fields['level']} do not echo the armed values"
                 )
                 break
-        off = ctx.radar.cmd("debugCfg 0", 2.0)
+        off = cli(ctx, "debugCfg 0")
         if "Done" not in off:
             problems.append("debugCfg 0 rejected")
         if _debug_lines(read_port_text(ctx, 0.5)):
             problems.append("trig lines still streaming after debugCfg 0")
-        bad = ctx.radar.cmd("debugCfg 2", 2.0)
+        bad = cli(ctx, "debugCfg 2")
         if "Error" not in bad:
             problems.append("debugCfg 2 accepted")
     finally:
-        ctx.radar.cmd("debugCfg 0", 2.0)
-        ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+        # The disarm must happen even if this image has no debugCfg at all.
+        try:
+            cli(ctx, "debugCfg 0")
+        finally:
+            _disarm(ctx)
     if problems:
         return failed(name, "; ".join(problems))
     return passed(name, f"{len(lines)} line(s), bin={local_bin} level={int(FLOOR_PROBE_LEVEL)}")
@@ -925,14 +1034,16 @@ def _check_debug_cfg(ctx: Context) -> CheckResult:
 
 def _check_debug_change_only(ctx: Context) -> CheckResult:
     name = "trigger/debug lines only change on phase change"
-    ctx.radar.cmd(arm_command(ctx, FLOOR_PROBE_LEVEL), 2.0)
+    cli(ctx, arm_command(ctx, FLOOR_PROBE_LEVEL))
     try:
         # The debugCfg 1 reply carries the first line; anything after Done streams on.
-        lines = _debug_lines(ctx.radar.cmd("debugCfg 1", 2.0))
+        lines = _debug_lines(cli(ctx, "debugCfg 1"))
         lines += _debug_lines(read_port_text(ctx, 1.0))
     finally:
-        ctx.radar.cmd("debugCfg 0", 2.0)
-        ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+        try:
+            cli(ctx, "debugCfg 0")
+        finally:
+            _disarm(ctx)
     repeats = sum(1 for a, b in zip(lines, lines[1:]) if a["phase"] == b["phase"])
     if repeats:
         return failed(name, f"{repeats} repeated same-phase line(s) in 1 s")
@@ -941,15 +1052,11 @@ def _check_debug_change_only(ctx: Context) -> CheckResult:
 
 def _check_floor(ctx: Context) -> CheckResult:
     name = "trigger/floor measurement"
-    local_bin = tee_local_bin(ctx.tee_m, ctx.config)
-    try:
-        floor, level = measure_trigger_level(
-            ctx.radar, local_bin, ctx.hits, clock=ctx.clock, pause=ctx.sleep
-        )
-    except RuntimeError as exc:
-        ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
-        return failed(name, str(exc))
-    ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+    measured, problem = _measure_level(ctx)
+    if measured is None:
+        return failed(name, problem or "floor measurement failed")
+    floor, level = measured
+    _disarm(ctx)
     if not floor > 0 or not level > floor:
         return failed(name, f"floor={floor:.1f} level={level:.1f}")
     return passed(name, f"floor={floor:.1f} level={level:.1f}")
@@ -957,8 +1064,8 @@ def _check_floor(ctx: Context) -> CheckResult:
 
 def _check_reconfigure_clears_arm(ctx: Context) -> CheckResult:
     name = "trigger/reconfigure clears a previous arm"
-    ctx.radar.cmd(arm_command(ctx, FLOOR_PROBE_LEVEL), 2.0)
-    ctx.radar.send_config(ctx.config)
+    cli(ctx, arm_command(ctx, FLOOR_PROBE_LEVEL))
+    load_config(ctx, ctx.config)
     snap = stats_snapshot(ctx)
     if (snap.enabled, snap.latched, snap.phase) != (0, 0, "off"):
         return failed(name, _trig_state(snap))
@@ -995,7 +1102,14 @@ class _SwingState:
 
 
 def wait_for_notice(ctx: Context, timeout_s: float, poll_s: float = 0.5) -> float | None:
-    """Seconds until ``Triggered`` arrives, polling ``stats`` so the notice must survive a reply."""
+    """Seconds until ``Triggered`` arrives, polling ``stats`` so the notice must survive a reply.
+
+    Two ways to see it, because the notice can be split across the listener and
+    a polled reply: hand our partial tail back to the driver before each poll so
+    ``cmd`` can rejoin the halves (the driver keeps its own tail, and only it
+    knows the right order), and read ``latched`` out of the polled reply — a
+    latch is the notice, whatever happened to the text.
+    """
     started = ctx.clock()
     pending = b""
     last_poll = started
@@ -1004,8 +1118,12 @@ def wait_for_notice(ctx: Context, timeout_s: float, poll_s: float = 0.5) -> floa
         if found:
             return ctx.clock() - started
         if ctx.clock() - last_poll >= poll_s:
-            ctx.radar.cmd("stats", 2.0)  # cmd() keeps a notice it reads for the listener
+            ctx.radar._remember_trigger_notice(pending)  # pylint: disable=protected-access
+            pending = b""
+            reply = ctx.radar.cmd("stats", 2.0)  # cmd() keeps a notice it reads for the listener
             last_poll = ctx.clock()
+            if parse_snapshot(reply).latched == 1:
+                return ctx.clock() - started
         else:
             ctx.sleep(0.01)
     return None
@@ -1016,21 +1134,16 @@ def _arm_for_swing(ctx: Context, state: _SwingState) -> str | None:
     if state.armed:
         return None
     if ctx.level is None:
-        local_bin = tee_local_bin(ctx.tee_m, ctx.config)
-        try:
-            _floor, level = measure_trigger_level(
-                ctx.radar, local_bin, ctx.hits, clock=ctx.clock, pause=ctx.sleep
-            )
-        except RuntimeError as exc:
-            ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
-            return f"floor measurement failed: {exc}"
-        state.level = level
+        measured, problem = _measure_level(ctx)
+        if measured is None:
+            return f"floor measurement failed: {problem}"
+        state.level = measured[1]
     else:
         state.level = ctx.level
-    reply = ctx.radar.cmd(arm_command(ctx, state.level), 2.0)
+    reply = cli(ctx, arm_command(ctx, state.level))
     if "Done" not in reply:
         return f"arm rejected: {reply.strip()[:60]!r}"
-    ctx.radar.cmd(track_config_command(ctx.config), 2.0)
+    cli(ctx, track_config_command(ctx.config))
     state.armed = True
     return None
 
@@ -1114,7 +1227,7 @@ def _swing_checks(shot: int, state: _SwingState) -> tuple[Check, ...]:
         meta = parse_header(raw)
         elapsed = ctx.clock() - started
         wire_elapsed = read_done - started
-        want_frames = (plan.plan_pre or 0) + (plan.plan_post or 0)
+        want_frames = _plan_frames(plan)
         problems = []
         if wire_elapsed >= READBACK_LIMIT_S:
             problems.append(f"readback {wire_elapsed:.2f} s >= {READBACK_LIMIT_S:.1f} s")
@@ -1186,7 +1299,7 @@ def _latched_cleared(state: _SwingState) -> Check:
         ctx.prompt("One more swing, which will NOT be read back. Place the ball, swing, then wait.")
         if wait_for_notice(ctx, ctx.wait_s) is None:
             return failed(name, f"no Triggered within {ctx.wait_s:.0f} s")
-        ctx.radar.send_config(ctx.config)
+        load_config(ctx, ctx.config)
         snap = stats_snapshot(ctx)
         if (snap.latched, snap.enabled, snap.phase) != (0, 0, "off"):
             return failed(name, _trig_state(snap))
