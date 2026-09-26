@@ -26,6 +26,7 @@ import numpy as np
 
 from openflight.iwr6843.calibration import DEFAULT_TEE_RANGE_M
 from openflight.iwr6843.driver import IWR6843Radar
+from openflight.iwr6843.firmware_checks import parse_trig
 from openflight.iwr6843.monitor import measure_trigger_level, tee_local_bin
 from openflight.iwr6843.self_trigger import BallLeaveDetector, TriggerObservation, replay_dump
 from openflight.iwr6843.sparse import SparsePlan
@@ -45,23 +46,6 @@ def port_name_error(port: str | None, platform: str) -> str | None:
             "or pass a device path such as /dev/ttyUSB0."
         )
     return None
-
-
-def parse_trig(line: str) -> dict[str, str] | None:
-    """Fields from a ``trig phase=...`` debug or stats line."""
-    text = line.strip()
-    marker = text.find("trig ")
-    if marker < 0 or "phase=" not in text[marker:]:
-        return None
-    fields: dict[str, str] = {}
-    for token in text[marker + len("trig ") :].split():
-        if "=" not in token:
-            continue
-        key, value = token.split("=", 1)
-        fields[key] = value
-    if "phase" not in fields or "tee" not in fields:
-        return None
-    return fields
 
 
 def is_latched(fields: dict[str, str] | None) -> bool:

@@ -22,13 +22,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 import time
 
 sys.path.insert(0, "src")
 
 from openflight.iwr6843.driver import IWR6843Radar  # noqa: E402
+from openflight.iwr6843.firmware_checks import parse_stats  # noqa: E402
 
 # Recorded baseline for the shipped wide/iq16 profile: a 0.0089% HWA
 # miss rate over a long run. The relocation must not make this materially
@@ -53,17 +53,6 @@ REQUIRED_STAT_FIELDS = ("hwa_frames", "hwa_missed", "iq8_overrun", "iq8_edma_err
 
 # frameCfg <chirpStart> <chirpEnd> <numLoops> <numFrames> <periodicity_ms> ...
 _FRAME_CFG_PERIOD_INDEX = 5
-
-
-def parse_stats(text: str) -> dict[str, int]:
-    """Pull the integer counters out of a firmware `stats` response.
-
-    `stats` also emits a couple of compound fields (`format=iq8`,
-    `plan=24pre/0post`, `used=100/200`) that this regex partially matches
-    on their leading digits; those partial matches are harmless because
-    none of the pass/fail checks below reads them.
-    """
-    return {key: int(value) for key, value in re.findall(r"(\w+)=(\d+)", text)}
 
 
 def rearm_summary(stats: dict[str, int], period_s: float) -> str | None:
