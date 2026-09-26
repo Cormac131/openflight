@@ -94,6 +94,44 @@ In debug mode, verify that the session contains an `iwr6843_capture` entry, a
 `temperature_report` object, and a `capture_path` pointing to the saved
 `.l3dump` file.
 
+## Firmware Feature Check
+
+After flashing a firmware image, or after any firmware change, run the CLI
+test suite. Stop the kiosk first; the suite owns the TI UART.
+
+```bash
+uv run python scripts/hardware-test/test_iwr_firmware.py
+```
+
+It exercises every command the firmware registers on its CLI and prints one
+`PASS`, `FAIL`, or `SKIP` line per check, grouped into sections:
+
+| Section | What it proves | Hands-off? |
+|---|---|---|
+| `lifecycle` | `sensorStart`/`sensorStop`/`stats` behave; config commands are refused while active; a restart resets counters | yes |
+| `profiles` | `captureCfg`, `phaseCaptureCfg`, `captureFormat`, `iq8Scale` validate their arguments; every shipped `config/iwr6843_*.cfg` loads with the declared format and stride | yes |
+| `readback` | `l3dump`, `l3sparse` (limit, oversized, late request), `trackCfg`, and `l3track` stream and rearm | yes |
+| `trigger` | a fresh session is untriggered, `triggerCfg` arms and disarms, the detector goes live only once the pre-trigger ring is full, `debugCfg` streams parsable change-only lines, the floor measurement works, and reconfiguring clears a previous arm | yes |
+| `trigger-swing` | with `--swing`: a ball on the tee reaches `watching`, a swing fires `Triggered` (the notice must survive a `stats` reply), the frozen ring reads back in under 1.0 s, the host detector replay agrees, the ring rearms, and a latched session is cleared by reconfigure | no, prompts you |
+| `solve` | always `SKIP`: the on-chip DSS solve is in the image but the MSS exposes no CLI entry point for it yet | yes |
+
+Run only one section, or add the prompted swing checks:
+
+```bash
+uv run python scripts/hardware-test/test_iwr_firmware.py --only trigger
+uv run python scripts/hardware-test/test_iwr_firmware.py --swing --tee-m 1.575 --shots 2
+```
+
+`--list` prints every check without opening a port. `--json path` writes the
+results for a report. The suite exits 1 on any `FAIL`; `SKIP` lines (older
+firmware, `--swing` not given, the solve placeholder) never fail the run.
+
+The check logic is unit-tested without hardware in
+`tests/test_iwr6843_firmware_checks.py` against a scripted serial port, and a
+test pins the suite's command list to the CLI table in
+`firmware/iwr6843/l3_dump.c`, so a new firmware command without a check fails
+CI.
+
 ## Cadence Acceptance Soak
 
 This is the acceptance gate for any change to the capture-path DMA/CPU memory
