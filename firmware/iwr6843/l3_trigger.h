@@ -62,6 +62,7 @@
 #define L3_TRIG_DEFAULT_GATE_BINS     3U    /* ~0.14 m either side of it */
 #define L3_TRIG_DEFAULT_MIN_COHERENCE 0.0F  /* off until measured */
 #define L3_TRIG_DEFAULT_MIN_STEP_BINS 1.0F  /* ~15 m/s radial at 3 ms */
+#define L3_TRIG_DEFAULT_MIN_SPEED_MPS 0.0F  /* Doppler gate off until measured */
 #define L3_TRIG_DEFAULT_STAT          L3_TRIG_STAT_PEAK
 
 /* Which per-bin statistic the floor and the candidate threshold use. A fast
@@ -88,6 +89,7 @@ enum {
     L3_TRIG_WHY_MISSED,         /* no candidate; track kept for now */
     L3_TRIG_WHY_LOST,           /* no candidate too many times; track dropped */
     L3_TRIG_WHY_LOW_COHERENCE,  /* strongest bin above floor but not coherent */
+    L3_TRIG_WHY_LOW_DOPPLER,    /* strongest bin above floor but too slow in Doppler */
     L3_TRIG_WHY_TOO_YOUNG,      /* in the gate before trackFrames observations */
     L3_TRIG_WHY_TOO_SLOW,       /* in the gate but approaching under minStep */
     L3_TRIG_WHY_FIRED,
@@ -104,6 +106,7 @@ enum {
     L3_TRIG_COUNT_MISSED,
     L3_TRIG_COUNT_LOST,
     L3_TRIG_COUNT_LOW_COHERENCE,
+    L3_TRIG_COUNT_LOW_DOPPLER,
     L3_TRIG_COUNT_TOO_YOUNG,
     L3_TRIG_COUNT_TOO_SLOW,
     L3_TRIG_COUNT_FIRED,
@@ -119,6 +122,12 @@ typedef struct {
     float    minCoherence;  /* 0..1; 0 disables the Doppler coherence test */
     float    minStepBins;   /* minimum mean approach rate, bins per frame */
     uint32_t stat;          /* L3_TRIG_STAT_ENERGY or L3_TRIG_STAT_PEAK */
+    /* Minimum apparent Doppler speed of a candidate, m/s; 0 disables. A body
+     * in the lane moves under 1 m/s and reads as such; a clubhead aliases
+     * across the +/- lambda/(4T) span and reads as |v| uniformly over it, so
+     * a gate of v rejects a club frame with probability v / span (~1.5/9),
+     * which one bridged miss mostly absorbs. */
+    float    minSpeedMps;
 } l3_trig_cfg_t;
 
 /* One range bin of one frame, summed over the vertical TX pair and all RX:

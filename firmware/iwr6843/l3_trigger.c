@@ -13,7 +13,7 @@ static void l3_trig_dropTrack(l3_trig_t *trig);
 
 static const char *const kWhyNames[L3_TRIG_WHY_COUNT] = {
     "quiet", "acquired", "advanced", "jumped", "missed", "lost",
-    "lowcoh", "young", "slow", "fired"
+    "lowcoh", "slowdop", "young", "slow", "fired"
 };
 
 static const char *const kStateNames[3] = { "idle", "tracking", "fired" };
@@ -27,6 +27,7 @@ static const int8_t kWhyCounter[L3_TRIG_WHY_COUNT] = {
     (int8_t)L3_TRIG_COUNT_MISSED,
     (int8_t)L3_TRIG_COUNT_LOST,
     (int8_t)L3_TRIG_COUNT_LOW_COHERENCE,
+    (int8_t)L3_TRIG_COUNT_LOW_DOPPLER,
     (int8_t)L3_TRIG_COUNT_TOO_YOUNG,
     (int8_t)L3_TRIG_COUNT_TOO_SLOW,
     (int8_t)L3_TRIG_COUNT_FIRED
@@ -40,6 +41,7 @@ void l3_trig_cfg_defaults(l3_trig_cfg_t *cfg)
     cfg->minCoherence = L3_TRIG_DEFAULT_MIN_COHERENCE;
     cfg->minStepBins = L3_TRIG_DEFAULT_MIN_STEP_BINS;
     cfg->stat = L3_TRIG_DEFAULT_STAT;
+    cfg->minSpeedMps = L3_TRIG_DEFAULT_MIN_SPEED_MPS;
 }
 
 int32_t l3_trig_cfg_check(const l3_trig_cfg_t *cfg)
@@ -65,7 +67,22 @@ int32_t l3_trig_cfg_check(const l3_trig_cfg_t *cfg)
     if (cfg->stat > L3_TRIG_STAT_PEAK) {
         return -1;
     }
+    if (!(cfg->minSpeedMps >= 0.0F)) {
+        return -1;
+    }
     return 0;
+}
+
+/* Apparent radial velocity of one observation from its lag-1 phase, m/s;
+ * aliased at +/- wavelength / (4 * loopPeriod). Zero without a loop period.
+ * The sign follows the stored (Im, Re) order and is a readout, not a gate. */
+static float l3_trig_velocity(const l3_trig_t *trig, const l3_trig_obs_t *obs)
+{
+    if (trig->loopPeriodS <= 0.0F || obs->energy <= 0.0F) {
+        return 0.0F;
+    }
+    return atan2f(obs->r1Im, obs->r1Re) * L3_TRIG_WAVELENGTH_M /
+           (4.0F * L3_TRIG_PI * trig->loopPeriodS);
 }
 
 /* The configured detection statistic of one observation. */
@@ -215,13 +232,7 @@ static void l3_trig_record(l3_trig_t *trig, uint32_t frame, uint8_t why,
         if (coherence > 1.0F) {
             coherence = 1.0F;
         }
-        if (trig->loopPeriodS > 0.0F) {
-            /* Doppler phase per loop -> radial velocity, aliased at
-             * +/- wavelength / (4 * loopPeriod). Sign convention follows
-             * the stored (Im, Re) order and is a readout, not a gate. */
-            velocity = atan2f(obs->r1Im, obs->r1Re) * L3_TRIG_WAVELENGTH_M /
-                       (4.0F * L3_TRIG_PI * trig->loopPeriodS);
-        }
+        velocity = l3_trig_velocity(trig, obs);
     }
     record->frame = frame;
     record->gap = (trig->quietSince > 0xFFFFU) ? 0xFFFFU : (uint16_t)trig->quietSince;
@@ -345,6 +356,16 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t firstBin,
             if (magnitude < cfg->minCoherence * best->energy) {
                 haveCandidate = 0U;
                 why = L3_TRIG_WHY_LOW_COHERENCE;
+            }
+        }
+        if (haveCandidate && cfg->minSpeedMps > 0.0F && trig->loopPeriodS > 0.0F) {
+            float speed = l3_trig_velocity(trig, best);
+            if (speed < 0.0F) {
+                speed = -speed;
+            }
+            if (speed < cfg->minSpeedMps) {
+                haveCandidate = 0U;
+                why = L3_TRIG_WHY_LOW_DOPPLER;
             }
         }
     }
@@ -508,7 +529,7 @@ int32_t l3_trig_format_summary(const l3_trig_t *trig, char *out, uint32_t cap)
     l3_trig_fmtFixed(trig->floor, 0U, floorText, sizeof(floorText));
     return snprintf(out, cap,
                     "trig state=%s floor=%s frames=%u cand=%u acq=%u adv=%u "
-                    "jump=%u miss=%u lost=%u lowcoh=%u young=%u slow=%u "
+                    "jump=%u miss=%u lost=%u lowcoh=%u slowdop=%u young=%u slow=%u "
                     "fired=%u records=%u",
                     kStateNames[trig->state], floorText,
                     (unsigned)c[L3_TRIG_COUNT_FRAMES],
@@ -519,6 +540,7 @@ int32_t l3_trig_format_summary(const l3_trig_t *trig, char *out, uint32_t cap)
                     (unsigned)c[L3_TRIG_COUNT_MISSED],
                     (unsigned)c[L3_TRIG_COUNT_LOST],
                     (unsigned)c[L3_TRIG_COUNT_LOW_COHERENCE],
+                    (unsigned)c[L3_TRIG_COUNT_LOW_DOPPLER],
                     (unsigned)c[L3_TRIG_COUNT_TOO_YOUNG],
                     (unsigned)c[L3_TRIG_COUNT_TOO_SLOW],
                     (unsigned)c[L3_TRIG_COUNT_FIRED],
@@ -530,21 +552,23 @@ int32_t l3_trig_format_config(const l3_trig_t *trig, char *out, uint32_t cap)
     char snrText[16];
     char coherenceText[16];
     char stepText[16];
+    char speedText[16];
     char loopText[16];
     const char *statText = (trig->cfg.stat == L3_TRIG_STAT_PEAK) ? "peak" : "energy";
 
+    l3_trig_fmtFixed(trig->cfg.minSpeedMps, 2U, speedText, sizeof(speedText));
     l3_trig_fmtFixed(trig->cfg.snr, 2U, snrText, sizeof(snrText));
     l3_trig_fmtFixed(trig->cfg.minCoherence, 2U, coherenceText, sizeof(coherenceText));
     l3_trig_fmtFixed(trig->cfg.minStepBins, 2U, stepText, sizeof(stepText));
     l3_trig_fmtFixed(trig->loopPeriodS * 1.0e6F, 1U, loopText, sizeof(loopText));
     return snprintf(out, cap,
                     "trigcfg tee=%u snr=%s track=%u approach=%u gate=%u "
-                    "mincoh=%s minstep=%s stat=%s loopus=%s",
+                    "mincoh=%s minstep=%s stat=%s minspeed=%s loopus=%s",
                     (unsigned)trig->cfg.teeBin, snrText,
                     (unsigned)trig->cfg.trackFrames,
                     (unsigned)trig->cfg.approachBins,
                     (unsigned)trig->cfg.gateBins,
-                    coherenceText, stepText, statText, loopText);
+                    coherenceText, stepText, statText, speedText, loopText);
 }
 
 int32_t l3_trig_format_record(const l3_trig_record_t *record, char *out, uint32_t cap)

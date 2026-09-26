@@ -25,7 +25,7 @@ MAX_BINS = 64
 LOG_DEPTH = 128
 TRACE_DEPTH = 64
 TRACE_RATIO = 2.0
-COUNT_TOTAL = 11
+COUNT_TOTAL = 12
 NO_BIN = 0xFF
 STATE_IDLE, STATE_TRACKING, STATE_FIRED = 0, 1, 2
 WHY = {
@@ -39,6 +39,7 @@ WHY = {
             "missed",
             "lost",
             "lowcoh",
+            "slowdop",
             "young",
             "slow",
             "fired",
@@ -48,7 +49,20 @@ WHY = {
 COUNT = {
     name: index
     for index, name in enumerate(
-        ["frames", "cand", "acq", "adv", "jump", "miss", "lost", "lowcoh", "young", "slow", "fired"]
+        [
+            "frames",
+            "cand",
+            "acq",
+            "adv",
+            "jump",
+            "miss",
+            "lost",
+            "lowcoh",
+            "slowdop",
+            "young",
+            "slow",
+            "fired",
+        ]
     )
 }
 WAVELENGTH_M = 0.00484
@@ -77,6 +91,7 @@ class Cfg(ctypes.Structure):
         ("minCoherence", ctypes.c_float),
         ("minStepBins", ctypes.c_float),
         ("stat", ctypes.c_uint32),
+        ("minSpeedMps", ctypes.c_float),
     ]
 
 
@@ -415,6 +430,7 @@ def test_defaults_are_the_documented_ones_and_pass_the_check(lib):
         {"minCoherence": -0.1},
         {"minStepBins": -1.0},
         {"stat": 2},
+        {"minSpeedMps": -1.0},
         {"teeBin": 253, "gateBins": 3},  # record stores bins in a byte, 0xFF = none
     ],
 )
@@ -792,6 +808,42 @@ def test_velocity_beyond_the_unambiguous_span_aliases(lib):
     assert det.records()[0].velocityCms == pytest.approx((12.0 - span) * 100.0, abs=3)
 
 
+def test_doppler_speed_gate_is_off_by_default(lib):
+    det = detector(lib)
+    assert det.feed({12: CLUB}, velocity_mps=0.0) is False
+    assert det.whys() == ["acquired"]
+
+
+def test_doppler_speed_gate_rejects_a_body_and_keeps_a_club(lib):
+    """A person sways at well under 1 m/s; a clubhead aliases to |v| spread over 0..9 m/s."""
+    det = detector(lib, minSpeedMps=1.5)
+    assert det.feed({12: CLUB}, velocity_mps=0.4) is False
+    assert det.whys() == ["slowdop"]
+    assert det.trig.state == STATE_IDLE
+    assert det.records()[0].velocityCms == pytest.approx(40, abs=3)
+    assert det.counter("slowdop") == 1
+    assert det.feed({12: CLUB}, velocity_mps=-3.0) is False
+    assert det.whys()[-1] == "acquired"
+    assert det.feed({15: CLUB}, velocity_mps=12.0) is False, "aliases to about -5.9 m/s: fast"
+    assert det.whys()[-1] == "advanced"
+
+
+def test_doppler_speed_gate_counts_as_a_miss_for_a_live_track(lib):
+    det = detector(lib, minSpeedMps=1.5)
+    det.feed({10: CLUB}, velocity_mps=4.0)
+    det.feed({12: CLUB}, velocity_mps=4.0)
+    assert det.feed({15: CLUB}, velocity_mps=0.2) is False
+    assert det.whys()[-1] == "slowdop"
+    assert det.trig.state == STATE_TRACKING, "one slow frame is bridged like a miss"
+    assert det.feed({18: CLUB}, velocity_mps=4.0) is True
+
+
+def test_doppler_speed_gate_needs_a_loop_period(lib):
+    det = Detector(lib, make_cfg(lib, minSpeedMps=1.5), loop_period_s=0.0)
+    assert det.feed({12: CLUB}, velocity_mps=0.0) is False
+    assert det.whys() == ["acquired"], "no timing, no Doppler: the gate does not apply"
+
+
 def test_no_loop_period_means_no_velocity(lib):
     det = Detector(lib, make_cfg(lib), loop_period_s=0.0)
     det.feed({12: CLUB}, velocity_mps=5.0)
@@ -952,7 +1004,7 @@ def test_config_line_echoes_the_arming_parameters(lib):
     line = det.config_line()
     assert line == (
         "trigcfg tee=20 snr=6.50 track=2 approach=12 gate=3 mincoh=0.00 minstep=1.25 "
-        "stat=peak loopus=135.0"
+        "stat=peak minspeed=0.00 loopus=135.0"
     )
 
 

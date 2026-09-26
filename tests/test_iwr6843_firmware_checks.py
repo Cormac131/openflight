@@ -385,7 +385,50 @@ def test_cleanup_runs_after_a_raising_check(monkeypatch):
 
     assert radar.ser.written[:2] == ["triggerCfg 0 0 0", "debugCfg 0"]
     assert stopped == [True]
-    assert [r.status for r in results] == ["PASS", "PASS", "PASS"]
+    assert [r.status for r in results] == ["PASS", "PASS", "PASS", "PASS"]
+    assert [r.name for r in results][2] == "cleanup/l3release if latched"
+    assert "l3release" not in radar.ser.written, "nothing latched, nothing released"
+
+
+def test_disarm_releases_a_ring_a_fire_left_frozen():
+    """triggerCfg 0 0 0 does not thaw the ring; without l3release every later check wedged."""
+    radar = _trigger_radar(latched=1)
+    fc._disarm(_ctx(radar))  # pylint: disable=protected-access
+    assert radar.ser.written[0] == "triggerCfg 0 0 0"
+    assert "l3release" in radar.ser.written
+
+    quiet = _trigger_radar(latched=0)
+    fc._disarm(_ctx(quiet))  # pylint: disable=protected-access
+    assert "l3release" not in quiet.ser.written
+
+
+def test_cleanup_releases_a_latched_ring_before_stopping(monkeypatch):
+    radar = _trigger_radar(latched=1)
+    order: list[str] = []
+    monkeypatch.setattr(radar, "stop_sensor", lambda: order.append("stop"))
+    monkeypatch.setattr(radar, "release_sparse_freeze", lambda *_a, **_k: order.append("release"))
+
+    results = fc.cleanup(_ctx(radar))
+
+    assert order == ["release", "stop"]
+    assert all(r.status == "PASS" for r in results)
+
+
+def test_floor_measurement_that_fires_prints_the_evidence_and_releases(monkeypatch):
+    check = fc.trigger_section().checks[6]
+
+    def latched(*_a, **_k):
+        raise RuntimeError("background sample latched the trigger")
+
+    monkeypatch.setattr(fc, "measure_trigger_level", latched)
+    radar = _trigger_radar(latched=1)
+    printed: list[str] = []
+    result = check.run(_ctx(radar, out=printed.append))
+
+    assert result.status == "FAIL" and "latched" in result.detail
+    assert any("fired during the floor sample" in line for line in printed)
+    assert "triggerLog trace" in radar.ser.written
+    assert "l3release" in radar.ser.written
 
 
 def test_cleanup_failure_forces_exit_1(monkeypatch):

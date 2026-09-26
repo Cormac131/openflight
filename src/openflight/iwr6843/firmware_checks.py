@@ -238,8 +238,27 @@ def _tee_bin(ctx: Context) -> int:
 
 
 def _disarm(ctx: Context) -> str:
-    """``triggerCfg 0 0 0`` — the one command that always leaves the detector off."""
-    return cli(ctx, SELF_TRIGGER_OFF_COMMAND)
+    """``triggerCfg 0 0 0``, then release the ring if a fire had frozen it.
+
+    Disarming does not thaw a frozen ring: a fire nobody reads back leaves
+    the BSS chirping into a stopped HWA, and ``l3release`` is the command
+    that rearms it. Without this every later check saw a wedged sensor.
+    """
+    reply = cli(ctx, SELF_TRIGGER_OFF_COMMAND)
+    release_if_latched(ctx)
+    return reply
+
+
+def release_if_latched(ctx: Context) -> bool:
+    """``l3release`` when stats show a latched fire; True when one was released."""
+    if stats_snapshot(ctx).latched != 1:
+        return False
+    try:
+        ctx.radar.release_sparse_freeze()
+    except RuntimeError as exc:
+        ctx.out(f"  (could not release the frozen ring: {exc})")
+        return False
+    return True
 
 
 def _plan_frames(snap: StatsSnapshot) -> int:
@@ -258,6 +277,11 @@ def _measure_level(ctx: Context) -> tuple[tuple[float, float] | None, str | None
             ctx.radar, _tee_bin(ctx), ctx.hits, snr=ctx.snr, clock=ctx.clock, pause=ctx.sleep
         )
     except RuntimeError as exc:
+        if "latched" in str(exc):
+            # A fire on an empty lane is the detector accepting something
+            # that is not a club; the log says what, before the disarm
+            # clears it.
+            report_evidence(ctx, "fired during the floor sample")
         _disarm(ctx)
         return None, str(exc)
     return (floor, level), None
@@ -413,6 +437,9 @@ def cleanup(ctx: Context) -> list[CheckResult]:
     steps: tuple[tuple[str, Callable[[], None]], ...] = (
         ("cleanup/triggerCfg off", lambda: cli(ctx, "triggerCfg 0 0 0")),
         ("cleanup/debugCfg off", lambda: cli(ctx, "debugCfg 0")),
+        # A fire left unread keeps the ring frozen; sensorStop on the current
+        # firmware copes, but releasing first works on every image.
+        ("cleanup/l3release if latched", lambda: release_if_latched(ctx)),
         ("cleanup/sensorStop", ctx.radar.stop_sensor),
     )
     results: list[CheckResult] = []
@@ -1281,9 +1308,19 @@ def _swing_checks(shot: int, state: _SwingState) -> tuple[Check, ...]:
 
         def watching() -> bool:
             latest["snap"] = stats_snapshot(ctx)
-            return latest["snap"].phase == "watching"
+            return latest["snap"].phase == "watching" or latest["snap"].latched == 1
 
-        if not wait_until(ctx, watching, ctx.wait_s, poll_s=0.2):
+        settled = wait_until(ctx, watching, ctx.wait_s, poll_s=0.2)
+        if latest["snap"].latched == 1:
+            # Placing the ball fired the trigger: a hand reaching the tee
+            # was taken for a club. Keep the evidence, thaw the ring.
+            report_evidence(ctx, "fired while the ball was being placed")
+            _disarm(ctx)
+            state.armed = False
+            return failed(
+                name, f"fired while the ball was being placed: {_trig_state(latest['snap'])}"
+            )
+        if not settled:
             return failed(name, _trig_state(latest["snap"]))
         state.threshold = (latest["snap"].tee or 0) * ctx.snr
         return passed(

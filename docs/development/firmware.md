@@ -130,17 +130,21 @@ driver) from a player walking up to the ball (a bin every few frames).
 The detector is armed and tuned over the CLI:
 
 ```text
-triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep stat]
-triggerLog
+triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep stat minSpeed]
+triggerLog [trace|clear]
 ```
 
 `snr` is the candidate threshold over the running noise floor (default 6 on
 the host), `frames` the observations a track needs before the gate may fire
 (host default 2; 0 disables the trigger). The optional values default to 12
 approach bins (about 0.56 m short of the tee), a gate half-width of 3 bins,
-no coherence test, one bin per frame of approach, and the strongest-loop
+no coherence test, one bin per frame of approach, the strongest-loop
 statistic (`stat` 1; 0 selects the energy over all loops once the club is
-known to be seen). `triggerLog` prints the detector's state and counters,
+known to be seen), and no Doppler speed gate (`minSpeed` in m/s; a player
+standing in the approach window moves under 1 m/s and reads as such, while
+a clubhead aliases across the ±9 m/s span, so a gate of 1.5 m/s rejects
+body returns at the cost of about one club frame in six, which the bridged
+miss absorbs). `triggerLog` prints the detector's state and counters,
 its configuration, then one line per frame that had a moving return above
 the floor (idle frames only count toward the next line's `gap=`): candidate
 bin, all-loop energy and strongest-loop peak against the floor (in the
@@ -155,7 +159,10 @@ region's strongest bin in a per-bin maximum since arming, and records the
 frame whenever that bin reaches twice the floor (well under any usable
 `snr`), with its all-loop energy, strongest-loop power, loop-0 power and the
 floor. `triggerLog clear` empties the trace and the maxima without touching
-the log or the arm. `test_iwr_firmware.py --swing` prints both the trace and
+the log or the arm. A fire that nobody reads back leaves the ring frozen
+with the front end still chirping; `l3release` thaws it, `sensorStop` now
+copes with it, and the check suite releases it whenever `stats` show
+`latched=1`, after printing the log that explains the fire. `test_iwr_firmware.py --swing` prints both the trace and
 the log when a swing does not fire, or when it is interrupted, before its
 cleanup disarms and clears them. Read the trace against `floor x snr`: flat
 maxima and no entries mean the club was not seen; entries under the

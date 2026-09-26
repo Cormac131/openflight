@@ -3206,24 +3206,25 @@ static int32_t l3_cli_trackCfg(int32_t argc, char *argv[])
 /* Longest triggerCfg waits for the detect task to finish scoring a frame. */
 #define L3_TRIGGER_CFG_WAIT_MS 50U
 
-/* CLI "triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep stat]":
- * arm the approaching-clubhead detector around the tee bin. A candidate
- * needs a residual statistic of at least <snr> times the running noise
- * floor; its track needs <frames> observations before entering the impact
- * gate fires the capture. frames of 0 disables the trigger. The optional
- * values are the bins watched short of the tee, the gate half-width in
- * bins, the minimum Doppler coherence (0..1, 0 = off), the minimum mean
- * approach rate in bins per frame, and the statistic (0 = energy over all
- * loops, 1 = strongest loop). Re-arming clears the log. */
+/* CLI "triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep
+ * stat minSpeed]": arm the approaching-clubhead detector around the tee
+ * bin. A candidate needs a residual statistic of at least <snr> times the
+ * running noise floor; its track needs <frames> observations before
+ * entering the impact gate fires the capture. frames of 0 disables the
+ * trigger. The optional values are the bins watched short of the tee, the
+ * gate half-width in bins, the minimum Doppler coherence (0..1, 0 = off),
+ * the minimum mean approach rate in bins per frame, the statistic (0 =
+ * energy over all loops, 1 = strongest loop) and the minimum apparent
+ * Doppler speed of a candidate in m/s (0 = off). Re-arming clears the log. */
 static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
 {
     l3_trig_cfg_t cfg;
     unsigned long value;
     char *end;
 
-    if (argc < 4 || argc > 9) {
+    if (argc < 4 || argc > 10) {
         CLI_write("Error: triggerCfg <localBin> <snr> <frames> "
-                  "[approach gate minCoh minStep stat]\n");
+                  "[approach gate minCoh minStep stat minSpeed]\n");
         return -1;
     }
     l3_trig_cfg_defaults(&cfg);
@@ -3281,6 +3282,13 @@ static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
             return -1;
         }
         cfg.stat = (uint32_t)value;
+    }
+    if (argc > 9) {
+        cfg.minSpeedMps = strtof(argv[9], &end);
+        if (*end != '\0') {
+            CLI_write("Error: trigger min speed\n");
+            return -1;
+        }
     }
     if (cfg.trackFrames != 0U && l3_trig_cfg_check(&cfg) != 0) {
         CLI_write("Error: trigger config (snr >= 1, gate < approach <= %u)\n",
@@ -3933,7 +3941,13 @@ static int32_t l3_cli_sensorStop(int32_t argc, char *argv[])
     int32_t errCode;
     (void)argc; (void)argv;
 
-    if (gCaptureActive) {
+    if (gSelfTriggerLatched) {
+        /* A self-trigger froze the ring and nobody read it. The freeze
+         * already cleared gCaptureActive, but the BSS is still chirping;
+         * closing over it wedged the CLI ("did not acknowledge sensorStop").
+         * Take the freeze like l3release does, stopping the front end. */
+        status = l3_awaitFrozenRing();
+    } else if (gCaptureActive) {
         status = l3_stopCaptureForShutdown();
     }
     /* MMWave_config is refused while the BSS still holds the last profile
@@ -4182,7 +4196,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[11].cmdHandlerFxn = l3_cli_sparse;
     cliCfg.tableEntry[12].cmd           = "triggerCfg";
     cliCfg.tableEntry[12].helpString    =
-        "triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep stat]";
+        "triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep stat minSpeed]";
     cliCfg.tableEntry[12].cmdHandlerFxn = l3_cli_triggerCfg;
     cliCfg.tableEntry[13].cmd           = "l3track";
     cliCfg.tableEntry[13].helpString    = "Freeze, pick ball and club cells on-chip, send them";
