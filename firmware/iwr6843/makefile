@@ -74,7 +74,14 @@ SOURCES    = l3_dump.c track_select.c detect_queue.c capture_plan.c
 DEPENDS    = $(addprefix $(PLATFORM_OBJDIR)/, $(SOURCES:.c=.$(R4F_DEP_EXT)))
 OBJECTS    = $(addprefix $(PLATFORM_OBJDIR)/, $(SOURCES:.c=.$(R4F_OBJ_EXT)))
 
-.PHONY: all bin clean cleanApp help appRTSC
+# --- DSS (C674x) image, built by firmware/iwr6843/dss/makefile ---------------
+# Task 2 of the on-chip solve plan: a minimal DSS image that boots alongside
+# this MSS image, to prove the three-image meta-image build/link plumbing
+# before any solve code is ported onto the DSP.
+DSS_DIR = dss
+DSS_OUT = $(DSS_DIR)/l3_dump_dss.$(C674_EXE_EXT)
+
+.PHONY: all bin dssAll clean cleanApp help appRTSC
 
 # --- SYS/BIOS (RTSC) configuration -------------------------------------------
 appRTSC:
@@ -93,30 +100,41 @@ all: buildDirectories appRTSC $(OBJECTS)
 	@echo 'Built $(OUT)'
 	@echo '******************************************************************'
 
-# --- flashable meta-image (MSS executable + radarss BSS firmware) ------------
-# Same generator + arg order as the mmw demo `all` target, minus the DSS image
-# (we are MSS-only). VERIFY: generateMetaImage.sh must accept a 4-arg (no-DSS)
-# invocation; if it insists on a DSS image we pass a null/empty placeholder.
-bin: all
-	$(GENERATE_METAIMAGE) $(BIN) $(SHMEM_ALLOC) $(OUT) $(XWR68XX_RADARSS_IMAGE_BIN)
+# --- link the DSS executable (delegates to dss/makefile) ---------------------
+dssAll:
+	$(MAKE) -C $(DSS_DIR) all
+
+# --- flashable meta-image (MSS executable + DSS executable + radarss BSS ----
+# firmware). generateMetaImage.sh's documented argument order is:
+#   <FLASHIMAGE> <SHMEM_ALLOC> <MSS_IMAGE_OUT> <BSS_IMAGE_BIN> <DSS_IMAGE_OUT>
+# (scripts/unix/generateMetaImage.sh, header comment) -- each *_OUT/_BIN slot
+# takes the keyword NULL if that core is not present. We previously omitted
+# the trailing DSS_IMAGE_OUT arg entirely (rather than passing NULL) because
+# we had no DSS image; now that dssAll produces one, it is appended as the
+# 5th argument.
+bin: all dssAll
+	$(GENERATE_METAIMAGE) $(BIN) $(SHMEM_ALLOC) $(OUT) $(XWR68XX_RADARSS_IMAGE_BIN) $(DSS_OUT)
 	@echo 'Built flashable $(BIN)'
 
 clean:
 	@$(DEL) $(OBJECTS) $(DEPENDS) $(MAP) $(OUT) $(BIN)
 	@$(DEL) $(CONFIGPKG)
 	@$(DEL) $(PLATFORM_OBJDIR)
+	@$(MAKE) -C $(DSS_DIR) clean
 
 # Same-geometry firmware iterations can reuse the generated RTSC/SYS/BIOS
 # package. Variant switches must continue to use the full `clean` target.
 cleanApp:
 	@$(DEL) $(OBJECTS) $(DEPENDS) $(MAP) $(OUT) $(BIN)
 	@$(DEL) $(PLATFORM_OBJDIR)
+	@$(MAKE) -C $(DSS_DIR) cleanApp
 
 help:
 	@echo '****************************************************************'
 	@echo '* OpenFlight L3-dump firmware targets'
-	@echo 'all   -> build the MSS executable (l3_dump_mss.xer4f)'
-	@echo 'bin   -> build the flashable meta-image (l3_dump.bin)'
+	@echo 'all      -> build the MSS executable (l3_dump_mss.xer4f)'
+	@echo 'dssAll   -> build the DSS executable (dss/l3_dump_dss.xe674)'
+	@echo 'bin      -> build the flashable meta-image (l3_dump.bin): MSS+DSS+radarss'
 	@echo 'clean -> remove build artifacts'
 	@echo 'cleanApp -> remove app objects but retain generated RTSC packages'
 	@echo '****************************************************************'

@@ -2,6 +2,9 @@ INSTALLER_DIR ?= ti_installers
 TI_ROOT ?= /opt/ti
 MMWAVE_SDK_INSTALL_PATH ?= $(TI_ROOT)/sdk/mmwave_sdk_03_06_02_00-LTS/packages
 R4F_CODEGEN_INSTALL_PATH ?= $(TI_ROOT)/cgt-arm/ti-cgt-arm_20.2.7.LTS
+# C6000 (C674x/DSS) codegen, installed alongside the mmWave SDK rather than
+# as its own top-level installer -- see openflight-iwr-sdk's Dockerfile.
+C674_CODEGEN_INSTALL_PATH ?= $(TI_ROOT)/sdk/ti-cgt-c6000_8.3.3
 XDC_INSTALL_PATH ?= $(TI_ROOT)/xdc/xdctools_3_61_00_16_core
 BIOS_INSTALL_PATH ?= $(TI_ROOT)/bios/bios_6_73_01_01/packages
 SYSCONFIG_INSTALL_PATH ?= $(TI_ROOT)/sysconfig
@@ -23,6 +26,7 @@ BUILD_ENV := \
 	DOWNLOAD_FROM_CCS=yes \
 	MMWAVE_SDK_INSTALL_PATH=$(MMWAVE_SDK_INSTALL_PATH) \
 	R4F_CODEGEN_INSTALL_PATH=$(R4F_CODEGEN_INSTALL_PATH) \
+	C674_CODEGEN_INSTALL_PATH=$(C674_CODEGEN_INSTALL_PATH) \
 	XDC_INSTALL_PATH=$(XDC_INSTALL_PATH) \
 	BIOS_INSTALL_PATH=$(BIOS_INSTALL_PATH) \
 	XWR68XX_RADARSS_IMAGE_BIN=$(XWR68XX_RADARSS_IMAGE_BIN)
@@ -128,7 +132,7 @@ check-tools:
 	for dir in "$(MMWAVE_SDK_INSTALL_PATH)" "$(BIOS_INSTALL_PATH)"; do \
 		if [ ! -d "$$dir" ]; then echo "ERROR: missing directory $$dir"; fail=1; fi; \
 	done; \
-	for exe in "$(R4F_CODEGEN_INSTALL_PATH)/bin/armcl" "$(XDC_INSTALL_PATH)/xdc"; do \
+	for exe in "$(R4F_CODEGEN_INSTALL_PATH)/bin/armcl" "$(C674_CODEGEN_INSTALL_PATH)/bin/cl6x" "$(XDC_INSTALL_PATH)/xdc"; do \
 		if [ ! -x "$$exe" ]; then echo "ERROR: missing executable $$exe"; fail=1; fi; \
 	done; \
 	if [ ! -f "$(XWR68XX_RADARSS_IMAGE_BIN)" ]; then \
