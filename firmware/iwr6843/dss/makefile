@@ -21,24 +21,39 @@ include $(MMWAVE_SDK_INSTALL_PATH)/ti/common/mmwave_sdk.mak
 
 APPNAME = l3_dump_dss
 
-# Sources live alongside this makefile.
-vpath %.c .
+# Sources live alongside this makefile, plus the solve stages one level up
+# in ../solve (firmware/iwr6843/solve/ -- shared with the host-compiler
+# equivalence tests under tests/).
+vpath %.c . ../solve
 
 ###################################################################################
 # Libraries. C674_COMMON_STD_LIB already provides osal+soc. Milestone 1 does
 # not yet talk over the mailbox (Task_sleep only) or trip ESM, so neither of
 # those libraries is linked yet -- Task 6 adds libmailbox_$(MMWAVE_SDK_DEVICE_TYPE)
 # when dss_solveTask becomes a real mailbox listener.
+#
+# Task 4 adds DSPLIB_C674x: the on-chip solve uses TI's C674x FFT
+# (DSPF_sp_fftSPxSP) rather than a hand-rolled one, per the plan. The mmWave
+# SDK's own mmwave_sdk.mak has no DSPLIB variables (it is not one of the
+# libraries an mmWave application normally needs), so the install path
+# defaults here the same way the other TI tool paths default in
+# ../../Makefile (TI_ROOT-relative, overridable). setenv.sh calls the same
+# location C674x_DSPLIB_INSTALL_PATH; that name is kept here for anyone
+# grepping from that script to this makefile.
 ###################################################################################
-DSS_STD_LIBS = $(C674_COMMON_STD_LIB)
-DSS_LOC_LIBS = $(C674_COMMON_LOC_LIB)
+TI_ROOT ?= /opt/ti
+C674x_DSPLIB_INSTALL_PATH ?= $(TI_ROOT)/sdk/dsplib_c674x_3_4_0_0
+DSPLIB_PACKAGES = $(C674x_DSPLIB_INSTALL_PATH)/packages
+
+DSS_STD_LIBS = $(C674_COMMON_STD_LIB) -ldsplib.$(C674_LIB_EXT)
+DSS_LOC_LIBS = $(C674_COMMON_LOC_LIB) -i$(DSPLIB_PACKAGES)/ti/dsplib/lib
 
 CFG        = dss.cfg
 CONFIGPKG  = dss_configPkg_$(MMWAVE_SDK_DEVICE_TYPE)
 MAP        = $(APPNAME).map
 OUT        = $(APPNAME).$(C674_EXE_EXT)
 APP_CMD    = dss_linker.cmd
-SOURCES    = dss_main.c
+SOURCES    = dss_main.c solve_fft.c
 DEPENDS    = $(addprefix $(PLATFORM_OBJDIR)/, $(SOURCES:.c=.$(C674_DEP_EXT)))
 OBJECTS    = $(addprefix $(PLATFORM_OBJDIR)/, $(SOURCES:.c=.$(C674_OBJ_EXT)))
 
@@ -53,6 +68,11 @@ appRTSC:
 # --- link the DSS executable --------------------------------------------------
 all: BUILD_CONFIGPKG=$(CONFIGPKG)
 all: C674_CFLAGS += --cmd_file=$(BUILD_CONFIGPKG)/compiler.opt
+# SOLVE_USE_DSPLIB selects solve_fft.c's DSPLIB path over its portable
+# host-testable reference path (see the seam explained in solve_fft.c) --
+# only defined for this DSS/C674x build, never for the host compiler that
+# builds tests/test_iwr6843_solve_fft.py.
+all: C674_CFLAGS += --define=SOLVE_USE_DSPLIB -i$(DSPLIB_PACKAGES)
 all: buildDirectories appRTSC $(OBJECTS)
 	$(C674_LD) $(C674_LDFLAGS) $(DSS_LOC_LIBS) $(DSS_STD_LIBS)              \
 	-l$(CONFIGPKG)/linker.cmd --map_file=$(MAP) $(OBJECTS)                  \

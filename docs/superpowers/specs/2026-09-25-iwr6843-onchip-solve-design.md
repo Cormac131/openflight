@@ -103,6 +103,103 @@ across 2,700 lines.
    demands enough L3 to undercut the movie extension, re-scope to the hybrid
    option (on-chip numerics, host decision logic) before porting further.
 
+### Phase 0 Findings (Task 4: Compute Probe)
+
+**What this task did.** Ported the window+FFT primitive behind
+`lcmf.py:502` (`_prepared_fft`) and `lcmf.py:547` (`_fast_design`) -- both
+apply `np.hanning` then `np.fft.fft(..., n=n_fft, axis=-1)` -- to
+`firmware/iwr6843/solve/solve_fft.{c,h}`. Wired it into the DSS build
+(`firmware/iwr6843/dss/makefile`), which now also links TI's DSPLIB
+(`dsplib.ae674`) and defines `SOLVE_USE_DSPLIB` for that build only.
+
+**The seam.** `solve_fft.c` splits into a portable part (windowing,
+zero-padding, per-row iteration -- pure C99, host-buildable) and a raw
+N-point complex DFT behind `solve_fft_transform()`, selected at compile
+time by the `SOLVE_USE_DSPLIB` macro: a double-precision reference
+Cooley-Tukey radix-2 DFT when undefined (every host build, including the
+pytest harness), or TI's `DSPF_sp_fftSPxSP` when defined (the DSS build
+only). This exists because DSPLIB is C674x/cl6x-only and the harness
+builds solve sources with the host compiler for ctypes -- a `solve_fft.c`
+that called DSPLIB directly would have no host build and no equivalence
+test at all.
+
+**What is verified and what is not.** `tests/test_iwr6843_solve_fft.py`
+compiles `solve_fft.c` with the host compiler and checks the windowing +
+zero-pad + reference DFT against `np.fft.fft` to 1e-5 relative-to-peak on
+the magnitude spectrum (see that test file for why relative-to-peak rather
+than strict per-bin relative). That test exercises ONLY the portable
+reference path. `solve_fft_transform_dsplib()` -- the actual DSPLIB call
+that will run on the DSS -- is exercised by nothing in this repository. It
+is unverified until it runs against a known input on the C674x and is
+checked against the Python reference there. A green host test run is
+evidence the port's algorithm (window, pad, per-row iteration) is correct;
+it is not evidence the DSPLIB FFT call is correct.
+
+**On-chip measurement: PARKED, not run.** Step 4 of the Task 4 brief (add a
+temporary `l3fft` CLI command, flash it, and measure elapsed microseconds
+on real silicon) requires hardware access this session did not have. No
+timing number is recorded here, and none should be inferred from the build
+succeeding -- a working build says the code compiles and links, not that it
+runs correctly or how fast. Consequently **the Phase 0 gate in this section
+cannot yet be evaluated**: whether this stage (or the full solve) fits the
+1 s budget remains open. This is the first thing to do with bench access
+before porting `tracking`, `lcmf`, `late_window`, or `club` (Tasks 5-8).
+
+**DSS build: compiles and links for the C674x.** Verified via
+`MSYS_NO_PATHCONV=1 docker run ... make -C firmware build-native` (the
+container's `openflight-iwr-sdk:latest` image already had `DSPLIB_C674x`
+installed from an earlier task). Both `l3_dump_mss.xer4f` (MSS) and
+`l3_dump_dss.xe674` (DSS, now including `solve_fft.oe674`) built and linked
+cleanly against `dsplib.ae674`, and the three-image meta-image
+(`l3_dump.bin`) still assembles. `solve_fft.c` also compiles clean under
+the host build's `-std=c99 -O2 -Wall -Wextra -Werror` used by the pytest
+harness. The portable reference path was additionally spot-checked outside
+pytest (no host compiler exists on this Windows box) by compiling and
+running two small C drivers with the container's `gcc` against vectors
+computed by the Python reference: an 8-row, 128-sample, 512-point case
+matched `np.fft.fft` to a worst relative-to-peak delta of ~5.1e-8, and a
+2-row, 5-sample, 8-point case matched to ~7.5e-8 absolute -- both far
+inside the 1e-5 tolerance the pytest suite enforces (that suite itself
+skips cleanly on this host and will run for real in CI, which has a host
+compiler).
+
+**MSS image: unchanged.** `firmware/iwr6843/l3_dump_mss.map` (gitignored
+build output) still shows the Task-2 invariant rows exactly:
+`L3_RAM` used/unused `000c0000`/`00000000` and `DATA_RAM` used/unused
+`0002ae2d`/`000051d3`. Expected, since this task touched only the DSS side
+(`firmware/iwr6843/dss/makefile` and the new `../solve/solve_fft.c`) --
+recorded here as confirmation, not because the change plausibly could have
+moved it. (Per the Task 4 instructions, the printed "Binary CRC32" is
+deliberately NOT used as the invariant: it covers the whole three-image
+flash blob and legitimately differs run to run.)
+
+**DSS L3/L2: still no resident L3 buffer; the Task 2 split holds.** The DSS
+map's `L3SRAM` row reads used/unused `00000000`/`000c0000` -- no section
+placed in L3, unchanged from Task 2/3. Adding `solve_fft.c` grew L2 SRAM
+usage as expected but nowhere near the budget: `L2SRAM_UMAP0` used
+`0x00014cb8` (~83.9 KiB) of `0x00020000` (128 KiB, `0x8000`/32 KiB of which
+is the `.cacheReserve` carve-out from Task 2 -- so ~83.9 KiB of the
+remaining ~96 KiB SRAM), and `L2SRAM_UMAP1` used `0x0000e000` (~56 KiB) of
+its own `0x00020000`. The Task 2 32 KB-cache/rest-SRAM split (`dss.cfg`,
+`dss_linker.cmd`) is unchanged and remains adequate for this stage; nothing
+here required moving it.
+
+**An open item for Task 5+, found while checking the above (not fixed in
+this task, since the DSPLIB path is not yet called from anywhere):**
+`dss_main.c`'s `dss_solveTask` is created with a 4 KiB stack
+(`taskParams.stackSize = 4 * 1024`, set in Task 2 before any solve stage
+existed). `solve_fft_apply`'s per-row locals alone are two
+`double[SOLVE_FFT_MAX_N]` arrays (8 KiB), and `solve_fft_transform_dsplib`
+nests three more `float[2*SOLVE_FFT_MAX_N]` arrays (12 KiB) on top of that
+when it is called -- comfortably more than 4 KiB before counting anything
+else on the call stack. This is inert today because nothing in `dss_main.c`
+calls into `solve_fft_apply` yet (Task 4 ported and build-wired the stage;
+wiring it into the mailbox dispatch is Task 6's job per the recipe). It
+will not stay inert once a solve stage is actually invoked from a BIOS
+task: `dss_solveTask`'s stack size needs raising (or these buffers need to
+move off the call stack) before then, and should be checked again once the
+`l3fft` measurement step actually runs.
+
 **Phase 1 - Infrastructure**
 
 4. DSS build: RTSC config, linker command file, three-image meta-image.
