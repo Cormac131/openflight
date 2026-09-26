@@ -24,7 +24,7 @@ from openflight.iwr6843.self_trigger import (
     tee_power_from_stats,
 )
 from openflight.iwr6843.sparse import OnboardTrack, SlicePlanner
-from openflight.iwr6843.tracking import RANGE_SPAN_M
+from openflight.iwr6843.tracking import RANGE_SPAN_M, same_tx_loop_period_s
 
 logger = logging.getLogger(__name__)
 
@@ -41,24 +41,42 @@ class CaptureConfigSummary:
     chirp_tx_masks: tuple[str, ...]
     first_window_start: int | None
     first_window_bins: int | None
+    chirp_period_s: float | None = None
+
+    @property
+    def n_tx(self) -> int:
+        """Transmitters the chirp sequence enables, one chirp each per loop."""
+        return len(set(self.chirp_tx_masks))
+
+    @property
+    def loop_period_s(self) -> float | None:
+        """Same-TX chirp interval, or None when the cfg has no profile or chirps."""
+        if self.chirp_period_s is None or not self.n_tx:
+            return None
+        return same_tx_loop_period_s(self.n_tx, self.chirp_period_s)
 
 
 def read_capture_config(config_path: str | Path) -> CaptureConfigSummary:
-    """Parse chirp TX masks and the first saved range window from a cfg."""
+    """Parse chirp TX masks, chirp period and the first saved range window."""
     masks: list[str] = []
     window: tuple[int, int] | None = None
+    chirp_period_s: float | None = None
     with Path(config_path).open(encoding="utf-8") as handle:
         for raw_line in handle:
             line = raw_line.strip()
+            fields = line.split()
             if line.startswith("chirpCfg"):
-                masks.append(line.rsplit(maxsplit=1)[-1])
+                masks.append(fields[-1])
+            elif line.startswith("profileCfg"):
+                # idleTime + rampEndTime, both in microseconds.
+                chirp_period_s = (float(fields[3]) + float(fields[5])) * 1e-6
             elif line.startswith("phaseCaptureCfg") and window is None:
-                fields = line.split()
                 window = (int(fields[1]), int(fields[2]))
     return CaptureConfigSummary(
         chirp_tx_masks=tuple(masks),
         first_window_start=window[0] if window else None,
         first_window_bins=window[1] if window else None,
+        chirp_period_s=chirp_period_s,
     )
 
 

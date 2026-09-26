@@ -26,6 +26,7 @@ from openflight.iwr6843.tracking import (
     detection_peaks,
     find_ball_from_power,
     mti_filter,
+    same_tx_loop_period_s,
 )
 
 POWER_MAGIC = b"ILP1"
@@ -247,6 +248,7 @@ def _parse_layout(raw: bytes, magic: bytes, label: str) -> tuple[CaptureLayout, 
         n_samples=bins,
         frame_period_s=period_us / 1e6 if period_us else 0.003,
         trigger_frame=0,
+        loop_period_s=same_tx_loop_period_s(n_tx),
         range_bin_start=bin_start,
         range_fft_size=RANGE_FFT_SIZE,
         range_bin_starts=None if uniform else tuple(starts),

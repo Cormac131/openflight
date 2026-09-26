@@ -13,6 +13,7 @@ import inspect
 import shutil
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -579,7 +580,7 @@ def test_runtime_planner_and_firmware_use_the_same_limits(lib):
         lib, summary, max_range_m=max_range, club_gate_m=(club_lo, club_hi)
     )
 
-    assert cells == set(runtime.plan_sparse_cells(summary))
+    assert cells == set(runtime.plan_sparse_cells(summary).cells)
 
 
 # --- end to end: firmware stream -> driver -> the same dump ------------------
@@ -662,3 +663,116 @@ def test_firmware_cells_rebuild_the_dump_the_host_planner_would(lib):
     assert ball.speed_ms == pytest.approx(45.0, rel=0.02)
     _meta, rebuilt = parse_dump(raw)
     assert np.count_nonzero(np.any(rebuilt != 0, axis=(1, 2))) == len(planned)
+
+
+# --- loop timing comes from the physical chirp sequence ----------------------
+
+_THREE_TX_CFG = (
+    "profileCfg 0 60.0 7 3 38 0 0 100 1 128 4000 0 0 30",
+    "chirpCfg 0 0 0 0 0 0 0 1",
+    "chirpCfg 1 1 0 0 0 0 0 2",
+    "chirpCfg 2 2 0 0 0 0 0 4",
+    "frameCfg 0 2 12 0 3 1 0",
+)
+
+
+def _cfg(tmp_path, lines) -> Path:
+    path = tmp_path / "radar.cfg"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _monitored_runtime(config_path) -> IWR6843Runtime:
+    calibration = Calibration.identity()
+    calibration.tee_range_m = 1.4
+    return IWR6843Runtime(
+        capture_monitor=SimpleNamespace(config_path=Path(config_path)),
+        calibration=calibration,
+        net_range_m=4.064,
+        flight_mode="net",
+    )
+
+
+def test_same_tx_loop_period_is_one_chirp_per_transmitter():
+    assert tracking.same_tx_loop_period_s(2) == pytest.approx(90e-6)
+    assert tracking.same_tx_loop_period_s(3) == pytest.approx(135e-6)
+    assert tracking.same_tx_loop_period_s(3, chirp_period_s=50e-6) == pytest.approx(150e-6)
+    with pytest.raises(ValueError):
+        tracking.same_tx_loop_period_s(0)
+
+
+def test_capture_config_reads_the_physical_loop_period(tmp_path):
+    from openflight.iwr6843.monitor import read_capture_config
+
+    summary = read_capture_config(_cfg(tmp_path, _THREE_TX_CFG))
+
+    assert summary.n_tx == 3
+    assert summary.chirp_period_s == pytest.approx(45e-6)
+    assert summary.loop_period_s == pytest.approx(135e-6)
+
+
+def test_capture_config_without_a_profile_has_no_loop_period(tmp_path):
+    from openflight.iwr6843.monitor import read_capture_config
+
+    summary = read_capture_config(_cfg(tmp_path, _THREE_TX_CFG[1:]))
+
+    assert summary.loop_period_s is None
+
+
+def test_track_config_uses_the_three_tx_loop_period(tmp_path):
+    runtime = _monitored_runtime(_cfg(tmp_path, _THREE_TX_CFG))
+
+    loop_s = _track_cfg_fields(runtime.track_config_command())[0]
+
+    assert loop_s == pytest.approx(135e-6)
+
+
+def test_track_config_follows_a_two_tx_profile(tmp_path):
+    lines = (_THREE_TX_CFG[0], _THREE_TX_CFG[1], "chirpCfg 1 1 0 0 0 0 0 4")
+    runtime = _monitored_runtime(_cfg(tmp_path, lines))
+
+    assert _track_cfg_fields(runtime.track_config_command())[0] == pytest.approx(90e-6)
+
+
+def test_every_shipped_profile_sends_its_own_loop_period():
+    """The default and dense profiles are all 3-TX: 90 us would mistime every row."""
+    configs = sorted(Path("config").glob("iwr6843_l3dump_*.cfg"))
+    assert configs
+    for config in configs:
+        from openflight.iwr6843.monitor import read_capture_config
+
+        expected = read_capture_config(config).loop_period_s
+        sent = _track_cfg_fields(_monitored_runtime(config).track_config_command())[0]
+        assert expected == pytest.approx(135e-6), config.name
+        assert sent == pytest.approx(expected), config.name
+
+
+def test_layout_header_times_loops_by_its_physical_transmitters():
+    """ILP1/ILT1 carry chirps-per-loop; the host planner must time rows the same way."""
+    for n_tx, loop_s in ((2, 90e-6), (3, 135e-6)):
+        geometry = Geometry(2, 24, 2, 4, 8, 0.003, 0, range_fft_size=sparse.RANGE_FFT_SIZE)
+        summary = PowerSummary(
+            n_tx=n_tx,
+            n_rx=4,
+            n_loops=12,
+            geometry=geometry,
+            power=np.zeros((24, 8), dtype=np.float32),
+        )
+
+        parsed = sparse.parse_power(summary.to_bytes())
+
+        assert parsed.geometry.loop_period_s == pytest.approx(loop_s)
+
+
+def test_planner_and_firmware_agree_on_three_tx_row_timing(tmp_path):
+    """trackCfg's loop period must equal the one the host planner reads off the header."""
+    runtime = _monitored_runtime(_cfg(tmp_path, _THREE_TX_CFG))
+    geometry = Geometry(2, 24, 2, 4, 8, 0.003, 0, range_fft_size=sparse.RANGE_FFT_SIZE)
+    layout = PowerSummary(
+        n_tx=3, n_rx=4, n_loops=12, geometry=geometry, power=np.zeros((24, 8), np.float32)
+    )
+
+    parsed = sparse.parse_power(layout.to_bytes())
+    sent = _track_cfg_fields(runtime.track_config_command())[0]
+
+    assert sent == pytest.approx(parsed.geometry.loop_period_s)

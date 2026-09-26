@@ -19,6 +19,7 @@ from dataclasses import dataclass
 import numpy as np
 
 LOOP_PRI_S = 90e-6  # TX1-to-next-TX1 loop period for the 2TX config
+CHIRP_PERIOD_S = 45e-6  # profileCfg idle 7 us + ramp end 38 us, every shipped cfg
 RANGE_SPAN_M = 6.0  # every cfg keeps a 6 m span: bin = 6.0/n_samples
 BALL_GATES_M = ((2.25, 3.75), (3.75, 5.5))
 SPEED_BOUNDS_MS = (20.0, 90.0)
@@ -33,6 +34,17 @@ FAST_TRACK_MS = 26.5  # RADIAL m/s: slowest real SW ball reads ~27.5
 #                               (66 mph x cos projection); flying tee ~25
 FAST_SUPPORT_FRAC = 0.55  # of the most-inliers candidate
 MAX_RADIAL_ACCEL = 200.0  # m/s^2 sanity for the quadratic refit
+
+
+def same_tx_loop_period_s(n_tx: int, chirp_period_s: float = CHIRP_PERIOD_S) -> float:
+    """Time between chirps from the same transmitter: one chirp per active TX.
+
+    Rows keep this physical timing even when a readback carries only the
+    vertical TX pair of a 3-TX loop.
+    """
+    if n_tx < 1:
+        raise ValueError(f"loop needs at least one transmitter, got {n_tx}")
+    return n_tx * chirp_period_s
 
 
 @dataclass
