@@ -22,7 +22,7 @@ from openflight.iwr6843.monitor import (
     read_capture_config,
     tee_local_bin,
 )
-from openflight.iwr6843.self_trigger import FLOOR_PROBE_LEVEL
+from openflight.iwr6843.self_trigger import FLOOR_PROBE_LEVEL, replay_dump
 from openflight.iwr6843.sparse import (
     POWER_MAGIC,
     RANGE_FFT_SIZE,
@@ -981,3 +981,223 @@ def trigger_section() -> Section:
             Check("trigger/reconfigure clears a previous arm", _check_reconfigure_clears_arm),
         ),
     )
+
+
+READBACK_LIMIT_S = 1.0  # docs/iwr6843/verify.md: readback latency must stay under 1.0 s per shot
+
+
+@dataclass
+class _SwingState:
+    level: float | None = None
+    armed: bool = False
+    last_dump: bytes | None = None
+    fired: bool = False
+
+
+def wait_for_notice(ctx: Context, timeout_s: float, poll_s: float = 0.5) -> float | None:
+    """Seconds until ``Triggered`` arrives, polling ``stats`` so the notice must survive a reply."""
+    started = ctx.clock()
+    pending = b""
+    last_poll = started
+    while ctx.clock() - started < timeout_s:
+        found, pending = ctx.radar.wait_trigger_notice(pending)
+        if found:
+            return ctx.clock() - started
+        if ctx.clock() - last_poll >= poll_s:
+            ctx.radar.cmd("stats", 2.0)  # cmd() keeps a notice it reads for the listener
+            last_poll = ctx.clock()
+        else:
+            ctx.sleep(0.01)
+    return None
+
+
+def _arm_for_swing(ctx: Context, state: _SwingState) -> str | None:
+    """Arm once; return an error string instead of arming when the lane is not empty."""
+    if state.armed:
+        return None
+    if ctx.level is None:
+        local_bin = tee_local_bin(ctx.tee_m, ctx.config)
+        try:
+            _floor, level = measure_trigger_level(
+                ctx.radar, local_bin, ctx.hits, clock=ctx.clock, pause=ctx.sleep
+            )
+        except RuntimeError as exc:
+            ctx.radar.cmd(SELF_TRIGGER_OFF_COMMAND, 2.0)
+            return f"floor measurement failed: {exc}"
+        state.level = level
+    else:
+        state.level = ctx.level
+    reply = ctx.radar.cmd(arm_command(ctx, state.level), 2.0)
+    if "Done" not in reply:
+        return f"arm rejected: {reply.strip()[:60]!r}"
+    ctx.radar.cmd(track_config_command(ctx.config), 2.0)
+    state.armed = True
+    return None
+
+
+def _swing_checks(shot: int, state: _SwingState) -> tuple[Check, ...]:
+    prefix = f"trigger-swing/shot {shot}"
+
+    def ball_on_tee(ctx: Context) -> CheckResult:
+        name = f"{prefix}: ball on tee reaches watching"
+        problem = _arm_for_swing(ctx, state)
+        if problem:
+            return failed(name, problem)
+        state.fired = False
+        ctx.prompt(f"Shot {shot}: place a ball on the tee, then press Enter.")
+        latest: dict[str, StatsSnapshot] = {}
+
+        def watching() -> bool:
+            latest["snap"] = stats_snapshot(ctx)
+            return latest["snap"].phase == "watching"
+
+        if not wait_until(ctx, watching, ctx.wait_s, poll_s=0.2):
+            return failed(name, _trig_state(latest["snap"]))
+        return passed(name, f"level={state.level:.0f} {_trig_state(latest['snap'])}")
+
+    def swing_fires(ctx: Context) -> CheckResult:
+        name = f"{prefix}: swing fires the trigger"
+        if not state.armed:
+            return skipped(name, "not armed")
+        before = stats_snapshot(ctx)
+        ctx.prompt(f"Shot {shot}: swing now. Waiting up to {ctx.wait_s:.0f} s.")
+        waited = wait_for_notice(ctx, ctx.wait_s)
+        if waited is None:
+            return failed(name, f"no Triggered within {ctx.wait_s:.0f} s")
+        notice_at = ctx.clock()
+        latest: dict[str, StatsSnapshot] = {}
+
+        def frozen() -> bool:
+            latest["snap"] = stats_snapshot(ctx)
+            snap = latest["snap"]
+            return snap.latched == 1 and snap.freeze_done == snap.freeze_req
+
+        settled = wait_until(ctx, frozen, ctx.wait_s, poll_s=0.05)
+        snap = latest["snap"]
+        problems = []
+        if snap.latched != 1 or snap.phase != "fired":
+            problems.append(_trig_state(snap))
+        if before.freeze_req is not None and snap.freeze_req != before.freeze_req + 1:
+            problems.append(f"freeze_req {before.freeze_req} -> {snap.freeze_req}")
+        if not settled:
+            problems.append(f"freeze_done={snap.freeze_done} != freeze_req={snap.freeze_req}")
+        if problems:
+            return failed(name, "; ".join(problems))
+        state.fired = True
+        return passed(
+            name, f"notice after {waited:.1f} s, latched {ctx.clock() - notice_at:.3f} s later"
+        )
+
+    def reads_back(ctx: Context) -> CheckResult:
+        name = f"{prefix}: frozen ring reads back"
+        if not state.fired:
+            return skipped(name, "no fire to read back")
+        plan = stats_snapshot(ctx)
+        started = ctx.clock()
+        tracked = ctx.radar.read_tracked()
+        if tracked is not None:
+            raw = tracked[0]
+        else:
+            capture = ctx.radar.read_sparse(
+                lambda summary: SparsePlan(
+                    cells=tuple(_every_cell(summary)[1:]), noise_cells=(_every_cell(summary)[0],)
+                )
+            )
+            if capture is None:
+                return failed(name, "both l3track and l3sparse refused")
+            raw = capture.raw
+        # A separate checkpoint for the wire transfer, distinct from host-side
+        # parsing below, so a slow radio link and a slow parse are told apart.
+        read_done = ctx.clock()
+        state.last_dump = raw
+        meta = parse_header(raw)
+        elapsed = ctx.clock() - started
+        want_frames = (plan.plan_pre or 0) + (plan.plan_post or 0)
+        problems = []
+        if elapsed >= READBACK_LIMIT_S:
+            problems.append(f"readback {elapsed:.2f} s >= {READBACK_LIMIT_S:.1f} s")
+        if meta["n_frames"] != want_frames:
+            problems.append(f"n_frames={meta['n_frames']} want {want_frames}")
+        if (
+            plan.pre_seen is not None
+            and plan.plan_pre is not None
+            and plan.pre_seen < plan.plan_pre
+        ):
+            problems.append(f"pre_seen={plan.pre_seen} < plan {plan.plan_pre}")
+        if problems:
+            return failed(name, "; ".join(problems))
+        return passed(
+            name,
+            f"{len(raw)} bytes via {'l3track' if tracked else 'l3sparse'} "
+            f"in {elapsed:.2f} s (wire {read_done - started:.2f} s)",
+        )
+
+    def replay_agrees(ctx: Context) -> CheckResult:
+        name = f"{prefix}: host replay agrees"
+        if state.last_dump is None:
+            return skipped(name, "no ring to replay")
+        observations = replay_dump(
+            state.last_dump,
+            tee_range_m=ctx.tee_m,
+            level=state.level or FLOOR_PROBE_LEVEL,
+            hits=ctx.hits,
+        )
+        fired_at = next((i for i, obs in enumerate(observations) if obs.fired), None)
+        state.last_dump = None
+        if fired_at is None:
+            return failed(name, f"host detector did not fire over {len(observations)} frames")
+        return passed(name, f"host detector fired at frame {fired_at}")
+
+    def rearmed(ctx: Context) -> CheckResult:
+        name = f"{prefix}: rearmed"
+        if not state.fired:
+            return skipped(name, "no fire to rearm from")
+        first = stats_snapshot(ctx)
+        ctx.sleep(0.2)
+        second = stats_snapshot(ctx)
+        problems = []
+        if second.latched != 0:
+            problems.append(f"latched={second.latched}")
+        if second.enabled != 1:
+            problems.append(f"enabled={second.enabled}")
+        if first.frames is None or second.frames is None or second.frames <= first.frames:
+            problems.append(f"frames {first.frames} -> {second.frames}")
+        if problems:
+            return failed(name, "; ".join(problems))
+        return passed(name, _trig_state(second))
+
+    return (
+        Check(f"{prefix}: ball on tee reaches watching", ball_on_tee, needs_swing=True),
+        Check(f"{prefix}: swing fires the trigger", swing_fires, needs_swing=True),
+        Check(f"{prefix}: frozen ring reads back", reads_back, needs_swing=True),
+        Check(f"{prefix}: host replay agrees", replay_agrees, needs_swing=True),
+        Check(f"{prefix}: rearmed", rearmed, needs_swing=True),
+    )
+
+
+def _latched_cleared(state: _SwingState) -> Check:
+    name = "trigger-swing/latched session is cleared by reconfigure"
+
+    def run(ctx: Context) -> CheckResult:
+        if not state.armed:
+            return skipped(name, "not armed")
+        ctx.prompt("One more swing, which will NOT be read back. Place the ball, swing, then wait.")
+        if wait_for_notice(ctx, ctx.wait_s) is None:
+            return failed(name, f"no Triggered within {ctx.wait_s:.0f} s")
+        ctx.radar.send_config(ctx.config)
+        snap = stats_snapshot(ctx)
+        if (snap.latched, snap.enabled, snap.phase) != (0, 0, "off"):
+            return failed(name, _trig_state(snap))
+        return passed(name, _trig_state(snap))
+
+    return Check(name, run, needs_swing=True)
+
+
+def swing_section(shots: int) -> Section:
+    """Real swings: fire, read back, host agreement, rearm; then a latched reconfigure."""
+    state = _SwingState()
+    checks: list[Check] = []
+    for shot in range(1, shots + 1):
+        checks.extend(_swing_checks(shot, state))
+    checks.append(_latched_cleared(state))
+    return Section("trigger-swing", "active", tuple(checks))

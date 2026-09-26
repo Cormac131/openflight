@@ -1007,3 +1007,206 @@ def test_disarm_fails_when_stats_still_reports_enabled():
     result = check.run(_ctx(radar))
 
     assert result.status == "FAIL" and "enabled=1" in result.detail
+
+
+def _swing_radar(
+    cube,
+    *,
+    notice_in_stats_after=2,
+    fire=True,
+    watching=True,
+    rearm=True,
+    clear_on_reconfigure=True,
+):
+    """Scripted swing. Once armed, the tee goes ``watching`` on the second stats poll;
+    ``notice_in_stats_after`` polls later a ``Triggered`` notice is planted inside a
+    stats reply (exactly how the firmware's unsolicited line lands on the wire)."""
+    state = {
+        "stats": 0,
+        "since_watching": None,
+        "latched": 0,
+        "freeze": 0,
+        "enabled": 0,
+        "phase": "tee-low",
+        "armed": False,
+    }
+    summary = _summary(cube)
+    track = OnboardTrack(True, 3, 1.0, 2.0, 0.1, 0.0, 0.01)
+    track_packet = (
+        summary.header_bytes(b"ILT1")
+        + track.to_bytes()
+        + slice_packet(cube, 3, [(0, 1)])
+        + b"Done\n"
+    )
+
+    def stats(_n):
+        state["stats"] += 1
+        prefix = b""
+        if state["armed"] and watching and state["phase"] == "tee-low" and state["stats"] >= 2:
+            state["phase"], state["since_watching"] = "watching", 0
+        elif state["since_watching"] is not None and state["phase"] == "watching":
+            state["since_watching"] += 1
+            if fire and state["since_watching"] == notice_in_stats_after:
+                prefix = b"Triggered\n"
+                state["latched"], state["freeze"], state["phase"] = 1, state["freeze"] + 1, "fired"
+        body = (
+            f"frames={state['stats'] * 100} active=1 freeze_req={state['freeze']} freeze_done={state['freeze']} "
+            f"format=iq16 plan={cube.shape[0] - 1}pre/1post loops={cube.shape[1] // 3} used=1/2\n"
+            f"pre_seen=999 stride=1\ntrig phase={state['phase']} tee=500 latched={state['latched']} enabled={state['enabled']}\nDone\n"
+        ).encode()
+        return prefix + body
+
+    class Port(ScriptedSerial):
+        def write(self, data):
+            line = data.decode(errors="replace").strip()
+            self.written.append(line)
+            if line == "stats":
+                self.inject(stats(0))
+            elif line.startswith("triggerCfg"):
+                state["armed"] = not line.endswith(" 0 0 0")
+                state["enabled"] = 1 if state["armed"] else 0
+                state["phase"], state["since_watching"], state["stats"] = "tee-low", None, 0
+                self.inject(b"Done\n")
+            elif line == "l3track":
+                self.inject(track_packet)
+                if rearm:  # the firmware rearms: unlatched, back to watching the tee
+                    state["latched"], state["phase"], state["since_watching"], state["stats"] = (
+                        0,
+                        "tee-low",
+                        None,
+                        0,
+                    )
+            else:
+                self.inject(b"Done\n")
+
+    from openflight.iwr6843.driver import IWR6843Radar
+
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    radar.ser = Port({})
+    radar.port = "scripted"
+    radar._trigger_pending = b""
+
+    def send_config(_cfg):
+        if clear_on_reconfigure:
+            state.update(latched=0, enabled=0, phase="off", armed=False, since_watching=None)
+
+    radar.send_config = send_config
+    return radar, state
+
+
+def test_swing_fake_fires_two_polls_after_watching():
+    """Pin the fake itself: tee-low, watching, then a notice inside the 2nd poll after that."""
+    radar, state = _swing_radar(_cube())
+    radar.ser.write(b"triggerCfg 14 1000 2\n")
+    radar.ser.read(radar.ser.in_waiting)
+    seen = []
+    for _ in range(4):
+        radar.ser.write(b"stats\n")
+        seen.append(radar.ser.read(radar.ser.in_waiting))
+
+    assert b"phase=tee-low" in seen[0]
+    assert b"phase=watching" in seen[1]
+    assert b"Triggered" not in seen[2]
+    assert seen[3].startswith(b"Triggered\n") and b"latched=1" in seen[3]
+    assert state["freeze"] == 1
+
+
+def test_swing_section_names_and_flags():
+    section = fc.swing_section(2)
+
+    assert _names(section) == [
+        "trigger-swing/shot 1: ball on tee reaches watching",
+        "trigger-swing/shot 1: swing fires the trigger",
+        "trigger-swing/shot 1: frozen ring reads back",
+        "trigger-swing/shot 1: host replay agrees",
+        "trigger-swing/shot 1: rearmed",
+        "trigger-swing/shot 2: ball on tee reaches watching",
+        "trigger-swing/shot 2: swing fires the trigger",
+        "trigger-swing/shot 2: frozen ring reads back",
+        "trigger-swing/shot 2: host replay agrees",
+        "trigger-swing/shot 2: rearmed",
+        "trigger-swing/latched session is cleared by reconfigure",
+    ]
+    assert all(check.needs_swing for check in section.checks)
+
+
+def test_swing_notice_inside_a_stats_reply_is_seen():
+    radar, _state = _swing_radar(_cube())
+    radar.ser.write(b"triggerCfg 14 1000 2\n")
+    radar.ser.read(radar.ser.in_waiting)
+
+    waited = fc.wait_for_notice(_ctx(radar), timeout_s=5.0, poll_s=0.5)
+
+    assert waited is not None
+    assert radar.ser.written.count("stats") >= 2
+
+
+def test_wait_for_notice_times_out_to_none():
+    radar, _state = _swing_radar(_cube(), fire=False)
+
+    assert fc.wait_for_notice(_ctx(radar, wait_s=1.0), timeout_s=1.0) is None
+
+
+def test_full_swing_run_passes_with_a_scripted_operator(monkeypatch):
+    cube = _cube()
+    radar, _state = _swing_radar(cube)
+    prompts: list[str] = []
+    monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [type("Obs", (), {"fired": True})()])
+    ctx = _ctx(radar, prompt=prompts.append, shots=1)
+
+    results = fc.run(ctx, (fc.swing_section(1),), swing=True)
+
+    assert [r.status for r in results] == ["PASS"] * 6, [(r.name, r.detail) for r in results]
+    assert any("ball" in p.lower() for p in prompts) and any("swing" in p.lower() for p in prompts)
+    assert "trackCfg" in " ".join(radar.ser.written)
+
+
+def test_swing_fire_check_fails_on_timeout_and_later_checks_skip(monkeypatch):
+    radar, _state = _swing_radar(_cube(), fire=False)
+    monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [])
+    ctx = _ctx(radar, wait_s=1.0, shots=1)
+
+    results = fc.run(ctx, (fc.swing_section(1),), swing=True)
+
+    statuses = {r.name.split("/", 1)[1]: r.status for r in results}
+    assert statuses["shot 1: swing fires the trigger"] == "FAIL"
+    assert statuses["shot 1: frozen ring reads back"] == "SKIP"
+    assert statuses["shot 1: host replay agrees"] == "SKIP"
+
+
+def test_readback_slower_than_the_limit_fails(monkeypatch):
+    cube = _cube()
+    radar, _state = _swing_radar(cube)
+    slow = {"now": 0.0}
+
+    def clock():
+        slow["now"] += 0.6
+        return slow["now"]
+
+    monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [type("Obs", (), {"fired": True})()])
+    results = fc.run(_ctx(radar, clock=clock, shots=1), (fc.swing_section(1),), swing=True)
+
+    readback = next(r for r in results if r.name.endswith("frozen ring reads back"))
+    assert readback.status == "FAIL" and "1.0 s" in readback.detail
+
+
+def test_host_replay_disagreement_fails(monkeypatch):
+    radar, _state = _swing_radar(_cube())
+    monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [type("Obs", (), {"fired": False})()])
+
+    results = fc.run(_ctx(radar, shots=1), (fc.swing_section(1),), swing=True)
+
+    replay = next(r for r in results if r.name.endswith("host replay agrees"))
+    assert replay.status == "FAIL"
+
+
+def test_rearm_and_reconfigure_failures_are_reported(monkeypatch):
+    monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [type("Obs", (), {"fired": True})()])
+
+    stuck, _ = _swing_radar(_cube(), rearm=False)
+    results = fc.run(_ctx(stuck, shots=1), (fc.swing_section(1),), swing=True)
+    assert next(r for r in results if r.name.endswith("rearmed")).status == "FAIL"
+
+    sticky, _ = _swing_radar(_cube(), clear_on_reconfigure=False)
+    results = fc.run(_ctx(sticky, shots=1), (fc.swing_section(1),), swing=True)
+    assert results[-1].status == "FAIL" and "latched=1" in results[-1].detail
