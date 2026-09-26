@@ -677,9 +677,34 @@ def _every_cell(summary) -> list[tuple[int, int]]:
     ]
 
 
+def _wait_for_full_ring(ctx: Context) -> StatsSnapshot:
+    """Stats once ``pre_seen`` reaches the plan's pre frames (or at once if unreported).
+
+    A freeze before the ring has wrapped streams only the pre frames captured
+    so far: on the Pi a dump taken right after sensorStart carried 5 of 9.
+    """
+    latest: dict[str, StatsSnapshot] = {}
+
+    def full() -> bool:
+        snap = stats_snapshot(ctx)
+        latest["snap"] = snap
+        return snap.pre_seen is None or snap.plan_pre is None or snap.pre_seen >= snap.plan_pre
+
+    wait_until(ctx, full, ctx.wait_s, poll_s=0.05)
+    return latest["snap"]
+
+
+def _printable(text: str, limit: int = 60) -> str:
+    """The tail of a CLI reply with binary noise summarised instead of escaped."""
+    binary = sum(1 for ch in text if not ch.isprintable() and ch not in "\r\n\t")
+    clean = "".join(ch for ch in text if ch.isprintable() or ch in "\r\n\t").strip()
+    tail = repr(clean[-limit:])
+    return f"<{binary} non-text bytes> {tail}" if binary else tail
+
+
 def _check_l3dump(ctx: Context) -> CheckResult:
     name = "readback/l3dump streams a valid dump"
-    plan = stats_snapshot(ctx)
+    plan = _wait_for_full_ring(ctx)
     raw = ctx.radar.read_dump()
     meta = parse_header(raw)
     after = stats_snapshot(ctx)
@@ -760,9 +785,9 @@ def _check_sparse_oversized(ctx: Context) -> CheckResult:
     health = ctx.radar.stats()
     problems = []
     if "longer than" not in reply:
-        problems.append(f"not refused: {reply.strip()[-60:]!r}")
+        problems.append(f"not refused: {_printable(reply)}")
     if "Done" not in health or "not recognized" in health:
-        problems.append(f"CLI dirty afterwards: {health.strip()[-60:]!r}")
+        problems.append(f"CLI dirty afterwards: {_printable(health)}")
     if problems:
         return failed(name, "; ".join(problems))
     return passed(name, f"{len(request)}-byte request refused, CLI clean")
@@ -1013,7 +1038,19 @@ def _check_arming(ctx: Context) -> CheckResult:
 def _check_disarm(ctx: Context) -> CheckResult:
     name = "trigger/triggerCfg 0 0 0 disarms"
     _disarm(ctx)
-    snap = stats_snapshot(ctx)
+    latest: dict[str, StatsSnapshot] = {}
+
+    def settled() -> bool:
+        # The detect task notes phase=off on the next frame, after the Done.
+        latest["snap"] = stats_snapshot(ctx)
+        return (latest["snap"].enabled, latest["snap"].phase, latest["snap"].latched) == (
+            0,
+            "off",
+            0,
+        )
+
+    wait_until(ctx, settled, 2.0, poll_s=0.05)
+    snap = latest["snap"]
     if (snap.enabled, snap.phase, snap.latched) != (0, "off", 0):
         return failed(name, _trig_state(snap))
     return passed(name, _trig_state(snap))

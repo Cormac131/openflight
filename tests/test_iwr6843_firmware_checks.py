@@ -1426,3 +1426,56 @@ def test_default_profiles_are_the_shipped_cfgs():
         Path(p).name.startswith("iwr6843_") and p.endswith(".cfg") for p in profiles
     )
     assert profiles == tuple(sorted(profiles))
+
+
+# --- hardware run 2026-09-26: regressions seen on the Pi ---------------------
+
+
+def test_l3dump_check_waits_for_the_pre_trigger_ring_to_fill():
+    """A dump taken right after sensorStart carries fewer pre frames than the plan
+    (the Pi streamed 5 pre + 15 post = 20 of 24). The check must wait for
+    pre_seen to reach the plan before it freezes the ring."""
+    cube = _cube()  # 4 frames: plan 3pre/1post
+    full = _stats_for(cube)(0).decode()
+
+    def stats(n):
+        pre_seen = 1 if n == 0 else 99
+        return full.replace("stride=1\n", f"pre_seen={pre_seen} stride=1\n").encode()
+
+    radar = scripted_radar({"l3dump": _dump_bytes(cube) + b"Done\n", "stats": stats})
+    check = fc.readback_section().checks[0]
+
+    result = check.run(_ctx(radar))
+
+    assert result.status == "PASS", result.detail
+    second_stats = [i for i, line in enumerate(radar.ser.written) if line == "stats"][1]
+    assert radar.ser.written.index("l3dump") > second_stats
+
+
+def test_disarm_waits_for_the_detector_to_report_off():
+    """The detect task notes phase=off on the next frame, so a stats read that
+    lands before that frame still shows the armed phase (Pi: phase=tee-low
+    enabled=0). The check must poll until the phase settles."""
+
+    def stats(n):
+        phase = "tee-low" if n == 0 else "off"
+        return f"frames=1 active=1\ntrig phase={phase} tee=0 latched=0 enabled=0\nDone\n".encode()
+
+    radar = scripted_radar({"triggerCfg": b"Done\n", "stats": stats})
+    check = fc.trigger_section().checks[3]
+
+    result = check.run(_ctx(radar))
+
+    assert result.status == "PASS", result.detail
+    assert radar.ser.written.count("stats") == 2
+
+
+def test_oversized_request_detail_is_readable_when_the_reply_is_binary():
+    radar = _sparse_radar(_cube(frames=8, bins=40), after_request=b"\x00" * 46 + b"Done\n")
+    check = fc.readback_section().checks[2]
+
+    result = check.run(_ctx(radar))
+
+    assert result.status == "FAIL"
+    assert "\x00" not in result.detail
+    assert "46 non-text byte" in result.detail
