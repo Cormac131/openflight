@@ -27,6 +27,7 @@ once, then choose a profile by passing its `.cfg` to OpenFlight.
 | Container build | `make -C firmware docker-build` |
 | Flash image size | 346,820 bytes |
 | Flash SHA-256 | `823ddd18a231d0004020de6262160d6863384cccac6674bae6f7d0fcea58f955` |
+| Validate on hardware | `uv run python scripts/hardware-test/test_iwr_firmware.py` (see [Firmware Feature Check](../iwr6843/verify.md#firmware-feature-check)) |
 | Dump format | Variable-width, timed complex range-FFT snapshots |
 
 Verify the checked-in image before flashing:
@@ -34,6 +35,10 @@ Verify the checked-in image before flashing:
 ```bash
 sha256sum firmware/releases/l3_dump_configurable_capture_20260818.bin
 ```
+
+After flashing, run the firmware CLI test suite on the Pi. It covers every
+registered CLI command; the on-chip solve reports `SKIP` until the MSS gains a
+command that invokes it.
 
 ## Choose A Capture Profile
 
