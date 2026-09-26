@@ -1,7 +1,7 @@
 """Source checks for the l3sparse and self-trigger firmware paths.
 
 The firmware cannot build or run here; these pin the properties the host
-relies on. scripts/hardware-test/test_iwr_self_trigger.py checks them on a board.
+relies on. scripts/hardware-test/test_iwr_firmware.py runs the readback section against a board.
 """
 
 from __future__ import annotations
