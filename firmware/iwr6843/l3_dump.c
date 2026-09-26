@@ -61,7 +61,9 @@
 /* --- task priorities (mirror the mmw demo): ctrl > CLI. -------------------- */
 #define L3_INIT_TASK_PRIORITY  2
 #define L3_CLI_TASK_PRIORITY   3
-#define L3_HWA_REARM_TASK_PRIORITY (L3_CLI_TASK_PRIORITY - 1U)
+/* Above the CLI: a stats or debug write must never delay the next HWA arm
+ * past the ~380 us gap a 2 ms frame leaves after its chirps. */
+#define L3_HWA_REARM_TASK_PRIORITY (L3_CLI_TASK_PRIORITY + 1U)
 /* Keep the live snapshot worker below CLI. SYS/BIOS Task_yield does not allow
  * lower-priority tasks to run, and a priority-4 snapshot loop starved l3dump
  * so the host only saw the echoed 7-byte "l3dump\n" command. */
@@ -357,6 +359,15 @@ static volatile uint8_t  gTriggerToward;
 static volatile uint8_t  gTriggerAway;
 static volatile uint32_t gTriggerPeakBin;
 static volatile uint8_t  gTriggerHavePeak;
+/* Loudest bin past the tee on the last frame that had one; a later frame
+ * must move it farther out to fire. */
+static volatile uint32_t gTriggerDepartureBin;
+static volatile uint8_t  gTriggerHaveDeparture;
+/* Frames since approach motion began; the swing must resolve within
+ * L3_TRIGGER_MOTION_TIMEOUT_US or the state is a waggle and resets. */
+static volatile uint32_t gTriggerMotionFrames;
+/* Consecutive approach-less frames tolerated (hands or shaft hiding the head). */
+static volatile uint32_t gTriggerMissedFrames;
 static volatile uint8_t  gTriggerPhase;
 static volatile uint32_t gTriggerTeePower;
 static volatile uint32_t gTriggerApproachPower;
@@ -2456,10 +2467,11 @@ static void l3_writeF32(float value)
     UART_writePolling(gDataUart, bytes, sizeof(bytes));
 }
 
-/* Read one CLI line into buf. Returns 0 on a line, -1 on timeout or an empty
- * line, and -2 when the line does not fit: the rest of it is then read and
- * discarded so none of it reaches the CLI parser as a command. */
+/* Read one CLI line into buf. Returns 0 on a line, -1 on timeout, -3 on an
+ * empty line, and -2 when the line does not fit: the rest of it is then read
+ * and discarded so none of it reaches the CLI parser as a command. */
 #define L3_READLINE_OVERFLOW (-2)
+#define L3_READLINE_EMPTY (-3)
 
 static int32_t l3_readLine(char *buf, uint32_t cap)
 {
@@ -2490,7 +2502,10 @@ static int32_t l3_readLine(char *buf, uint32_t cap)
             if (overflow) {
                 return L3_READLINE_OVERFLOW;
             }
-            return (used > 0U) ? 0 : -1;
+            if (used == 0U) {
+                return L3_READLINE_EMPTY;
+            }
+            return 0;
         }
         if (used + 1U < cap) {
             buf[used++] = (char)value;
@@ -2566,6 +2581,10 @@ static float l3_verticalPowerAt(uint32_t slot, uint32_t localBin)
 
 /* Clubhead is short of the ball. Twelve bins is about 0.6 m at the wide profile. */
 #define L3_TRIGGER_APPROACH_BINS 12U
+/* Approach motion older than this without a departure is a waggle, not a swing. */
+#define L3_TRIGGER_MOTION_TIMEOUT_US 60000U
+/* Approach frames the clubhead may vanish for before the motion resets. */
+#define L3_TRIGGER_MAX_MISSED_FRAMES 2U
 
 static void l3_clearTriggerMotion(void)
 {
@@ -2575,6 +2594,10 @@ static void l3_clearTriggerMotion(void)
     gTriggerRun = 0U;
     gTriggerPeakBin = 0U;
     gTriggerHavePeak = 0U;
+    gTriggerDepartureBin = 0U;
+    gTriggerHaveDeparture = 0U;
+    gTriggerMotionFrames = 0U;
+    gTriggerMissedFrames = 0U;
 }
 
 static const char *l3_triggerPhaseName(uint8_t phase)
@@ -2666,29 +2689,73 @@ static void l3_considerSelfTrigger(uint32_t slot)
         return;
     }
     if (gTriggerBin >= gFrameBinCount[0] && gTriggerBin >= gCapturePlan.preBins) {
+        l3_clearTriggerMotion();
         l3_noteTrigger(2U, 0.0F, 0.0F);
         return;
     }
     if (gTriggerBin >= gFrameBinCount[slot]) {
+        l3_clearTriggerMotion();
         l3_noteTrigger(2U, 0.0F, 0.0F);
         return;
     }
     tee = l3_verticalPowerAt(slot, gTriggerBin);
-    /* A real hit keeps the tee bin loud. Waiting for it to fall below the
-     * level never fires: the ball has already moved past the tee. */
-    if (tee < gTriggerPower) {
+    if (gTriggerToward) {
+        gTriggerMotionFrames++;
+        if (gTriggerMotionFrames * (uint32_t)gFramePeriodUs > L3_TRIGGER_MOTION_TIMEOUT_US) {
+            l3_clearTriggerMotion();
+        }
+    }
+    /* Once motion is under way the tee bin may already be quiet: the ball
+     * is gone and only the departure check below can settle the swing. */
+    if (tee < gTriggerPower && !gTriggerToward) {
         l3_clearTriggerMotion();
         l3_noteTrigger(3U, tee, 0.0F);
         return;
     }
-    gTriggerRun++;
     if (!gTriggerReady) {
+        gTriggerRun++;
         if (gTriggerRun >= gTriggerHits) {
             gTriggerReady = 1U;
         }
         l3_noteTrigger(gTriggerReady ? 5U : 4U, tee, 0.0F);
         return;
     }
+    if (gTriggerToward) {
+        /* Fire on outward progression: the loudest return past the tee must
+         * sit farther out than it did on the last frame that had one. */
+        uint32_t pastEnd = gTriggerBin + 1U + L3_TRIGGER_APPROACH_BINS;
+        uint32_t pastBin = 0U;
+        float pastPeak = 0.0F;
+
+        if (pastEnd > gFrameBinCount[slot]) {
+            pastEnd = gFrameBinCount[slot];
+        }
+        for (bin = gTriggerBin + 1U; bin < pastEnd; bin++) {
+            float past = l3_verticalPowerAt(slot, bin);
+            if (past > pastPeak) {
+                pastPeak = past;
+                pastBin = bin;
+            }
+        }
+        if (pastPeak >= gTriggerPower) {
+            if (gTriggerHaveDeparture && pastBin > gTriggerDepartureBin) {
+                l3_latchSelfTrigger(tee, pastPeak);
+                return;
+            }
+            if (gTriggerHaveDeparture && pastBin < gTriggerDepartureBin) {
+                /* Walking back toward the tee is the club, not the ball. */
+                l3_clearTriggerMotion();
+                l3_noteTrigger(5U, tee, 0.0F);
+                return;
+            }
+            gTriggerDepartureBin = pastBin;
+            gTriggerHaveDeparture = 1U;
+            gTriggerMissedFrames = 0U;
+            l3_noteTrigger(8U, tee, pastPeak);
+            return;
+        }
+    }
+    gTriggerHaveDeparture = 0U;
     first = (gTriggerBin > L3_TRIGGER_APPROACH_BINS) ? (gTriggerBin - L3_TRIGGER_APPROACH_BINS) : 0U;
     for (bin = first; bin < gTriggerBin; bin++) {
         float power;
@@ -2703,39 +2770,23 @@ static void l3_considerSelfTrigger(uint32_t slot)
         }
     }
     if (!havePeak) {
+        gTriggerMissedFrames++;
+        if (gTriggerMissedFrames > L3_TRIGGER_MAX_MISSED_FRAMES) {
+            l3_clearTriggerMotion();
+        }
         l3_noteTrigger(6U, tee, 0.0F);
         return;
     }
+    gTriggerMissedFrames = 0U;
     /* gTriggerHavePeak, not gTriggerPeakBin != 0: bin 0 is a real bin. */
     if (gTriggerHavePeak && peakBin > gTriggerPeakBin) {
         gTriggerToward = 1U;
     } else if (gTriggerToward && gTriggerHavePeak && peakBin < gTriggerPeakBin) {
-        gTriggerAway = 1U;
+        /* The approach peak walked back without anything passing the tee. */
+        l3_clearTriggerMotion();
     }
     gTriggerPeakBin = peakBin;
     gTriggerHavePeak = 1U;
-    if (gTriggerAway) {
-        l3_latchSelfTrigger(tee, peak);
-        return;
-    }
-    if (gTriggerToward) {
-        uint32_t pastEnd = gTriggerBin + L3_TRIGGER_APPROACH_BINS;
-        float pastPeak = 0.0F;
-
-        if (pastEnd > gFrameBinCount[slot]) {
-            pastEnd = gFrameBinCount[slot];
-        }
-        for (bin = gTriggerBin + 1U; bin < pastEnd; bin++) {
-            float past = l3_verticalPowerAt(slot, bin);
-            if (past > pastPeak) {
-                pastPeak = past;
-            }
-        }
-        if (pastPeak >= gTriggerPower && pastPeak > peak) {
-            l3_latchSelfTrigger(tee, pastPeak);
-            return;
-        }
-    }
     l3_noteTrigger(gTriggerToward ? 7U : 5U, tee, peak);
 }
 
@@ -2770,16 +2821,12 @@ typedef struct {
     uint32_t maxBins;
 } l3_sparse_window_t;
 
-/* Freeze the ring for l3sparse or l3track. A self-trigger has already
- * requested the freeze; otherwise stop at the next frame boundary. */
-static int32_t l3_sparseFreeze(void)
+/* Wait until a self-trigger freeze has landed, or stop at the next frame
+ * boundary. Does not stream and does not read a follow-up CLI line.
+ * The HWA freeze only stops re-arm; the BSS keeps chirping until
+ * l3_finishCaptureStop, and MMWave_start refuses a sensor that is still running. */
+static int32_t l3_awaitFrozenRing(void)
 {
-#ifdef L3_RING_IQ8
-    if (l3_captureUsesIq8()) {
-        CLI_write("Error: sparse dump requires IQ16 storage\n");
-        return -1;
-    }
-#endif
     if (!gCaptureActive && !gSelfTriggerLatched) {
         return -1;
     }
@@ -2791,10 +2838,25 @@ static int32_t l3_sparseFreeze(void)
             return -1;
         }
         gSelfTriggerLatched = 0U;
-    } else if (l3_stopCaptureAtBoundary() != 0) {
+        return l3_finishCaptureStop();
+    }
+    if (l3_stopCaptureAtBoundary() != 0) {
         return -1;
     }
     return 0;
+}
+
+/* Freeze the ring for l3sparse or l3track. A self-trigger has already
+ * requested the freeze; otherwise stop at the next frame boundary. */
+static int32_t l3_sparseFreeze(void)
+{
+#ifdef L3_RING_IQ8
+    if (l3_captureUsesIq8()) {
+        CLI_write("Error: sparse dump requires IQ16 storage\n");
+        return -1;
+    }
+#endif
+    return l3_awaitFrozenRing();
 }
 
 static void l3_sparseWindow(l3_sparse_window_t *window)
@@ -2909,6 +2971,19 @@ static int32_t l3_sparseRearm(void)
     return 0;
 }
 
+/* CLI "l3release": rearm after a self-trigger without streaming the power
+ * map. The SCI receiver holds one byte, so a cell line written while that
+ * map is going out is lost before l3_readLine runs. */
+static int32_t l3_cli_release(int32_t argc, char *argv[])
+{
+    (void)argc;
+    (void)argv;
+    if (l3_awaitFrozenRing() != 0) {
+        return -1;
+    }
+    return l3_sparseRearm();
+}
+
 int32_t l3_cli_sparse(int32_t argc, char *argv[])
 {
     l3_sparse_window_t window;
@@ -2949,6 +3024,16 @@ int32_t l3_cli_sparse(int32_t argc, char *argv[])
         }
     }
     lineStatus = l3_readLine(request, sizeof(request));
+    /* A stray CR/LF in the FIFO is not the cell request. "\r\n" is two empty
+     * reads; skip those and take the line that follows. A timeout is not
+     * retried, so a missing request still fails in one 5s wait. */
+    if (lineStatus == L3_READLINE_EMPTY) {
+        uint32_t emptyReads = 1U;
+        while (lineStatus == L3_READLINE_EMPTY && emptyReads < 3U) {
+            emptyReads++;
+            lineStatus = l3_readLine(request, sizeof(request));
+        }
+    }
     if (lineStatus == L3_READLINE_OVERFLOW) {
         CLI_write("Error: sparse cell request longer than L3_SPARSE_REQUEST_MAX\n");
         return l3_sparseRearm();
@@ -3930,6 +4015,9 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[15].cmd           = "debugCfg";
     cliCfg.tableEntry[15].helpString    = "debugCfg <0|1> stream trigger decisions";
     cliCfg.tableEntry[15].cmdHandlerFxn = l3_cli_debugCfg;
+    cliCfg.tableEntry[16].cmd           = "l3release";
+    cliCfg.tableEntry[16].helpString    = "Rearm a self-trigger freeze without streaming";
+    cliCfg.tableEntry[16].cmdHandlerFxn = l3_cli_release;
     CLI_open(&cliCfg);
 }
 

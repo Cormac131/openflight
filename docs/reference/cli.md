@@ -67,7 +67,9 @@ The supported angle radar.
 | `--iwr6843-tee-m` | float; default `1.575` | Antenna-center to tee slant range in metres (default: 1.575) |
 | `--iwr6843-net-m` | float; default `4.6` | Antenna-center to net range in metres (default: 4.6) |
 | `--iwr6843-flight` | choices: `net`, `range`, `course`; default `net` | net clamps tracks at the net. range or course keeps returns past it and measures the late-window descent after the shot is published |
-| `--iwr6843-self-trigger` | flag | Freeze the IWR ring when the ball leaves the tee and send S! to the OPS, instead of the sound-gate edge. Disconnect the SEN-14262 GATE from HOST_INT. Requires --iwr6843 and --trigger sound |
+| `--iwr6843-self-trigger` | flag | Freeze the IWR ring after approach motion followed by outward progression beyond the tee and send S! to the OPS, instead of the sound-gate edge. Disconnect the SEN-14262 GATE from HOST_INT. Requires --iwr6843 and --trigger sound |
+| `--iwr6843-full-capture` | flag | Transfer all samples and TX channels instead of selected cells; about 7 seconds for the default profile. Use with `--debug` to save full diagnostic dumps. |
+| `--no-iwr6843-onboard-track` | flag | Select cells on the Pi instead of onboard; still transfers selected samples unless `--iwr6843-full-capture` is set. |
 | `--iwr6843-self-trigger-bin` | int | Local range bin of the tee (default: from --iwr6843-tee-m). Requires --iwr6843-self-trigger |
 | `--iwr6843-self-trigger-level` | float | Residual-power threshold (default: 1000). Requires --iwr6843-self-trigger |
 | `--iwr6843-self-trigger-hits` | int | Consecutive frames the tee bin must be occupied before it is ready, at least 1 (default: 2). Requires --iwr6843-self-trigger |
@@ -79,6 +81,22 @@ The supported angle radar.
 | `--iwr6843-output-dir` | — | Raw TI dump directory when --debug is enabled (default: <session-log-dir>/iwr6843) |
 | `--iwr6843-azimuth-offset-deg` | float | Azimuth of the radar boresight relative to the target line, in degrees. Positive means boresight points right of the target line. Added to the measured club path; 0 reports club path relative to boresight. |
 | `--iwr6843-horizontal-phase-reference-rad` | float | Static target-line phase measured by horizontal aim calibration. Subtracted from the TX2 horizontal proxy before angle conversion. |
+
+Self-trigger mode uses serial messages; no microphone or trigger GPIO is required,
+and the trigger pin is left unallocated. The detector waits for the pre-trigger
+history to fill, then requires a return beyond the tee to advance to a farther bin
+across frames after approach motion. A reversal alone does not trigger. Approach
+state expires after more than two missing frames or 60 ms without a departure; the
+timeout is counted in frames from the cfg's `frameCfg` period, so it holds on the
+2 ms profiles too. These checks reduce false triggers but do not prove ball identity;
+validate tee geometry and thresholds with real shots. Self-trigger needs an IQ16
+profile: the IQ8 dense profiles are rejected at startup. Full capture is a
+diagnostic alternative, not a longer recording window.
+
+The detector runs in the firmware; `scripts/iwr6843/swing_trigger.py` and
+`openflight.iwr6843.self_trigger` replay the same rule on the host, and
+`tests/test_iwr6843_trigger_firmware.py` checks the two agree frame by frame.
+Flash an image built from the matching `firmware/iwr6843/l3_dump.c`.
 
 ## Inclinometer
 

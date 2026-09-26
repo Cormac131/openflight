@@ -42,6 +42,9 @@ class CaptureConfigSummary:
     first_window_start: int | None
     first_window_bins: int | None
     chirp_period_s: float | None = None
+    loops: int | None = None
+    frame_period_s: float | None = None
+    capture_format: str | None = None
 
     @property
     def n_tx(self) -> int:
@@ -57,10 +60,13 @@ class CaptureConfigSummary:
 
 
 def read_capture_config(config_path: str | Path) -> CaptureConfigSummary:
-    """Parse chirp TX masks, chirp period and the first saved range window."""
+    """Parse chirp TX masks, physical timing, storage format and the first saved window."""
     masks: list[str] = []
     window: tuple[int, int] | None = None
     chirp_period_s: float | None = None
+    loops: int | None = None
+    frame_period_s: float | None = None
+    capture_format: str | None = None
     with Path(config_path).open(encoding="utf-8") as handle:
         for raw_line in handle:
             line = raw_line.strip()
@@ -70,6 +76,12 @@ def read_capture_config(config_path: str | Path) -> CaptureConfigSummary:
             elif line.startswith("profileCfg"):
                 # idleTime + rampEndTime, both in microseconds.
                 chirp_period_s = (float(fields[3]) + float(fields[5])) * 1e-6
+            elif line.startswith("frameCfg"):
+                # numLoops, then framePeriodicity in milliseconds.
+                loops = int(fields[3])
+                frame_period_s = float(fields[5]) * 1e-3
+            elif line.startswith("captureFormat"):
+                capture_format = fields[1].lower()
             elif line.startswith("phaseCaptureCfg") and window is None:
                 window = (int(fields[1]), int(fields[2]))
     return CaptureConfigSummary(
@@ -77,6 +89,9 @@ def read_capture_config(config_path: str | Path) -> CaptureConfigSummary:
         first_window_start=window[0] if window else None,
         first_window_bins=window[1] if window else None,
         chirp_period_s=chirp_period_s,
+        loops=loops,
+        frame_period_s=frame_period_s,
+        capture_format=capture_format,
     )
 
 
@@ -292,12 +307,23 @@ class IWR6843CaptureMonitor:
         """Connected TI serial port."""
         return self.radar.port
 
-    def start(self, *, armed: bool = True) -> None:
-        """Configure the radar and GPIO, optionally arming trigger capture."""
+    def start(self, *, armed: bool = True, onboard_track_config: str | None = None) -> None:
+        """Configure the radar and GPIO, optionally arming trigger capture.
+
+        ``onboard_track_config`` is the ``trackCfg`` line for the firmware
+        tracker. It is sent here, before the worker thread owns the port,
+        because a command from another thread would race the self-trigger
+        listener's reads.
+        """
         if self._running:
             return
         if not self.config_path.is_file():
             raise FileNotFoundError(f"IWR6843 config not found: {self.config_path}")
+        if self.watch_self_trigger:
+            # The firmware's tee-power probe and the host replay both read IQ16.
+            capture_format = read_capture_config(self.config_path).capture_format
+            if capture_format == "iq8":
+                raise ValueError("IQ8 capture does not support the IWR6843 self-trigger")
         if self.save_dumps:
             self.output_dir.mkdir(parents=True, exist_ok=True)
         configured = False
@@ -306,20 +332,14 @@ class IWR6843CaptureMonitor:
             configured = True
             # Before the worker starts: after that only the worker may talk
             # to the radar.
+            if onboard_track_config is not None:
+                self._configure_onboard_tracking(onboard_track_config)
             self._apply_self_trigger()
 
-            button_factory = self._button_factory
-            if button_factory is None:
-                # Must precede the first gpiozero device: on a Pi 5 gpiozero's
-                # own auto-detection fails outright. See gpio_factory.
-                ensure_lgpio_pin_factory()
-
-                from gpiozero import Button  # pylint: disable=import-error,import-outside-toplevel
-
-                button_factory = Button
-            # No gpiozero debounce: lgpio delays delivery by the debounce interval,
-            # which previously cost the first 50 ms of ball flight.
-            self._button = button_factory(self.gpio_pin, pull_up=False, bounce_time=None)
+            # The self-trigger listens for the firmware line; the pin stays
+            # free so a stray sound-gate edge cannot start a second capture.
+            if not self.watch_self_trigger:
+                self._button = self._open_button()
             self._running = True
             self._worker = threading.Thread(
                 target=self._capture_loop,
@@ -347,6 +367,43 @@ class IWR6843CaptureMonitor:
             ", armed" if self._armed else ", waiting for OPS",
             f", self-trigger {self.self_trigger.command!r}" if self.self_trigger else "",
         )
+
+    def _open_button(self):
+        """The trigger-pin input, from the injected factory or gpiozero."""
+        button_factory = self._button_factory
+        if button_factory is None:
+            # Must precede the first gpiozero device: on a Pi 5 gpiozero's
+            # own auto-detection fails outright. See gpio_factory.
+            ensure_lgpio_pin_factory()
+
+            from gpiozero import Button  # pylint: disable=import-error,import-outside-toplevel
+
+            button_factory = Button
+        # No gpiozero debounce: lgpio delays delivery by the debounce interval,
+        # which previously cost the first 50 ms of ball flight.
+        return button_factory(self.gpio_pin, pull_up=False, bounce_time=None)
+
+    def _configure_onboard_tracking(self, command: str) -> bool:
+        """Hand the rig limits to the firmware tracker; True when it accepts them.
+
+        Optional: older firmware has no ``trackCfg``, and any failure here only
+        means the host keeps planning cells over ``l3sparse``.
+        """
+        self.onboard_tracking = False
+        try:
+            reply = self.radar.cmd(command, 2.0)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.warning("[IWR6843] trackCfg failed (%s); the host will plan cells", error)
+            return False
+        if "Error" in reply or "Done" not in reply:
+            logger.info(
+                "[IWR6843] Firmware has no on-chip tracker (%s); the host will plan cells",
+                reply.strip() or "no reply",
+            )
+            return False
+        self.onboard_tracking = True
+        logger.info("[IWR6843] On-chip tracker armed: %s", command)
+        return True
 
     def _apply_self_trigger(self) -> None:
         """Send ``triggerCfg`` for the configured self-trigger, if any."""

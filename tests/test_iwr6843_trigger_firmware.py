@@ -16,6 +16,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from openflight.iwr6843.self_trigger import PHASES, BallLeaveDetector
+
 FIRMWARE = Path(__file__).parents[1] / "firmware" / "iwr6843" / "l3_dump.c"
 
 TEE_BIN = 20
@@ -24,6 +26,7 @@ BINS = 53
 PHASE_NO_FRAME = 1
 PHASE_BIN_OUTSIDE = 2
 PHASE_FIRED = 9
+FRAME_PERIOD_US = 3000
 
 
 def _function(source: str, signature: str) -> str:
@@ -52,13 +55,14 @@ def detector(tmp_path_factory):
         line.replace("volatile ", "")
         for line in re.findall(r"^static volatile[^\n]*\bgTrigger\w*[^\n]*;", source, re.M)
     )
-    approach = re.search(r"^#define L3_TRIGGER_APPROACH_BINS[^\n]*", source, re.M).group(0)
+    approach = "\n".join(re.findall(r"^#define L3_TRIGGER_\w+[^\n]*", source, re.M))
     harness = f"""
 #include <stdint.h>
 #include <stddef.h>
 {approach}
 static uint8_t gSelfTriggerLatched, gHwaFreezeRequested, gPostCaptureStarted;
 static uint32_t gPreFramesCaptured;
+static uint16_t gFramePeriodUs = {FRAME_PERIOD_US}U;
 static uint32_t gFrameBinCount[4];
 static struct {{ uint32_t preFrames, loops, preBins; }} gCapturePlan;
 static const float *gPowers;
@@ -89,6 +93,7 @@ void reset(uint32_t pre_frames, uint32_t captured, uint32_t bins)
     for (i = 0U; i < 4U; i++) {{ gFrameBinCount[i] = bins; }}
 }}
 void set_captured(uint32_t captured) {{ gPreFramesCaptured = captured; }}
+void set_period(uint32_t us) {{ gFramePeriodUs = (uint16_t)us; }}
 void set_bins(uint32_t slot, uint32_t bins) {{ gFrameBinCount[slot] = bins; }}
 int step(uint32_t slot, const float *powers)
 {{
@@ -113,6 +118,7 @@ int have_peak(void) {{ return gTriggerHavePeak; }}
     lib.reset.argtypes = [ctypes.c_uint32] * 3
     lib.set_captured.argtypes = [ctypes.c_uint32]
     lib.set_bins.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+    lib.set_period.argtypes = [ctypes.c_uint32]
     return lib
 
 
@@ -129,8 +135,16 @@ def _step(lib, frame: np.ndarray, slot: int = 0) -> int:
     return lib.step(slot, frame.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
 
 
-# A club approaching the tee, then energy past it: fires today.
-_SWING = (_frame(), _frame(), _frame(b12=3000), _frame(b15=3000), _frame(b17=3000, b24=8000))
+# A club approaching the tee, then energy past it moving farther out: fires
+# on the sixth frame, when the departure has progressed.
+_SWING = (
+    _frame(),
+    _frame(),
+    _frame(b12=3000),
+    _frame(b15=3000),
+    _frame(b17=3000, b24=8000),
+    _frame(b26=8000),
+)
 
 
 def test_a_swing_fires_once_the_history_is_full(detector):
@@ -161,8 +175,8 @@ def test_the_detector_starts_on_the_frame_that_completes_the_history(detector):
     assert PHASE_NO_FRAME not in phases[2:]
 
 
-def test_a_frame_without_the_tee_bin_keeps_the_approach(detector):
-    """Mirrors the host replay (test_missing_tee_bin_does_not_clear_motion): a gap is not a reset."""
+def test_a_frame_without_the_tee_bin_clears_the_approach(detector):
+    """Mirrors the host replay (test_missing_tee_bin_clears_motion): a gap loses the approach."""
     detector.reset(4, 4, BINS)
     for frame in _SWING[:4]:
         _step(detector, frame)
@@ -171,8 +185,63 @@ def test_a_frame_without_the_tee_bin_keeps_the_approach(detector):
     detector.set_bins(1, TEE_BIN)
     assert _step(detector, _frame(b17=3000), slot=1) == PHASE_BIN_OUTSIDE
 
-    assert detector.toward()
-    assert _step(detector, _SWING[-1]) == PHASE_FIRED
+    assert not detector.toward()
+    assert _step(detector, _SWING[-1]) != PHASE_FIRED
+    assert not detector.latched()
+
+
+def _rows(frames: list[dict[int, float]]) -> list[np.ndarray]:
+    rows = []
+    for peaks in frames:
+        row = np.zeros(BINS, dtype=np.float32)
+        for bin_index, power in peaks.items():
+            row[bin_index] = power
+        rows.append(row)
+    return rows
+
+
+@pytest.mark.parametrize("period_us", [2000, 3000, 4000])
+@pytest.mark.parametrize("case", ["reversal", "departure", "gap", "stationary", "timeout"])
+def test_firmware_matches_the_host_replay_and_fires_only_on_departure(detector, period_us, case):
+    """Frame by frame, the C detector and BallLeaveDetector report the same phase."""
+    tee = TEE_BIN
+    # Approach returns sit inside the L3_TRIGGER_APPROACH_BINS window below the tee.
+    frames = [
+        {tee: 1000.0},
+        {tee: 1000.0},
+        {tee: 1000.0, tee - 10: 1500.0},
+        {tee: 1000.0, tee - 6: 1500.0},
+    ]
+    if case == "reversal":
+        # The approach peak walks back without anything passing the tee.
+        frames += [{tee: 1000.0, tee - 9: 1500.0}]
+    elif case == "departure":
+        # Energy past the tee moves farther out on the next frame.
+        frames += [{tee + 2: 1500.0}, {tee + 4: 1500.0}]
+    elif case == "gap":
+        # The approach vanishes for longer than the missed-frame allowance.
+        frames += [{tee: 1000.0}] * 300 + [
+            {tee: 1000.0, tee - 9: 1500.0, tee + 2: 1600.0},
+            {tee + 4: 1600.0},
+        ]
+    elif case == "stationary":
+        # Something sits past the tee without moving: not a ball leaving.
+        frames += [{tee + 2: 1500.0}] * 5
+    else:
+        # Approach motion that never resolves times out before the departure.
+        frames += [{tee: 1000.0, tee - 6: 1500.0}] * 40 + [{tee + 2: 1500.0}, {tee + 4: 1500.0}]
+    detector.reset(4, 4, BINS)
+    detector.set_period(period_us)
+    replay = BallLeaveDetector(level=LEVEL, hits=2, frame_period_s=period_us / 1e6)
+
+    phases = []
+    for index, row in enumerate(_rows(frames)):
+        phase = PHASES[_step(detector, row)]
+        phases.append(phase)
+        assert phase == replay.step(index, row, TEE_BIN, BINS).phase, (case, index, phases)
+
+    detector.set_period(FRAME_PERIOD_US)
+    assert ("fired" in phases) == (case == "departure"), (case, phases)
 
 
 def test_sensor_start_forgets_every_trigger_from_the_previous_session():

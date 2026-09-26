@@ -204,6 +204,7 @@ class FakeSparseSerial:
             self._buffer += power_packet(summary)
         self.written: list[bytes] = []
         self.requested_cells: list[tuple[int, int]] | None = None
+        self.unread_at_request = 0
 
     @property
     def in_waiting(self) -> int:
@@ -219,6 +220,7 @@ class FakeSparseSerial:
         self.written.append(data)
         if not data.startswith(b"cells"):
             return
+        self.unread_at_request = len(self._buffer)
         if self._after_request is not None:
             self._buffer += self._after_request
             return

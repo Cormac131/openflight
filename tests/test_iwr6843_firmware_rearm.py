@@ -199,8 +199,7 @@ def test_dump_header_rotates_from_oldest_completed_frame():
 
     assert (
         "oldestPre = (gPreFramesCaptured >= gCapturePlan.preFrames)\n"
-        "                    ? (gPreFramesCaptured % gCapturePlan.preFrames) : 0U;"
-        in dump
+        "                    ? (gPreFramesCaptured % gCapturePlan.preFrames) : 0U;" in dump
     )
     assert "uint32_t slot = (oldestPre + i) % gCapturePlan.preFrames;" in dump
 
@@ -331,7 +330,9 @@ def test_supported_profiles_fit_the_l3_capture_budget():
     ), "L3_TOTAL_BYTES is no longer derived from the SDK bank defines"
 
     capacity_fn = _function_source(
-        source, "static uint32_t l3_captureCapacityBytes", "static uint32_t l3_captureBytesPerComplex"
+        source,
+        "static uint32_t l3_captureCapacityBytes",
+        "static uint32_t l3_captureBytesPerComplex",
     )
     assert "return L3_TOTAL_BYTES;" in capacity_fn, (
         "l3_captureCapacityBytes() must unconditionally return the whole L3 arena"
@@ -455,7 +456,9 @@ def test_track_config_takes_the_fields_the_runtime_sends():
 def test_stats_reports_trigger_state_and_debug_prints_on_phase_change_only():
     """A missed Triggered line must still be visible, without a per-frame UART write."""
     source = FIRMWARE.read_text(encoding="utf-8")
-    stats = _function_source(source, "static int32_t l3_cli_stats", "static int32_t l3_cli_hwaStats")
+    stats = _function_source(
+        source, "static int32_t l3_cli_stats", "static int32_t l3_cli_hwaStats"
+    )
     debug_write = _function_source(
         source,
         "static void l3_writeTriggerDebug",
@@ -576,3 +579,11 @@ def test_sensor_start_resets_rearm_latency_and_the_counter_runs():
     assert "#include <ti/utils/cycleprofiler/cycle_profiler.h>" in source
     assert init.index("Cycleprofiler_init();") < init.index("UART_init();")
     assert "xdc.useModule('ti.sysbios.family.arm.v7a.Pmu')" in MSS_CFG.read_text(encoding="utf-8")
+
+
+def test_rearm_task_outranks_the_cli():
+    """A stats or debug write on the CLI must not push the next HWA arm past the
+    inter-frame gap; the 2 ms profiles leave about 380 us after the chirps."""
+    source = FIRMWARE.read_text(encoding="utf-8")
+
+    assert "#define L3_HWA_REARM_TASK_PRIORITY (L3_CLI_TASK_PRIORITY + 1U)" in source

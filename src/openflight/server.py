@@ -1138,29 +1138,6 @@ def _ops_pre_trigger_segments(args) -> int:
     return _DEFAULT_OPS_PRE_TRIGGER_SEGMENTS
 
 
-def _enable_onboard_tracking(capture_monitor, runtime) -> bool:
-    """Hand the rig limits to the firmware tracker; True when it accepts them.
-
-    Optional: older firmware has no ``trackCfg``, and any failure here only
-    means the host keeps planning cells over ``l3sparse``.
-    """
-    command = runtime.track_config_command()
-    try:
-        reply = capture_monitor.radar.cmd(command, 2.0)
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        logger.warning("[IWR6843] trackCfg failed (%s); the host will plan cells", error)
-        return False
-    if "Error" in reply or "Done" not in reply:
-        logger.info(
-            "[IWR6843] Firmware has no on-chip tracker (%s); the host will plan cells",
-            reply.strip() or "no reply",
-        )
-        return False
-    capture_monitor.onboard_tracking = True
-    logger.info("[IWR6843] On-chip tracker armed: %s", command)
-    return True
-
-
 def init_iwr6843(
     *,
     port: str | None,
@@ -1181,8 +1158,13 @@ def init_iwr6843(
     self_trigger: "SelfTriggerConfig | None" = None,
     flight: str = "net",
     onboard_track: bool = True,
+    full_capture: bool = False,
 ) -> bool:
-    """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator."""
+    """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator.
+
+    ``full_capture`` transfers every stored sample instead of selected cells:
+    a diagnostic mode, about 7 s per shot on the default profile.
+    """
     global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
     try:
         from .iwr6843 import Calibration
@@ -1218,9 +1200,6 @@ def init_iwr6843(
             ),
             self_trigger=self_trigger,
         )
-        # OPS initialization can pulse the shared sound gate. Configure TI now,
-        # but do not accept edges until the OPS trigger path is fully running.
-        capture_monitor.start(armed=False)
         if self_trigger is not None:
             logger.warning(
                 "[IWR6843] Self-trigger drives the OPS with S!. Disconnect the "
@@ -1240,10 +1219,20 @@ def init_iwr6843(
             # in multipath and collapse the eight-element vertical channel.
             tdm_sign_policy="positive",
         )
-        capture_monitor.slice_planner = iwr6843_runtime.plan_sparse_cells
-        onboard_tracking = onboard_track and _enable_onboard_tracking(
-            capture_monitor, iwr6843_runtime
+        capture_monitor.slice_planner = None if full_capture else iwr6843_runtime.plan_sparse_cells
+        # OPS initialization can pulse the shared sound gate. Configure TI now,
+        # but do not accept edges until the OPS trigger path is fully running.
+        # trackCfg goes with the configuration: once the worker starts, only
+        # it may talk to the radar.
+        capture_monitor.start(
+            armed=False,
+            onboard_track_config=(
+                iwr6843_runtime.track_config_command()
+                if onboard_track and not full_capture
+                else None
+            ),
         )
+        onboard_tracking = capture_monitor.onboard_tracking
         iwr6843_runtime_config = {
             "enabled": True,
             "estimator": "lcmf_v1",
@@ -1268,6 +1257,7 @@ def init_iwr6843(
             "horizontal_phase_reference_rad": horizontal_phase_reference_rad,
             "capture_timeout_s": capture_timeout_s,
             "onboard_tracking": onboard_tracking,
+            "full_capture": full_capture,
             "freeze_delay_ms": 0.0,
             "raw_dump_saved": save_dumps,
             "output_dir": str(Path(output_dir).expanduser()),
@@ -4742,6 +4732,12 @@ def main():
         "(default: 2 with --iwr6843-self-trigger)",
     )
     parser.add_argument(
+        "--iwr6843-full-capture",
+        action="store_true",
+        help="Transfer all IWR samples instead of selected cells, for diagnosis "
+        "(about 7 seconds per shot on the default profile)",
+    )
+    parser.add_argument(
         "--no-iwr6843-onboard-track",
         dest="iwr6843_onboard_track",
         action="store_false",
@@ -5138,6 +5134,7 @@ def main():
             save_dumps=args.debug,
             self_trigger=self_trigger_config,
             onboard_track=args.iwr6843_onboard_track,
+            full_capture=args.iwr6843_full_capture,
         ):
             calibration = iwr6843_runtime.calibration
             ball_speed_correction_distance_ft = args.iwr6843_tee_m * 3.28084
