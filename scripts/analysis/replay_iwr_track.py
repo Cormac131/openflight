@@ -73,6 +73,12 @@ def _parser() -> argparse.ArgumentParser:
         help="peak (default) or energy",
     )
     parser.add_argument(
+        "--subbin",
+        choices=sorted(fw.SUBBIN_NAMES),
+        default=argparse.SUPPRESS,
+        help="sub-bin range of a target: parabolic (default) or centroid",
+    )
+    parser.add_argument(
         "--loop-period-us",
         type=float,
         default=argparse.SUPPRESS,
@@ -113,7 +119,15 @@ def _overrides(args: argparse.Namespace) -> dict:
     """ReplayConfig fields the command line set explicitly."""
     chosen = {
         key: getattr(args, key)
-        for key in ("dest_bin", "snr", "track_frames", "stat", "stop_at_fire", "post_from_frame")
+        for key in (
+            "dest_bin",
+            "snr",
+            "track_frames",
+            "stat",
+            "subbin",
+            "stop_at_fire",
+            "post_from_frame",
+        )
         if hasattr(args, key)
     }
     if hasattr(args, "loop_period_us"):

@@ -216,6 +216,7 @@ class ReplayConfig:
     snr: float = DEFAULT_SNR
     track_frames: int = DEFAULT_TRACK_FRAMES
     stat: str = "peak"  # "peak" or "energy"
+    subbin: str = "parabolic"  # how targets read their sub-bin range: "parabolic" or "centroid"
     dest_bin: int | None = None  # a locked ball's global bin; None uses the tee
     loop_period_s: float | None = None  # None: n_tx x the shipped chirp period
     fft_size: int = DEFAULT_FFT_SIZE
@@ -633,6 +634,8 @@ def replay_dump(
         raise ValueError("replay needs a range-FFT snapshot dump, not raw ADC samples")
     if config.stat not in fw.STAT_NAMES:
         raise ValueError(f"stat must be one of {sorted(fw.STAT_NAMES)}, got {config.stat!r}")
+    if config.subbin not in fw.SUBBIN_NAMES:
+        raise ValueError(f"subbin must be one of {sorted(fw.SUBBIN_NAMES)}, got {config.subbin!r}")
     n_tx = int(meta["n_tx"])
     loop_period_s = config.loop_period_s or same_tx_loop_period_s(n_tx)
     timestamps = frame_timestamps_us(meta)
@@ -704,7 +707,9 @@ def replay_dump(
                 ball_elevation = float(static_obs.elevationRad)
                 ball_angle = _angle_summary(static_obs)
 
-    params = fw.ObsParams(trig_cfg.stat, trig_cfg.snr, loop_period_s)
+    params = fw.ObsParams(
+        trig_cfg.stat, trig_cfg.snr, loop_period_s, fw.SUBBIN_NAMES[config.subbin]
+    )
     targets = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
     first_local = ctypes.c_uint32()
     count = ctypes.c_uint32()
@@ -999,7 +1004,7 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
     the launch fit and the shot machine's post-impact transitions."""
     count = min(window_bins, fw.TRIG_MAX_BINS)
     obs = bin_observations(cube, frame, 0, count, n_tx)
-    ball_params = fw.ObsParams(params.stat, ball_track.cfg.snr, params.loopPeriodS)
+    ball_params = fw.ObsParams(params.stat, ball_track.cfg.snr, params.loopPeriodS, params.subBin)
     lib.l3_obs_floor_update(ctypes.byref(ball_floor), params.stat, obs, count, FLOOR_SHIFT)
     floor = ball_floor.value
     found = lib.l3_obs_extract(

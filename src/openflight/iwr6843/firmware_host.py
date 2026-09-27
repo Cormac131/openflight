@@ -39,6 +39,7 @@ HOST_SOURCES = (
     "l3_adaptive.c",
     "l3_iq8.c",
     "l3_retain.c",
+    "l3_iq16_stats.c",
 )
 
 # l3_observation.h
@@ -48,6 +49,8 @@ OBS_WAVELENGTH_M = 0.00484
 OBS_FLOOR_MIN = 1.0
 STAT_ENERGY, STAT_PEAK = 0, 1
 STAT_NAMES = {"energy": STAT_ENERGY, "peak": STAT_PEAK}
+SUBBIN_CENTROID, SUBBIN_PARABOLIC = 0, 1
+SUBBIN_NAMES = {"centroid": SUBBIN_CENTROID, "parabolic": SUBBIN_PARABOLIC}
 
 # l3_trigger.h
 TRIG_MAX_BINS = 64
@@ -188,7 +191,12 @@ class BinObs(ctypes.Structure):
 class ObsParams(ctypes.Structure):
     """``l3_obs_params_t``."""
 
-    _fields_ = [("stat", ctypes.c_uint32), ("snr", ctypes.c_float), ("loopPeriodS", ctypes.c_float)]
+    _fields_ = [
+        ("stat", ctypes.c_uint32),
+        ("snr", ctypes.c_float),
+        ("loopPeriodS", ctypes.c_float),
+        ("subBin", ctypes.c_uint32),
+    ]
 
 
 class TargetObs(ctypes.Structure):
@@ -639,6 +647,33 @@ class Iq8Mode(ctypes.Structure):
     ]
 
 
+class Iq16ChannelStats(ctypes.Structure):
+    """l3_iq16_channel_stats_t"""
+
+    _fields_ = [
+        ("loops", ctypes.c_uint32),
+        ("sumIm", ctypes.c_int32),
+        ("sumRe", ctypes.c_int32),
+        ("energy", ctypes.c_int64),
+        ("loopPower", ctypes.c_int64 * 16),
+        ("r1Re", ctypes.c_int64),
+        ("r1Im", ctypes.c_int64),
+    ]
+
+
+class Iq16BinStats(ctypes.Structure):
+    """l3_iq16_bin_stats_t"""
+
+    _fields_ = [
+        ("loops", ctypes.c_uint32),
+        ("channels", ctypes.c_uint32),
+        ("energy", ctypes.c_int64),
+        ("loopPower", ctypes.c_int64 * 16),
+        ("r1Re", ctypes.c_int64),
+        ("r1Im", ctypes.c_int64),
+    ]
+
+
 class Roi(ctypes.Structure):
     """l3_roi_t"""
 
@@ -768,6 +803,18 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
         _U32,
     ),
     "l3_obs_format_target": ([_P(TargetObs), *_TEXT], ctypes.c_int32),
+    "l3_obs_parabolic_offset": ([_F32, _F32, _F32], _F32),
+    # l3_iq16_stats.h
+    "l3_iq16_channel_stats": (
+        [_P(ctypes.c_int16), _U32, _U32, _P(Iq16ChannelStats)],
+        ctypes.c_int32,
+    ),
+    "l3_iq16_bin_stats_init": ([_P(Iq16BinStats), _U32], None),
+    "l3_iq16_bin_stats_add": ([_P(Iq16BinStats), _P(Iq16ChannelStats)], None),
+    "l3_iq16_bin_stats_finish": (
+        [_P(Iq16BinStats), _P(_F32), _P(_F32), _P(_F32), _P(_F32), _P(_F32), _P(_F32)],
+        None,
+    ),
     # l3_frames.h
     "l3_cal_identity": ([_P(RadarCal), _U32], None),
     "l3_frames_from_spherical": ([_P(Spherical), _P(Vec3)], None),

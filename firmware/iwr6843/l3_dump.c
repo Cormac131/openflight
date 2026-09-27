@@ -63,6 +63,7 @@
 #include "l3_adaptive.h"
 #include "l3_impact.h"
 #include "l3_iq8.h"
+#include "l3_iq16_stats.h"
 #include "l3_retain.h"
 #include "compact_iq16.h"
 #include "l3_profile.h"
@@ -383,6 +384,8 @@ static volatile uint8_t  gSelfTriggerLatched;
  * triggerLog) waits for that flag before it resets or reads the state.
  * gTriggerPhase is the readout the host's stats parser already knows. */
 static l3_trig_cfg_t     gTrigCfg;
+/* How targets read their sub-bin range (L3_OBS_SUBBIN_*): "trackCfg subbin". */
+static uint32_t          gObsSubBin = L3_OBS_SUBBIN_PARABOLIC;
 static l3_trig_t         gTrig;
 static volatile uint8_t  gTrigBusy;
 static float             gTrigLoopPeriodS;
@@ -3010,6 +3013,38 @@ static void l3_verticalResidual(const l3_detect_frame_t *source, uint32_t localB
     for (loop = 0U; loop < loops; loop++) {
         loopPower[loop] = 0.0F;
     }
+    if (cb == 2U && loops <= L3_IQ16_MAX_LOOPS) {
+        /* IQ16: exact integer statistics (l3_iq16_stats.c), converted to
+         * float once at the end, so the IQ16 precision the scratch or ring
+         * holds is not spent in float rounding on the way to the detector. */
+        l3_iq16_bin_stats_t bin;
+        l3_iq16_channel_stats_t channelStats;
+
+        l3_iq16_bin_stats_init(&bin, loops);
+        for (tx = 0U; tx < ntx; tx++) {
+            uint32_t rx;
+            if (ntx == 3U && tx == 1U) {
+                continue;
+            }
+            for (rx = 0U; rx < N_RX; rx++) {
+                const int16_t *words =
+                    (const int16_t *)(const void *)&frame[((tx * N_RX + rx) * binCount + localBin) * 4U];
+
+                if (l3_iq16_channel_stats(words, loops, loopStride / 2U, &channelStats) == 0) {
+                    l3_iq16_bin_stats_add(&bin, &channelStats);
+                }
+            }
+        }
+        l3_iq16_bin_stats_finish(&bin, &energy, &peak, &loopPower[0], &r1Re, &r1Im, perLoop);
+        if (obs != NULL) {
+            obs->energy = energy;
+            obs->peak = peak;
+            obs->loop0 = loopPower[0];
+            obs->r1Re = r1Re;
+            obs->r1Im = r1Im;
+        }
+        return;
+    }
     for (tx = 0U; tx < ntx; tx++) {
         uint32_t rx;
         if (ntx == 3U && tx == 1U) {
@@ -3543,6 +3578,7 @@ static void l3_considerBallTrack(uint32_t slot)
     params.stat = gTrigCfg.stat;
     params.snr = gBallTrackCfg.snr;   /* a departing ball is a weaker return than a club */
     params.loopPeriodS = gTrigLoopPeriodS;
+    params.subBin = gObsSubBin;
     l3_obs_floor_update(&gBallFloor, gTrigCfg.stat, obs, count, L3_TRIG_FLOOR_SHIFT);
     found = l3_obs_extract(&params, frame, gPostTimestampUs, frame.binStart, obs, count,
                            gBallFloor, targets, L3_OBS_MAX_TARGETS);
@@ -3673,6 +3709,7 @@ static void l3_considerSelfTrigger(uint32_t slot)
         params.stat = gTrigCfg.stat;
         params.snr = gTrigCfg.snr;
         params.loopPeriodS = gTrigLoopPeriodS;
+        params.subBin = gObsSubBin;
         ticks = Cycleprofiler_getTimeStamp();
         found = l3_obs_extract(&params, gPreFramesCaptured,
                                gPreFramesCaptured * (uint32_t)gFramePeriodUs,
@@ -4232,9 +4269,23 @@ static int32_t l3_cli_trackCfg(int32_t argc, char *argv[])
     if (argc >= 2 && strcmp(argv[1], "impact") == 0) {
         return l3_cli_trackCfgImpact(argc, argv);
     }
+    if (argc == 3 && strcmp(argv[1], "subbin") == 0) {
+        /* "trackCfg subbin centroid|parabolic": how targets read their
+         * sub-bin range (l3_observation.h). */
+        if (strcmp(argv[2], "centroid") == 0) {
+            gObsSubBin = L3_OBS_SUBBIN_CENTROID;
+        } else if (strcmp(argv[2], "parabolic") == 0) {
+            gObsSubBin = L3_OBS_SUBBIN_PARABOLIC;
+        } else {
+            CLI_write("Error: trackCfg subbin centroid|parabolic\n");
+            return -1;
+        }
+        CLI_write("Done\n");
+        return 0;
+    }
     if (argc != 6) {
         CLI_write("Error: trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM> "
-                  "| cal ... | elem ... | impact ...\n");
+                  "| cal ... | elem ... | impact ... | subbin ...\n");
         return -1;
     }
     for (i = 0; i < 5; i++) {

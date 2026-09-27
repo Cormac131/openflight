@@ -331,6 +331,30 @@ the host launch angle and club path, capture cost) from session logs into
 one CSV row per shot, tagged with the firmware SHA, before any of the
 representation work changes them.
 
+### IQ16 precision in the observations
+
+`l3_iq16_stats.c` computes a bin's burst-MTI residual energy, per-loop power
+and lag-1 autocorrelation in integers: the residual is taken scaled by the
+loop count (exact in int32), its products and sums in int64, and the totals
+are divided by loops squared once at the end. `l3_verticalResidual` takes
+that path for every IQ16 frame (ring or scratch) and keeps the float path
+for IQ8, so the precision the capture holds is not spent in float rounding
+before the detector sees it.
+
+Targets read their sub-bin range from the parabola through the LOG of the
+statistic at the peak and its two neighbours (`trackCfg subbin
+parabolic|centroid`, `l3_obs_parabolic_offset`), the centroid standing in
+at a region edge. A Gaussian-shaped lobe is fitted exactly; the unwindowed
+128-point range FFT's sinc-squared lobe is not a parabola in any domain, and
+the log fit's worst error on it is 0.17 bin (8 mm) against 0.28 for the
+linear parabola, which `tests/test_iwr6843_firmware_iq16_stats.py` pins. A
+Hann window on the HWA (`windowEn`, a waveform decision for the profile
+work) would make it almost exact. On the five recorded swings the two
+estimators give the same speeds to 0.3 m/s and the same fit residuals to
+half a millimetre; parabolic is the default because it is the exact fit
+for a smooth lobe and its bias is characterised, where the centroid's
+depends on the floor estimate.
+
 ### Compact IQ16 capture (compact16, adaptive16)
 
 `captureFormat compact16|adaptive16` (with `captureCfg retain <preBins>

@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Exact IQ16 observation statistics and a log-parabolic sub-bin range.**
+  `firmware/iwr6843/l3_iq16_stats.c` accumulates the residual energy, per-loop
+  power and lag-1 autocorrelation in integers with one float conversion at the
+  end, and targets read their sub-bin range from the log parabola through the
+  peak and its neighbours (`trackCfg subbin`). The estimator's bias on the
+  unwindowed range lobe is measured and pinned.
 - **Compact IQ16 capture formats in the firmware.** `captureFormat compact16`
   and `adaptive16` process every frame at full IQ16 precision from the
   accelerator's scratch and store only the retained window in L3 (16/24/16

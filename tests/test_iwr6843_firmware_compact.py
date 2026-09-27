@@ -261,3 +261,30 @@ def test_the_adaptive_profile_asks_for_the_compact_format_and_its_retain_widths(
         < order.index("phaseCaptureCfg")
     )
     assert order[-1] == "sensorStart"
+
+
+def test_iq16_frames_take_the_exact_integer_statistics_path():
+    residual = _function("static void l3_verticalResidual(")
+    assert "if (cb == 2U && loops <= L3_IQ16_MAX_LOOPS) {" in residual
+    assert "l3_iq16_bin_stats_init(&bin, loops);" in residual
+    assert "l3_iq16_channel_stats(words, loops, loopStride / 2U, &channelStats)" in residual
+    assert (
+        "l3_iq16_bin_stats_finish(&bin, &energy, &peak, &loopPower[0], &r1Re, &r1Im, perLoop);"
+        in residual
+    )
+    assert residual.index("if (cb == 2U") < residual.index(
+        "(l3_ringComponent(sample, cb) - meanIm) * scale;"
+    ), "the float path stays for IQ8"
+    assert '#include "l3_iq16_stats.h"' in _source()
+    makefile = (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
+    assert "l3_iq16_stats.c" in makefile
+
+
+def test_the_sub_bin_estimator_is_configurable_and_reaches_both_extractions():
+    source = _source()
+    assert "static uint32_t          gObsSubBin = L3_OBS_SUBBIN_PARABOLIC;" in source
+    assert source.count("params.subBin = gObsSubBin;") == 2, "the club and the ball extraction"
+    track_cfg = _function("static int32_t l3_cli_trackCfg(")
+    assert 'strcmp(argv[1], "subbin") == 0' in track_cfg
+    assert "gObsSubBin = L3_OBS_SUBBIN_CENTROID;" in track_cfg
+    assert "gObsSubBin = L3_OBS_SUBBIN_PARABOLIC;" in track_cfg
