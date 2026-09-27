@@ -131,7 +131,11 @@ The detector is armed and tuned over the CLI:
 
 ```text
 triggerCfg <globalBin> <snr> <frames> [approach gate minCoh minStep stat minSpeed]
-triggerLog [trace|track|clear]
+triggerLog [trace|track|shot|result|perf|clear]
+trackCfg cal <pitchDeg> <yawDeg> <rollDeg> <azOffsetRad> <elOffsetDeg> <rangeBiasM>
+trackCfg elem <index> <phaseRad> <gain>
+trackCfg impact <toleranceM> <horizonS> <minSpeedMps> <minConfidence> <armed>
+captureCfg adaptive <enabled> <approachBins> <marginBins>
 ```
 
 `snr` is the candidate threshold over the running noise floor (default 6 on
@@ -188,6 +192,148 @@ Both modules are pure C. `tests/test_iwr6843_firmware_observation.py` and
 `tests/test_iwr6843_firmware_club_track.py` build them with the host compiler
 through `openflight.iwr6843.firmware_host`, which holds the ctypes mirrors of
 every `l3_*.h` structure in one place.
+
+### Coordinate frames and angles
+
+Two frames, defined once in `l3_frames.h` and nowhere else. The RADAR frame
+has x out of the antenna face, y to the radar's right seen from behind, z
+up; azimuth is positive right and elevation positive up. The GOLF frame has x
+along the target line, y right of it, z up, origin at the antenna. The two
+differ by the enclosure's roll, pitch (nose up positive) and yaw (boresight
+right of the target line positive), held in `l3_radar_cal_t` together with
+the per-virtual-element complex corrections from the corner-reflector solve,
+the electrical zeros of the two baselines and the range bias. Every angle a
+metric reports follows one rule: horizontal angles (club path, horizontal
+launch) are `atan2(vy, vx)`, positive right, in-to-out for a right-hander;
+vertical angles (angle of attack, vertical launch) are `atan2(vz, hypot(vx,
+vy))`, positive up. `tests/test_iwr6843_firmware_frames.py` is the executable
+statement of those conventions.
+
+`l3_angle.c` reads a target's angles from its antenna channels at its range
+bin. RX0..RX3 sit lambda/2 apart and the vertical TX pair (TX0 and TX2 of a
+three-TX loop) is 2 lambda apart on the same axis, so `[txA.rx0..3,
+txB.rx0..3]` is the 8-element elevation array once flipped into the
+calibration's physical order and corrected; a Bartlett beamformer over +/-40
+degrees with parabolic refinement gives elevation, and its peak-to-mean
+power ratio the quality. TX1 sits lambda/2 off the pair's centre on the axis
+the rotation made horizontal: the coherent mean over RX of TX1 against that
+centre has phase `-pi sin(azimuth)` (TX1 is physically left), so azimuth is
+positive right. The TDM phase between TX blocks is the per-loop Doppler
+phase the observation layer measured, unwrapped by the alias the track's
+range rate selects, divided by the TX count; `l3_dump.c` builds the channel
+snapshot by summing each channel's burst-MTI residual coherently over the
+loops with that per-loop phase unwound, and estimates angles for the
+associated club target only, once its track has a range rate.
+
+### Club delivery, geometric impact, ball flight, result
+
+Each club-track point carries a golf-frame position from its range and
+whatever angles it measured. `l3_track_delivery` fits x, y and z against
+time over the newest points: the velocity vector gives club speed, its
+direction club path and angle of attack, each valid only when the fitted
+points carried the angle it needs (range alone gives the radial speed;
+elevation adds attack; azimuth adds path), with the radial speed kept for
+cross-checking. `triggerLog track` prints the delivery line and the newest
+angle estimate beside the track.
+
+`l3_impact.c` judges the delivery against the ball position (the locked
+ball, else the tee, on boresight until the ball detector measures angles):
+the closest approach of the fitted line and the moment it happens, which
+dates impact between frames. Contact within the tolerance and the horizon
+fires; a line that misses by more is a practice swing; a slow mover is a
+body. It records its verdict every frame and fires the capture only when
+`trackCfg impact ... 1` arms it; the range gate stays the fallback and
+`triggerLog track` reports which fired.
+
+`l3_shot.c` is the explicit per-shot sequence: WAITING_FOR_BALL, READY,
+CLUB_ACQUIRE, CLUB_TRACK, IMPACT, BALL_TRACK, SOLVE, RESULT. IMPACT freezes
+the ball origin, the delivery, the impact time and the club trajectory;
+nothing after reads a live tracker. Kept post-impact frames are published to
+the detect task (IQ16 rings) and routed to `l3_ball_track.c`, which looks
+for a coherent return leaving the origin: acquired at or beyond the origin
+bin within a short gate, confirmed by its second point's range rate, dropped
+when it is the resting club or impossibly fast. The launch is fitted over
+the earliest clean points and extrapolated to the impact time: ball speed,
+horizontal launch and vertical launch. `triggerLog shot` prints the machine,
+the ball track, the launch and the ball points.
+
+`l3_result.c` assembles the versioned result when the machine reaches
+RESULT: nine measurements (ball speed, vertical and horizontal launch, club
+speed, path, attack, spin rate, spin axis, impact range) each with value,
+confidence and flags (valid; measured rather than inferred; radial-only;
+implausible; the tee stood in for a locked ball), evidence and plausibility
+flags, and a VALID, PARTIAL or INVALID verdict. Spin stays invalid until it
+is measured. `triggerLog result` prints the lines and the fixed 100-byte
+little-endian packet as two hex lines; `openflight.iwr6843.shot_result`
+parses it and labels every metric MEASURED or ESTIMATED for the UI.
+
+### Profiling and adaptive windows
+
+`triggerLog perf` prints per-stage counts, last, mean and maximum in
+microseconds (residual, trigger, extraction, club track, angle, impact, ball
+detector, ball tracker) from `l3_profile.c` and the R4F cycle counter. That
+is the evidence for moving a stage to the HWA or DSP; nothing is moved until
+the numbers say which. `captureCfg adaptive 1 <approachBins> <marginBins>`
+lets `l3_adaptive.c` move the plan's windows to the locked ball between
+shots (at rearm, before the HWA restarts): pre starts `approachBins` short of
+the ball, impact and post `marginBins` short, late half a window further
+out. L3 is then spent on where the shot is rather than on fixed ranges.
+
+### Hardware-gated work
+
+The code above is complete and host-tested; what needs the rig is listed
+here so nobody mistakes it for done. The ball detector's acceptance list
+(empty tee reaches waiting, a ball locks within a bin, the golfer does not
+create false locks, removal releases, dest minus club bin behaves) has not
+been run. The angle estimator wants a corner reflector at 0, +/-10 and
++/-20 degrees and known heights, and the reference calibration loaded with
+`trackCfg cal` and `trackCfg elem`. The six core measurements need a
+reference monitor over 30 to 50 shots per club (`tests/radar/datasets/`).
+The geometric impact detector runs in observe-only mode until those swings
+show it firing where the gate does. The spin probe's thresholds are
+placeholders until stationary, low-spin and high-spin balls have been
+recorded. Loop counts are chosen from
+`scripts/analysis/evaluate_iwr_profiles.py` on real captures, not from
+frame rate; nothing moves to the HWA or DSP before `triggerLog perf` has
+numbers.
+
+### End-state architecture
+
+```text
+              IWR6843 ADC
+                   |
+                   v
+             HWA RANGE FFT
+                   |
+          +--------+--------+
+          |                 |
+     STATIC PROFILE       MTI (l3_verticalResidual)
+          |                 |
+          v                 v
+    BALL DETECTOR     OBSERVATION LAYER (l3_observation)
+     (l3_ball)              |
+          |                 v
+          |           CLUB TRACKER (l3_club_track + l3_angle)
+          |                 |
+          |        speed / path / attack (l3_track_delivery)
+          |                 |
+          +------> IMPACT <-+   range gate (l3_trigger) or geometry (l3_impact)
+                    |
+                    v      shot machine (l3_shot)
+               BALL TRACKER (l3_ball_track)
+                    |
+           speed / HLA / VLA (l3_ball_track_launch)
+                    |
+                    v
+              SPIN PROCESSOR (host spin_probe, experimental)
+                    |
+                    v
+             SHOT VALIDATOR + RESULT PACKET (l3_result)
+                    |
+                    v
+              Raspberry Pi: shot_result.py, ballistics.solve_flight
+              with environment.py, delivery.py (face, smash, gates)
+```
 
 ### Replaying recorded swings
 
@@ -348,7 +494,16 @@ matching host-parser change and regression tests in the same commit.
 | `firmware/iwr6843/l3_dump.c` | RF control, HWA/EDMA pipeline, circular ring, freeze/rearm, CLI, and dump streaming |
 | `firmware/iwr6843/l3_observation.c`, `l3_observation.h` | Observation layer: statistic, adaptive floor, target extraction with sub-bin range, coherence, Doppler readout, confidence (host-testable, no hardware) |
 | `firmware/iwr6843/l3_trigger.c`, `l3_trigger.h` | Self-trigger detector: impact gate over the observation layer, frame log and trace (host-testable, no hardware) |
-| `firmware/iwr6843/l3_club_track.c`, `l3_club_track.h` | Persistent club trajectory: predictive association, coasting, range-over-time speed fit (host-testable, no hardware) |
+| `firmware/iwr6843/l3_club_track.c`, `l3_club_track.h` | Persistent club trajectory: predictive association, coasting, 3D delivery fit (host-testable, no hardware) |
+| `firmware/iwr6843/l3_frames.c`, `l3_frames.h` | Radar and golf coordinate frames, the calibration structure, velocity-angle conventions |
+| `firmware/iwr6843/l3_angle.c`, `l3_angle.h` | Azimuth and elevation of a target from its antenna channels, TDM alias resolution |
+| `firmware/iwr6843/l3_impact.c`, `l3_impact.h` | Geometric impact detector: closest approach of the club line to the ball, impact time between frames |
+| `firmware/iwr6843/l3_shot.c`, `l3_shot.h` | Shot state machine with the frozen impact record |
+| `firmware/iwr6843/l3_ball_track.c`, `l3_ball_track.h` | Post-impact ball tracker and launch fit (ball speed, HLA, VLA) |
+| `firmware/iwr6843/l3_result.c`, `l3_result.h` | Measurements with confidence, shot validation, the versioned result packet |
+| `firmware/iwr6843/l3_profile.c`, `l3_profile.h` | Per-stage cycle counters for `triggerLog perf` |
+| `firmware/iwr6843/l3_adaptive.c`, `l3_adaptive.h` | Capture windows that follow the locked ball between shots |
+| `firmware/iwr6843/l3_text.c`, `l3_text.h` | Integer-only fixed-point text for the CLI |
 | `firmware/iwr6843/l3_ball.c`, `l3_ball.h` | Ball placement detector: static background, compact-reflector appearance, confidence (host-testable, no hardware) |
 | `firmware/iwr6843/dump_format.h` | Packed firmware-side wire contract |
 | `firmware/iwr6843/makefile` | TI mmWave SDK application build and meta-image generation |
@@ -362,7 +517,11 @@ matching host-parser change and regression tests in the same commit.
 | `config/iwr6843_l3dump_dense_36f2ms_53bin_iq8_wide_late.cfg` | Experimental dense IQ8 capture with the wide late-flight window |
 | `src/openflight/iwr6843/dump.py` | Python decoder and executable format reference |
 | `src/openflight/iwr6843/firmware_host.py` | Host build of the pure-C modules and their ctypes mirrors |
-| `src/openflight/iwr6843/firmware_replay.py` | Replays recorded captures through the compiled trigger, observation layer and club track |
+| `src/openflight/iwr6843/firmware_replay.py` | Replays recorded captures through the compiled trigger, trackers, impact detector and shot machine |
+| `src/openflight/iwr6843/shot_result.py` | Parses the firmware's result packet into labelled measurements |
+| `src/openflight/iwr6843/spin_probe.py` | Experimental spin observable: ball ROI, micro-Doppler spread |
+| `src/openflight/iwr6843/datasets.py` | Labelled calibration dataset schema and loader (`tests/radar/datasets/`) |
+| `src/openflight/environment.py`, `src/openflight/delivery.py` | Air density for the flight model; inferred face, smash and plausibility gates |
 | `tests/radar/recordings/` | Recorded `.l3dump` swings with a `manifest.json` for the replay test |
 
 ## Where To Build, Flash, And Run
@@ -693,6 +852,13 @@ uv run pytest \
   tests/test_iwr6843_firmware_observation.py \
   tests/test_iwr6843_firmware_club_track.py \
   tests/test_iwr6843_firmware_replay.py \
+  tests/test_iwr6843_firmware_frames.py \
+  tests/test_iwr6843_firmware_angle.py \
+  tests/test_iwr6843_firmware_impact.py \
+  tests/test_iwr6843_firmware_shot.py \
+  tests/test_iwr6843_firmware_ball_track.py \
+  tests/test_iwr6843_firmware_result.py \
+  tests/test_iwr6843_firmware_profile.py \
   tests/test_iwr6843_pipeline.py \
   tests/test_iwr6843_driver.py \
   tests/test_iwr6843_monitor.py \

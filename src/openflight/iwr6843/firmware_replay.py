@@ -812,6 +812,103 @@ def replay_file(
 
 RECORDINGS_DIR = Path(__file__).resolve().parents[3] / "tests" / "radar" / "recordings"
 MANIFEST_NAME = "manifest.json"
+EXPECT_KEY = "expect"
+
+
+@dataclass(frozen=True)
+class Expectation:
+    """What a recording is expected to produce: ranges, not exact values.
+
+    Keys of the manifest's ``expect`` entry: ``impact_frame`` [lo, hi] (the
+    range gate), ``geometric_frame`` [lo, hi], ``club_points_min``,
+    ``club_direction`` ("approaching"), ``acquisitions_max``,
+    ``ball_origin_bin`` [lo, hi] (the first ball point), ``ball_speed_mps``
+    [lo, hi], ``club_speed_mps`` [lo, hi], ``fires`` (true/false).
+    """
+
+    impact_frame: tuple[int, int] | None = None
+    geometric_frame: tuple[int, int] | None = None
+    club_points_min: int | None = None
+    club_direction: str | None = None
+    acquisitions_max: int | None = None
+    ball_origin_bin: tuple[float, float] | None = None
+    ball_speed_mps: tuple[float, float] | None = None
+    club_speed_mps: tuple[float, float] | None = None
+    fires: bool | None = None
+
+    @classmethod
+    def from_manifest(cls, raw: dict) -> Expectation:
+        known = {f for f in cls.__dataclass_fields__}  # pylint: disable=no-member
+        unknown = set(raw) - known
+        if unknown:
+            raise ValueError(f"unknown expectation keys {sorted(unknown)}; known: {sorted(known)}")
+        values = dict(raw)
+        for key in (
+            "impact_frame",
+            "geometric_frame",
+            "ball_origin_bin",
+            "ball_speed_mps",
+            "club_speed_mps",
+        ):
+            if key in values:
+                lo, hi = values[key]
+                values[key] = (lo, hi)
+        return cls(**values)
+
+    def check(self, result: ReplayResult) -> list[str]:
+        """The expectations the result fails, as readable reasons; empty is a pass."""
+        failures: list[str] = []
+
+        def in_range(name: str, value, bounds) -> None:
+            if bounds is None:
+                return
+            if value is None:
+                failures.append(f"{name}: none, expected {bounds[0]}..{bounds[1]}")
+            elif not bounds[0] <= value <= bounds[1]:
+                failures.append(f"{name}: {value:.2f} outside {bounds[0]}..{bounds[1]}")
+
+        if self.fires is not None and (result.fired_frame is not None) != self.fires:
+            failures.append(f"fires: {result.fired_frame is not None}, expected {self.fires}")
+        in_range("impact_frame", result.fired_frame, self.impact_frame)
+        in_range("geometric_frame", result.geometric_frame, self.geometric_frame)
+        if self.club_points_min is not None and len(result.points) < self.club_points_min:
+            failures.append(f"club_points: {len(result.points)} < {self.club_points_min}")
+        if self.club_direction == "approaching" and result.approach_fraction < 0.75:
+            failures.append(
+                f"club_direction: approach fraction {result.approach_fraction:.2f} < 0.75"
+            )
+        if self.acquisitions_max is not None and result.acquisitions > self.acquisitions_max:
+            failures.append(f"acquisitions: {result.acquisitions} > {self.acquisitions_max}")
+        first_ball = result.ball_points[0].range_bin if result.ball_points else None
+        in_range("ball_origin_bin", first_ball, self.ball_origin_bin)
+        in_range(
+            "ball_speed_mps",
+            None if result.launch is None else result.launch.speed_mps,
+            self.ball_speed_mps,
+        )
+        in_range(
+            "club_speed_mps",
+            None if result.delivery is None else result.delivery.speed_mps,
+            self.club_speed_mps,
+        )
+        return failures
+
+
+def recording_expectations(directory: str | Path = RECORDINGS_DIR) -> dict[str, Expectation]:
+    """The ``expect`` entry of each recording in the manifest, by file name;
+    the ``default`` entry's expectations apply to files without their own."""
+    directory = Path(directory)
+    manifest_path = directory / MANIFEST_NAME
+    if not manifest_path.exists():
+        return {}
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    default = manifest.get("default", {}).get(EXPECT_KEY, {})
+    out: dict[str, Expectation] = {}
+    for path in sorted(directory.glob("*.l3dump")):
+        raw = {**default, **manifest.get(path.name, {}).get(EXPECT_KEY, {})}
+        if raw:
+            out[path.name] = Expectation.from_manifest(raw)
+    return out
 
 
 def recording_configs(
@@ -837,6 +934,7 @@ def recording_configs(
     for path in sorted(directory.glob("*.l3dump")):
         entry = {**default, **manifest.get(path.name, {})}
         entry.pop("notes", None)
+        entry.pop(EXPECT_KEY, None)
         if "tee_bin" not in entry:
             raise ValueError(f"{path.name}: no tee_bin in {MANIFEST_NAME} and no default given")
         configs.append((path, ReplayConfig(**entry)))
@@ -920,7 +1018,9 @@ __all__ = [
     "RECORDINGS_DIR",
     "DEFAULT_SNR",
     "DEFAULT_TRACK_FRAMES",
+    "EXPECT_KEY",
     "AngleSummary",
+    "Expectation",
     "DeliverySummary",
     "LaunchSummary",
     "PointSummary",
@@ -934,6 +1034,7 @@ __all__ = [
     "frame_timestamps_us",
     "frame_window",
     "recording_configs",
+    "recording_expectations",
     "replay_dump",
     "replay_file",
     "vertical_tx_indices",

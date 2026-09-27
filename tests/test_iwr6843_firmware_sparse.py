@@ -329,9 +329,9 @@ def test_club_track_rides_the_trigger_pass_and_prints_from_trigger_log():
     assert 'strcmp(argv[1], "track") == 0' in log
     assert "l3_track_format_status(&gClubTrack, gClubTrackDest, line, sizeof(line));" in log
     assert "l3_track_format_point(&point, gClubTrackDest, line, sizeof(line));" in log
-    assert 'CLI_write("Error: triggerLog [trace|track|shot|result|clear]\\n");' in log
+    assert 'CLI_write("Error: triggerLog [trace|track|shot|result|perf|clear]\\n");' in log
     assert (
-        "triggerLog [trace|track|shot|result|clear]: frame log, trace, club track, shot, result"
+        "triggerLog [trace|track|shot|result|perf|clear]: log, trace, club, shot, result, perf"
         in source
     )
 
@@ -574,9 +574,9 @@ def test_trigger_log_shot_prints_the_machine_the_ball_track_and_the_launch():
     assert "l3_ball_track_format_status(&gBallTrack, line, sizeof(line));" in log
     assert "l3_launch_format(&gLaunch, line, sizeof(line));" in log
     assert "l3_track_point(&gBallTrack.core, index, &point)" in log
-    assert 'CLI_write("Error: triggerLog [trace|track|shot|result|clear]\\n");' in log
+    assert 'CLI_write("Error: triggerLog [trace|track|shot|result|perf|clear]\\n");' in log
     assert (
-        "triggerLog [trace|track|shot|result|clear]: frame log, trace, club track, shot, result"
+        "triggerLog [trace|track|shot|result|perf|clear]: log, trace, club, shot, result, perf"
         in source
     )
 
@@ -602,3 +602,58 @@ def test_the_result_is_built_once_the_shot_reaches_result_and_printed_with_its_p
     assert 'CLI_write("packet %s\\n", line);' in log
     assert 'CLI_write("packet+ %s\\n", &hex[L3_RESULT_PACKET_BYTES]);' in log
     assert "gShotResultReady = 0U;" in _function("static void l3_trigRearm(")
+
+
+def test_every_stage_is_profiled_with_the_cpu_clock_and_printed_by_perf():
+    source = _source()
+    consider = _function("static void l3_considerSelfTrigger(")
+    ball_track = _function("static void l3_considerBallTrack(")
+    ball = _function("static void l3_considerBall(")
+    stage = _function("static void l3_profileStage(")
+    log = _function("static int32_t l3_cli_triggerLog(")
+
+    assert (
+        '#include "l3_profile.h"' in source
+        and "l3_profile.c" in (FIRMWARE.parent / "makefile").read_text()
+    )
+    assert "l3_profile_init(&gProfile, gCpuClock / 1000000U);" in stage
+    assert "l3_profile_add(&gProfile, stage, Cycleprofiler_getTimeStamp() - startTicks);" in stage
+    for name in ("RESIDUAL", "TRIGGER", "EXTRACT", "CLUB_TRACK", "ANGLE", "IMPACT"):
+        assert f"l3_profileStage(L3_PROF_{name}, ticks);" in consider, name
+    assert consider.count("ticks = Cycleprofiler_getTimeStamp();") == 6
+    assert "l3_profile_frame(&gProfile);" in consider
+    assert "l3_profileStage(L3_PROF_BALL_DETECT, ticks);" in ball
+    assert "l3_profileStage(L3_PROF_BALL_TRACK, ticks);" in ball_track
+    assert 'strcmp(argv[1], "perf") == 0' in log
+    assert "l3_profile_format_summary(&gProfile, line, sizeof(line));" in log
+    assert "l3_profile_format(&gProfile, index, line, sizeof(line));" in log
+    assert 'CLI_write("Error: triggerLog [trace|track|shot|result|perf|clear]\\n");' in log
+
+
+def test_adaptive_windows_apply_between_shots_from_the_locked_ball():
+    source = _source()
+    apply = _function("static void l3_applyAdaptiveWindows(")
+    rearm = _function("static void l3_trigRearm(")
+    capture_cfg = _function("static int32_t l3_cli_captureCfg(")
+    adaptive = _function("static int32_t l3_cli_captureCfgAdaptive(")
+    log = _function("static int32_t l3_cli_triggerLog(")
+
+    assert (
+        '#include "l3_adaptive.h"' in source
+        and "l3_adaptive.c" in (FIRMWARE.parent / "makefile").read_text()
+    )
+    assert (
+        "if (!gAdaptiveCfg.enabled || gCaptureActive || !l3_ball_locked(&gBall, &ballBin))" in apply
+    )
+    assert "l3_adaptive_windows(&gAdaptiveCfg, ballBin, N_SAMPLES, gCapturePlan.preBins," in apply
+    assert "gCapturePlan.preStart = windows.preStart;" in apply
+    assert "gCapturePlan.lateStart = windows.lateStart;" in apply
+    assert "if (l3_finalizeCapturePlan(gCapturePlan.loops) == 0) {" in apply
+    assert rearm.index("l3_applyAdaptiveWindows();") < rearm.index("l3_trig_rearm(&gTrig);")
+    sparse_rearm = _function("static int32_t l3_sparseRearm(")
+    assert sparse_rearm.index("l3_trigRearm();") < sparse_rearm.index(
+        "l3_restartCompletedHwaFrame()"
+    )
+    assert 'strcmp(argv[1], "adaptive") == 0' in capture_cfg
+    assert "gAdaptiveCfg.enabled = (values[0] != 0U) ? 1U : 0U;" in adaptive
+    assert "l3_adaptive_format(&gAdaptiveCfg, &gAdaptiveWindows, line, sizeof(line));" in log

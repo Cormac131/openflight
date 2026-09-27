@@ -22,6 +22,7 @@ from typing import Callable
 import serial
 
 from openflight.iwr6843.dump import HEADER, MAGIC, parse_header, payload_nbytes
+from openflight.iwr6843.shot_result import parse_result_reply
 from openflight.iwr6843.sparse import (
     POWER_MAGIC,
     SLICE_MAGIC,
@@ -574,6 +575,33 @@ class IWR6843Radar:
     def clear_trigger_trace(self) -> None:
         """Empty the trace and its maxima; the arm and the log are untouched."""
         self._require_done("triggerLog clear", self.cmd("triggerLog clear", 2.0))
+
+    def club_track(self) -> str:
+        """``triggerLog track``: the club track, its delivery fit, the newest
+        angle estimate, the geometric impact verdict and every held point."""
+        return self.cmd("triggerLog track", 3.0)
+
+    def shot_status(self) -> str:
+        """``triggerLog shot``: the shot machine, the ball track, the launch and
+        the ball points."""
+        return self.cmd("triggerLog shot", 3.0)
+
+    def shot_result(self):
+        """The firmware's result packet for the last shot, parsed, or None when
+        the machine has not reached RESULT since the last rearm.
+
+        Reads ``triggerLog result``; the packet lines are always printed (the
+        last shot's, or all invalid), so ``ready=0`` on the first line is what
+        says there is no result yet.
+        """
+        reply = self.cmd("triggerLog result", 3.0)
+        if " ready=1" not in reply:
+            return None
+        return parse_result_reply(reply)
+
+    def perf(self) -> str:
+        """``triggerLog perf``: per-stage microseconds and the adaptive window state."""
+        return self.cmd("triggerLog perf", 2.0)
 
     def stop_sensor(self) -> None:
         """Stop capture and verify the firmware returned to its idle CLI state."""

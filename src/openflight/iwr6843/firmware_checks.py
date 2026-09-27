@@ -1081,6 +1081,35 @@ def detector_evidence(ctx: Context) -> list[str]:
     return lines
 
 
+def shot_evidence(ctx: Context) -> list[str]:
+    """What the shot machine, the trackers and the result say after a fire.
+
+    ``triggerLog track`` (club track, delivery, angle, impact verdict),
+    ``triggerLog shot`` (machine, ball track, launch) and the first line of
+    ``triggerLog result`` (verdict, quality, smash). Empty on firmware without
+    them. Read before rearming: the rearm resets all three.
+    """
+    lines: list[str] = []
+    prefixes = ("clubtrack", "delivery", "angle", "impact", "shot", "balltrack", "launch", "result")
+    for command in ("triggerLog track", "triggerLog shot", "triggerLog result"):
+        reply = ctx.radar.cmd(command, 6.0)
+        if "not recognized" in reply:
+            continue
+        lines.extend(
+            line.strip()
+            for line in reply.splitlines()
+            if line.strip().startswith(prefixes)
+            and not line.strip().startswith("triggerLog")  # the command's echo
+        )
+    return lines
+
+
+def report_shot(ctx: Context) -> None:
+    ctx.out("  shot evidence (after the fire):")
+    for line in shot_evidence(ctx) or ["(none: firmware without triggerLog track/shot/result)"]:
+        ctx.out(f"    {line}")
+
+
 def report_evidence(ctx: Context, why: str) -> None:
     ctx.out(f"  detector evidence ({why}):")
     for line in detector_evidence(ctx) or ["(none: firmware without triggerLog)"]:
@@ -1563,6 +1592,7 @@ def _swing_checks(shot: int, state: _SwingState) -> tuple[Check, ...]:
         if problems:
             return failed(name, "; ".join(problems))
         state.fired = True
+        report_shot(ctx)
         return passed(
             name, f"notice after {waited:.1f} s, latched {ctx.clock() - notice_at:.3f} s later"
         )

@@ -22,7 +22,26 @@ in `manifest.json`:
 }
 ```
 
-Every key other than `notes` is a `ReplayConfig` field
+An `expect` entry (per file or in `default`) states ranges the replay must
+land in; the test asserts them and the script prints `expectations: ok` or
+the failures and exits 2:
+
+```json
+{
+  "iwr6843_20260920_181204_003.l3dump": {
+    "dest_bin": 46,
+    "expect": {"impact_frame": [10, 12], "club_direction": "approaching",
+               "club_points_min": 7, "acquisitions_max": 1,
+               "ball_origin_bin": [47, 49], "ball_speed_mps": [55, 75]}
+  }
+}
+```
+
+Keys: `fires`, `impact_frame`, `geometric_frame`, `club_points_min`,
+`club_direction` ("approaching"), `acquisitions_max`, `ball_origin_bin`,
+`ball_speed_mps`, `club_speed_mps`.
+
+Every key other than `notes` and `expect` is a `ReplayConfig` field
 (`openflight.iwr6843.firmware_replay`). `tee_bin` and `dest_bin` are GLOBAL
 range-FFT bins (bin = range / (6 m / 128) on the shipped profiles; bin 34 is
 1.59 m). `dest_bin` is the ball detector's locked bin when the firmware was

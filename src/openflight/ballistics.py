@@ -19,11 +19,12 @@ Kiratidis & Leinweber (2018) at ~4%/s.
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 from .clubs import ClubType
 from .clubs.physics import CLUB_PHYSICS
+from .environment import STANDARD_ENVIRONMENT, Environment
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, Shot
 
 MPH_TO_MPS = 0.44704
@@ -35,7 +36,7 @@ M_TO_YD = 1.09361
 # the rules rather than by a guess at the specific ball in play.
 BALL_MASS_KG = 0.04593
 BALL_RADIUS_M = 0.02135
-BALL_AREA_M2 = math.pi * BALL_RADIUS_M ** 2
+BALL_AREA_M2 = math.pi * BALL_RADIUS_M**2
 AIR_DENSITY_STD = 1.225  # kg/m³ at sea level, 15 °C ISA
 
 # Cd = CD_POLY[0] + CD_POLY[1]*Sp + CD_POLY[2]*Sp^2
@@ -127,6 +128,95 @@ class Trajectory:
         return self.carry_yards + rollout
 
 
+@dataclass
+class FlightResult:
+    """The solver's outputs, kept apart from the measurements that fed it.
+
+    ``measured`` names the launch inputs that came from a sensor, ``estimated``
+    the ones that were substituted (spin from the club table) and everything
+    the model produced: carry, total, apex, flight time, curve, landing.
+    """
+
+    trajectory: Trajectory
+    conditions: LaunchConditions
+    air_density: float
+    measured: dict = field(default_factory=dict)
+    estimated: dict = field(default_factory=dict)
+
+    @property
+    def carry_yards(self) -> float:
+        return self.trajectory.carry_yards
+
+    @property
+    def total_yards(self) -> float:
+        return self.trajectory.total_yards
+
+    @property
+    def apex_yards(self) -> float:
+        return self.trajectory.apex_yards
+
+    @property
+    def curve_yards(self) -> float:
+        """Lateral landing offset, positive right (the frame of l3_frames.h)."""
+        return self.trajectory.lateral_yards
+
+    @property
+    def flight_time_s(self) -> float:
+        return self.trajectory.flight_time_s
+
+    @property
+    def landing_angle_deg(self) -> float:
+        return self.trajectory.landing_angle_deg
+
+    def lines(self) -> list:
+        """MEASURED first, ESTIMATED after, for a display that keeps them apart."""
+        out = ["MEASURED"]
+        for name, value in self.measured.items():
+            out.append(f"  {name:16s} {value:.1f}")
+        out.append("ESTIMATED")
+        for name, value in self.estimated.items():
+            out.append(f"  {name:16s} {value:.1f}")
+        out.append(f"  {'air density':16s} {self.air_density:.3f} kg/m3")
+        return out
+
+
+def solve_flight(
+    conditions: LaunchConditions,
+    environment: Environment = STANDARD_ENVIRONMENT,
+    *,
+    measured_vertical_launch: bool = True,
+    measured_horizontal_launch: bool = True,
+) -> FlightResult:
+    """Run the flight model for the day's air, labelling inputs and outputs.
+
+    Ball speed is always a measurement here (the OPS or the IWR6843 read it);
+    the launch angles are measured unless the caller says they were assumed;
+    spin is measured only when ``conditions.spin_source`` says so.
+    """
+    density = environment.air_density_kg_m3
+    trajectory = simulate(conditions, air_density=density)
+    measured = {"ball speed mph": conditions.ball_speed_mph}
+    estimated = {}
+    (measured if measured_vertical_launch else estimated)["launch deg"] = conditions.launch_angle_v
+    (measured if measured_horizontal_launch else estimated)["direction deg"] = (
+        conditions.launch_angle_h
+    )
+    (measured if conditions.spin_source == "measured" else estimated)["spin rpm"] = (
+        conditions.spin_rpm
+    )
+    estimated.update(
+        {
+            "carry yd": trajectory.carry_yards,
+            "total yd": trajectory.total_yards,
+            "apex yd": trajectory.apex_yards,
+            "flight s": trajectory.flight_time_s,
+            "curve yd": trajectory.lateral_yards,
+            "landing deg": trajectory.landing_angle_deg,
+        }
+    )
+    return FlightResult(trajectory, conditions, density, measured, estimated)
+
+
 def resolve_launch(shot: Shot) -> Optional[LaunchConditions]:
     """
     Produce committed launch conditions from a shot.
@@ -148,9 +238,7 @@ def resolve_launch(shot: Shot) -> Optional[LaunchConditions]:
         spin_rpm = float(shot.spin_rpm)
         source: Literal["measured", "club_typical"] = "measured"
     else:
-        spin_rpm = CLUB_TYPICAL_SPIN_RPM.get(
-            shot.club, CLUB_TYPICAL_SPIN_RPM[ClubType.UNKNOWN]
-        )
+        spin_rpm = CLUB_TYPICAL_SPIN_RPM.get(shot.club, CLUB_TYPICAL_SPIN_RPM[ClubType.UNKNOWN])
         source = "club_typical"
 
     return LaunchConditions(
@@ -242,10 +330,7 @@ def _rk4_step(
     k3 = _derivatives(s3, omega, axis, air_density)
     s4 = tuple(state[i] + dt * k3[i] for i in range(6))
     k4 = _derivatives(s4, omega, axis, air_density)
-    return tuple(
-        state[i] + (dt / 6.0) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i])
-        for i in range(6)
-    )
+    return tuple(state[i] + (dt / 6.0) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]) for i in range(6))
 
 
 def simulate(
@@ -309,15 +394,17 @@ def simulate(
             final = tuple(state[i] + frac * (new_state[i] - state[i]) for i in range(6))
             fx, fy, fz, fvx, fvy, fvz = final
             v_final = math.sqrt(fvx * fvx + fvy * fvy + fvz * fvz)
-            landing_angle = math.degrees(
-                math.atan2(-fvz, math.sqrt(fvx * fvx + fvy * fvy))
+            landing_angle = math.degrees(math.atan2(-fvz, math.sqrt(fvx * fvx + fvy * fvy)))
+            points.append(
+                TrajectoryPoint(
+                    t_hit,
+                    fx * M_TO_YD,
+                    fy * M_TO_YD,
+                    max(fz, 0.0) * M_TO_YD,
+                    v_final * MPS_TO_MPH,
+                    omega * 60 / (2 * math.pi),
+                )
             )
-            points.append(TrajectoryPoint(
-                t_hit,
-                fx * M_TO_YD, fy * M_TO_YD, max(fz, 0.0) * M_TO_YD,
-                v_final * MPS_TO_MPH,
-                omega * 60 / (2 * math.pi),
-            ))
             return Trajectory(
                 points=points,
                 carry_yards=fx * M_TO_YD,
@@ -333,12 +420,16 @@ def simulate(
         if t - last_sample_t >= SAMPLE_INTERVAL_S:
             sx_, sy_, sz_, svx, svy, svz = state
             v = math.sqrt(svx * svx + svy * svy + svz * svz)
-            points.append(TrajectoryPoint(
-                t,
-                sx_ * M_TO_YD, sy_ * M_TO_YD, sz_ * M_TO_YD,
-                v * MPS_TO_MPH,
-                omega * 60 / (2 * math.pi),
-            ))
+            points.append(
+                TrajectoryPoint(
+                    t,
+                    sx_ * M_TO_YD,
+                    sy_ * M_TO_YD,
+                    sz_ * M_TO_YD,
+                    v * MPS_TO_MPH,
+                    omega * 60 / (2 * math.pi),
+                )
+            )
             last_sample_t = t
 
     # Flight did not terminate — return current state as best-effort

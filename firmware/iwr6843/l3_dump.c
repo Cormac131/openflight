@@ -60,7 +60,9 @@
 #include "l3_angle.h"
 #include "l3_ball_track.h"
 #include "l3_club_track.h"
+#include "l3_adaptive.h"
 #include "l3_impact.h"
+#include "l3_profile.h"
 #include "l3_result.h"
 #include "l3_shot.h"
 
@@ -422,6 +424,13 @@ static uint32_t            gPostFramesScored;
 static l3_shot_result_t    gShotResult;
 static uint8_t             gShotResultReady;
 static uint32_t            gShotId;
+/* Per-stage cycle counts ("triggerLog perf") and the adaptive capture
+ * windows applied between shots from the locked ball bin. */
+static l3_profile_t        gProfile;
+static uint8_t             gProfileReady;
+static l3_adaptive_cfg_t   gAdaptiveCfg;
+static l3_adaptive_windows_t gAdaptiveWindows;
+static uint32_t            gAdaptiveApplied;
 /* trackCfg's range resolution, defined with the on-chip selector below. */
 static double            gTrackRangeResM;
 static volatile uint8_t  gTriggerPhase;
@@ -667,8 +676,36 @@ static int32_t l3_finalizeCapturePlan(uint16_t loops)
  * The post reservation is fixed by the requested count. All remaining L3 is
  * converted into pre-trigger ring slots after frameCfg supplies the loop count.
  */
+/* "captureCfg adaptive <enabled> <approachBins> <marginBins>": follow the
+ * locked ball with the capture windows between shots (l3_adaptive.h). */
+static int32_t l3_cli_captureCfgAdaptive(int32_t argc, char *argv[])
+{
+    uint8_t values[3];
+    int32_t i;
+
+    if (argc != 5) {
+        CLI_write("Error: captureCfg adaptive <enabled> <approachBins> <marginBins>\n");
+        return -1;
+    }
+    for (i = 0; i < 3; i++) {
+        if (l3_parseU8(argv[i + 2], &values[i]) != 0) {
+            CLI_write("Error: captureCfg adaptive value\n");
+            return -1;
+        }
+    }
+    l3_adaptive_cfg_defaults(&gAdaptiveCfg);
+    gAdaptiveCfg.enabled = (values[0] != 0U) ? 1U : 0U;
+    gAdaptiveCfg.approachBins = values[1];
+    gAdaptiveCfg.marginBins = values[2];
+    CLI_write("Done\n");
+    return 0;
+}
+
 static int32_t l3_cli_captureCfg(int32_t argc, char *argv[])
 {
+    if (argc >= 2 && strcmp(argv[1], "adaptive") == 0) {
+        return l3_cli_captureCfgAdaptive(argc, argv);
+    }
     uint8_t values[7];
     uint32_t valueCount;
     uint32_t i;
@@ -2909,8 +2946,38 @@ static void l3_noteTrigger(uint8_t phase, float tee)
 
 /* The ring was re-armed for the next shot: forget the track and any fired
  * state, keep the noise floor, counters and log. */
+/* Between shots: if the ball detector holds a lock and adaptive windows are
+ * enabled, move the plan's windows to the ball and rebuild the frame tables.
+ * Runs on the CLI task with the capture stopped, before the HWA restarts. */
+static void l3_applyAdaptiveWindows(void)
+{
+    uint32_t ballBin;
+    l3_adaptive_windows_t windows;
+
+    if (!gAdaptiveCfg.enabled || gCaptureActive || !l3_ball_locked(&gBall, &ballBin)) {
+        return;
+    }
+    if (!l3_adaptive_windows(&gAdaptiveCfg, ballBin, N_SAMPLES, gCapturePlan.preBins,
+                             gCapturePlan.impactBins, gCapturePlan.postBins, &windows)) {
+        return;
+    }
+    gAdaptiveWindows = windows;
+    if (!l3_adaptive_differs(&windows, gCapturePlan.preStart, gCapturePlan.impactStart,
+                             gCapturePlan.postStart, gCapturePlan.lateStart)) {
+        return;
+    }
+    gCapturePlan.preStart = windows.preStart;
+    gCapturePlan.impactStart = windows.impactStart;
+    gCapturePlan.postStart = windows.postStart;
+    gCapturePlan.lateStart = windows.lateStart;
+    if (l3_finalizeCapturePlan(gCapturePlan.loops) == 0) {
+        gAdaptiveApplied++;
+    }
+}
+
 static void l3_trigRearm(void)
 {
+    l3_applyAdaptiveWindows();
     l3_trig_rearm(&gTrig);
     l3_track_reset(&gClubTrack);
     l3_impact_rearm(&gImpact);
@@ -2921,6 +2988,16 @@ static void l3_trigRearm(void)
     gPostTimestampUs = 0U;
     gPostFramesScored = 0U;
     gShotResultReady = 0U;
+}
+
+/* Stage timing: Cycleprofiler ticks at the CPU clock; one call per stage. */
+static void l3_profileStage(uint32_t stage, uint32_t startTicks)
+{
+    if (!gProfileReady) {
+        l3_profile_init(&gProfile, gCpuClock / 1000000U);
+        gProfileReady = 1U;
+    }
+    l3_profile_add(&gProfile, stage, Cycleprofiler_getTimeStamp() - startTicks);
 }
 
 /* The calibration starts as identity; the CLI refines it. */
@@ -3002,6 +3079,7 @@ static void l3_considerBall(uint32_t slot)
     static float power[L3_BALL_MAX_BINS];
     uint32_t count = gFrameBinCount[slot];
     uint32_t bin;
+    uint32_t ticks;
 
     if (gBall.state == L3_BALL_STATE_OFF || gCapturePlan.loops == 0U ||
         (gPreFramesCaptured & 1U) != 0U) {
@@ -3011,10 +3089,12 @@ static void l3_considerBall(uint32_t slot)
         count = L3_BALL_MAX_BINS;
     }
     gBallBusy = 1U;
+    ticks = Cycleprofiler_getTimeStamp();
     for (bin = 0U; bin < count; bin++) {
         power[bin] = l3_verticalStaticPower(slot, bin, 4U);
     }
     (void)l3_ball_update(&gBall, gFrameBinStart[slot], power, count);
+    l3_profileStage(L3_PROF_BALL_DETECT, ticks);
     gBallBusy = 0U;
 }
 
@@ -3035,6 +3115,7 @@ static void l3_considerBallTrack(uint32_t slot)
     uint32_t found;
     uint32_t bin;
     uint32_t frame;
+    uint32_t ticks;
 
     if (!gBallTrack.armed || gCapturePlan.loops == 0U) {
         return;
@@ -3046,6 +3127,7 @@ static void l3_considerBallTrack(uint32_t slot)
     gPostFramesScored++;
     frame = gPreFramesCaptured + gPostFramesScored;
     gTrigBusy = 1U;
+    ticks = Cycleprofiler_getTimeStamp();
     for (bin = 0U; bin < count; bin++) {
         l3_verticalResidual(slot, bin, NULL, &obs[bin]);
     }
@@ -3089,6 +3171,7 @@ static void l3_considerBallTrack(uint32_t slot)
         }
     }
     (void)l3_ball_track_launch(&gBallTrack, &gLaunch);
+    l3_profileStage(L3_PROF_BALL_TRACK, ticks);
     gTrigBusy = 0U;
     /* IMPACT -> BALL_TRACK -> SOLVE on the frames; SOLVE -> RESULT at once,
      * the launch fit being the solver. */
@@ -3122,6 +3205,7 @@ static void l3_considerSelfTrigger(uint32_t slot)
     int32_t fired;
     int32_t geometric = 0;
     l3_track_point_t newest;
+    uint32_t ticks;
     uintptr_t key;
 
     uint32_t teeBin = gTrigCfg.teeBin;
@@ -3160,29 +3244,38 @@ static void l3_considerSelfTrigger(uint32_t slot)
         return;
     }
     gTrigBusy = 1U;
+    ticks = Cycleprofiler_getTimeStamp();
     for (bin = 0U; bin < count; bin++) {
         l3_verticalResidual(slot, first + bin, NULL, &obs[bin]);
     }
+    l3_profileStage(L3_PROF_RESIDUAL, ticks);
     gTrig.loopPeriodS = gTrigLoopPeriodS;
+    ticks = Cycleprofiler_getTimeStamp();
     fired = l3_trig_update(&gTrig, gPreFramesCaptured, teeBin, gFrameBinStart[slot] + first,
                            obs, count);
+    l3_profileStage(L3_PROF_TRIGGER, ticks);
     {
         /* The same observations, as ranked targets, into the club track. */
         static l3_target_obs_t targets[L3_OBS_MAX_TARGETS];
         l3_obs_params_t params;
         uint32_t found;
+        int32_t appended;
 
         params.stat = gTrigCfg.stat;
         params.snr = gTrigCfg.snr;
         params.loopPeriodS = gTrigLoopPeriodS;
+        ticks = Cycleprofiler_getTimeStamp();
         found = l3_obs_extract(&params, gPreFramesCaptured,
                                gPreFramesCaptured * (uint32_t)gFramePeriodUs,
                                gFrameBinStart[slot] + first, obs, count, gTrig.floor,
                                targets, L3_OBS_MAX_TARGETS);
+        l3_profileStage(L3_PROF_EXTRACT, ticks);
         gClubTrackDest = teeBin;
-        if (l3_track_update(&gClubTrack, targets, found, gPreFramesCaptured,
-                            gPreFramesCaptured * (uint32_t)gFramePeriodUs) &&
-            gClubTrack.lastTargetIndex < found && gClubTrack.count > 1U &&
+        ticks = Cycleprofiler_getTimeStamp();
+        appended = l3_track_update(&gClubTrack, targets, found, gPreFramesCaptured,
+                                   gPreFramesCaptured * (uint32_t)gFramePeriodUs);
+        l3_profileStage(L3_PROF_CLUB_TRACK, ticks);
+        if (appended && gClubTrack.lastTargetIndex < found && gClubTrack.count > 1U &&
             l3_track_point(&gClubTrack, gClubTrack.count - 1U, &newest)) {
             /* Angles for the associated target only: one estimate per frame.
              * The track's range-rate velocity resolves the TDM alias, so the
@@ -3190,6 +3283,7 @@ static void l3_considerSelfTrigger(uint32_t slot)
             static l3_angle_snapshot_t snapshot;
             const l3_target_obs_t *hit = &targets[gClubTrack.lastTargetIndex];
 
+            ticks = Cycleprofiler_getTimeStamp();
             l3_channelSnapshot(slot, (uint32_t)hit->peakBin - gFrameBinStart[slot],
                                hit->dopplerPhaseRad, newest.radialVelocityMps, &snapshot);
             if (l3_angle_estimate(&gRadarCal, &snapshot, &gLastAngle)) {
@@ -3205,14 +3299,20 @@ static void l3_considerSelfTrigger(uint32_t slot)
                                           gLastAngle.elevationRad, flags);
                 gAngleEstimates++;
             }
+            l3_profileStage(L3_PROF_ANGLE, ticks);
         }
         /* The delivery and the geometric impact verdict, every frame. The
          * destination bin (locked ball, else the tee) on boresight is the
          * ball position until the ball detector measures its angles. */
+        ticks = Cycleprofiler_getTimeStamp();
         (void)l3_track_delivery(&gClubTrack, 8U, &gDelivery);
         l3_frames_observe(&gRadarCal, (float)teeBin * gClubTrack.cfg.binWidthM, 0.0F, 0.0F,
                           &gBallPosition);
         geometric = l3_impact_update(&gImpact, &gDelivery, &gBallPosition, 1U);
+        l3_profileStage(L3_PROF_IMPACT, ticks);
+    }
+    if (gProfileReady) {
+        l3_profile_frame(&gProfile);
     }
     gTrigBusy = 0U;
     gTrigFireSource = (uint8_t)((fired ? 1U : 0U) | (geometric ? 2U : 0U));
@@ -3886,7 +3986,7 @@ static void l3_writeTriggerTrace(char *line, uint32_t cap)
     }
 }
 
-/* CLI "triggerLog [trace|track|shot|result|clear]". Bare: the detector's state and counters,
+/* CLI "triggerLog [trace|track|shot|result|perf|clear]". Bare: the detector's state and counters,
  * its configuration, then one line per logged frame, oldest first. Only
  * frames with a candidate or an active track are logged; gap= counts the
  * quiet frames before each. "trace" prints the raw-input trace instead (see
@@ -3908,6 +4008,23 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
     }
     if (argc == 2 && strcmp(argv[1], "trace") == 0) {
         l3_writeTriggerTrace(line, sizeof(line));
+        CLI_write("Done\n");
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "perf") == 0) {
+        /* Per-stage cost in microseconds, then the adaptive window state. */
+        if (gProfileReady) {
+            (void)l3_profile_format_summary(&gProfile, line, sizeof(line));
+            CLI_write("%s\n", line);
+            for (index = 0U; index < L3_PROF_STAGE_COUNT; index++) {
+                (void)l3_profile_format(&gProfile, index, line, sizeof(line));
+                CLI_write("%s\n", line);
+            }
+        } else {
+            CLI_write("perf frames=0 (no frame scored yet)\n");
+        }
+        (void)l3_adaptive_format(&gAdaptiveCfg, &gAdaptiveWindows, line, sizeof(line));
+        CLI_write("%s applied=%u\n", line, (unsigned)gAdaptiveApplied);
         CLI_write("Done\n");
         return 0;
     }
@@ -3973,7 +4090,7 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         return 0;
     }
     if (argc != 1) {
-        CLI_write("Error: triggerLog [trace|track|shot|result|clear]\n");
+        CLI_write("Error: triggerLog [trace|track|shot|result|perf|clear]\n");
         return -1;
     }
     (void)l3_trig_format_summary(&gTrig, line, sizeof(line));
@@ -4982,7 +5099,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
         "ball [status] | ball scan <firstBin> <count> | ball cfg <enable> <follow> [...]";
     cliCfg.tableEntry[18].cmdHandlerFxn = l3_cli_ball;
     cliCfg.tableEntry[17].cmd           = "triggerLog";
-    cliCfg.tableEntry[17].helpString    = "triggerLog [trace|track|shot|result|clear]: frame log, trace, club track, shot, result";
+    cliCfg.tableEntry[17].helpString    = "triggerLog [trace|track|shot|result|perf|clear]: log, trace, club, shot, result, perf";
     cliCfg.tableEntry[17].cmdHandlerFxn = l3_cli_triggerLog;
     CLI_open(&cliCfg);
 }

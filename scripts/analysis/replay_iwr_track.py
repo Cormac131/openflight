@@ -34,6 +34,7 @@ from openflight.iwr6843.firmware_replay import (
     ReplayResult,
     format_report,
     recording_configs,
+    recording_expectations,
     replay_file,
 )
 from openflight.iwr6843.tracking import RANGE_SPAN_M
@@ -127,21 +128,36 @@ def _summary_line(name: str, result: ReplayResult) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Replay every requested capture; 0 on success, 1 when nothing was found."""
+    """Replay every requested capture; 0 on success, 1 when nothing was found,
+    2 when a recording failed the expectations its manifest states."""
     args = _parser().parse_args(argv)
     jobs = _collect(args)
     if not jobs:
         print("no .l3dump files found", file=sys.stderr)
         return 1
     lib = fw.build_firmware_library()
+    expectations = {}
+    for text in args.paths:
+        path = Path(text).expanduser()
+        if path.is_dir():
+            expectations.update(recording_expectations(path))
     summaries = []
+    failed = 0
     for path, config in jobs:
         result = replay_file(path, config, lib=lib)
         print(format_report(result, name=path.name, points=args.points))
+        expectation = expectations.get(path.name)
+        if expectation is not None:
+            failures = expectation.check(result)
+            failed += bool(failures)
+            print("  expectations: " + ("ok" if not failures else "FAIL " + "; ".join(failures)))
         summaries.append(_summary_line(path.name, result))
     if len(summaries) > 1:
         print()
         print("\n".join(summaries))
+    if failed:
+        print(f"\n{failed} of {len(jobs)} recordings failed their expectations", file=sys.stderr)
+        return 2
     return 0
 
 

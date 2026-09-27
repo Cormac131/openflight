@@ -160,6 +160,16 @@ Optional rolling-buffer capture and replay. See [camera setup](../camera/README.
 | Flag | Type / default | Description |
 | --- | --- | --- |
 | `--camera-capture` | flag | Enable high-speed rolling-buffer capture and replay |
+
+Flight model air. The ballistic carry uses the day's air density instead of
+the standard 1.225 kg/m3 when these are given (`openflight.environment`).
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--temperature-c` | float | Air temperature, default 15 C |
+| `--pressure-hpa` | float | Station pressure; default standard, or from altitude |
+| `--humidity` | float | Relative humidity 0..1, default 0 |
+| `--altitude-m` | float | Range altitude for the pressure when no barometer |
 | `--camera-capture-width` | int; default `640` | Capture width |
 | `--camera-capture-height` | int; default `400` | Capture height |
 | `--camera-capture-fps` | float; default `300` | Capture frame rate |

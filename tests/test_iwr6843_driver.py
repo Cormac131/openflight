@@ -613,3 +613,48 @@ def test_reading_the_frozen_capture_consumes_its_remembered_trigger():
         pass
 
     assert radar.wait_trigger_notice()[0] is False
+
+
+def test_shot_result_parses_the_packet_only_once_the_machine_reached_result(monkeypatch):
+    """The firmware always prints a packet; ``ready=`` says whether it is this shot's."""
+    from openflight.iwr6843 import firmware_host as fw
+
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    packet = bytearray(fw.RESULT_PACKET_BYTES)
+    packet[0] = 1  # version
+    packet[4] = 9  # shot id
+    packet[90] = 2  # verdict valid
+    hex_text = packet.hex()
+    replies = {
+        "triggerLog result": (
+            "triggerLog result\nresult v1 shot=9 verdict=valid valid=0x0 quality=0x0 impact=0 "
+            f"source=none club=0 ball=0 smash=0.00 ready=1\n  ball_speed=- conf=0.00 flags=none\n"
+            f"packet {hex_text[:100]}\npacket+ {hex_text[100:]}\nDone\nl3dump:/>"
+        ),
+        "triggerLog shot": (
+            "triggerLog shot\nshot state=ready since=1 impact=- source=none "
+            "origin=0.00,0.00,0.00 club=0 post=0 transitions=1\nDone\nl3dump:/>"
+        ),
+        "triggerLog perf": "triggerLog perf\nperf frames=12 total=400us clock=200\nDone\nl3dump:/>",
+        "triggerLog track": "triggerLog track\nclubtrack active=0 ...\nDone\nl3dump:/>",
+    }
+    calls = []
+
+    def fake_cmd(command, window):
+        calls.append((command, window))
+        return replies[command]
+
+    monkeypatch.setattr(radar, "cmd", fake_cmd)
+    result = radar.shot_result()
+    assert result is not None and result.shot_id == 9 and result.verdict == "valid"
+    assert "shot state=ready" in radar.shot_status()
+    assert "perf frames=12" in radar.perf()
+    assert "clubtrack" in radar.club_track()
+    assert [c[0] for c in calls] == [
+        "triggerLog result",
+        "triggerLog shot",
+        "triggerLog perf",
+        "triggerLog track",
+    ]
+    replies["triggerLog result"] = replies["triggerLog result"].replace("ready=1", "ready=0")
+    assert radar.shot_result() is None

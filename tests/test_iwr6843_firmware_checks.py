@@ -1787,3 +1787,34 @@ def test_oversized_request_detail_is_readable_when_the_reply_is_binary():
     assert result.status == "FAIL"
     assert "\x00" not in result.detail
     assert "46 non-text byte" in result.detail
+
+
+def test_shot_evidence_collects_the_track_shot_and_result_lines():
+    from openflight.iwr6843.firmware_checks import Context, shot_evidence
+
+    replies = {
+        "triggerLog track": (
+            "triggerLog track\nclubtrack active=0 why=idle count=6\n"
+            "delivery points=5 az=5 el=5 speed=22.40 valid=spa\n angle az=1.20 el=0.00 valid=ae estimates=5\n"
+            "impact fired=1 why=fired closestcm=0.07 armed=0 source=1\np frame=1 t=4000 bin=19.59\nDone\n"
+        ),
+        "triggerLog shot": "triggerLog shot\nshot state=result since=14 impact=20000 source=gate\nballtrack armed=1 confirmed=1 done=1 post=9\nlaunch points=5 speed=61.00 valid=shv\nDone\n",
+        "triggerLog result": "triggerLog result\nresult v1 shot=1 verdict=valid ready=1\n  ball_speed=61.00 conf=0.71 flags=measured\npacket 00\npacket+ 00\nDone\n",
+    }
+
+    class Radar:
+        def cmd(self, command, _window):
+            return replies.get(command, "Error: 'triggerLog' is not recognized\n")
+
+    ctx = Context.__new__(Context)
+    ctx.radar = Radar()
+    lines = shot_evidence(ctx)
+    assert lines[0].startswith("clubtrack active=0")
+    assert any(line.startswith("delivery points=5") for line in lines)
+    assert any(line.startswith("impact fired=1") for line in lines)
+    assert any(line.startswith("shot state=result") for line in lines)
+    assert any(line.startswith("launch points=5") for line in lines)
+    assert lines[-1].startswith("result v1 shot=1 verdict=valid")
+    assert not any(line.startswith(("p frame", "packet", "ball_speed")) for line in lines)
+    replies.clear()
+    assert shot_evidence(ctx) == []

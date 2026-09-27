@@ -31,6 +31,7 @@ from .clubs.physics import (
     get_club_physics,
     get_club_simulation_profile,
 )
+from .environment import STANDARD_ENVIRONMENT, Environment
 from .launch_monitor import SPIN_CONFIDENCE_HIGH, SPIN_CONFIDENCE_RELIABLE, Shot, summarize_shots
 from .ops243 import (
     UART_BAUD_COMMANDS,
@@ -147,6 +148,9 @@ inclinometer_runtime_config: dict = {"enabled": False}
 # a vertical launch angle is available. Operators can explicitly disable it;
 # missing launch inputs always fall back to the legacy table estimator.
 ballistics_enabled: bool = True
+# The day's air for the flight model: temperature, pressure, humidity or
+# altitude from the CLI (later the environmental sensors). Standard by default.
+flight_environment: Environment = STANDARD_ENVIRONMENT
 
 # Simulator connectors (optional). Populated in main() from config/sim.json +
 # CLI flags; shots fan out to every connected connector. Player/club state is
@@ -3387,7 +3391,7 @@ def _finalize_shot_detected(
     if shot.mode != "mock":
         conditions = resolve_launch(shot) if ballistics_enabled else None
         if conditions is not None:
-            trajectory = simulate(conditions)
+            trajectory = simulate(conditions, air_density=flight_environment.air_density_kg_m3)
             shot.carry_spin_adjusted = trajectory.carry_yards
             # The late window, when it measures one, replaces this afterwards.
             shot.landing_angle_deg = trajectory.landing_angle_deg
@@ -4430,6 +4434,43 @@ def _add_ballistics_arguments(parser):
         help="Disable the physics simulator and use the legacy carry table for all shots.",
     )
     parser.set_defaults(ballistics=True)
+    parser.add_argument(
+        "--temperature-c",
+        type=float,
+        default=STANDARD_ENVIRONMENT.temperature_c,
+        help="Air temperature for the flight model (default 15 C).",
+    )
+    parser.add_argument(
+        "--pressure-hpa",
+        type=float,
+        default=None,
+        help="Station pressure for the flight model (default: standard, or from --altitude-m).",
+    )
+    parser.add_argument(
+        "--humidity",
+        type=float,
+        default=0.0,
+        help="Relative humidity 0..1 for the flight model (default 0).",
+    )
+    parser.add_argument(
+        "--altitude-m",
+        type=float,
+        default=None,
+        help="Range altitude, used for the pressure when --pressure-hpa is not given.",
+    )
+
+
+def environment_from_args(args) -> Environment:
+    """The flight model's air from the CLI; standard pressure unless told otherwise."""
+    pressure = args.pressure_hpa
+    if pressure is None and args.altitude_m is None:
+        pressure = STANDARD_ENVIRONMENT.pressure_hpa
+    return Environment(
+        temperature_c=args.temperature_c,
+        pressure_hpa=pressure,
+        relative_humidity=args.humidity,
+        altitude_m=args.altitude_m,
+    )
 
 
 def _add_battery_arguments(parser):
@@ -4997,6 +5038,10 @@ def main():
     global calculated_spin_enabled
     calculated_spin_enabled = args.calculated_spin
     ballistics_enabled = args.ballistics
+    global flight_environment
+    flight_environment = environment_from_args(args)
+    if flight_environment != STANDARD_ENVIRONMENT:
+        logger.info("[SERVER] Flight model air: %s", flight_environment.describe())
     battery_provider = args.battery
     profile_store = ProfileStore(args.profiles_path)
     startup_status = StartupStatusReporter(

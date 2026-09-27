@@ -35,6 +35,8 @@ HOST_SOURCES = (
     "l3_shot.c",
     "l3_ball_track.c",
     "l3_result.c",
+    "l3_profile.c",
+    "l3_adaptive.c",
 )
 
 # l3_observation.h
@@ -133,6 +135,18 @@ QUALITY_FLAGS = {
     "smash_plausible": 512,
     "geometric_impact": 1024,
 }
+
+# l3_profile.h
+PROFILE_STAGE_NAMES = (
+    "residual",
+    "trigger",
+    "extract",
+    "clubtrack",
+    "angle",
+    "impact",
+    "balldetect",
+    "balltrack",
+)
 
 # l3_club_track.h
 TRACK_POINTS = 32
@@ -558,6 +572,49 @@ class ShotResult(ctypes.Structure):
     ]
 
 
+class ProfileStage(ctypes.Structure):
+    """``l3_profile_stage_t``."""
+
+    _fields_ = [
+        ("count", ctypes.c_uint32),
+        ("lastTicks", ctypes.c_uint32),
+        ("maxTicks", ctypes.c_uint32),
+        ("sumTicks", ctypes.c_uint32),
+        ("sumOverflow", ctypes.c_uint32),
+    ]
+
+
+class Profile(ctypes.Structure):
+    """``l3_profile_t``."""
+
+    _fields_ = [
+        ("ticksPerUs", ctypes.c_uint32),
+        ("frames", ctypes.c_uint32),
+        ("stage", ProfileStage * len(PROFILE_STAGE_NAMES)),
+    ]
+
+
+class AdaptiveCfg(ctypes.Structure):
+    """``l3_adaptive_cfg_t``."""
+
+    _fields_ = [
+        ("enabled", ctypes.c_uint8),
+        ("approachBins", ctypes.c_uint8),
+        ("marginBins", ctypes.c_uint8),
+    ]
+
+
+class AdaptiveWindows(ctypes.Structure):
+    """``l3_adaptive_windows_t``."""
+
+    _fields_ = [
+        ("preStart", ctypes.c_uint8),
+        ("impactStart", ctypes.c_uint8),
+        ("postStart", ctypes.c_uint8),
+        ("lateStart", ctypes.c_uint8),
+    ]
+
+
 _U32 = ctypes.c_uint32
 _F32 = ctypes.c_float
 _P = ctypes.POINTER
@@ -658,6 +715,25 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_result_format": ([_P(ShotResult), *_TEXT], ctypes.c_int32),
     "l3_result_format_metric": ([_P(ShotResult), _U32, *_TEXT], ctypes.c_int32),
     "l3_result_format_hex": ([_P(ShotResult), *_TEXT], ctypes.c_int32),
+    # l3_profile.h
+    "l3_profile_init": ([_P(Profile), _U32], None),
+    "l3_profile_reset": ([_P(Profile)], None),
+    "l3_profile_add": ([_P(Profile), _U32, _U32], None),
+    "l3_profile_frame": ([_P(Profile)], None),
+    "l3_profile_mean_us": ([_P(Profile), _U32], _U32),
+    "l3_profile_max_us": ([_P(Profile), _U32], _U32),
+    "l3_profile_frame_us": ([_P(Profile)], _U32),
+    "l3_profile_stage_name": ([_U32], ctypes.c_char_p),
+    "l3_profile_format": ([_P(Profile), _U32, *_TEXT], ctypes.c_int32),
+    "l3_profile_format_summary": ([_P(Profile), *_TEXT], ctypes.c_int32),
+    # l3_adaptive.h
+    "l3_adaptive_cfg_defaults": ([_P(AdaptiveCfg)], None),
+    "l3_adaptive_windows": (
+        [_P(AdaptiveCfg), _U32, _U32, _U32, _U32, _U32, _P(AdaptiveWindows)],
+        ctypes.c_int32,
+    ),
+    "l3_adaptive_differs": ([_P(AdaptiveWindows), _U32, _U32, _U32, _U32], ctypes.c_int32),
+    "l3_adaptive_format": ([_P(AdaptiveCfg), _P(AdaptiveWindows), *_TEXT], ctypes.c_int32),
     # l3_shot.h
     "l3_shot_cfg_defaults": ([_P(ShotCfg)], None),
     "l3_shot_init": ([_P(Shot), _P(ShotCfg)], None),
@@ -787,7 +863,12 @@ __all__ = [
     "MEAS_MEASURED",
     "MEAS_RADIAL_ONLY",
     "MEAS_VALID",
+    "PROFILE_STAGE_NAMES",
     "QUALITY_FLAGS",
+    "AdaptiveCfg",
+    "AdaptiveWindows",
+    "Profile",
+    "ProfileStage",
     "RESULT_METRIC_NAMES",
     "RESULT_METRICS",
     "RESULT_PACKET_BYTES",
