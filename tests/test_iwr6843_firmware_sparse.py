@@ -707,3 +707,27 @@ def test_every_ring_reader_handles_iq8_samples_with_the_frame_scale():
     component = _function("static float l3_ringComponent(")
     assert "return (float)*(const int8_t *)component;" in component
     assert source.count("l3_ringComponentBytes()") >= 5
+
+
+def test_iq8_quantisation_in_the_firmware_is_the_shared_module():
+    """The host emulator compiles l3_iq8.c; l3_dump.c must not keep a copy of the arithmetic."""
+    source = _source()
+    assert '#include "l3_iq8.h"' in source
+    for gone in (
+        "static int8_t l3_quantizeIq8(",
+        "static uint8_t l3_iq8PackShift(",
+        "static uint8_t l3_iq8SampledPackShift(",
+        "static int8_t l3_quantizeIq8Shift(",
+    ):
+        assert gone not in source, gone
+    pack = _function("static void l3_packIq8CompletedFrame(")
+    assert "l3_iq8_pack_shift(source, components, L3_IQ8_SCALE_COMPLEX_STRIDE)" in pack
+    assert "l3_iq8_pack_shift(source, components, 1U)" in pack
+    assert "l3_iq8_quantize_shift(source[component], packShift, &clippedComponents)" in pack
+    assert "gIq8ClippedComponents += clippedComponents;" in pack
+    scale = _function("static uint16_t l3_iq8FrameScale(")
+    assert "l3_iq8_dump_scale(l3_iq8_max_abs(src, words))" in scale
+    write = _function("static void l3_writeCompressedIq8Frame(")
+    assert "l3_iq8_quantize_scale(src[word], scale)" in write
+    makefile = (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
+    assert "l3_iq8.c" in makefile

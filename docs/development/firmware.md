@@ -295,6 +295,40 @@ the frame's HWA scale, so the dense IQ8 profiles get the same trigger,
 club track and ball track as the wide IQ16 one. Firmware older than this
 scores garbage on IQ8; the host logs which format is in use at start.
 
+### IQ16 processing and exact IQ8 emulation
+
+The measurement algorithms read IQ16. In the IQ16 profiles the ring holds
+the HWA's int16 output and the detect task processes it as is; the plan is
+for the compact profiles to process the IQ16 scratch frame before it is
+compacted, so that IQ8 (and the compact IQ16 formats that follow) are
+storage formats, not signal-processing formats.
+
+What IQ8 costs a measurement is answered offline, not argued.
+`firmware/iwr6843/l3_iq8.c` holds the board's three quantisers (the CPU
+pack with a per-frame shift, the EDMA low-byte copy after the fixed
+`iq8Scale` shift, which wraps rather than clips, and the dump-time divide)
+and both `l3_dump.c` and the host library compile it, so
+`openflight.iwr6843.iq8_emulation` turns an IQ16 recording into the IQ8 dump
+the firmware would have stored, scale table included.
+`scripts/analysis/ab_iq16_iq8.py` replays each recording both ways through
+the trigger, club track, impact detector, ball track and launch fit and
+prints the measurement table with a delta column, then a corpus summary
+(`mean |delta|`, `max |delta|`, bias, and how often only one path produced
+a measurement). On the five recorded swings the shipped EDMA path at scale
+128 moves the gate's fire frame on two captures, the ball speed by under
+0.15 m/s, and the club path and attack angle by degrees where a 3D fit
+existed: the club is the measurement IQ8 hurts. The HWA's own shift
+rounding is settled on a board with
+`scripts/hardware-test/iwr6843_iq8_hwa_probe.py` (a truncating shift biases
+every stored component by half a step) and passed to the tool as
+`--hwa-rounding`.
+
+`scripts/analysis/baseline_dataset.py` freezes the current firmware's
+per-shot numbers (OPS speeds, the onboard result with every confidence,
+the host launch angle and club path, capture cost) from session logs into
+one CSV row per shot, tagged with the firmware SHA, before any of the
+representation work changes them.
+
 ### Profiling and adaptive windows
 
 `triggerLog perf` prints per-stage counts, last, mean and maximum in

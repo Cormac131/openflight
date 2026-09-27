@@ -37,6 +37,7 @@ HOST_SOURCES = (
     "l3_result.c",
     "l3_profile.c",
     "l3_adaptive.c",
+    "l3_iq8.c",
 )
 
 # l3_observation.h
@@ -135,6 +136,10 @@ QUALITY_FLAGS = {
     "smash_plausible": 512,
     "geometric_impact": 1024,
 }
+
+# l3_iq8.h
+IQ8_PATH_CPU, IQ8_PATH_EDMA, IQ8_PATH_DUMP = 0, 1, 2
+IQ8_PATH_NAMES = {"cpu": IQ8_PATH_CPU, "edma": IQ8_PATH_EDMA, "dump": IQ8_PATH_DUMP}
 
 # l3_profile.h
 PROFILE_STAGE_NAMES = (
@@ -609,6 +614,17 @@ class AdaptiveCfg(ctypes.Structure):
     ]
 
 
+class Iq8Mode(ctypes.Structure):
+    """l3_iq8_mode_t"""
+
+    _fields_ = [
+        ("path", ctypes.c_uint8),
+        ("hwaShift", ctypes.c_uint8),
+        ("hwaRounding", ctypes.c_uint8),
+        ("sparseStride", ctypes.c_uint8),
+    ]
+
+
 class AdaptiveWindows(ctypes.Structure):
     """``l3_adaptive_windows_t``."""
 
@@ -739,6 +755,19 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     ),
     "l3_adaptive_differs": ([_P(AdaptiveWindows), _U32, _U32, _U32, _U32], ctypes.c_int32),
     "l3_adaptive_format": ([_P(AdaptiveCfg), _P(AdaptiveWindows), *_TEXT], ctypes.c_int32),
+    # l3_iq8.h
+    "l3_iq8_mode_defaults": ([_P(Iq8Mode), ctypes.c_uint8], None),
+    "l3_iq8_hwa_scale": ([ctypes.c_int16, ctypes.c_uint8, ctypes.c_uint8], ctypes.c_int16),
+    "l3_iq8_pack_shift": ([_P(ctypes.c_int16), _U32, _U32], ctypes.c_uint8),
+    "l3_iq8_quantize_shift": ([ctypes.c_int16, ctypes.c_uint8, _P(_U32)], ctypes.c_int8),
+    "l3_iq8_quantize_scale": ([ctypes.c_int16, ctypes.c_uint16], ctypes.c_int8),
+    "l3_iq8_dump_scale": ([_U32], ctypes.c_uint16),
+    "l3_iq8_low_byte": ([ctypes.c_int16], ctypes.c_int8),
+    "l3_iq8_max_abs": ([_P(ctypes.c_int16), _U32], _U32),
+    "l3_iq8_emulate_frame": (
+        [_P(Iq8Mode), _P(ctypes.c_int16), _P(ctypes.c_int8), _U32, _P(ctypes.c_uint16)],
+        _U32,
+    ),
     # l3_shot.h
     "l3_shot_cfg_defaults": ([_P(ShotCfg)], None),
     "l3_shot_init": ([_P(Shot), _P(ShotCfg)], None),

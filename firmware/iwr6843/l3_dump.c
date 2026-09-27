@@ -62,6 +62,7 @@
 #include "l3_club_track.h"
 #include "l3_adaptive.h"
 #include "l3_impact.h"
+#include "l3_iq8.h"
 #include "l3_profile.h"
 #include "l3_result.h"
 #include "l3_shot.h"
@@ -1450,139 +1451,33 @@ static int32_t l3_configHwaCommon(void)
 }
 
 #ifdef L3_DUMP_IQ8
-static int8_t l3_quantizeIq8(int16_t sample, uint16_t scale)
-{
-    int32_t value = (int32_t)sample;
-    int32_t half = (int32_t)scale / 2;
-    int32_t quantized;
-
-    if (value >= 0) {
-        quantized = (value + half) / (int32_t)scale;
-    } else {
-        quantized = -((-value + half) / (int32_t)scale);
-    }
-    if (quantized > 127) {
-        quantized = 127;
-    } else if (quantized < -128) {
-        quantized = -128;
-    }
-    return (int8_t)quantized;
-}
+/* Dump-time quantisation: l3_iq8_quantize_scale (l3_iq8.c) is the one
+ * definition, shared with the host emulator. */
 #endif
 
 #ifdef L3_RING_IQ8
 #ifndef L3_IQ8_EDMA_PACK
-#ifdef L3_IQ8_SPARSE_SCALE
-static uint8_t l3_iq8SampledPackShift(const int16_t *source,
-                                      uint32_t components)
-{
-    uint32_t maxAbs = 1U;
-    uint32_t component;
-    uint32_t step = 2U * L3_IQ8_SCALE_COMPLEX_STRIDE;
-    uint8_t shift = 0U;
-
-    for (component = 0U; component + 1U < components; component += step) {
-        int32_t iValue = (int32_t)source[component];
-        int32_t qValue = (int32_t)source[component + 1U];
-        uint32_t iMagnitude =
-            (iValue < 0) ? (uint32_t)(-iValue) : (uint32_t)iValue;
-        uint32_t qMagnitude =
-            (qValue < 0) ? (uint32_t)(-qValue) : (uint32_t)qValue;
-
-        if (iMagnitude > maxAbs) {
-            maxAbs = iMagnitude;
-        }
-        if (qMagnitude > maxAbs) {
-            maxAbs = qMagnitude;
-        }
-    }
-    while (maxAbs > 127U) {
-        maxAbs = (maxAbs + 1U) >> 1U;
-        shift++;
-    }
-    return shift;
-}
-#endif
-
-#ifndef L3_IQ8_SPARSE_SCALE
-static uint8_t l3_iq8PackShift(const int16_t *source, uint32_t components)
-{
-    uint32_t maxAbs = 1U;
-    uint32_t component;
-    uint8_t shift = 0U;
-
-    for (component = 0U; component < components; component++) {
-        int32_t value = (int32_t)source[component];
-        uint32_t magnitude =
-            (value < 0) ? (uint32_t)(-value) : (uint32_t)value;
-        if (magnitude > maxAbs) {
-            maxAbs = magnitude;
-        }
-    }
-    while (maxAbs > 127U) {
-        maxAbs = (maxAbs + 1U) >> 1U;
-        shift++;
-    }
-    return shift;
-}
-#endif
-
-static int8_t l3_quantizeIq8Shift(int16_t sample, uint8_t shift,
-                                  uint32_t *clippedComponents)
-{
-    int32_t value = (int32_t)sample;
-    int32_t quantized;
-
-    if (shift == 0U) {
-        quantized = value;
-    } else {
-        int32_t half = (int32_t)(1U << (shift - 1U));
-        if (value >= 0) {
-            quantized = (value + half) >> shift;
-        } else {
-            quantized = -((-value + half) >> shift);
-        }
-    }
-    if (quantized > 127) {
-        quantized = 127;
-        if (clippedComponents != NULL) {
-            (*clippedComponents)++;
-        }
-    } else if (quantized < -128) {
-        quantized = -128;
-        if (clippedComponents != NULL) {
-            (*clippedComponents)++;
-        }
-    }
-    return (int8_t)quantized;
-}
-
+/* The pack shift and the shift quantiser are l3_iq8_pack_shift and
+ * l3_iq8_quantize_shift (l3_iq8.c): the host emulator compiles the same
+ * arithmetic, so an offline IQ8 is the board's IQ8. */
 static void l3_packIq8CompletedFrame(uint32_t slot, uint8_t scratch)
 {
     const int16_t *source = &g_iq16FrameScratch[scratch][0];
     int8_t *destination = (int8_t *)&g_ring[gFrameOffset[slot]];
     uint32_t components = gFrameBytes[slot];
     uint32_t component;
-#ifdef L3_IQ8_SPARSE_SCALE
     uint32_t clippedComponents = 0U;
-    uint8_t packShift = l3_iq8SampledPackShift(source, components);
+#ifdef L3_IQ8_SPARSE_SCALE
+    uint8_t packShift = l3_iq8_pack_shift(source, components, L3_IQ8_SCALE_COMPLEX_STRIDE);
 #else
-    uint8_t packShift = l3_iq8PackShift(source, components);
+    uint8_t packShift = l3_iq8_pack_shift(source, components, 1U);
 #endif
 
     for (component = 0U; component < components; component++) {
-#ifdef L3_IQ8_SPARSE_SCALE
         destination[component] =
-            l3_quantizeIq8Shift(source[component], packShift,
-                                &clippedComponents);
-#else
-        destination[component] =
-            l3_quantizeIq8Shift(source[component], packShift, NULL);
-#endif
+            l3_iq8_quantize_shift(source[component], packShift, &clippedComponents);
     }
-#ifdef L3_IQ8_SPARSE_SCALE
     gIq8ClippedComponents += clippedComponents;
-#endif
     gFrameIq8Scale[slot] =
         (uint16_t)(L3_IQ8_HWA_SCALE << packShift);
     gIq8PackFrames++;
@@ -2243,18 +2138,8 @@ static uint16_t l3_iq8FrameScale(uint32_t slot)
 {
     const int16_t *src = (const int16_t *)&g_ring[gFrameOffset[slot]];
     uint32_t words = gFrameBytes[slot] / (uint32_t)sizeof(int16_t);
-    uint32_t maxAbs = 1U;
-    uint32_t word;
 
-    for (word = 0U; word < words; word++) {
-        int32_t value = (int32_t)src[word];
-        uint32_t magnitude =
-            (value < 0) ? (uint32_t)(-value) : (uint32_t)value;
-        if (magnitude > maxAbs) {
-            maxAbs = magnitude;
-        }
-    }
-    return (uint16_t)((maxAbs + 126U) / 127U);
+    return l3_iq8_dump_scale(l3_iq8_max_abs(src, words));
 }
 #endif
 
@@ -2279,7 +2164,7 @@ static void l3_writeCompressedIq8Frame(uint32_t slot, uint16_t scale)
     uint32_t word;
 
     for (word = 0U; word < words; word++) {
-        out[pending++] = (uint8_t)l3_quantizeIq8(src[word], scale);
+        out[pending++] = (uint8_t)l3_iq8_quantize_scale(src[word], scale);
         if (pending == sizeof(out)) {
             UART_writePolling(gDataUart, out, pending);
             pending = 0U;

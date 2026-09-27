@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Exact IQ8 emulation and an IQ16-vs-IQ8 A/B tool.** The firmware's three
+  IQ8 quantisers now live in `firmware/iwr6843/l3_iq8.c`, compiled into the
+  board and the host library, so `scripts/analysis/ab_iq16_iq8.py` can turn
+  an IQ16 recording into the exact IQ8 the board would store and replay both
+  through the onboard pipeline with a measurement-by-measurement delta table
+  and a corpus summary. `scripts/analysis/baseline_dataset.py` freezes the
+  current per-shot numbers from session logs as the reference dataset, and
+  `scripts/hardware-test/iwr6843_iq8_hwa_probe.py` settles the HWA's shift
+  rounding on a board.
 - **The IWR6843 firmware's shot result reaches the shot and the kiosk.** After
   a self-triggered capture the server reads `triggerLog result`, keeps the
   100-byte packet on the shot as `iwr6843_onboard`, logs it beside the OPS and
