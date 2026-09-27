@@ -541,6 +541,14 @@ class IWR6843Radar:
         """
         return self.cmd("triggerLog", 6.0)
 
+    def tee_scan(self, first_bin: int, count: int) -> str:
+        """``teeScan``: static power per local bin averaged over the ring's pre frames.
+
+        The firmware freezes at the next frame boundary, reports, and rearms,
+        so the sensor must be active. Parse with ``tee_scan.parse_tee_scan``.
+        """
+        return self.cmd(f"teeScan {first_bin} {count}", 4.0)
+
     def trigger_trace(self) -> str:
         """The detector's raw-input trace: what it was offered, not what it took.
 

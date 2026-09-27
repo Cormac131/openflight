@@ -62,6 +62,18 @@ def test_trigger_log_reads_the_detector_log_with_a_window_for_128_lines(monkeypa
     assert calls == [("triggerLog", 6.0)]
 
 
+def test_tee_scan_sends_the_bin_range(monkeypatch):
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    calls = []
+    monkeypatch.setattr(
+        radar, "cmd", lambda command, window: calls.append((command, window)) or "Done\n"
+    )
+
+    radar.tee_scan(8, 13)
+
+    assert calls == [("teeScan 8 13", 4.0)]
+
+
 def test_stop_sensor_rejects_firmware_that_remains_active(monkeypatch):
     radar = IWR6843Radar.__new__(IWR6843Radar)
     responses = iter(["sensorStop\nDone\n", "stats\nactive=1\nDone\n"])

@@ -4,9 +4,10 @@
 Stop the kiosk first; this owns the TI UART. Each check prints PASS, FAIL or
 SKIP and the script exits 1 if any check fails. SKIP never fails the run.
 
-Sections (see --list): lifecycle, profiles, readback, trigger, trigger-swing,
-solve. The trigger-swing section needs --swing and prompts you to place a
-ball and swing; the others run hands-off.
+Sections (see --list): lifecycle, profiles, readback, trigger, ball-detect,
+trigger-swing, solve. ball-detect needs --ball (or --swing) and prompts you
+to clear the tee and then place a ball; trigger-swing needs --swing and
+prompts you to swing; the others run hands-off.
 
     uv run python scripts/hardware-test/test_iwr_firmware.py
     uv run python scripts/hardware-test/test_iwr_firmware.py --only trigger
@@ -52,7 +53,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="profile for the default sections")
     parser.add_argument("--only", default=None, help="comma-separated section names to run")
     parser.add_argument("--list", action="store_true", help="print the catalogue and exit")
-    parser.add_argument("--swing", action="store_true", help="run the prompted swing checks")
+    parser.add_argument(
+        "--swing", action="store_true", help="run the prompted ball-detect and swing checks"
+    )
+    parser.add_argument(
+        "--ball",
+        action="store_true",
+        help="run the prompted ball-detect checks (empty tee vs ball on tee) without swinging",
+    )
     parser.add_argument("--shots", type=int, default=2, help="swings to validate with --swing")
     parser.add_argument("--tee-m", type=float, default=DEFAULT_TEE_RANGE_M)
     parser.add_argument(
@@ -75,7 +83,11 @@ def build_parser() -> argparse.ArgumentParser:
 def print_catalogue(sections: tuple[fc.Section, ...]) -> None:
     """``--list`` output: one line per section, indented check names."""
     for section in sections:
-        needs = ", needs --swing" if any(c.needs_swing for c in section.checks) else ""
+        needs = ""
+        if any(c.needs_swing for c in section.checks):
+            needs = ", needs --swing"
+        elif any(c.needs_ball for c in section.checks):
+            needs = ", needs --ball or --swing"
         print(f"{section.name} (sensor: {section.sensor}{needs})")
         for check in section.checks:
             print(f"  {check.name}")
@@ -139,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
                 sections,
                 only=only,
                 swing=args.swing,
+                ball=args.ball or args.swing,
                 fail_fast=args.fail_fast,
                 results=results,
             )

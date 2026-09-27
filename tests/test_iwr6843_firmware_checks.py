@@ -1326,6 +1326,89 @@ def test_missed_swing_prints_the_detector_evidence_before_cleanup_can_clear_it(m
     assert "triggerLog clear" in radar.ser.written, "the trace starts with the swing"
 
 
+def _ball_radar(*, ball_bin: int | None = 15, ball_power: float = 8650.0, baseline: float = 1000.0):
+    """teeScan answers flat until the operator's second prompt, then a bump at ``ball_bin``."""
+    state = {"scans": 0, "occupied": False}
+
+    def handler(line):
+        if line.startswith("teeScan"):
+            _cmd, first, count = line.split()
+            first, count = int(first), int(count)
+            state["scans"] += 1
+            rows = []
+            for local_bin in range(first, first + count):
+                power = baseline
+                if state["occupied"] and local_bin == ball_bin:
+                    power = ball_power
+                rows.append(f"bin={local_bin} power={power:.0f}")
+            body = f"teescan frames=9 loops=12 first={first} count={count} start=20\n"
+            return (body + "\n".join(rows) + "\nDone\n").encode()
+        if line == "stats":
+            return b"frames=10 active=1\nDone\n"
+        return b"Done\n"
+
+    radar = scripted_radar({}, handler=handler)
+    radar.send_config = lambda cfg: None  # type: ignore[method-assign]
+    return radar, state
+
+
+def test_ball_detect_section_needs_the_flag():
+    radar, _state = _ball_radar()
+    results = fc.run(_ctx(radar), (fc.ball_detect_section(),))
+    assert [r.status for r in results] == ["SKIP", "SKIP"]
+    assert all("needs --ball or --swing" in r.detail for r in results)
+    assert "teeScan" not in " ".join(radar.ser.written)
+
+
+def test_ball_detect_finds_the_ball_and_hands_the_swing_checks_its_bin():
+    radar, state = _ball_radar(ball_bin=15)
+    prompts: list[str] = []
+
+    def prompt(text):
+        prompts.append(text)
+        state["occupied"] = "Place a ball" in text
+
+    ctx = _ctx(radar, prompt=prompt)
+    results = fc.run(ctx, (fc.ball_detect_section(),), ball=True)
+
+    assert [r.status for r in results] == ["PASS", "PASS"], [(r.name, r.detail) for r in results]
+    assert "Remove the ball" in prompts[0] and "1.575 m" in prompts[1]
+    detail = results[1].detail
+    assert "expected_bin=14 detected_bin=15" in detail and "ratio=8.65x" in detail
+    assert "detected_range=1.64m" in detail
+    assert ctx.observed_tee_bin == 15
+    assert fc._tee_bin(ctx) == 15  # pylint: disable=protected-access
+    assert fc.arm_command(ctx).startswith("triggerCfg 15 ")
+    scans = [line for line in radar.ser.written if line.startswith("teeScan")]
+    assert len(scans) == 2 * fc.DEFAULT_SCANS
+    assert scans[0] == "teeScan 8 13", "expected bin 14 +/- 6 inside the 53-bin window"
+
+
+def test_ball_detect_without_a_clear_return_fails_with_the_numbers_and_keeps_the_expected_bin():
+    radar, state = _ball_radar(ball_bin=15, ball_power=1200.0)
+
+    def prompt(text):
+        state["occupied"] = "Place a ball" in text
+
+    ctx = _ctx(radar, prompt=prompt)
+    results = fc.run(ctx, (fc.ball_detect_section(),), ball=True)
+
+    assert results[1].status == "FAIL" and "no clear ball return" in results[1].detail
+    assert "ratio=1.20x" in results[1].detail
+    assert ctx.observed_tee_bin is None
+    assert fc._tee_bin(ctx) == 14  # pylint: disable=protected-access
+
+
+def test_swing_flag_implies_ball_detect():
+    radar, state = _ball_radar()
+
+    def prompt(text):
+        state["occupied"] = "Place a ball" in text
+
+    results = fc.run(_ctx(radar, prompt=prompt), (fc.ball_detect_section(),), swing=True)
+    assert [r.status for r in results] == ["PASS", "PASS"]
+
+
 def test_swing_fake_fires_two_polls_after_watching():
     """Pin the fake itself: tee-low, watching, then a notice inside the 2nd poll after that."""
     radar, state = _swing_radar(_cube())
@@ -1504,6 +1587,7 @@ def test_build_sections_orders_the_catalogue():
         "profiles",
         "readback",
         "trigger",
+        "ball-detect",
         "trigger-swing",
         "solve",
     ]

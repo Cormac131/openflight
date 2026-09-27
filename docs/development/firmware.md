@@ -153,6 +153,14 @@ configured statistic's units), apparent velocity, coherence, track age, and
 (`acquired`, `advanced`, `jumped`, `missed`, `lost`, `lowcoh`, `young`,
 `slow`, `fired`). Read it after a missed swing before re-arming: the ring
 re-arm after `l3sparse` keeps the log, `triggerCfg` clears it.
+`teeScan <firstBin> <count>` is the one view the trigger never has: the static
+(non-MTI) power per bin, averaged over the ring's pre-trigger frames, so a
+ball sitting on the tee is visible in it while the residual removes it. The
+check suite's `ball-detect` section compares an empty tee with an occupied
+one to find the ball's actual bin. It is entry 18 of the CLI table; with the
+mmWave extension's commands that table is at the SDK's limit, so further
+diagnostics ride existing commands as sub-modes.
+
 `triggerLog trace` answers the question the log cannot when it stays empty:
 did the radar see anything at all? Every frame, the detector notes the
 region's strongest bin in a per-bin maximum since arming, and records the

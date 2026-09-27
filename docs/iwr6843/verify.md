@@ -119,12 +119,28 @@ The `l3track without trackCfg` check can only prove the refusal on the first run
 after a power cycle; on later runs it reports `SKIP` (the firmware never clears
 `gTrackConfigured`, so `l3track` streams instead of refusing).
 
-Run only one section, or add the prompted swing checks:
+Run only one section, or add the prompted checks:
 
 ```bash
 uv run python scripts/hardware-test/test_iwr_firmware.py --only trigger
+uv run python scripts/hardware-test/test_iwr_firmware.py --ball --tee-m 1.575
 uv run python scripts/hardware-test/test_iwr_firmware.py --swing --tee-m 1.575 --shots 2
 ```
+
+`--ball` runs `ball-detect`: it asks for an empty tee, scans the static (non-MTI)
+power of the bins around the expected tee bin with the firmware's `teeScan`,
+asks for the ball, scans again, and reports where the return grew most:
+
+```text
+PASS  ball-detect/stationary return: expected=1.575m expected_bin=14 detected_bin=15
+      detected_range=1.64m baseline=328441 occupied=2841977 ratio=8.65x (searched bins 8-20)
+```
+
+The self-trigger works from the MTI residual, which removes a stationary ball,
+so this is the only check that proves the radar sees a ball at the tee at all.
+`--swing` runs it first and arms the swing checks on the detected bin. Repeat
+it a few times: a detected bin that wanders by one is the hand-measured tee
+range; one that is always off by the same amount is the range conversion.
 
 `--list` prints every check without opening a port. `--json path` writes the
 results for a report. The suite exits 1 on any `FAIL`; `SKIP` lines (older

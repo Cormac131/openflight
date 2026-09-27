@@ -34,6 +34,15 @@ from openflight.iwr6843.sparse import (
     parse_power,
     power_packet_size,
 )
+from openflight.iwr6843.tee_scan import (
+    DEFAULT_MIN_RATIO,
+    DEFAULT_SCANS,
+    DEFAULT_SEARCH_HALF_WIDTH,
+    average_scans,
+    detect_ball,
+    local_bin_range_m,
+    parse_tee_scan,
+)
 from openflight.iwr6843.tracking import LOOP_PRI_S, RANGE_SPAN_M
 
 _INT_FIELD = re.compile(r"(\w+)=(\d+)")
@@ -177,15 +186,21 @@ class Context:
     # The .cfg this suite last loaded, so a section can tell "sensor active" from
     # "sensor active with the profile I asked for". None means "never loaded here".
     loaded: str | None = None
+    # Where ball-detect actually found the ball, when it ran and passed. The
+    # swing checks arm on it instead of the computed tee bin, so a range
+    # conversion that is a bin off does not read as a missed swing.
+    observed_tee_bin: int | None = None
 
 
 @dataclass(frozen=True)
 class Check:
-    """A named check; ``needs_swing`` ones run only with ``--swing``."""
+    """A named check; ``needs_swing`` ones run only with ``--swing``, ``needs_ball``
+    ones with ``--ball`` (which ``--swing`` implies): both prompt the operator."""
 
     name: str
     run: Callable[[Context], CheckResult]
     needs_swing: bool = False
+    needs_ball: bool = False
 
 
 @dataclass(frozen=True)
@@ -233,7 +248,14 @@ def stats_snapshot(ctx: Context) -> StatsSnapshot:
 
 
 def _tee_bin(ctx: Context) -> int:
-    """The capture-local range bin the tee sits in for this rig and profile."""
+    """The tee's capture-local bin: where ball-detect saw the ball, else where the range says."""
+    if ctx.observed_tee_bin is not None:
+        return ctx.observed_tee_bin
+    return expected_tee_bin(ctx)
+
+
+def expected_tee_bin(ctx: Context) -> int:
+    """The capture-local range bin ``--tee-m`` converts to for this profile."""
     return tee_local_bin(ctx.tee_m, ctx.config)
 
 
@@ -396,6 +418,7 @@ def run(
     *,
     only: tuple[str, ...] | None = None,
     swing: bool = False,
+    ball: bool = False,
     fail_fast: bool = False,
     results: list[CheckResult] | None = None,
 ) -> list[CheckResult]:
@@ -420,6 +443,9 @@ def run(
             for check in section.checks:
                 if check.needs_swing and not swing:
                     _emit(ctx, results, skipped(check.name, "needs --swing"))
+                    continue
+                if check.needs_ball and not (ball or swing):
+                    _emit(ctx, results, skipped(check.name, "needs --ball or --swing"))
                     continue
                 _emit(ctx, results, run_check(ctx, check))
                 if fail_fast and results[-1].status == FAIL:
@@ -1325,6 +1351,8 @@ def _swing_checks(shot: int, state: _SwingState) -> tuple[Check, ...]:
         state.threshold = (latest["snap"].tee or 0) * ctx.snr
         return passed(
             name,
+            f"tee bin {_tee_bin(ctx)} (expected {expected_tee_bin(ctx)}"
+            f"{', observed' if ctx.observed_tee_bin is not None else ', not observed'}) "
             f"floor={latest['snap'].tee} threshold={state.threshold:.0f} at snr {ctx.snr:g} "
             f"{_trig_state(latest['snap'])}",
         )
@@ -1475,6 +1503,85 @@ def _latched_cleared(state: _SwingState) -> Check:
     return Check(name, run, needs_swing=True)
 
 
+@dataclass
+class _BallState:
+    baseline: dict[int, float] | None = None
+    scan_first: int = 0
+    scan_count: int = 0
+    window_start: int = 0
+
+
+def _scan_region(ctx: Context) -> tuple[int, int, int]:
+    """(first local bin, count, absolute start) around the expected tee inside the pre window."""
+    summary = read_capture_config(ctx.config)
+    if summary.first_window_start is None or summary.first_window_bins is None:
+        raise ValueError(f"{ctx.config} has no phaseCaptureCfg")
+    expected = expected_tee_bin(ctx)
+    first = max(0, expected - DEFAULT_SEARCH_HALF_WIDTH)
+    last = min(summary.first_window_bins - 1, expected + DEFAULT_SEARCH_HALF_WIDTH)
+    return first, last - first + 1, summary.first_window_start
+
+
+def _averaged_scan(ctx: Context, first: int, count: int) -> dict[int, float]:
+    scans = []
+    for _ in range(DEFAULT_SCANS):
+        scans.append(parse_tee_scan(cli(ctx, f"teeScan {first} {count}", 4.0)))
+    return average_scans(scans)
+
+
+def ball_detect_section() -> Section:
+    """Prove the radar sees a ball at the tee, and where, before any swing is judged.
+
+    An empty-tee baseline and an occupied scan are compared bin by bin near
+    the expected tee bin. Passing hands the observed bin to the swing checks.
+    """
+    state = _BallState()
+
+    def baseline(ctx: Context) -> CheckResult:
+        name = "ball-detect/empty tee baseline"
+        state.scan_first, state.scan_count, state.window_start = _scan_region(ctx)
+        ctx.prompt("Remove the ball from the tee, then press Enter.")
+        state.baseline = _averaged_scan(ctx, state.scan_first, state.scan_count)
+        expected = expected_tee_bin(ctx)
+        at_tee = state.baseline.get(expected)
+        return passed(
+            name,
+            f"{DEFAULT_SCANS} scans of bins {state.scan_first}-"
+            f"{state.scan_first + state.scan_count - 1}, expected bin {expected} "
+            f"reads {at_tee:.0f}"
+            if at_tee is not None
+            else f"{DEFAULT_SCANS} scans",
+        )
+
+    def stationary(ctx: Context) -> CheckResult:
+        name = "ball-detect/stationary return"
+        if state.baseline is None:
+            return skipped(name, "no baseline")
+        ctx.prompt(f"Place a ball on the tee at {ctx.tee_m:.3f} m, then press Enter.")
+        occupied = _averaged_scan(ctx, state.scan_first, state.scan_count)
+        expected = expected_tee_bin(ctx)
+        found = detect_ball(state.baseline, occupied, expected)
+        detail = (
+            f"expected={ctx.tee_m:.3f}m expected_bin={expected} detected_bin={found.detected_bin} "
+            f"detected_range={local_bin_range_m(found.detected_bin, state.window_start):.2f}m "
+            f"baseline={found.baseline:.0f} occupied={found.occupied:.0f} ratio={found.ratio:.2f}x "
+            f"(searched bins {found.search_bins[0]}-{found.search_bins[1]})"
+        )
+        if found.ratio < DEFAULT_MIN_RATIO:
+            return failed(name, f"no clear ball return: {detail}")
+        ctx.observed_tee_bin = found.detected_bin
+        return passed(name, detail)
+
+    return Section(
+        "ball-detect",
+        "active",
+        (
+            Check("ball-detect/empty tee baseline", baseline, needs_ball=True),
+            Check("ball-detect/stationary return", stationary, needs_ball=True),
+        ),
+    )
+
+
 def swing_section(shots: int) -> Section:
     """Real swings: fire, read back, host agreement, rearm; then a latched reconfigure."""
     state = _SwingState()
@@ -1531,6 +1638,7 @@ def build_sections(profiles: tuple[str, ...], shots: int) -> tuple[Section, ...]
         profiles_section(profiles),
         readback_section(),
         trigger_section(),
+        ball_detect_section(),
         swing_section(shots),
         solve_section(),
     )
