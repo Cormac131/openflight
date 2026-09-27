@@ -71,7 +71,7 @@ def test_tee_scan_sends_the_bin_range(monkeypatch):
 
     radar.tee_scan(8, 13)
 
-    assert calls == [("teeScan 8 13", 4.0)]
+    assert calls == [("ball scan 8 13", 4.0)]
 
 
 def test_stop_sensor_rejects_firmware_that_remains_active(monkeypatch):
@@ -496,7 +496,7 @@ def test_watch_script_releases_a_trigger_in_the_arming_reply(monkeypatch):
     radar.release_sparse_freeze.side_effect = lambda: calls.append("release")
     type(radar.ser).in_waiting = PropertyMock(side_effect=KeyboardInterrupt)
     monkeypatch.setitem(main.__globals__, "IWR6843Radar", lambda **_kwargs: radar)
-    monkeypatch.setitem(main.__globals__, "tee_local_bin", lambda *_args: 14)
+    monkeypatch.setitem(main.__globals__, "tee_global_bin", lambda *_args: 14)
     monkeypatch.setitem(
         main.__globals__, "measure_trigger_level", lambda *_args, **_kwargs: (200000.0, 1200000.0)
     )
@@ -533,7 +533,7 @@ def test_watch_script_arms_above_the_measured_tee_floor(monkeypatch):
     radar.cmd.side_effect = _cmd
     type(radar.ser).in_waiting = PropertyMock(side_effect=KeyboardInterrupt)
     monkeypatch.setitem(main.__globals__, "IWR6843Radar", lambda **_kwargs: radar)
-    monkeypatch.setitem(main.__globals__, "tee_local_bin", lambda *_args: 14)
+    monkeypatch.setitem(main.__globals__, "tee_global_bin", lambda *_args: 14)
     monkeypatch.setitem(
         main.__globals__, "measure_trigger_level", lambda *_args, **_kwargs: (200000.0, 1200000.0)
     )

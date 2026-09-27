@@ -27,7 +27,7 @@ import numpy as np
 from openflight.iwr6843.calibration import DEFAULT_TEE_RANGE_M
 from openflight.iwr6843.driver import IWR6843Radar
 from openflight.iwr6843.firmware_checks import parse_trig
-from openflight.iwr6843.monitor import measure_trigger_level, tee_local_bin
+from openflight.iwr6843.monitor import measure_trigger_level, tee_global_bin
 from openflight.iwr6843.self_trigger import BallLeaveDetector, TriggerObservation, replay_dump
 from openflight.iwr6843.sparse import SparsePlan
 
@@ -414,7 +414,7 @@ def main() -> None:
     error = port_name_error(args.port, sys.platform)
     if error:
         raise SystemExit(error)
-    tee_bin = tee_local_bin(args.tee_m, args.config)
+    tee_bin = tee_global_bin(args.tee_m, args.config)
     radar = IWR6843Radar(port=args.port)
     print(f"IWR6843 on {radar.port}. Stop the kiosk before swinging.", flush=True)
     try:

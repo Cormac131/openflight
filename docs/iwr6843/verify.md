@@ -127,17 +127,39 @@ uv run python scripts/hardware-test/test_iwr_firmware.py --ball --tee-m 1.575
 uv run python scripts/hardware-test/test_iwr_firmware.py --swing --tee-m 1.575 --shots 2
 ```
 
-`--ball` runs `ball-detect`: it asks for an empty tee, scans the static (non-MTI)
-power of the bins around the expected tee bin with the firmware's `teeScan`,
-asks for the ball, scans again, and reports where the return grew most:
+`--ball` runs `ball-detect`: it asks for an empty tee, starts the firmware's
+ball detector and scans the static (non-MTI) power of the global bins around
+the expected tee bin with `ball scan`, asks for the ball, scans again, reports
+where the return grew most and how the range sits in the supported setup
+envelope, then checks that the firmware's own detector locked on the same bin:
 
 ```text
-PASS  ball-detect/stationary return: expected=1.575m expected_bin=14 detected_bin=15
-      detected_range=1.64m baseline=328441 occupied=2841977 ratio=8.65x (searched bins 8-20)
+PASS  ball-detect/stationary return: expected=1.575m expected_bin=34 detected_bin=35
+      detected_range=1.64m baseline=328441 occupied=2841977 ratio=8.65x
+      (searched bins 28-40) setup=ideal: Ready
+PASS  ball-detect/firmware detector locks on the placed ball: firmware bin=35
+      ratio=7.65x, scan bin=35 (offset +0), range=1.64m
 ```
 
-The self-trigger works from the MTI residual, which removes a stationary ball,
-so this is the only check that proves the radar sees a ball at the tee at all.
+Bins are global range-FFT bins (46.9 mm; bin 34 is 1.59 m). The self-trigger
+works from the MTI residual, which removes a stationary ball, so this is the
+check that proves the radar sees a ball at the tee at all, and where.
+`--swing` runs it first and arms the swing checks on the detected bin. Repeat
+it a few times: a detected bin that wanders by one is the hand-measured tee
+range; one that is always off by the same amount is the range conversion. A
+`setup=too-far` line with "move OpenFlight about 65 cm closer" is the ten
+captures that started this: the club at 2.2-2.4 m and a tee configured at
+1.575 m.
+
+To make the firmware aim the trigger at the detected ball rather than the
+configured tee, arm the detector with follow on before `triggerCfg`:
+
+```text
+ball cfg 1 1
+```
+
+With no ball locked it falls back to the configured tee and counts the
+frames in `stats` (`trig dest=... source=tee fallback=N`).
 
 A swing that does not fire within `--swing-wait-s` (default 10 s) is not
 silent: the check prints the detector's raw-input trace and frame log, then a

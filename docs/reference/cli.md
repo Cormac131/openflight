@@ -70,7 +70,7 @@ The supported angle radar.
 | `--iwr6843-self-trigger` | flag | Freeze the IWR ring when the firmware tracks the clubhead into the tee and send S! to the OPS, instead of the sound-gate edge. Disconnect the SEN-14262 GATE from HOST_INT. Requires --iwr6843 and --trigger sound |
 | `--iwr6843-full-capture` | flag | Transfer all samples and TX channels instead of selected cells; about 7 seconds for the default profile. Use with `--debug` to save full diagnostic dumps. |
 | `--no-iwr6843-onboard-track` | flag | Select cells on the Pi instead of onboard; still transfers selected samples unless `--iwr6843-full-capture` is set. |
-| `--iwr6843-self-trigger-bin` | int | Local range bin of the tee (default: from --iwr6843-tee-m). Requires --iwr6843-self-trigger |
+| `--iwr6843-self-trigger-bin` | int | Global range-FFT bin of the tee (default: from --iwr6843-tee-m; bin 34 is 1.59 m). Requires --iwr6843-self-trigger |
 | `--iwr6843-self-trigger-snr` | float | Clubhead candidate threshold as a multiple of the firmware's running noise floor, at least 1 (default: 6). Requires --iwr6843-self-trigger |
 | `--iwr6843-self-trigger-frames` | int | Frames a candidate must be tracked approaching the tee before it can fire, at least 1 (default: 2). Requires --iwr6843-self-trigger |
 | `--iwr6843-tilt-deg` | float | Override mount tilt from the TI calibration JSON |

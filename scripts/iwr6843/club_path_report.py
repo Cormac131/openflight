@@ -136,9 +136,7 @@ def separation(groups: dict[str, list[float]]) -> dict:
     }
     names = list(groups)
     means = [stats[name]["mean"] for name in names]
-    ordered = all(
-        a is not None and b is not None and a < b for a, b in zip(means, means[1:])
-    )
+    ordered = all(a is not None and b is not None and a < b for a, b in zip(means, means[1:]))
 
     reasons: list[str] = []
     if not ordered:
@@ -193,9 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     for name, group_stats in report["groups"].items():
         mean = "n/a" if group_stats["mean"] is None else f"{group_stats['mean']:8.2f}"
         flag = (
-            f"  (n < {CLUB_PATH_MIN_GROUP_N}, unreliable)"
-            if group_stats["insufficient_n"]
-            else ""
+            f"  (n < {CLUB_PATH_MIN_GROUP_N}, unreliable)" if group_stats["insufficient_n"] else ""
         )
         print(
             f"{name:>12} {group_stats['n']:>4} {coverage[name]['rejected']:>9} "

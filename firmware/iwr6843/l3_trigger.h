@@ -114,7 +114,7 @@ enum {
 };
 
 typedef struct {
-    uint32_t teeBin;        /* local bin of the ball in the first window */
+    uint32_t teeBin;        /* global range bin of the tee (default destination) */
     float    snr;           /* candidate threshold = floor * snr (>= 1) */
     uint32_t trackFrames;   /* observations a track needs before it can fire */
     uint32_t approachBins;  /* watch this many bins short of the tee */
@@ -145,7 +145,7 @@ typedef struct {
 typedef struct {
     uint32_t frame;
     uint16_t gap;           /* untraced frames since the previous entry */
-    uint8_t  bin;
+    uint8_t  bin;           /* strongest global bin */
     uint8_t  state;         /* detector state after the frame */
     float    energy;
     float    peak;
@@ -153,6 +153,7 @@ typedef struct {
     float    floor;         /* in the configured statistic's units */
     float    threshold;     /* floor x snr in force this frame */
     uint8_t  coherencePct;  /* |lag-1 autocorrelation| / energy */
+    uint8_t  dest;          /* destination global bin; dist = dest - bin */
 } l3_trig_trace_t;
 
 typedef struct {
@@ -160,13 +161,14 @@ typedef struct {
     uint16_t gap;           /* quiet frames since the previous record */
     uint8_t  state;         /* after this frame */
     uint8_t  why;
-    uint8_t  bin;           /* candidate local bin; 0xFF when none */
+    uint8_t  bin;           /* candidate global bin; 0xFF when none */
     uint8_t  age;
     int16_t  velocityCms;   /* apparent (aliased) Doppler velocity */
     float    energy;
     float    peak;
     float    floor;         /* in the configured statistic's units */
     uint8_t  coherencePct;
+    uint8_t  dest;          /* destination (tee or locked ball) global bin */
 } l3_trig_record_t;
 
 typedef struct {
@@ -207,14 +209,23 @@ void l3_trig_init(l3_trig_t *trig, const l3_trig_cfg_t *cfg, float loopPeriodS);
  * fired state so the detector can fire again. The floor, counters and log
  * survive, so a shot's log is still readable after its ring was read. */
 void l3_trig_rearm(l3_trig_t *trig);
-/* Watch region for a window of binCount local bins. Returns 0 when the tee
- * bin is outside the window (nothing to watch). */
-int32_t l3_trig_region(const l3_trig_cfg_t *cfg, uint32_t binCount,
-                       uint32_t *firstBin, uint32_t *count);
-/* Feed one frame: obs[i] describes local bin firstBin + i. Returns 1 when
- * this frame fires the trigger, else 0. After firing, further frames are
- * ignored until l3_trig_init. */
-int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t firstBin,
+/* Every bin the detector speaks of is a GLOBAL range-FFT bin (0..127 on a
+ * 128-point FFT), never a capture-window offset: the window start moves
+ * between profiles and between the pre and post phases, and a tee bin read
+ * in the wrong coordinates watched an empty stretch of air.
+ *
+ * Watch region for a frame whose window holds binCount bins from global bin
+ * windowStart, around the destination teeBin (global). firstLocal is the
+ * window offset to index the frame with; firstLocal + windowStart is the
+ * global bin of obs[0]. Returns 0 when the tee is outside the window. */
+int32_t l3_trig_region(const l3_trig_cfg_t *cfg, uint32_t teeBin, uint32_t windowStart,
+                       uint32_t binCount, uint32_t *firstLocal, uint32_t *count);
+/* Feed one frame: obs[i] describes global bin firstBin + i and the impact
+ * gate sits around teeBin (global; the configured tee or, when the ball
+ * detector is followed, the ball's bin). Returns 1 when this frame fires the
+ * trigger, else 0. After firing, further frames are ignored until
+ * l3_trig_init or l3_trig_rearm. */
+int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t teeBin, uint32_t firstBin,
                        const l3_trig_obs_t *obs, uint32_t count);
 
 /* Read side for the triggerLog command and the host tests. */

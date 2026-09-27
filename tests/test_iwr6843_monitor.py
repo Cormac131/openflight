@@ -17,7 +17,7 @@ from openflight.iwr6843.monitor import (
     SelfTriggerConfig,
     measure_trigger_level,
     read_capture_config,
-    tee_local_bin,
+    tee_global_bin,
     tx_order_from_config,
 )
 from openflight.iwr6843.sparse import SparseCapture
@@ -133,7 +133,7 @@ def test_capture_monitor_rejects_iq8_self_trigger_before_configuring_hardware(tm
         config_path=config,
         output_dir=tmp_path / "dumps",
         radar=radar,
-        self_trigger=SelfTriggerConfig(local_bin=1, snr=2.0, track_frames=2),
+        self_trigger=SelfTriggerConfig(tee_bin=1, snr=2.0, track_frames=2),
     )
 
     with pytest.raises(ValueError, match="IQ8.*self-trigger"):
@@ -456,7 +456,7 @@ def _self_trigger_monitor(tmp_path, radar, **kwargs) -> IWR6843CaptureMonitor:
         output_dir=tmp_path / "dumps",
         radar=radar,
         button_factory=FakeButton,
-        self_trigger=SelfTriggerConfig(local_bin=12, snr=6.0, track_frames=2),
+        self_trigger=SelfTriggerConfig(tee_bin=12, snr=6.0, track_frames=2),
         **kwargs,
     )
 
@@ -773,10 +773,10 @@ def test_sparse_failure_after_freeze_is_a_capture_error_not_a_fallback(tmp_path)
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"local_bin": -1, "snr": 6.0, "track_frames": 2}, "bin"),
-        ({"local_bin": 3, "snr": 0.5, "track_frames": 2}, "snr"),
-        ({"local_bin": 3, "snr": float("nan"), "track_frames": 2}, "snr"),
-        ({"local_bin": 3, "snr": 6.0, "track_frames": 0}, "track frames"),
+        ({"tee_bin": -1, "snr": 6.0, "track_frames": 2}, "bin"),
+        ({"tee_bin": 3, "snr": 0.5, "track_frames": 2}, "snr"),
+        ({"tee_bin": 3, "snr": float("nan"), "track_frames": 2}, "snr"),
+        ({"tee_bin": 3, "snr": 6.0, "track_frames": 0}, "track frames"),
     ],
 )
 def test_self_trigger_config_rejects_values_the_firmware_would_misread(kwargs, message):
@@ -785,7 +785,7 @@ def test_self_trigger_config_rejects_values_the_firmware_would_misread(kwargs, m
 
 
 def test_self_trigger_command_is_the_firmware_triggercfg_line():
-    assert SelfTriggerConfig(local_bin=14, snr=6.0, track_frames=2).command == "triggerCfg 14 6.0 2"
+    assert SelfTriggerConfig(tee_bin=14, snr=6.0, track_frames=2).command == "triggerCfg 14 6.0 2"
     # Zero frames is the firmware's "off"; the on-line never sends it.
     assert SELF_TRIGGER_OFF_COMMAND == "triggerCfg 0 0 0"
 
@@ -812,11 +812,12 @@ def test_capture_config_summary_reads_masks_and_first_window(tmp_path):
     assert tx_order_from_config(path) == "normal"
 
 
-def test_tee_local_bin_is_relative_to_the_first_window(tmp_path):
+def test_tee_global_bin_is_the_absolute_fft_bin_inside_the_first_window(tmp_path):
     path = _cfg(tmp_path, "phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1")
 
-    # 1.575 m / (6 m / 128) = bin 33.6 -> 34; 34 - 20 = 14.
-    assert tee_local_bin(1.575, path) == 14
+    # 1.575 m / (6 m / 128) = bin 33.6 -> 34: global, not 34 - 20 = 14 as the
+    # window offset. The firmware speaks global bins everywhere now.
+    assert tee_global_bin(1.575, path) == 34
 
 
 @pytest.mark.parametrize("tee_m", [0.5, 4.0])
@@ -824,12 +825,12 @@ def test_tee_outside_the_first_window_is_an_error(tmp_path, tee_m):
     path = _cfg(tmp_path, "phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1")
 
     with pytest.raises(ValueError, match="outside the first capture window"):
-        tee_local_bin(tee_m, path)
+        tee_global_bin(tee_m, path)
 
 
 def test_tee_bin_needs_a_capture_window(tmp_path):
     with pytest.raises(ValueError, match="no phaseCaptureCfg"):
-        tee_local_bin(1.5, _cfg(tmp_path, "sensorStart"))
+        tee_global_bin(1.5, _cfg(tmp_path, "sensorStart"))
 
 
 def test_listener_serial_error_does_not_kill_the_worker(tmp_path):

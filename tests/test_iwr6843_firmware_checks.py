@@ -1404,23 +1404,43 @@ def test_diagnosis_follows_the_log_counters_when_the_club_crossed_the_threshold(
     assert expected in _diagnose(evidence)
 
 
-def _ball_radar(*, ball_bin: int | None = 15, ball_power: float = 8650.0, baseline: float = 1000.0):
-    """teeScan answers flat until the operator's second prompt, then a bump at ``ball_bin``."""
-    state = {"scans": 0, "occupied": False}
+def _ball_radar(*, ball_bin: int | None = 35, ball_power: float = 8650.0, baseline: float = 1000.0):
+    """ball scan answers flat until the operator's second prompt, then a bump at ``ball_bin``
+    (a global bin); ball status locks on that bin once the tee is occupied."""
+    state = {"scans": 0, "occupied": False, "detector": False}
 
     def handler(line):
-        if line.startswith("teeScan"):
-            _cmd, first, count = line.split()
+        if line.startswith("ball scan"):
+            _cmd, _scan, first, count = line.split()
             first, count = int(first), int(count)
             state["scans"] += 1
             rows = []
-            for local_bin in range(first, first + count):
+            for global_bin in range(first, first + count):
                 power = baseline
-                if state["occupied"] and local_bin == ball_bin:
+                if state["occupied"] and global_bin == ball_bin:
                     power = ball_power
-                rows.append(f"bin={local_bin} power={power:.0f}")
+                rows.append(f"bin={global_bin} power={power:.0f}")
             body = f"teescan frames=9 loops=12 first={first} count={count} start=20\n"
             return (body + "\n".join(rows) + "\nDone\n").encode()
+        if line.startswith("ball cfg"):
+            state["detector"] = line.split()[2] == "1"
+            return b"Done\n"
+        if line in ("ball", "ball status"):
+            if state["detector"] and state["occupied"] and ball_bin is not None:
+                status = (
+                    f"ball state=locked follow=0 bin={ball_bin} ratio=7.65 confidence=0.91 "
+                    "delta=7650 background=1000 age=30 locks=1 releases=0 reason=none window=20+53\n"
+                    f"balldbg updates=200 candidate=0/0 centroid={ball_bin}.20 width=1 "
+                    "persistence=30/50 no_delta=100 too_wide=0 unstable=0 gone=0\n"
+                )
+            else:
+                status = (
+                    "ball state=waiting follow=0 bin=0 ratio=0.00 confidence=0.00 delta=0 "
+                    "background=0 age=0 locks=0 releases=0 reason=no_delta window=20+53\n"
+                    "balldbg updates=100 candidate=0/0 centroid=0.00 width=0 persistence=0/50 "
+                    "no_delta=100 too_wide=0 unstable=0 gone=0\n"
+                )
+            return status.encode() + b"Done\n"
         if line == "stats":
             return b"frames=10 active=1\nDone\n"
         return b"Done\n"
@@ -1433,13 +1453,13 @@ def _ball_radar(*, ball_bin: int | None = 15, ball_power: float = 8650.0, baseli
 def test_ball_detect_section_needs_the_flag():
     radar, _state = _ball_radar()
     results = fc.run(_ctx(radar), (fc.ball_detect_section(),))
-    assert [r.status for r in results] == ["SKIP", "SKIP"]
+    assert [r.status for r in results] == ["SKIP", "SKIP", "SKIP"]
     assert all("needs --ball or --swing" in r.detail for r in results)
-    assert "teeScan" not in " ".join(radar.ser.written)
+    assert "ball" not in " ".join(radar.ser.written)
 
 
 def test_ball_detect_finds_the_ball_and_hands_the_swing_checks_its_bin():
-    radar, state = _ball_radar(ball_bin=15)
+    radar, state = _ball_radar(ball_bin=35)
     prompts: list[str] = []
 
     def prompt(text):
@@ -1449,21 +1469,24 @@ def test_ball_detect_finds_the_ball_and_hands_the_swing_checks_its_bin():
     ctx = _ctx(radar, prompt=prompt)
     results = fc.run(ctx, (fc.ball_detect_section(),), ball=True)
 
-    assert [r.status for r in results] == ["PASS", "PASS"], [(r.name, r.detail) for r in results]
+    assert [r.status for r in results] == ["PASS"] * 3, [(r.name, r.detail) for r in results]
     assert "Remove the ball" in prompts[0] and "1.575 m" in prompts[1]
     detail = results[1].detail
-    assert "expected_bin=14 detected_bin=15" in detail and "ratio=8.65x" in detail
-    assert "detected_range=1.64m" in detail
-    assert ctx.observed_tee_bin == 15
-    assert fc._tee_bin(ctx) == 15  # pylint: disable=protected-access
-    assert fc.arm_command(ctx).startswith("triggerCfg 15 ")
-    scans = [line for line in radar.ser.written if line.startswith("teeScan")]
+    assert "expected_bin=34 detected_bin=35" in detail and "ratio=8.65x" in detail
+    assert "detected_range=1.64m" in detail and "setup=ideal: Ready" in detail
+    assert ctx.observed_tee_bin == 35
+    assert fc._tee_bin(ctx) == 35  # pylint: disable=protected-access
+    assert fc.arm_command(ctx).startswith("triggerCfg 35 ")
+    scans = [line for line in radar.ser.written if line.startswith("ball scan")]
     assert len(scans) == 2 * fc.DEFAULT_SCANS
-    assert scans[0] == "teeScan 8 13", "expected bin 14 +/- 6 inside the 53-bin window"
+    assert scans[0] == "ball scan 28 13", "global bin 34 +/- 6 inside the 20..72 window"
+    assert "firmware bin=35" in results[2].detail and "offset +0" in results[2].detail
+    assert radar.ser.written[-1] == "ball cfg 0 0", "the detector is left off"
+    assert "ball cfg 1 0" in radar.ser.written
 
 
 def test_ball_detect_without_a_clear_return_fails_with_the_numbers_and_keeps_the_expected_bin():
-    radar, state = _ball_radar(ball_bin=15, ball_power=1200.0)
+    radar, state = _ball_radar(ball_bin=35, ball_power=1200.0)
 
     def prompt(text):
         state["occupied"] = "Place a ball" in text
@@ -1473,8 +1496,29 @@ def test_ball_detect_without_a_clear_return_fails_with_the_numbers_and_keeps_the
 
     assert results[1].status == "FAIL" and "no clear ball return" in results[1].detail
     assert "ratio=1.20x" in results[1].detail
+    assert results[2].status == "SKIP"
     assert ctx.observed_tee_bin is None
-    assert fc._tee_bin(ctx) == 14  # pylint: disable=protected-access
+    assert fc._tee_bin(ctx) == 34  # pylint: disable=protected-access
+
+
+def test_ball_detect_reports_a_detector_that_disagrees_with_the_scan():
+    radar, state = _ball_radar(ball_bin=35)
+    # The firmware's detector believes bin 40 while the scan says 35.
+    original = radar.ser._handler  # pylint: disable=protected-access
+
+    def handler(line):
+        reply = original(line)
+        if line in ("ball", "ball status") and state["occupied"]:
+            return reply.replace(b"bin=35", b"bin=40")
+        return reply
+
+    radar.ser._handler = handler  # pylint: disable=protected-access
+
+    def prompt(text):
+        state["occupied"] = "Place a ball" in text
+
+    results = fc.run(_ctx(radar, prompt=prompt), (fc.ball_detect_section(),), ball=True)
+    assert results[2].status == "FAIL" and "disagree" in results[2].detail
 
 
 def test_swing_flag_implies_ball_detect():
@@ -1484,7 +1528,7 @@ def test_swing_flag_implies_ball_detect():
         state["occupied"] = "Place a ball" in text
 
     results = fc.run(_ctx(radar, prompt=prompt), (fc.ball_detect_section(),), swing=True)
-    assert [r.status for r in results] == ["PASS", "PASS"]
+    assert [r.status for r in results] == ["PASS"] * 3
 
 
 def test_swing_fake_fires_two_polls_after_watching():
@@ -1614,7 +1658,9 @@ def test_readback_slower_than_the_limit_fails(monkeypatch):
 
     monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [type("Obs", (), {"fired": True})()])
     results = fc.run(
-        _ctx(radar, clock=clock, shots=1, wait_s=30.0), (fc.swing_section(1),), swing=True
+        _ctx(radar, clock=clock, shots=1, wait_s=30.0, swing_wait_s=30.0),
+        (fc.swing_section(1),),
+        swing=True,
     )
 
     readback = next(r for r in results if r.name.endswith("frozen ring reads back"))

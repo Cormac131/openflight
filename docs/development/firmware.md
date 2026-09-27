@@ -130,7 +130,7 @@ driver) from a player walking up to the ball (a bin every few frames).
 The detector is armed and tuned over the CLI:
 
 ```text
-triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep stat minSpeed]
+triggerCfg <globalBin> <snr> <frames> [approach gate minCoh minStep stat minSpeed]
 triggerLog [trace|clear]
 ```
 
@@ -153,13 +153,70 @@ configured statistic's units), apparent velocity, coherence, track age, and
 (`acquired`, `advanced`, `jumped`, `missed`, `lost`, `lowcoh`, `young`,
 `slow`, `fired`). Read it after a missed swing before re-arming: the ring
 re-arm after `l3sparse` keeps the log, `triggerCfg` clears it.
-`teeScan <firstBin> <count>` is the one view the trigger never has: the static
-(non-MTI) power per bin, averaged over the ring's pre-trigger frames, so a
-ball sitting on the tee is visible in it while the residual removes it. The
-check suite's `ball-detect` section compares an empty tee with an occupied
-one to find the ball's actual bin. It is entry 18 of the CLI table; with the
-mmWave extension's commands that table is at the SDK's limit, so further
-diagnostics ride existing commands as sub-modes.
+### Global range bins
+
+Every bin the trigger and the ball detector speak of is a global range-FFT
+bin (0..127 on the 128-point FFT over 6 m, 46.9 mm each; bin 34 is 1.59 m),
+never a capture-window offset. The window start moves between profiles and
+between the pre and post phases (20 on the wide profile's pre window, 47 on
+its late window), and a tee bin read as a window offset watched an empty
+stretch of air: ten captures put the club's motion at global bins 46-50
+(2.2-2.4 m) while `triggerCfg` was watching around bin 34. `triggerCfg`'s
+first argument, the `bin=`/`dest=` fields of `triggerLog`, `ball scan` and
+`ball status` are all global; the firmware converts to a window offset only
+when it indexes a frame (`l3_trig_region`). The host side does the same:
+`tee_global_bin` replaces `tee_local_bin`.
+
+### Ball placement detector
+
+```text
+ball                 status: state, bin, ratio, confidence, reason, window
+ball status          the same plus a balldbg line: centroid, width, persistence
+ball scan <bin> <n>  static power of n global bins, pre frames averaged
+ball cfg <enable> <follow> [minRatio stableUpdates buildUpdates]
+```
+
+The trigger's MTI residual removes a stationary ball entirely, and the
+strongest static reflector in the lane is usually furniture (those captures
+had one at 2.06 m), so neither motion nor "the biggest static return" finds
+the ball. What does is the thing the golfer always does: place it.
+`l3_ball.c` keeps a per-bin background of the static (non-MTI) power learned
+while the tee is empty, then watches for a compact new reflector against it:
+
+```text
+BUILDING   ~64 updates (every other frame) learning the empty background
+WAITING    background known, no ball; background keeps adapting slowly
+CANDIDATE  a bin rose to minRatio (default 1.0: power doubled) over its
+           background, no wider than two bins; the background around it
+           is frozen so the ball is not learned in
+LOCKED     the candidate held still for stableUpdates (12, ~70 ms): the
+           ball's bin is frozen until it leaves, so the club and the
+           launched ball cannot drag it; release needs goneUpdates (20)
+           consecutive updates under 30 % of the settled return, longer
+           than acquisition, so one bad frame moves nothing
+```
+
+The status reports a confidence (contrast x width x persistence x range
+stability, 0..1), a delta-weighted centroid across the ball's cluster for a
+sub-bin range, the width of the rise, how many of the last 50 updates saw
+the ball, and why the last update did not lock: `no_delta`, `too_wide`,
+`unstable` or `gone`. With `follow` set, the self-trigger aims at the locked
+ball's bin instead of the configured tee; with no ball locked it falls back
+to the tee, motion only, and counts the frames (`trig dest= source=
+fallback=` in `stats`), so the detector cannot make a shot uncapturable
+while it is being proven. Every `triggerLog` record and trace line carries
+`dest=` and `dist=`, the destination bin and the candidate's distance short
+of it, which is what the tracker actually decides on and what makes
+captures at 1.4 m and 2.0 m comparable. The setup envelope (too close,
+close, ideal, far, too far, and how far to move the unit) is classified on
+the host from the detected range, in `openflight.iwr6843.tee_scan`, ready
+for the kiosk to show; it is not wired into the UI yet.
+
+`ball scan` is the raw view behind the check suite's `ball-detect` section,
+which compares an empty tee with an occupied one and then checks that the
+firmware's own detector locked on the same bin. `ball` is entry 18 of the
+CLI table; with the mmWave extension's commands that table is at the SDK's
+limit, so further diagnostics ride existing commands as sub-modes.
 
 `triggerLog trace` answers the question the log cannot when it stays empty:
 did the radar see anything at all? Every frame, the detector notes the
@@ -229,6 +286,7 @@ matching host-parser change and regression tests in the same commit.
 |---|---|
 | `firmware/iwr6843/l3_dump.c` | RF control, HWA/EDMA pipeline, circular ring, freeze/rearm, CLI, and dump streaming |
 | `firmware/iwr6843/l3_trigger.c`, `l3_trigger.h` | Self-trigger detector: noise floor, clubhead track, impact gate, frame log (host-testable, no hardware) |
+| `firmware/iwr6843/l3_ball.c`, `l3_ball.h` | Ball placement detector: static background, compact-reflector appearance, confidence (host-testable, no hardware) |
 | `firmware/iwr6843/dump_format.h` | Packed firmware-side wire contract |
 | `firmware/iwr6843/makefile` | TI mmWave SDK application build and meta-image generation |
 | `firmware/iwr6843/mss.cfg` | SYS/BIOS configuration |

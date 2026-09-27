@@ -1,4 +1,4 @@
-"""Tests for openflight.iwr6843.tee_scan: teeScan parsing and stationary-ball detection."""
+"""Tests for openflight.iwr6843.tee_scan: static scans, ball status and setup advice."""
 
 from __future__ import annotations
 
@@ -7,13 +7,15 @@ import pytest
 from openflight.iwr6843.tee_scan import (
     TeeScan,
     average_scans,
+    bin_range_m,
+    classify_setup,
     detect_ball,
-    local_bin_range_m,
+    parse_ball_status,
     parse_tee_scan,
 )
 
 REPLY = (
-    "teeScan 8 4\nteescan frames=9 loops=12 first=8 count=4 start=20\n"
+    "ball scan 8 4\nteescan frames=9 loops=12 first=8 count=4 start=20\n"
     "bin=8 power=1000\nbin=9 power=1200\nbin=10 power=800\nbin=11 power=950\nDone\nl3dump:/>"
 )
 
@@ -28,7 +30,7 @@ def test_parse_reads_header_and_every_bin():
 @pytest.mark.parametrize(
     ("text", "message"),
     [
-        ("teeScan 8 4\nError: teeScan count\nError -1\n", "no teescan header"),
+        ("ball scan 8 4\nError: ball scan count\nError -1\n", "no teescan header"),
         ("teescan frames=9 loops=12 first=8 count=4 start=20\nbin=8 power=1\nDone\n", "promised 4"),
     ],
 )
@@ -89,9 +91,57 @@ def test_detect_ratio_floors_an_empty_baseline():
     assert found.ratio == pytest.approx(300.0)
 
 
-def test_local_bin_range_inverts_the_tee_bin_conversion():
-    from openflight.iwr6843.monitor import tee_local_bin
+def test_bin_range_inverts_the_tee_bin_conversion():
+    from openflight.iwr6843.monitor import tee_global_bin
 
     config = "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
-    local = tee_local_bin(1.575, config)
-    assert local_bin_range_m(local, 20) == pytest.approx(1.575, abs=0.0235)
+    assert bin_range_m(tee_global_bin(1.575, config)) == pytest.approx(1.575, abs=0.0235)
+    assert bin_range_m(48) == pytest.approx(2.25, abs=0.01), "where ten captures put the club"
+
+
+STATUS = (
+    "ball status\nball state=locked follow=1 bin=48 ratio=8.65 confidence=0.93 delta=7650000 "
+    "background=1000000 age=120 locks=3 releases=2 reason=none window=20+53\n"
+    "balldbg updates=1842 candidate=0/0 centroid=48.27 width=2 persistence=47/50 "
+    "no_delta=900 too_wide=12 unstable=3 gone=40\nDone\nl3dump:/>"
+)
+
+
+def test_parse_ball_status_reads_both_lines():
+    status = parse_ball_status(STATUS)
+
+    assert status.locked and status.bin == 48 and status.follow is True
+    assert status.ratio == pytest.approx(8.65) and status.confidence == pytest.approx(0.93)
+    assert (status.locks, status.releases, status.reason) == (3, 2, "none")
+    assert status.window == (20, 53)
+    assert status.centroid == pytest.approx(48.27) and status.width == 2
+    assert status.persistence == pytest.approx(47 / 50)
+    assert status.range_m == pytest.approx(48.27 * 6.0 / 128)
+
+
+def test_parse_ball_status_without_a_lock_has_no_bin():
+    text = (
+        "ball state=waiting follow=0 bin=0 ratio=0.00 confidence=0.00 delta=0 background=0 "
+        "age=0 locks=0 releases=0 reason=no_delta window=20+53\nDone\n"
+    )
+    status = parse_ball_status(text)
+    assert not status.locked and status.bin is None and status.reason == "no_delta"
+    assert status.centroid is None and status.range_m is None
+    with pytest.raises(ValueError, match="no ball status"):
+        parse_ball_status("Done\n")
+
+
+@pytest.mark.parametrize(
+    ("range_m", "label", "ok", "fragment"),
+    [
+        (1.20, "too-close", False, "40 cm back"),
+        (1.40, "close", True, "20 cm back"),
+        (1.60, "ideal", True, "Ready"),
+        (1.90, "far", True, "30 cm closer"),
+        (2.25, "too-far", False, "65 cm closer"),
+    ],
+)
+def test_classify_setup_names_the_band_and_the_move(range_m, label, ok, fragment):
+    advice = classify_setup(range_m)
+    assert advice.label == label and advice.ok is ok
+    assert fragment in advice.message

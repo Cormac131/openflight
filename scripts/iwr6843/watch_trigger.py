@@ -15,7 +15,7 @@ from openflight.iwr6843.driver import TRIGGER_NOTICE, IWR6843Radar
 from openflight.iwr6843.monitor import (
     SELF_TRIGGER_DEFAULT_SNR,
     measure_trigger_level,
-    tee_local_bin,
+    tee_global_bin,
 )
 
 _DEFAULT_CFG = "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
@@ -37,13 +37,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    local_bin = tee_local_bin(args.tee_m, args.config)
+    tee_bin = tee_global_bin(args.tee_m, args.config)
     radar = IWR6843Radar(port=args.port)
     try:
         radar.send_config(args.config)
         # The firmware keeps its own noise floor; show it and the threshold
         # it implies so a swing's triggerLog can be read against them.
-        floor, threshold = measure_trigger_level(radar, local_bin, args.hits, snr=args.snr)
+        floor, threshold = measure_trigger_level(radar, tee_bin, args.hits, snr=args.snr)
         print(f"floor p95 {floor:.0f}; threshold {threshold:.0f} at snr {args.snr:g}", flush=True)
         # Debug first so the frames right after arming are visible: a fire in
         # that window used to be swallowed by the next command's buffer reset.
@@ -51,10 +51,10 @@ def main() -> None:
         if "Done" not in reply:
             raise SystemExit(f"debugCfg rejected: {reply.strip()}")
         print(
-            f"watching local bin {local_bin}, snr {args.snr:g}, {args.hits} frames. Ctrl+C to stop.",
+            f"watching global bin {tee_bin}, snr {args.snr:g}, {args.hits} frames. Ctrl+C to stop.",
             flush=True,
         )
-        reply = radar.cmd(f"triggerCfg {local_bin} {args.snr} {args.hits}")
+        reply = radar.cmd(f"triggerCfg {tee_bin} {args.snr} {args.hits}")
         if "Done" not in reply:
             raise SystemExit(f"triggerCfg rejected: {reply.strip()}")
         print(reply.replace("Done", "").strip(), flush=True)

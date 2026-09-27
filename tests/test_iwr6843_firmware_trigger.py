@@ -120,6 +120,7 @@ class Trace(ctypes.Structure):
         ("floor", ctypes.c_float),
         ("threshold", ctypes.c_float),
         ("coherencePct", ctypes.c_uint8),
+        ("dest", ctypes.c_uint8),
     ]
 
 
@@ -136,6 +137,7 @@ class Record(ctypes.Structure):
         ("peak", ctypes.c_float),
         ("floor", ctypes.c_float),
         ("coherencePct", ctypes.c_uint8),
+        ("dest", ctypes.c_uint8),
     ]
 
 
@@ -198,15 +200,18 @@ def lib(tmp_path_factory):
     library.l3_trig_rearm.argtypes = [ctypes.POINTER(Trig)]
     library.l3_trig_region.argtypes = [
         ctypes.POINTER(Cfg),
-        ctypes.c_uint32,
+        ctypes.c_uint32,  # tee (global)
+        ctypes.c_uint32,  # window start (global)
+        ctypes.c_uint32,  # bins in the window
         ctypes.POINTER(ctypes.c_uint32),
         ctypes.POINTER(ctypes.c_uint32),
     ]
     library.l3_trig_region.restype = ctypes.c_int32
     library.l3_trig_update.argtypes = [
         ctypes.POINTER(Trig),
-        ctypes.c_uint32,
-        ctypes.c_uint32,
+        ctypes.c_uint32,  # frame
+        ctypes.c_uint32,  # tee (global)
+        ctypes.c_uint32,  # global bin of obs[0]
         ctypes.POINTER(Obs),
         ctypes.c_uint32,
     ]
@@ -279,22 +284,43 @@ def make_cfg(lib, **overrides) -> Cfg:
 
 
 class Detector:
-    """One detector instance plus a frame builder for its watch region."""
+    """One detector instance plus a frame builder for its watch region.
 
-    def __init__(self, lib, cfg: Cfg, bin_count: int = 53, loop_period_s: float = LOOP_PERIOD_S):
+    Bins are global. The fixture's window starts at global bin 0 unless
+    ``window_start`` says otherwise, so the local offsets equal the global
+    bins and the scenarios read plainly; the windowed tests set a start.
+    """
+
+    def __init__(
+        self,
+        lib,
+        cfg: Cfg,
+        bin_count: int = 53,
+        loop_period_s: float = LOOP_PERIOD_S,
+        window_start: int = 0,
+        tee: int | None = None,
+    ):
         self.lib = lib
         self.cfg = cfg
+        self.tee = cfg.teeBin if tee is None else tee
+        self.window_start = window_start
         self.trig = Trig()
         lib.l3_trig_init(ctypes.byref(self.trig), ctypes.byref(cfg), loop_period_s)
         first = ctypes.c_uint32()
         count = ctypes.c_uint32()
         assert (
             lib.l3_trig_region(
-                ctypes.byref(cfg), bin_count, ctypes.byref(first), ctypes.byref(count)
+                ctypes.byref(cfg),
+                self.tee,
+                window_start,
+                bin_count,
+                ctypes.byref(first),
+                ctypes.byref(count),
             )
             == 1
         )
-        self.first = first.value
+        self.first_local = first.value
+        self.first = window_start + first.value  # global bin of obs[0]
         self.count = count.value
         self.frame = 0
 
@@ -339,7 +365,7 @@ class Detector:
         self.frame += 1
         return bool(
             self.lib.l3_trig_update(
-                ctypes.byref(self.trig), self.frame, self.first, obs, self.count
+                ctypes.byref(self.trig), self.frame, self.tee, self.first, obs, self.count
             )
         )
 
@@ -455,7 +481,9 @@ def test_region_clips_to_the_capture_window(lib, tee, bin_count, expected):
     first = ctypes.c_uint32()
     count = ctypes.c_uint32()
     assert (
-        lib.l3_trig_region(ctypes.byref(cfg), bin_count, ctypes.byref(first), ctypes.byref(count))
+        lib.l3_trig_region(
+            ctypes.byref(cfg), tee, 0, bin_count, ctypes.byref(first), ctypes.byref(count)
+        )
         == 1
     )
     assert (first.value, count.value) == expected
@@ -467,10 +495,59 @@ def test_region_is_empty_when_the_tee_is_outside_the_window(lib, bin_count):
     first = ctypes.c_uint32()
     count = ctypes.c_uint32()
     assert (
-        lib.l3_trig_region(ctypes.byref(cfg), bin_count, ctypes.byref(first), ctypes.byref(count))
+        lib.l3_trig_region(
+            ctypes.byref(cfg), TEE, 0, bin_count, ctypes.byref(first), ctypes.byref(count)
+        )
         == 0
     )
     assert count.value == 0
+
+
+def test_region_converts_a_global_tee_into_the_windows_offsets(lib):
+    """Wide profile: window 20..72, tee 1.575 m = global bin 34 -> local 14, region local 2..17."""
+    cfg = make_cfg(lib, teeBin=34)
+    first = ctypes.c_uint32()
+    count = ctypes.c_uint32()
+    assert (
+        lib.l3_trig_region(ctypes.byref(cfg), 34, 20, 53, ctypes.byref(first), ctypes.byref(count))
+        == 1
+    )
+    assert (first.value, count.value) == (2, 16)
+    # The same tee against the late window (47..99) is not visible.
+    assert (
+        lib.l3_trig_region(ctypes.byref(cfg), 34, 47, 53, ctypes.byref(first), ctypes.byref(count))
+        == 0
+    )
+    # A ball found at global bin 48 (2.25 m) in the pre window: local 28, region 16..31.
+    assert (
+        lib.l3_trig_region(ctypes.byref(cfg), 48, 20, 53, ctypes.byref(first), ctypes.byref(count))
+        == 1
+    )
+    assert (first.value, count.value) == (16, 16)
+
+
+def test_records_and_trace_report_global_bins_in_a_windowed_frame(lib):
+    det = Detector(lib, make_cfg(lib, teeBin=34), window_start=20)
+    assert (det.first_local, det.first) == (2, 22)
+    assert det.feed({27: CLUB}) is False  # global bins throughout
+    assert det.feed({29: CLUB}) is False
+    assert det.feed({31: CLUB}) is True, "31 is inside the gate 31..37 around tee 34"
+    assert [record.bin for record in det.records()] == [27, 29, 31]
+    assert det.traces()[-1].bin == 31
+    assert det.trig.maxFirstBin == 22
+
+
+def test_destination_can_differ_from_the_configured_tee(lib):
+    """Following the ball detector: the gate moves to where the ball actually is."""
+    det = Detector(lib, make_cfg(lib, teeBin=34), window_start=20, tee=48)
+    assert det.first == 36
+    for local_bin in [40, 43, 46]:  # the gate is 45..51 around the ball, not around 34
+        fired = det.feed({local_bin: CLUB})
+    assert fired is True
+    records = det.records()
+    assert [record.dest for record in records] == [48, 48, 48]
+    assert [record.dest - record.bin for record in records] == [8, 5, 2], "bins short of impact"
+    assert det.traces()[-1].dest == 48
 
 
 # --- swings that must fire ---------------------------------------------------
@@ -986,7 +1063,9 @@ def test_trace_header_and_lines_read_without_float_printf(lib):
     assert header.startswith("trigtrace state=idle stat=peak floor=")
     assert f"bar=2.0x frames=4 region={det.first}+{det.count} entries=1" in header
     line = det.trace_line(det.traces()[0])
-    assert line.startswith("t frame=4 gap=3 bin=12 state=idle energy=400 peak=100 loop0=33 floor=")
+    assert line.startswith(
+        "t frame=4 gap=3 bin=12 dest=20 dist=8 state=idle energy=400 peak=100 loop0=33 floor="
+    )
     # floor ~25 (peak units): threshold ~150, energy/floor ~16, peak/floor ~4.
     assert " thr=" in line and " e/f=16." in line and " p/f=4.0 coh=90" in line
 
@@ -1021,7 +1100,8 @@ def test_record_line_is_human_readable_without_float_printf(lib):
     det.feed({12: CLUB}, velocity_mps=2.5)
     line = det.record_line(det.records()[0])
     assert line.startswith(
-        "frame=5 gap=4 state=tracking why=acquired bin=12 age=1 energy=6000 peak=1500 floor="
+        "frame=5 gap=4 state=tracking why=acquired bin=12 dest=20 dist=8 age=1 "
+        "energy=6000 peak=1500 floor="
     )
     assert " v=2.5" in line and line.endswith("coh=90")
 
@@ -1031,7 +1111,7 @@ def test_record_line_shows_a_dash_when_no_bin_was_seen(lib):
     det.feed({12: CLUB})
     det.feed()
     line = det.record_line(det.records()[1])
-    assert "why=missed bin=- age=1" in line
+    assert "why=missed bin=- dest=20 dist=- age=1" in line
 
 
 def test_why_names_cover_every_reason(lib):

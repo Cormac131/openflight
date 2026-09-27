@@ -1102,7 +1102,7 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
         SELF_TRIGGER_DEFAULT_SNR,
         SELF_TRIGGER_DEFAULT_TRACK_FRAMES,
         SelfTriggerConfig,
-        tee_local_bin,
+        tee_global_bin,
     )
 
     tuning = [
@@ -1120,11 +1120,11 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
         return None
     bin_index = args.iwr6843_self_trigger_bin
     if bin_index is None:
-        bin_index = tee_local_bin(args.iwr6843_tee_m, args.iwr6843_config)
+        bin_index = tee_global_bin(args.iwr6843_tee_m, args.iwr6843_config)
     snr = args.iwr6843_self_trigger_snr
     frames = args.iwr6843_self_trigger_frames
     return SelfTriggerConfig(
-        local_bin=bin_index,
+        tee_bin=bin_index,
         snr=SELF_TRIGGER_DEFAULT_SNR if snr is None else snr,
         track_frames=SELF_TRIGGER_DEFAULT_TRACK_FRAMES if frames is None else frames,
     )
@@ -4716,7 +4716,7 @@ def main():
         "--iwr6843-self-trigger-bin",
         type=int,
         default=None,
-        help="Local range bin of the tee (default: from --iwr6843-tee-m). "
+        help="Global range-FFT bin of the tee (default: from --iwr6843-tee-m). "
         "Requires --iwr6843-self-trigger",
     )
     parser.add_argument(

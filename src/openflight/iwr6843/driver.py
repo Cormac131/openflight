@@ -542,12 +542,22 @@ class IWR6843Radar:
         return self.cmd("triggerLog", 6.0)
 
     def tee_scan(self, first_bin: int, count: int) -> str:
-        """``teeScan``: static power per local bin averaged over the ring's pre frames.
+        """``ball scan``: static power per global bin averaged over the ring's pre frames.
 
         The firmware freezes at the next frame boundary, reports, and rearms,
         so the sensor must be active. Parse with ``tee_scan.parse_tee_scan``.
         """
-        return self.cmd(f"teeScan {first_bin} {count}", 4.0)
+        return self.cmd(f"ball scan {first_bin} {count}", 4.0)
+
+    def ball_status(self) -> str:
+        """The ball-placement detector's state line; parse with ``tee_scan.parse_ball_status``."""
+        return self.cmd("ball status", 2.0)
+
+    def configure_ball(self, enable: bool, follow: bool) -> None:
+        """Start (or stop) the ball-placement detector; ``follow`` aims the trigger at it."""
+        self._require_done(
+            "ball cfg", self.cmd(f"ball cfg {int(enable)} {int(follow and enable)}", 2.0)
+        )
 
     def trigger_trace(self) -> str:
         """The detector's raw-input trace: what it was offered, not what it took.

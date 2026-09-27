@@ -1,11 +1,14 @@
-"""Stationary-ball detection from the firmware's ``teeScan`` static power.
+"""Stationary-ball detection from the firmware's static range power.
 
 The self-trigger works from the MTI residual, which removes a ball sitting
 on the tee entirely, so it can never say whether the radar sees the ball at
-all. ``teeScan`` reports the raw static power per range bin instead; this
+all. ``ball scan`` reports the raw static power per global range bin; this
 module parses it, averages repeated scans, and compares an empty tee against
 an occupied one to find where the ball actually is relative to where the
-configured tee range says it should be.
+configured tee range says it should be. ``ball status`` is the firmware's
+own appearance detector (a new compact reflector against a learned
+background); it is parsed here too, and the ball's range is classified
+against the supported setup envelope.
 """
 
 from __future__ import annotations
@@ -124,9 +127,122 @@ def detect_ball(
     )
 
 
-def local_bin_range_m(local_bin: int, window_start: int, fft_size: int = 128) -> float:
-    """Range of a capture-local bin, the inverse of ``tee_local_bin``."""
-    return (window_start + local_bin) * (RANGE_SPAN_M / fft_size)
+def bin_range_m(global_bin: int, fft_size: int = 128) -> float:
+    """Range of a global range-FFT bin, the inverse of ``tee_global_bin``."""
+    return global_bin * (RANGE_SPAN_M / fft_size)
+
+
+@dataclass(frozen=True)
+class BallStatus:
+    """The firmware's placement detector, from ``ball status`` (two lines) or ``stats`` (one)."""
+
+    state: str  # off, building, waiting, candidate, locked
+    follow: bool
+    bin: int | None  # global bin while locked
+    ratio: float
+    confidence: float
+    locks: int
+    releases: int
+    reason: str
+    window: tuple[int, int]  # (first global bin, bins) the detector covers
+    centroid: float | None = None  # from the balldbg line, sub-bin global
+    width: int | None = None
+    persistence: float | None = None
+
+    @property
+    def locked(self) -> bool:
+        return self.state == "locked" and self.bin is not None
+
+    @property
+    def range_m(self) -> float | None:
+        """Range of the centroid when known, else of the locked bin."""
+        if self.centroid is not None and self.locked:
+            return self.centroid * (RANGE_SPAN_M / 128)
+        return bin_range_m(self.bin) if self.bin is not None else None
+
+
+_KEY_VALUE = re.compile(r"(\S+?)=(\S+)")
+
+
+def parse_ball_status(text: str) -> BallStatus:
+    """Parse ``ball status`` or a ``stats`` reply; raises ValueError without a ball line."""
+    status: dict[str, str] = {}
+    debug: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("ball state="):
+            status = dict(_KEY_VALUE.findall(line[len("ball ") :]))
+        elif line.startswith("balldbg "):
+            debug = dict(_KEY_VALUE.findall(line[len("balldbg ") :]))
+    if "state" not in status:
+        raise ValueError(f"no ball status line in {text.strip()[:80]!r}")
+    state = status["state"]
+    first, _, count = status.get("window", "0+0").partition("+")
+    seen, _, total = debug.get("persistence", "0/0").partition("/")
+    return BallStatus(
+        state=state,
+        follow=status.get("follow") == "1",
+        bin=int(status["bin"]) if state == "locked" else None,
+        ratio=float(status.get("ratio", 0)),
+        confidence=float(status.get("confidence", 0)),
+        locks=int(status.get("locks", 0)),
+        releases=int(status.get("releases", 0)),
+        reason=status.get("reason", "?"),
+        window=(int(first or 0), int(count or 0)),
+        centroid=float(debug["centroid"]) if "centroid" in debug and state == "locked" else None,
+        width=int(debug["width"]) if "width" in debug else None,
+        persistence=(int(seen) / int(total)) if total and int(total) else None,
+    )
+
+
+# Supported tee ranges, metres from the radar. Values to validate on real
+# rigs, not final: the ten captures that prompted this put the club at
+# 2.2-2.4 m with a tee configured at 1.575 m.
+SETUP_TOO_CLOSE_M = 1.30
+SETUP_CLOSE_M = 1.45
+SETUP_FAR_M = 1.75
+SETUP_TOO_FAR_M = 2.00
+SETUP_IDEAL_M = 1.60  # the middle of the ideal band, for the "move by" advice
+
+
+@dataclass(frozen=True)
+class SetupAdvice:
+    label: str  # too-close, close, ideal, far, too-far
+    range_m: float
+    move_m: float  # positive: move OpenFlight closer to the ball; negative: back
+
+    @property
+    def ok(self) -> bool:
+        return self.label in ("close", "ideal", "far")
+
+    @property
+    def message(self) -> str:
+        if self.label == "ideal":
+            return "Ready"
+        direction = "closer" if self.move_m > 0 else "back"
+        distance_cm = abs(self.move_m) * 100.0
+        if self.label in ("close", "far"):
+            return (
+                f"Usable; move OpenFlight about {distance_cm:.0f} cm {direction} for best results"
+            )
+        return f"Move OpenFlight about {distance_cm:.0f} cm {direction}"
+
+
+def classify_setup(range_m: float) -> SetupAdvice:
+    """Where the detected ball range sits in the supported envelope, and how to fix it."""
+    if range_m < SETUP_TOO_CLOSE_M:
+        label = "too-close"
+    elif range_m < SETUP_CLOSE_M:
+        label = "close"
+    elif range_m <= SETUP_FAR_M:
+        label = "ideal"
+    elif range_m <= SETUP_TOO_FAR_M:
+        label = "far"
+    else:
+        label = "too-far"
+    return SetupAdvice(
+        label=label, range_m=range_m, move_m=range_m - SETUP_IDEAL_M if label != "ideal" else 0.0
+    )
 
 
 __all__ = [
@@ -134,9 +250,13 @@ __all__ = [
     "DEFAULT_SCANS",
     "DEFAULT_SEARCH_HALF_WIDTH",
     "BallDetection",
+    "BallStatus",
+    "SetupAdvice",
     "TeeScan",
     "average_scans",
+    "bin_range_m",
+    "classify_setup",
     "detect_ball",
-    "local_bin_range_m",
+    "parse_ball_status",
     "parse_tee_scan",
 ]

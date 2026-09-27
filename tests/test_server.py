@@ -4796,8 +4796,8 @@ class TestSelfTriggerCli:
     def test_switch_alone_takes_the_bin_from_the_tee_and_the_defaults(self):
         config = server_module._self_trigger_config(_self_trigger_args(iwr6843_self_trigger=True))
 
-        assert (config.local_bin, config.snr, config.track_frames) == (14, 6.0, 2)
-        assert config.command == "triggerCfg 14 6.0 2"
+        assert (config.tee_bin, config.snr, config.track_frames) == (34, 6.0, 2)
+        assert config.command == "triggerCfg 34 6.0 2"
 
     def test_explicit_tuning_wins(self):
         config = server_module._self_trigger_config(
@@ -4809,7 +4809,7 @@ class TestSelfTriggerCli:
             )
         )
 
-        assert (config.local_bin, config.snr, config.track_frames) == (9, 4.5, 4)
+        assert (config.tee_bin, config.snr, config.track_frames) == (9, 4.5, 4)
 
     def test_zero_frames_is_refused_instead_of_silently_disabling_capture(self):
         with pytest.raises(ValueError, match="track frames must be >= 1"):

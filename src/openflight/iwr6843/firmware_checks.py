@@ -20,7 +20,7 @@ from openflight.iwr6843.monitor import (
     SelfTriggerConfig,
     measure_trigger_level,
     read_capture_config,
-    tee_local_bin,
+    tee_global_bin,
 )
 from openflight.iwr6843.self_trigger import FLOOR_PROBE_LEVEL, replay_dump
 from openflight.iwr6843.sparse import (
@@ -40,8 +40,10 @@ from openflight.iwr6843.tee_scan import (
     DEFAULT_SEARCH_HALF_WIDTH,
     BallDetection,
     average_scans,
+    bin_range_m,
+    classify_setup,
     detect_ball,
-    local_bin_range_m,
+    parse_ball_status,
     parse_tee_scan,
 )
 from openflight.iwr6843.tracking import LOOP_PRI_S, RANGE_SPAN_M
@@ -260,8 +262,8 @@ def _tee_bin(ctx: Context) -> int:
 
 
 def expected_tee_bin(ctx: Context) -> int:
-    """The capture-local range bin ``--tee-m`` converts to for this profile."""
-    return tee_local_bin(ctx.tee_m, ctx.config)
+    """The global range bin ``--tee-m`` converts to, checked against this profile's window."""
+    return tee_global_bin(ctx.tee_m, ctx.config)
 
 
 def _disarm(ctx: Context) -> str:
@@ -1056,7 +1058,7 @@ def arm_command(ctx: Context) -> str:
     a measured absolute level (~3e7) there, which armed a threshold no swing
     could reach and read as "the radar does not see the club".
     """
-    return SelfTriggerConfig(local_bin=_tee_bin(ctx), snr=ctx.snr, track_frames=ctx.hits).command
+    return SelfTriggerConfig(tee_bin=_tee_bin(ctx), snr=ctx.snr, track_frames=ctx.hits).command
 
 
 def detector_evidence(ctx: Context) -> list[str]:
@@ -1678,23 +1680,27 @@ class _BallState:
     scan_first: int = 0
     scan_count: int = 0
     window_start: int = 0
+    detector: bool = False  # the firmware accepted "ball cfg 1 0"
 
 
 def _scan_region(ctx: Context) -> tuple[int, int, int]:
-    """(first local bin, count, absolute start) around the expected tee inside the pre window."""
+    """(first global bin, count, window start) around the expected tee inside the pre window."""
     summary = read_capture_config(ctx.config)
     if summary.first_window_start is None or summary.first_window_bins is None:
         raise ValueError(f"{ctx.config} has no phaseCaptureCfg")
     expected = expected_tee_bin(ctx)
-    first = max(0, expected - DEFAULT_SEARCH_HALF_WIDTH)
-    last = min(summary.first_window_bins - 1, expected + DEFAULT_SEARCH_HALF_WIDTH)
+    first = max(summary.first_window_start, expected - DEFAULT_SEARCH_HALF_WIDTH)
+    last = min(
+        summary.first_window_start + summary.first_window_bins - 1,
+        expected + DEFAULT_SEARCH_HALF_WIDTH,
+    )
     return first, last - first + 1, summary.first_window_start
 
 
 def _averaged_scan(ctx: Context, first: int, count: int) -> dict[int, float]:
     scans = []
     for _ in range(DEFAULT_SCANS):
-        scans.append(parse_tee_scan(cli(ctx, f"teeScan {first} {count}", 4.0)))
+        scans.append(parse_tee_scan(cli(ctx, f"ball scan {first} {count}", 4.0)))
     return average_scans(scans)
 
 
@@ -1710,6 +1716,9 @@ def ball_detect_section() -> Section:
         name = "ball-detect/empty tee baseline"
         state.scan_first, state.scan_count, state.window_start = _scan_region(ctx)
         ctx.prompt("Remove the ball from the tee, then press Enter.")
+        # The firmware's own detector learns its background from the same
+        # empty tee; its lock is compared with the scan later.
+        state.detector = "Done" in cli(ctx, "ball cfg 1 0")
         state.baseline = _averaged_scan(ctx, state.scan_first, state.scan_count)
         expected = expected_tee_bin(ctx)
         at_tee = state.baseline.get(expected)
@@ -1730,16 +1739,52 @@ def ball_detect_section() -> Section:
         occupied = _averaged_scan(ctx, state.scan_first, state.scan_count)
         expected = expected_tee_bin(ctx)
         found = detect_ball(state.baseline, occupied, expected)
+        setup = classify_setup(bin_range_m(found.detected_bin))
         detail = (
             f"expected={ctx.tee_m:.3f}m expected_bin={expected} detected_bin={found.detected_bin} "
-            f"detected_range={local_bin_range_m(found.detected_bin, state.window_start):.2f}m "
+            f"detected_range={setup.range_m:.2f}m "
             f"baseline={found.baseline:.0f} occupied={found.occupied:.0f} ratio={found.ratio:.2f}x "
-            f"(searched bins {found.search_bins[0]}-{found.search_bins[1]})"
+            f"(searched bins {found.search_bins[0]}-{found.search_bins[1]}) "
+            f"setup={setup.label}: {setup.message}"
         )
         ctx.ball_detection = found
         if found.ratio < DEFAULT_MIN_RATIO:
             return failed(name, f"no clear ball return: {detail}")
         ctx.observed_tee_bin = found.detected_bin
+        return passed(name, detail)
+
+    def detector_locks(ctx: Context) -> CheckResult:
+        """The firmware's appearance detector agrees with the scan, then is turned off."""
+        name = "ball-detect/firmware detector locks on the placed ball"
+        if not state.detector:
+            return skipped(name, "ball cfg not accepted by this firmware")
+        if ctx.observed_tee_bin is None:
+            cli(ctx, "ball cfg 0 0")
+            return skipped(name, "no scan-detected ball to compare with")
+        latest: dict[str, str] = {}
+
+        def locked() -> bool:
+            latest["reply"] = cli(ctx, "ball status")
+            try:
+                return parse_ball_status(latest["reply"]).locked
+            except ValueError:
+                return False
+
+        settled = wait_until(ctx, locked, min(ctx.wait_s, 5.0), poll_s=0.2)
+        cli(ctx, "ball cfg 0 0")
+        try:
+            status = parse_ball_status(latest["reply"])
+        except ValueError:
+            return failed(name, f"no ball status line: {latest['reply'].strip()[:60]!r}")
+        if not settled:
+            return failed(name, f"detector state={status.state} while a ball sits on the tee")
+        offset = (status.bin or 0) - ctx.observed_tee_bin
+        detail = (
+            f"firmware bin={status.bin} ratio={status.ratio:.2f}x, scan bin={ctx.observed_tee_bin} "
+            f"(offset {offset:+d}), range={bin_range_m(status.bin or 0):.2f}m"
+        )
+        if abs(offset) > 1:
+            return failed(name, f"detector and scan disagree: {detail}")
         return passed(name, detail)
 
     return Section(
@@ -1748,6 +1793,11 @@ def ball_detect_section() -> Section:
         (
             Check("ball-detect/empty tee baseline", baseline, needs_ball=True),
             Check("ball-detect/stationary return", stationary, needs_ball=True),
+            Check(
+                "ball-detect/firmware detector locks on the placed ball",
+                detector_locks,
+                needs_ball=True,
+            ),
         ),
     )
 
@@ -1790,7 +1840,7 @@ COMMANDS_COVERED = frozenset(
         "debugCfg",
         "l3release",
         "triggerLog",
-        "teeScan",
+        "ball",
     }
 )
 

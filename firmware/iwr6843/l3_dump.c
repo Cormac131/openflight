@@ -54,6 +54,7 @@
 #include "capture_plan.h"
 #include "track_select.h"
 #include "l3_trigger.h"
+#include "l3_ball.h"
 
 #if defined(L3_DUMP_IQ8) || defined(L3_RING_IQ8)
 #define L3_ANY_IQ8 1
@@ -364,6 +365,18 @@ static l3_trig_cfg_t     gTrigCfg;
 static l3_trig_t         gTrig;
 static volatile uint8_t  gTrigBusy;
 static float             gTrigLoopPeriodS;
+/* Ball-placement detector (l3_ball.c): fed the pre window's static power
+ * every other frame by the detect task; "ball cfg" resets it under the
+ * same busy handshake as triggerCfg. */
+static l3_ball_cfg_t     gBallCfg;
+static l3_ball_t         gBall;
+static volatile uint8_t  gBallBusy;
+/* Where the last scored frame aimed: the locked ball (1) or the configured
+ * tee (0). With follow on and no ball locked the trigger falls back to the
+ * tee and counts the frames, so the ball detector cannot make a shot
+ * uncapturable while it is being proven. */
+static volatile uint8_t  gTrigDestBall;
+static volatile uint32_t gTrigFallbackFrames;
 static volatile uint8_t  gTriggerPhase;
 static volatile uint32_t gTriggerTeePower;
 static volatile uint8_t  gTriggerDebug;
@@ -432,6 +445,7 @@ static int32_t l3_armCapture(void);
 #ifdef HWA_CHAINED_SNAPSHOT_RING
 static void l3_hwaRearmTask(UArg arg0, UArg arg1);
 static void l3_considerSelfTrigger(uint32_t slot);
+static void l3_considerBall(uint32_t slot);
 static void l3_publishDetectFrame(uint32_t slot, uint32_t epoch);
 static void l3_resetDetectQueue(void);
 static void l3_detectTask(UArg arg0, UArg arg1);
@@ -2633,17 +2647,17 @@ static void l3_verticalPowerLoops(uint32_t slot, uint32_t localBin, float *out)
 }
 
 /* Static (non-MTI) power of one bin: mean |I + jQ|^2 per complex sample over
- * every loop of the vertical TX pair and all RX. The residual above removes
+ * every loopStep-th loop of the vertical TX pair and all RX. The residual above removes
  * exactly this, so it is the view of a stationary ball on the tee that the
  * trigger never sees; teeScan reports it so a ball's presence and range bin
  * can be proved before any swing is judged. Diagnostic only. */
-static float l3_verticalStaticPower(uint32_t slot, uint32_t localBin)
+static float l3_verticalStaticPower(uint32_t slot, uint32_t localBin, uint32_t loopStep)
 {
     const int16_t *frame = (const int16_t *)&g_ring[gFrameOffset[slot]];
     uint32_t binCount = gFrameBinCount[slot];
     uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
     uint32_t loops = gCapturePlan.loops;
-    uint32_t loopStride = ntx * N_RX * binCount * 2U;
+    uint32_t loopStride = ntx * N_RX * binCount * 2U * loopStep;
     float total = 0.0F;
     uint32_t samples = 0U;
     uint32_t tx;
@@ -2656,7 +2670,9 @@ static float l3_verticalStaticPower(uint32_t slot, uint32_t localBin)
         for (rx = 0U; rx < N_RX; rx++) {
             const int16_t *sample = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U];
             uint32_t loop;
-            for (loop = 0U; loop < loops; loop++) {
+            /* loopStep > 1 subsamples the loops: a static target does not
+             * change between them, and the ball detector runs every frame. */
+            for (loop = 0U; loop < loops; loop += loopStep) {
                 float im = (float)sample[0];
                 float re = (float)sample[1];
                 total += im * im + re * re;
@@ -2720,7 +2736,7 @@ static const char *l3_triggerPhaseName(uint8_t phase)
 {
     static const char *const names[] = {
         "off", "no-frame", "bin-outside", "tee-low", "occupying",
-        "watching", "no-approach", "toward", "away", "fired"
+        "watching", "no-approach", "toward", "away", "fired", "no-ball"
     };
 
     if (phase >= (uint8_t)(sizeof(names) / sizeof(names[0]))) {
@@ -2781,6 +2797,30 @@ static void l3_trigRearm(void)
     l3_trig_rearm(&gTrig);
 }
 
+/* Every other completed pre-trigger slot: the static power of the whole
+ * window, loops subsampled by four, into the ball detector. About a fifth
+ * of the trigger's own cost per frame. */
+static void l3_considerBall(uint32_t slot)
+{
+    static float power[L3_BALL_MAX_BINS];
+    uint32_t count = gFrameBinCount[slot];
+    uint32_t bin;
+
+    if (gBall.state == L3_BALL_STATE_OFF || gCapturePlan.loops == 0U ||
+        (gPreFramesCaptured & 1U) != 0U) {
+        return;
+    }
+    if (count > L3_BALL_MAX_BINS) {
+        count = L3_BALL_MAX_BINS;
+    }
+    gBallBusy = 1U;
+    for (bin = 0U; bin < count; bin++) {
+        power[bin] = l3_verticalStaticPower(slot, bin, 4U);
+    }
+    (void)l3_ball_update(&gBall, gFrameBinStart[slot], power, count);
+    gBallBusy = 0U;
+}
+
 /* Per completed pre-trigger slot: reduce the watch region to one observation
  * per bin and hand it to the detector. The detect task passes the slot it
  * popped, so a slow read does not score a frame the ring has reused. */
@@ -2793,6 +2833,8 @@ static void l3_considerSelfTrigger(uint32_t slot)
     uint32_t bin;
     int32_t fired;
     uintptr_t key;
+
+    uint32_t teeBin = gTrigCfg.teeBin;
 
     if (!gTriggerEnabled) {
         l3_noteTrigger(0U, 0.0F);
@@ -2809,7 +2851,21 @@ static void l3_considerSelfTrigger(uint32_t slot)
         l3_noteTrigger(1U, 0.0F);
         return;
     }
-    if (!l3_trig_region(&gTrigCfg, gFrameBinCount[slot], &first, &count)) {
+    /* Following the ball detector, the destination is where the ball was
+     * placed, in global bins (ten captures put the club at 2.2-2.4 m while
+     * a hand-measured tee said 1.575 m). Without a locked ball the
+     * configured tee stands in, motion only, and the fallback is counted. */
+    gTrigDestBall = 0U;
+    if (gBallCfg.follow) {
+        if (l3_ball_locked(&gBall, &teeBin)) {
+            gTrigDestBall = 1U;
+        } else {
+            teeBin = gTrigCfg.teeBin;
+            gTrigFallbackFrames++;
+        }
+    }
+    if (!l3_trig_region(&gTrigCfg, teeBin, gFrameBinStart[slot], gFrameBinCount[slot],
+                        &first, &count)) {
         l3_noteTrigger(2U, 0.0F);
         return;
     }
@@ -2818,7 +2874,8 @@ static void l3_considerSelfTrigger(uint32_t slot)
         l3_verticalResidual(slot, first + bin, NULL, &obs[bin]);
     }
     gTrig.loopPeriodS = gTrigLoopPeriodS;
-    fired = l3_trig_update(&gTrig, gPreFramesCaptured, first, obs, count);
+    fired = l3_trig_update(&gTrig, gPreFramesCaptured, teeBin, gFrameBinStart[slot] + first,
+                           obs, count);
     gTrigBusy = 0U;
     if (!fired) {
         l3_noteTrigger(gTrig.state == L3_TRIG_STATE_TRACKING ? 7U : 5U, gTrig.floor);
@@ -2855,6 +2912,7 @@ static void l3_detectTask(UArg arg0, UArg arg1)
             gDetectStale++;
             continue;
         }
+        l3_considerBall(queuedSlot);
         l3_considerSelfTrigger(queuedSlot);
     }
 }
@@ -3242,9 +3300,10 @@ static int32_t l3_cli_trackCfg(int32_t argc, char *argv[])
 /* Longest triggerCfg waits for the detect task to finish scoring a frame. */
 #define L3_TRIGGER_CFG_WAIT_MS 50U
 
-/* CLI "triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep
- * stat minSpeed]": arm the approaching-clubhead detector around the tee
- * bin. A candidate needs a residual statistic of at least <snr> times the
+/* CLI "triggerCfg <bin> <snr> <frames> [approach gate minCoh minStep stat
+ * minSpeed]": arm the approaching-clubhead detector around the tee bin, a
+ * GLOBAL range-FFT bin (the host converts the tee range; bin 34 is 1.59 m
+ * on a 128-point FFT over 6 m). A candidate needs a residual statistic of at least <snr> times the
  * running noise floor; its track needs <frames> observations before
  * entering the impact gate fires the capture. frames of 0 disables the
  * trigger. The optional values are the bins watched short of the tee, the
@@ -3453,54 +3512,38 @@ static int32_t l3_cli_debugCfg(int32_t argc, char *argv[])
     return 0;
 }
 
-/* CLI "teeScan <firstBin> <count>": freeze at the next frame boundary,
- * report the static power of <count> local bins from <firstBin>, averaged
- * over every pre-trigger frame in the ring, then rearm. Values are the mean
+/* "ball scan <firstBin> <count>": freeze at the next frame boundary, report
+ * the static power of <count> GLOBAL bins from <firstBin>, averaged over
+ * every pre-trigger frame in the ring, then rearm. Values are the mean
  * |I + jQ|^2 per complex sample (vertical TX pair, all RX, all loops), so
  * scans of different depths compare directly; the host averages repeated
- * scans for a longer baseline. Bins outside the window read 0. IQ16 only. */
-static int32_t l3_cli_teeScan(int32_t argc, char *argv[])
+ * scans for a longer baseline. Bins outside a frame's window read 0. */
+static int32_t l3_ballScan(uint32_t first, uint32_t count)
 {
     static float power[L3_RING_MAX_BINS];
     l3_sparse_window_t window;
-    unsigned long first;
-    unsigned long count;
-    char *end;
     uint32_t bin;
     uint32_t frame;
     uint32_t preFrames = 0U;
 
-    if (argc != 3) {
-        CLI_write("Error: teeScan <firstBin> <count>\n");
-        return -1;
-    }
-    first = strtoul(argv[1], &end, 10);
-    if (*end != '\0' || first >= L3_RING_MAX_BINS) {
-        CLI_write("Error: teeScan first bin\n");
-        return -1;
-    }
-    count = strtoul(argv[2], &end, 10);
-    if (*end != '\0' || count == 0UL || first + count > L3_RING_MAX_BINS) {
-        CLI_write("Error: teeScan count\n");
-        return -1;
-    }
     if (l3_sparseFreeze() != 0) {
         return -1;
     }
     l3_sparseWindow(&window);
-    for (bin = 0U; bin < (uint32_t)count; bin++) {
+    for (bin = 0U; bin < count; bin++) {
         power[bin] = 0.0F;
     }
     /* Pre-trigger slots only: post slots may hold another window. */
     for (frame = 0U; frame < window.nFrames; frame++) {
+        uint32_t windowStart = window.starts[frame];
         if (window.slots[frame] >= gCapturePlan.preFrames) {
             continue;
         }
         preFrames++;
-        for (bin = 0U; bin < (uint32_t)count; bin++) {
-            uint32_t localBin = (uint32_t)first + bin;
-            if (localBin < window.counts[frame]) {
-                power[bin] += l3_verticalStaticPower(window.slots[frame], localBin);
+        for (bin = 0U; bin < count; bin++) {
+            uint32_t global = first + bin;
+            if (global >= windowStart && global - windowStart < window.counts[frame]) {
+                power[bin] += l3_verticalStaticPower(window.slots[frame], global - windowStart, 1U);
             }
         }
     }
@@ -3508,14 +3551,118 @@ static int32_t l3_cli_teeScan(int32_t argc, char *argv[])
               (unsigned)preFrames, (unsigned)gCapturePlan.loops,
               (unsigned)first, (unsigned)count,
               (unsigned)(window.nFrames ? window.starts[0] : 0U));
-    for (bin = 0U; bin < (uint32_t)count; bin++) {
+    for (bin = 0U; bin < count; bin++) {
         float mean = (preFrames > 0U) ? (power[bin] / (float)preFrames) : 0.0F;
         if (mean > 4.0e9F) {
             mean = 4.0e9F;
         }
-        CLI_write("bin=%u power=%u\n", (unsigned)((uint32_t)first + bin), (unsigned)mean);
+        CLI_write("bin=%u power=%u\n", (unsigned)(first + bin), (unsigned)mean);
     }
     return l3_sparseRearm();
+}
+
+/* CLI "ball [status] | ball scan <firstBin> <count> | ball cfg <enable>
+ * <follow> [minRatio stableUpdates buildUpdates]": the ball-placement
+ * detector. "cfg" (re)starts it: enable 0 turns it off; follow 1 makes the
+ * self-trigger track the club toward the locked ball's bin instead of the
+ * configured tee, falling back to the tee (counted in stats) while no ball
+ * is locked. "status" (or no argument) prints the state line that stats
+ * also carries, then a balldbg line with centroid, width, persistence and
+ * the reasons acquisition did not lock. */
+static int32_t l3_cli_ball(int32_t argc, char *argv[])
+{
+    static char line[192];
+
+    if (argc == 1 || (argc == 2 && strcmp(argv[1], "status") == 0)) {
+        (void)l3_ball_format_status(&gBall, line, sizeof(line));
+        CLI_write("%s\n", line);
+        (void)l3_ball_format_debug(&gBall, line, sizeof(line));
+        CLI_write("%s\n", line);
+        CLI_write("Done\n");
+        return 0;
+    }
+    if (argc == 4 && strcmp(argv[1], "scan") == 0) {
+        unsigned long first;
+        unsigned long count;
+        char *end;
+
+        first = strtoul(argv[2], &end, 10);
+        if (*end != '\0' || first >= 2U * L3_RING_MAX_BINS) {
+            CLI_write("Error: ball scan first bin\n");
+            return -1;
+        }
+        count = strtoul(argv[3], &end, 10);
+        if (*end != '\0' || count == 0UL || count > L3_RING_MAX_BINS) {
+            CLI_write("Error: ball scan count\n");
+            return -1;
+        }
+        return l3_ballScan((uint32_t)first, (uint32_t)count);
+    }
+    if (argc >= 4 && argc <= 7 && strcmp(argv[1], "cfg") == 0) {
+        l3_ball_cfg_t cfg;
+        unsigned long value;
+        char *end;
+        uint32_t waited = 0U;
+
+        l3_ball_cfg_defaults(&cfg);
+        value = strtoul(argv[2], &end, 10);
+        if (*end != '\0' || value > 1UL) {
+            CLI_write("Error: ball cfg enable\n");
+            return -1;
+        }
+        cfg.enabled = (uint8_t)value;
+        value = strtoul(argv[3], &end, 10);
+        if (*end != '\0' || value > 1UL) {
+            CLI_write("Error: ball cfg follow\n");
+            return -1;
+        }
+        cfg.follow = (uint8_t)value;
+        if (argc > 4) {
+            cfg.minRatio = strtof(argv[4], &end);
+            if (*end != '\0') {
+                CLI_write("Error: ball cfg min ratio\n");
+                return -1;
+            }
+        }
+        if (argc > 5) {
+            value = strtoul(argv[5], &end, 10);
+            if (*end != '\0') {
+                CLI_write("Error: ball cfg stable updates\n");
+                return -1;
+            }
+            cfg.stableUpdates = (uint32_t)value;
+        }
+        if (argc > 6) {
+            value = strtoul(argv[6], &end, 10);
+            if (*end != '\0') {
+                CLI_write("Error: ball cfg build updates\n");
+                return -1;
+            }
+            cfg.buildUpdates = (uint32_t)value;
+        }
+        if (cfg.enabled && l3_ball_cfg_check(&cfg) != 0) {
+            CLI_write("Error: ball cfg (minRatio > 0, counts > 0)\n");
+            return -1;
+        }
+        if (cfg.follow && !cfg.enabled) {
+            CLI_write("Error: ball cfg follow needs enable\n");
+            return -1;
+        }
+        /* Let a frame being scored finish, as triggerCfg does. */
+        while (gBallBusy && waited < L3_TRIGGER_CFG_WAIT_MS) {
+            Task_sleep(1);
+            waited++;
+        }
+        gBallCfg = cfg;
+        l3_ball_init(&gBall, &gBallCfg);
+        gTrigDestBall = 0U;
+        gTrigFallbackFrames = 0U;
+        CLI_write("Done\n");
+        return 0;
+    }
+    CLI_write("Error: ball [status] | ball scan <firstBin> <count> | "
+              "ball cfg <enable> <follow> [minRatio stable build]\n");
+    return -1;
 }
 
 /* CLI "stats": report capture counters (diagnostic). */
@@ -3596,6 +3743,14 @@ static int32_t l3_cli_stats(int32_t argc, char *argv[])
               (unsigned)gNumFrame, (unsigned)gNumWrap, (int)gCaptureActive,
               (unsigned)gCalibStatus, (unsigned)gRfFaults);
 #endif
+    {
+        static char ballLine[192];
+        (void)l3_ball_format_status(&gBall, ballLine, sizeof(ballLine));
+        CLI_write("%s\n", ballLine);
+    }
+    CLI_write("trig dest=%u source=%s fallback=%u\n",
+              (unsigned)(gTrigDestBall ? gBall.ballBin : gTrigCfg.teeBin),
+              gTrigDestBall ? "ball" : "tee", (unsigned)gTrigFallbackFrames);
     CLI_write("trig phase=%s tee=%u latched=%u enabled=%u\n",
               l3_triggerPhaseName(gTriggerPhase),
               (unsigned)gTriggerTeePower,
@@ -4313,9 +4468,10 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[16].cmdHandlerFxn = l3_cli_release;
     /* Entries 0..18 plus the mmWave extension's commands must fit the SDK's
      * CLI_MAX_CMD; keep new diagnostics as sub-modes of existing commands. */
-    cliCfg.tableEntry[18].cmd           = "teeScan";
-    cliCfg.tableEntry[18].helpString    = "teeScan <firstBin> <count>: static power per bin, pre frames averaged";
-    cliCfg.tableEntry[18].cmdHandlerFxn = l3_cli_teeScan;
+    cliCfg.tableEntry[18].cmd           = "ball";
+    cliCfg.tableEntry[18].helpString    =
+        "ball [status] | ball scan <firstBin> <count> | ball cfg <enable> <follow> [...]";
+    cliCfg.tableEntry[18].cmdHandlerFxn = l3_cli_ball;
     cliCfg.tableEntry[17].cmd           = "triggerLog";
     cliCfg.tableEntry[17].helpString    = "triggerLog [trace|clear]: detector frame log or raw-input trace";
     cliCfg.tableEntry[17].cmdHandlerFxn = l3_cli_triggerLog;

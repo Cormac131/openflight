@@ -106,24 +106,28 @@ def tx_order_from_config(config_path: str | Path) -> str:
     raise ValueError(f"IWR6843 config must contain chirp TX masks 1/4, 4/1, or 1/2/4, got {masks}")
 
 
-def tee_local_bin(tee_range_m: float, config_path: str | Path, fft_size: int = 128) -> int:
-    """Tee bin inside the cfg's first saved window.
+def tee_global_bin(tee_range_m: float, config_path: str | Path, fft_size: int = 128) -> int:
+    """The tee's global range-FFT bin, checked to lie in the cfg's first window.
 
-    Raises when the tee falls outside that window: the firmware would watch a
-    bin that never sees the ball.
+    The firmware speaks global bins everywhere (bin 34 is 1.59 m on a
+    128-point FFT over 6 m). Raises when the tee falls outside the first
+    capture window: the firmware would watch bins it never captures.
     """
     summary = read_capture_config(config_path)
     if summary.first_window_start is None or summary.first_window_bins is None:
         raise ValueError(f"{config_path} has no phaseCaptureCfg")
     absolute = int(round(tee_range_m / (RANGE_SPAN_M / fft_size)))
-    local = absolute - summary.first_window_start
-    if not 0 <= local < summary.first_window_bins:
+    if (
+        not summary.first_window_start
+        <= absolute
+        < summary.first_window_start + summary.first_window_bins
+    ):
         raise ValueError(
             f"tee at {tee_range_m:.2f} m (bin {absolute}) is outside the first capture "
             f"window, bins {summary.first_window_start}-"
             f"{summary.first_window_start + summary.first_window_bins - 1}"
         )
-    return local
+    return absolute
 
 
 def _monotonic() -> float:
@@ -148,7 +152,7 @@ SELF_TRIGGER_DEFAULT_TRACK_FRAMES = 2
 class SelfTriggerConfig:
     """Firmware ``triggerCfg``: freeze when a tracked clubhead reaches the tee.
 
-    The firmware watches the range bins short of ``local_bin`` for a moving
+    The firmware watches the range bins short of ``tee_bin`` for a moving
     return of at least ``snr`` times its running noise floor, follows it
     frame to frame, and fires once it has been seen ``track_frames`` times
     and enters the impact gate around the tee. The gate width, approach
@@ -156,13 +160,13 @@ class SelfTriggerConfig:
     defaults; ``triggerLog`` on the board reports what each frame saw.
     """
 
-    local_bin: int
+    tee_bin: int  # global range-FFT bin (tee_global_bin), not a window offset
     snr: float
     track_frames: int
 
     def __post_init__(self) -> None:
-        if self.local_bin < 0:
-            raise ValueError(f"self-trigger bin must be >= 0, got {self.local_bin}")
+        if self.tee_bin < 0:
+            raise ValueError(f"self-trigger bin must be >= 0, got {self.tee_bin}")
         if not math.isfinite(self.snr) or self.snr < 1.0:
             # Below the floor itself every frame would be a candidate.
             raise ValueError(f"self-trigger snr must be >= 1, got {self.snr}")
@@ -174,7 +178,7 @@ class SelfTriggerConfig:
     @property
     def command(self) -> str:
         """CLI line that arms this trigger."""
-        return f"triggerCfg {self.local_bin} {self.snr} {self.track_frames}"
+        return f"triggerCfg {self.tee_bin} {self.snr} {self.track_frames}"
 
 
 # frames=0 disables the firmware trigger (see l3_cli_triggerCfg).
@@ -183,7 +187,7 @@ SELF_TRIGGER_OFF_COMMAND = "triggerCfg 0 0 0"
 
 def measure_trigger_level(
     radar: IWR6843Radar,
-    local_bin: int,
+    tee_bin: int,
     hits: int,
     *,
     snr: float = SELF_TRIGGER_DEFAULT_SNR,
@@ -201,7 +205,7 @@ def measure_trigger_level(
     """
     now = _monotonic if clock is None else clock
     wait = _pause if pause is None else pause
-    probe = SelfTriggerConfig(local_bin=local_bin, snr=snr, track_frames=hits).command
+    probe = SelfTriggerConfig(tee_bin=tee_bin, snr=snr, track_frames=hits).command
     reply = radar.cmd(probe, 2.0)
     if "Error" in reply or "Done" not in reply:
         raise RuntimeError(f"IWR6843 background probe rejected: {reply.strip()}")
@@ -775,6 +779,6 @@ __all__ = [
     "SelfTriggerConfig",
     "measure_trigger_level",
     "read_capture_config",
-    "tee_local_bin",
+    "tee_global_bin",
     "tx_order_from_config",
 ]

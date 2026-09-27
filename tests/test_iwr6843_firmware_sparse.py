@@ -126,7 +126,10 @@ def test_trigger_scores_every_loop_not_just_loop_zero():
     assert "l3_verticalPowerAt" not in source
     assert "perLoop[0]" not in source
     assert "l3_verticalResidual(slot, first + bin, NULL, &obs[bin]);" in consider
-    assert "l3_trig_update(&gTrig, gPreFramesCaptured, first, obs, count)" in consider
+    assert (
+        "l3_trig_update(&gTrig, gPreFramesCaptured, teeBin, gFrameBinStart[slot] + first,"
+        in consider
+    )
 
 
 def test_trigger_no_longer_gates_on_the_tee_bin_or_a_toward_away_sequence():
@@ -267,10 +270,10 @@ def test_doppler_speed_gate_is_optional_and_rides_the_same_pass():
 
 
 def test_tee_scan_reports_static_power_the_trigger_never_sees():
-    """A stationary ball is exactly what MTI removes; teeScan reads it back raw."""
+    """A stationary ball is exactly what MTI removes; ball scan reads it back raw."""
     source = _source()
     static = _function("static float l3_verticalStaticPower(")
-    scan = _function("static int32_t l3_cli_teeScan(")
+    scan = _function("static int32_t l3_ballScan(")
 
     assert "meanIm" not in static and "meanRe" not in static, "no mean subtraction: static power"
     assert "total += im * im + re * re;" in static
@@ -283,7 +286,7 @@ def test_tee_scan_reports_static_power_the_trigger_never_sees():
     assert "if (window.slots[frame] >= gCapturePlan.preFrames)" in scan, "pre frames only"
     assert 'CLI_write("teescan frames=%u loops=%u first=%u count=%u start=%u\\n"' in scan
     assert 'CLI_write("bin=%u power=%u\\n"' in scan
-    assert 'cliCfg.tableEntry[18].cmd           = "teeScan";' in source
+    assert 'cliCfg.tableEntry[18].cmd           = "ball";' in source
     assert "tableEntry[19]" not in source
 
 
