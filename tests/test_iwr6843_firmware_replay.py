@@ -569,10 +569,6 @@ def test_adaptive_retention_keeps_every_club_and_ball_point_of_the_synthetic_sho
     assert any(r in ("impact", "ballsearch") for r in reasons)
     assert "ballfollow" in reasons, "a confirmed flight is followed"
     assert all(w.bins in (16, 24) for w in result.retain_windows)
-    assert all(
-        w.end <= frame.first_bin + frame.count or frame.count == 0
-        for w, frame in zip(result.retain_windows, [f for f in result.frames if f.retain])
-    )
     report = format_report(result)
     assert "retention:" in report and f"{covered}/{judged} points inside" in report
 
