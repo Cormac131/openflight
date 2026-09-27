@@ -241,8 +241,8 @@ def test_asymmetric_neighbours_move_both_estimators_the_same_way(lib):
         leans[name] = 32.0 - weaker.rangeBin
     assert 0.0 < leans["parabolic"] <= 0.5 and 0.0 < leans["centroid"] <= 0.5
     # A symmetric peak stays on its bin either way.
-    symmetric = _bins({40: 900.0, 41: 5000.0, 42: 900.0})
+    symmetric = _bins({28: 900.0, 29: 5000.0, 30: 900.0})
     for mode in (fw.SUBBIN_PARABOLIC, fw.SUBBIN_CENTROID):
         params = fw.ObsParams(fw.STAT_PEAK, 6.0, 135e-6, mode)
         assert _extract(lib, params, symmetric, out) == 1
-        assert out[0].rangeBin == pytest.approx(41.0, abs=1e-4)
+        assert out[0].rangeBin == pytest.approx(29.0, abs=1e-4)
