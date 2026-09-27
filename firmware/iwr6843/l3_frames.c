@@ -1,8 +1,10 @@
 /* See l3_frames.h. */
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "l3_frames.h"
+#include "l3_text.h"
 
 void l3_cal_identity(l3_radar_cal_t *cal, uint32_t virtualElements)
 {
@@ -127,4 +129,72 @@ float l3_frames_vertical_rad(const l3_vec3_t *velocity)
 float l3_frames_speed(const l3_vec3_t *velocity)
 {
     return sqrtf(velocity->x * velocity->x + velocity->y * velocity->y + velocity->z * velocity->z);
+}
+
+int32_t l3_cal_set_element(l3_radar_cal_t *cal, uint32_t index, float gain, float phaseRad)
+{
+    if (index >= L3_CAL_MAX_VIRTUAL || !(gain > 0.0F)) {
+        return -1;
+    }
+    cal->correctionRe[index] = cosf(-phaseRad) / gain;
+    cal->correctionIm[index] = sinf(-phaseRad) / gain;
+    if (index >= cal->virtualElements) {
+        cal->virtualElements = index + 1U;
+    }
+    return 0;
+}
+
+int32_t l3_cal_element(const l3_radar_cal_t *cal, uint32_t index, float *gain, float *phaseRad)
+{
+    float re;
+    float im;
+    float magnitude;
+
+    if (index >= L3_CAL_MAX_VIRTUAL) {
+        return -1;
+    }
+    re = cal->correctionRe[index];
+    im = cal->correctionIm[index];
+    magnitude = sqrtf(re * re + im * im);
+    if (gain != NULL) {
+        *gain = (magnitude > 0.0F) ? 1.0F / magnitude : 0.0F;
+    }
+    if (phaseRad != NULL) {
+        *phaseRad = (magnitude > 0.0F) ? -atan2f(im, re) : 0.0F;
+    }
+    return 0;
+}
+
+int32_t l3_cal_format(const l3_radar_cal_t *cal, char *out, uint32_t cap)
+{
+    char az[16];
+    char el[16];
+    char pitch[16];
+    char yaw[16];
+    char roll[16];
+    char bias[16];
+
+    l3_text_fixed2(cal->azimuthOffsetRad, az, sizeof(az));
+    l3_text_fixed2(cal->elevationOffsetRad, el, sizeof(el));
+    l3_text_degrees2(cal->radarPitchRad, pitch, sizeof(pitch));
+    l3_text_degrees2(cal->radarYawRad, yaw, sizeof(yaw));
+    l3_text_degrees2(cal->radarRollRad, roll, sizeof(roll));
+    l3_text_fixed2(cal->rangeBiasM, bias, sizeof(bias));
+    return snprintf(out, cap, "cal elems=%u az0=%s el0=%s pitch=%s yaw=%s roll=%s bias=%s",
+                    (unsigned)cal->virtualElements, az, el, pitch, yaw, roll, bias);
+}
+
+int32_t l3_cal_format_element(const l3_radar_cal_t *cal, uint32_t index, char *out, uint32_t cap)
+{
+    float gain = 0.0F;
+    float phase = 0.0F;
+    char gainText[16];
+    char phaseText[16];
+
+    if (l3_cal_element(cal, index, &gain, &phase) != 0) {
+        return snprintf(out, cap, "elem %u invalid", (unsigned)index);
+    }
+    l3_text_fixed2(gain, gainText, sizeof(gainText));
+    l3_text_fixed2(phase, phaseText, sizeof(phaseText));
+    return snprintf(out, cap, "elem %u gain=%s phase=%s", (unsigned)index, gainText, phaseText);
 }

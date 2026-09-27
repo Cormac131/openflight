@@ -65,6 +65,18 @@ typedef struct {
 
 /* Unit corrections, zero offsets and attitude. */
 void l3_cal_identity(l3_radar_cal_t *cal, uint32_t virtualElements);
+/* One element's correction from its measured gain and phase offset: the
+ * element is divided by the gain and rotated back by the phase, so a
+ * calibrated array reads the physical steering vector. Returns -1 for an
+ * index outside the array or a gain that is not positive. */
+int32_t l3_cal_set_element(l3_radar_cal_t *cal, uint32_t index, float gain, float phaseRad);
+/* The gain and phase offset a correction encodes (the inverse of the above). */
+int32_t l3_cal_element(const l3_radar_cal_t *cal, uint32_t index, float *gain, float *phaseRad);
+/* "cal elems=8 az0=0.00 el0=0.00 pitch=0.00 yaw=0.00 roll=0.00 bias=0.00" (radians,
+ * degrees for the attitude, metres) */
+int32_t l3_cal_format(const l3_radar_cal_t *cal, char *out, uint32_t cap);
+/* "elem 3 gain=1.00 phase=0.00" (radians) */
+int32_t l3_cal_format_element(const l3_radar_cal_t *cal, uint32_t index, char *out, uint32_t cap);
 
 /* Spherical (radar) <-> Cartesian (radar). */
 void l3_frames_from_spherical(const l3_spherical_t *in, l3_vec3_t *radar);

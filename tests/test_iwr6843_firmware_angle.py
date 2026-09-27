@@ -235,3 +235,36 @@ def test_format_prints_degrees_quality_and_validity(lib):
     assert fw.c_text(lib.l3_angle_format, ctypes.byref(only_el)).endswith(" valid=e")
     empty = fw.AngleObs()
     assert fw.c_text(lib.l3_angle_format, ctypes.byref(empty)).endswith(" valid=none")
+
+
+def test_confidence_falls_with_noise_and_is_the_weaker_of_the_two_qualities(lib):
+    clean = estimate(lib, synth_snapshot(lib, az_deg=5.0, el_deg=-3.0))[1]
+    noisy = estimate(lib, synth_snapshot(lib, az_deg=5.0, el_deg=-3.0, noise=150.0, seed=3))[1]
+    assert 0.0 < noisy.confidence < clean.confidence <= 1.0
+    expected = min(
+        min(1.0, (clean.elevationPeakRatio - 1.0) / (fw_peak_full() - 1.0)),
+        clean.azimuthCoherence,
+    )
+    assert clean.confidence == pytest.approx(expected, abs=1e-5)
+    only_el = estimate(lib, synth_snapshot(lib, az_deg=0.0, el_deg=0.0, ntx=2))[1]
+    assert only_el.confidence == pytest.approx(
+        min(1.0, (only_el.elevationPeakRatio - 1.0) / (fw_peak_full() - 1.0)), abs=1e-5
+    ), "without azimuth the peak ratio alone decides"
+    assert lib.l3_angle_confidence(1.0, 1.0, 1) == 0.0, "a flat beam is no measurement"
+    assert lib.l3_angle_confidence(6.0, 1.0, 1) == pytest.approx(1.0)
+    assert lib.l3_angle_confidence(20.0, 0.4, 1) == pytest.approx(0.4), "capped by the coherence"
+    assert lib.l3_angle_confidence(20.0, 0.4, 0) == pytest.approx(1.0), (
+        "no azimuth: coherence ignored"
+    )
+    assert lib.l3_angle_confidence(3.5, -1.0, 1) == 0.0
+
+
+def fw_peak_full() -> float:
+    return 6.0  # L3_ANGLE_PEAK_RATIO_FULL
+
+
+def test_format_prints_the_confidence(lib):
+    _, obs = estimate(lib, synth_snapshot(lib, az_deg=10.0, el_deg=-5.0))
+    text = fw.c_text(lib.l3_angle_format, ctypes.byref(obs))
+    assert " conf=" in text and text.index(" conf=") < text.index(" valid=")
+    assert f" conf={obs.confidence:.2f}" in text

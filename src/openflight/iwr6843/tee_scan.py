@@ -133,6 +133,50 @@ def bin_range_m(global_bin: int, fft_size: int = 128) -> float:
 
 
 @dataclass(frozen=True)
+class BallAngle:
+    """The locked ball's measured direction from ``ball status``'s ``ballangle`` line.
+
+    The firmware prints ``l3_angle_format`` with a ``ball`` prefix and appends
+    its own ``valid=`` flag, so the line carries two ``valid=`` keys: the
+    estimator's letters (``a`` azimuth, ``e`` elevation, or ``none``) and the
+    detector's 0/1 (elevation peak sharp enough to trust). Angles in degrees.
+    """
+
+    azimuth_deg: float | None
+    elevation_deg: float | None
+    azimuth_coherence: float
+    elevation_peak_ratio: float
+    confidence: float
+    trusted: bool  # the detector's valid=1
+
+
+def _parse_ball_angle(line: str) -> BallAngle:
+    tokens = line.split()[1:]  # drop "ballangle"
+    values: dict[str, str] = {}
+    valid_letters = "none"
+    trusted = False
+    for token in tokens:
+        key, _, value = token.partition("=")
+        if key == "valid":
+            if value in ("0", "1"):
+                trusted = value == "1"
+            else:
+                valid_letters = value
+        else:
+            values[key] = value
+    az = float(values.get("az", "0")) if "a" in valid_letters and valid_letters != "none" else None
+    el = float(values.get("el", "0")) if "e" in valid_letters and valid_letters != "none" else None
+    return BallAngle(
+        azimuth_deg=az,
+        elevation_deg=el,
+        azimuth_coherence=float(values.get("coh", "0")),
+        elevation_peak_ratio=float(values.get("peak", "0")),
+        confidence=float(values.get("conf", "0")),
+        trusted=trusted,
+    )
+
+
+@dataclass(frozen=True)
 class BallStatus:
     """The firmware's placement detector, from ``ball status`` (two lines) or ``stats`` (one)."""
 
@@ -148,6 +192,7 @@ class BallStatus:
     centroid: float | None = None  # from the balldbg line, sub-bin global
     width: int | None = None
     persistence: float | None = None
+    angle: BallAngle | None = None  # from the ballangle line, when the firmware prints one
 
     @property
     def locked(self) -> bool:
@@ -168,12 +213,15 @@ def parse_ball_status(text: str) -> BallStatus:
     """Parse ``ball status`` or a ``stats`` reply; raises ValueError without a ball line."""
     status: dict[str, str] = {}
     debug: dict[str, str] = {}
+    angle: BallAngle | None = None
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("ball state="):
             status = dict(_KEY_VALUE.findall(line[len("ball ") :]))
         elif line.startswith("balldbg "):
             debug = dict(_KEY_VALUE.findall(line[len("balldbg ") :]))
+        elif line.startswith("ballangle "):
+            angle = _parse_ball_angle(line)
     if "state" not in status:
         raise ValueError(f"no ball status line in {text.strip()[:80]!r}")
     state = status["state"]
@@ -192,6 +240,7 @@ def parse_ball_status(text: str) -> BallStatus:
         centroid=float(debug["centroid"]) if "centroid" in debug and state == "locked" else None,
         width=int(debug["width"]) if "width" in debug else None,
         persistence=(int(seen) / int(total)) if total and int(total) else None,
+        angle=angle,
     )
 
 
@@ -249,6 +298,7 @@ __all__ = [
     "DEFAULT_MIN_RATIO",
     "DEFAULT_SCANS",
     "DEFAULT_SEARCH_HALF_WIDTH",
+    "BallAngle",
     "BallDetection",
     "BallStatus",
     "SetupAdvice",

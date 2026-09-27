@@ -284,6 +284,7 @@ class AngleObs(ctypes.Structure):
         ("azimuthCoherence", ctypes.c_float),
         ("elevationPeakRatio", ctypes.c_float),
         ("chirpPhaseRad", ctypes.c_float),
+        ("confidence", ctypes.c_float),
         ("azimuthValid", ctypes.c_uint8),
         ("elevationValid", ctypes.c_uint8),
     ]
@@ -831,6 +832,11 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_angle_bartlett": ([_P(Cpx), _U32, _P(_F32)], _F32),
     "l3_angle_estimate": ([_P(RadarCal), _P(AngleSnapshot), _P(AngleObs)], ctypes.c_int32),
     "l3_angle_format": ([_P(AngleObs), *_TEXT], ctypes.c_int32),
+    "l3_angle_confidence": ([_F32, _F32, ctypes.c_uint8], _F32),
+    "l3_cal_set_element": ([_P(RadarCal), _U32, _F32, _F32], ctypes.c_int32),
+    "l3_cal_element": ([_P(RadarCal), _U32, _P(_F32), _P(_F32)], ctypes.c_int32),
+    "l3_cal_format": ([_P(RadarCal), *_TEXT], ctypes.c_int32),
+    "l3_cal_format_element": ([_P(RadarCal), _U32, *_TEXT], ctypes.c_int32),
     # l3_text.h
     "l3_text_fixed": ([_F32, _U32, *_TEXT], None),
     "l3_text_fixed2": ([_F32, *_TEXT], None),

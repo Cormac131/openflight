@@ -4220,8 +4220,10 @@ static int32_t l3_cli_trackCfgElem(int32_t argc, char *argv[])
     }
     l3_ensureRadarCal();
     index = (uint32_t)values[0];
-    gRadarCal.correctionRe[index] = cosf(-values[1]) / values[2];
-    gRadarCal.correctionIm[index] = sinf(-values[1]) / values[2];
+    if (l3_cal_set_element(&gRadarCal, index, values[2], values[1]) != 0) {
+        CLI_write("Error: trackCfg elem <index 0..7> <phaseRad> <gain>\n");
+        return -1;
+    }
     CLI_write("Done\n");
     return 0;
 }
@@ -4477,6 +4479,19 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         CLI_write("Done\n");
         return 0;
     }
+    if (argc == 2 && strcmp(argv[1], "cal") == 0) {
+        /* The calibration in force: offsets, attitude, range bias, then
+         * every element's gain and phase (physical order). */
+        l3_ensureRadarCal();
+        (void)l3_cal_format(&gRadarCal, line, sizeof(line));
+        CLI_write("%s\n", line);
+        for (index = 0U; index < gRadarCal.virtualElements && index < L3_CAL_MAX_VIRTUAL; index++) {
+            (void)l3_cal_format_element(&gRadarCal, index, line, sizeof(line));
+            CLI_write("%s\n", line);
+        }
+        CLI_write("Done\n");
+        return 0;
+    }
 #ifdef L3_RING_IQ8
     if (argc == 2 && strcmp(argv[1], "frames") == 0) {
         /* What each stored slot of the compact ring holds: pre slots oldest
@@ -4586,7 +4601,7 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         return 0;
     }
     if (argc != 1) {
-        CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|clear]\n");
+        CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|cal|clear]\n");
         return -1;
     }
     (void)l3_trig_format_summary(&gTrig, line, sizeof(line));
@@ -5623,7 +5638,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
         "ball [status] | ball scan <firstBin> <count> | ball cfg <enable> <follow> [...]";
     cliCfg.tableEntry[18].cmdHandlerFxn = l3_cli_ball;
     cliCfg.tableEntry[17].cmd           = "triggerLog";
-    cliCfg.tableEntry[17].helpString    = "triggerLog [trace|track|shot|result|perf|frames|clear]: log, trace, club, shot, result, perf, stored frames";
+    cliCfg.tableEntry[17].helpString    = "triggerLog [trace|track|shot|result|perf|frames|cal|clear]: log, trace, club, shot, result, perf, stored frames, calibration";
     cliCfg.tableEntry[17].cmdHandlerFxn = l3_cli_triggerLog;
     CLI_open(&cliCfg);
 }

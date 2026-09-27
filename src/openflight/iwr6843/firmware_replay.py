@@ -270,6 +270,7 @@ class AngleSummary:
     elevation_deg: float | None
     azimuth_coherence: float
     elevation_peak_ratio: float
+    confidence: float = 0.0  # l3_angle_confidence: 0..1
 
 
 @dataclass(frozen=True)
@@ -440,6 +441,7 @@ def _angle_summary(obs: fw.AngleObs) -> AngleSummary:
         elevation_deg=math.degrees(obs.elevationRad) if obs.elevationValid else None,
         azimuth_coherence=float(obs.azimuthCoherence),
         elevation_peak_ratio=float(obs.elevationPeakRatio),
+        confidence=float(obs.confidence),
     )
 
 
@@ -1243,7 +1245,7 @@ def _point_angles(result: ReplayResult, point: PointSummary) -> str:
         if frame.frame == point.frame and frame.angle is not None:
             az = "-" if frame.angle.azimuth_deg is None else f"{frame.angle.azimuth_deg:+.1f}"
             el = "-" if frame.angle.elevation_deg is None else f"{frame.angle.elevation_deg:+.1f}"
-            return f" az={az} el={el}"
+            return f" az={az} el={el} aconf={frame.angle.confidence:.2f}"
     return ""
 
 

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Angle confidence, readable calibration and angular validation tooling.**
+  Angle estimates carry a 0..1 confidence from the beam's sharpness and the
+  azimuth coherence; `triggerLog cal` prints the calibration in force and the
+  host parses the ball detector's measured direction. A static reflector
+  protocol (`scripts/hardware-test/iwr6843_angle_static.py`) and a moving
+  reflector replay (`scripts/analysis/iwr6843_angle_moving.py`, with an IQ16
+  versus IQ8 comparison) produce per-position bias, spread, repeatability and
+  error against speed through `openflight.iwr6843.angle_validation`.
 - **Exact IQ16 observation statistics and a log-parabolic sub-bin range.**
   `firmware/iwr6843/l3_iq16_stats.c` accumulates the residual energy, per-loop
   power and lag-1 autocorrelation in integers with one float conversion at the

@@ -137,6 +137,32 @@ float l3_angle_bartlett(const l3_cpx_t *elements, uint32_t n, float *peakRatio)
     return (refined - (float)(L3_ANGLE_GRID_STEPS - 1U) / 2.0F) * L3_ANGLE_GRID_STEP_RAD;
 }
 
+float l3_angle_confidence(float elevationPeakRatio, float azimuthCoherence, uint8_t azimuthValid)
+{
+    float elevation = (elevationPeakRatio - 1.0F) / (L3_ANGLE_PEAK_RATIO_FULL - 1.0F);
+    float confidence;
+
+    if (elevation < 0.0F) {
+        elevation = 0.0F;
+    } else if (elevation > 1.0F) {
+        elevation = 1.0F;
+    }
+    confidence = elevation;
+    if (azimuthValid) {
+        float azimuth = azimuthCoherence;
+
+        if (azimuth < 0.0F) {
+            azimuth = 0.0F;
+        } else if (azimuth > 1.0F) {
+            azimuth = 1.0F;
+        }
+        if (azimuth < confidence) {
+            confidence = azimuth;
+        }
+    }
+    return confidence;
+}
+
 int32_t l3_angle_estimate(const l3_radar_cal_t *cal, const l3_angle_snapshot_t *snapshot,
                           l3_angle_obs_t *out)
 {
@@ -222,6 +248,8 @@ int32_t l3_angle_estimate(const l3_radar_cal_t *cal, const l3_angle_snapshot_t *
             out->azimuthValid = 1U;
         }
     }
+    out->confidence =
+        l3_angle_confidence(out->elevationPeakRatio, out->azimuthCoherence, out->azimuthValid);
     return 1;
 }
 
@@ -232,6 +260,7 @@ int32_t l3_angle_format(const l3_angle_obs_t *obs, char *out, uint32_t cap)
     char cohText[16];
     char peakText[16];
     char psiText[16];
+    char confText[16];
     char valid[3];
     uint32_t v = 0U;
 
@@ -240,6 +269,7 @@ int32_t l3_angle_format(const l3_angle_obs_t *obs, char *out, uint32_t cap)
     l3_text_fixed2(obs->azimuthCoherence, cohText, sizeof(cohText));
     l3_text_fixed(obs->elevationPeakRatio, 1U, peakText, sizeof(peakText));
     l3_text_fixed2(obs->chirpPhaseRad, psiText, sizeof(psiText));
+    l3_text_fixed2(obs->confidence, confText, sizeof(confText));
     if (obs->azimuthValid) {
         valid[v++] = 'a';
     }
@@ -247,6 +277,6 @@ int32_t l3_angle_format(const l3_angle_obs_t *obs, char *out, uint32_t cap)
         valid[v++] = 'e';
     }
     valid[v] = '\0';
-    return snprintf(out, cap, "angle az=%s el=%s coh=%s peak=%s psi=%s valid=%s", azText, elText,
-                    cohText, peakText, psiText, (v > 0U) ? valid : "none");
+    return snprintf(out, cap, "angle az=%s el=%s coh=%s peak=%s psi=%s conf=%s valid=%s", azText,
+                    elText, cohText, peakText, psiText, confText, (v > 0U) ? valid : "none");
 }

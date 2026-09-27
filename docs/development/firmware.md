@@ -355,6 +355,33 @@ half a millimetre; parabolic is the default because it is the exact fit
 for a smooth lobe and its bias is characterised, where the centroid's
 depends on the floor estimate.
 
+### Angle confidence, calibration and angular validation
+
+Every angle estimate now carries a confidence (`l3_angle_confidence`): the
+elevation beam's peak-to-mean ratio mapped from 1 (flat) to
+`L3_ANGLE_PEAK_RATIO_FULL` (6), capped by the azimuth coherence when azimuth
+was measured; `l3_angle_format` prints it as `conf=` and the replay carries
+it per point (`aconf=`). The per-element calibration is set and read as a
+gain and a phase offset (`l3_cal_set_element`, `l3_cal_element`; `trackCfg
+elem <index> <phaseRad> <gain>` as before) and `triggerLog cal` prints the
+calibration in force: offsets, attitude, range bias and every element.
+
+Validation needs a rig, so the tooling is ready before the rig is. Static:
+`scripts/hardware-test/iwr6843_angle_static.py` walks the protocol's
+positions (azimuth -20 to +20 in 5 degree steps, elevation -15 to +15),
+locks the ball detector on the corner reflector and reads its measured
+direction (`ball status` -> `ballangle`, which the host now parses) thirty
+times per placement, saving a JSON set that
+`openflight.iwr6843.angle_validation` summarises: bias, standard
+deviation, P95, quality numbers per position, and the repeatability across
+placements. Moving: `scripts/analysis/iwr6843_angle_moving.py` replays
+recordings of a swinging reflector, compares every tracked point's angles
+with the truth direction, bins the error by radial speed (where the TDM
+correction and the alias resolution are exercised) and, with `--iq8`, runs
+the firmware-exact IQ8 of the same captures beside IQ16. Whether IQ8's
+angle noise rises with speed faster than IQ16's is answered by that table,
+not argued.
+
 ### Compact IQ16 capture (compact16, adaptive16)
 
 `captureFormat compact16|adaptive16` (with `captureCfg retain <preBins>

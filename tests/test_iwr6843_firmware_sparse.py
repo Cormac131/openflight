@@ -328,10 +328,12 @@ def test_club_track_rides_the_trigger_pass_and_prints_from_trigger_log():
     assert 'strcmp(argv[1], "track") == 0' in log
     assert "l3_track_format_status(&gClubTrack, gClubTrackDest, line, sizeof(line));" in log
     assert "l3_track_format_point(&point, gClubTrackDest, line, sizeof(line));" in log
-    assert 'CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|clear]\\n");' in log
     assert (
-        "triggerLog [trace|track|shot|result|perf|frames|clear]: log, trace, club, shot, result, "
-        "perf, stored frames" in source
+        'CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|cal|clear]\\n");' in log
+    )
+    assert (
+        "triggerLog [trace|track|shot|result|perf|frames|cal|clear]: log, trace, club, shot, result, "
+        "perf, stored frames, calibration" in source
     )
 
 
@@ -480,7 +482,7 @@ def test_calibration_and_impact_are_configured_through_track_cfg_sub_modes():
     assert "gRadarCal.radarPitchRad = values[0] * (L3_FRAMES_PI / 180.0F);" in cal
     assert "gRadarCal.rangeBiasM = values[5];" in cal
     elem = _function("static int32_t l3_cli_trackCfgElem(")
-    assert "gRadarCal.correctionRe[index] = cosf(-values[1]) / values[2];" in elem
+    assert "l3_cal_set_element(&gRadarCal, index, values[2], values[1])" in elem
     assert "values[0] >= (float)L3_CAL_MAX_VIRTUAL" in elem
     impact = _function("static int32_t l3_cli_trackCfgImpact(")
     assert "gImpactArmed = (values[4] != 0.0F) ? 1U : 0U;" in impact
@@ -591,10 +593,12 @@ def test_trigger_log_shot_prints_the_machine_the_ball_track_and_the_launch():
     assert "l3_ball_track_format_status(&gBallTrack, line, sizeof(line));" in log
     assert "l3_launch_format(&gLaunch, line, sizeof(line));" in log
     assert "l3_track_point(&gBallTrack.core, index, &point)" in log
-    assert 'CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|clear]\\n");' in log
     assert (
-        "triggerLog [trace|track|shot|result|perf|frames|clear]: log, trace, club, shot, result, "
-        "perf, stored frames" in source
+        'CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|cal|clear]\\n");' in log
+    )
+    assert (
+        "triggerLog [trace|track|shot|result|perf|frames|cal|clear]: log, trace, club, shot, result, "
+        "perf, stored frames, calibration" in source
     )
 
 
@@ -644,7 +648,9 @@ def test_every_stage_is_profiled_with_the_cpu_clock_and_printed_by_perf():
     assert 'strcmp(argv[1], "perf") == 0' in log
     assert "l3_profile_format_summary(&gProfile, line, sizeof(line));" in log
     assert "l3_profile_format(&gProfile, index, line, sizeof(line));" in log
-    assert 'CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|clear]\\n");' in log
+    assert (
+        'CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|cal|clear]\\n");' in log
+    )
 
 
 def test_adaptive_windows_apply_between_shots_from_the_locked_ball():

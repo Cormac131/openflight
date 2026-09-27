@@ -288,3 +288,13 @@ def test_the_sub_bin_estimator_is_configurable_and_reaches_both_extractions():
     assert 'strcmp(argv[1], "subbin") == 0' in track_cfg
     assert "gObsSubBin = L3_OBS_SUBBIN_CENTROID;" in track_cfg
     assert "gObsSubBin = L3_OBS_SUBBIN_PARABOLIC;" in track_cfg
+
+
+def test_element_calibration_goes_through_the_shared_helper_and_prints_back():
+    elem = _function("static int32_t l3_cli_trackCfgElem(")
+    assert "l3_cal_set_element(&gRadarCal, index, values[2], values[1])" in elem
+    assert "cosf(-values[1])" not in elem
+    log = _function("static int32_t l3_cli_triggerLog(")
+    assert 'strcmp(argv[1], "cal") == 0' in log
+    assert "l3_cal_format(&gRadarCal, line, sizeof(line));" in log
+    assert "l3_cal_format_element(&gRadarCal, index, line, sizeof(line));" in log

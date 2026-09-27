@@ -145,3 +145,34 @@ def test_classify_setup_names_the_band_and_the_move(range_m, label, ok, fragment
     advice = classify_setup(range_m)
     assert advice.label == label and advice.ok is ok
     assert fragment in advice.message
+
+
+def test_parse_ball_status_reads_the_ball_angle_line_with_its_two_valid_keys():
+    text = (
+        "ball state=locked follow=0 bin=34 ratio=8.0 confidence=0.9 delta=1 background=1 "
+        "age=9 locks=1 releases=0 reason=none window=20+53\n"
+        "balldbg updates=10 candidate=0/0 centroid=34.10 width=2 persistence=9/10\n"
+        "ballangle az=1.20 el=-3.40 coh=0.91 peak=6.2 psi=0.35 conf=0.84 valid=ae valid=1\nDone\n"
+    )
+    status = parse_ball_status(text)
+    angle = status.angle
+    assert angle is not None
+    assert angle.azimuth_deg == pytest.approx(1.2) and angle.elevation_deg == pytest.approx(-3.4)
+    assert angle.azimuth_coherence == pytest.approx(0.91)
+    assert angle.elevation_peak_ratio == pytest.approx(6.2)
+    assert angle.confidence == pytest.approx(0.84) and angle.trusted is True
+    # Elevation only, and the detector did not trust it.
+    only_el = parse_ball_status(
+        "ball state=locked follow=0 bin=34 ratio=8.0 confidence=0.9 delta=1 background=1 "
+        "age=9 locks=1 releases=0 reason=none window=20+53\n"
+        "ballangle az=0.00 el=2.00 coh=0.00 peak=2.1 psi=0.00 conf=0.22 valid=e valid=0\nDone\n"
+    ).angle
+    assert only_el.azimuth_deg is None and only_el.elevation_deg == pytest.approx(2.0)
+    assert only_el.trusted is False
+    none = parse_ball_status(
+        "ball state=waiting follow=0 bin=0 ratio=0 confidence=0 delta=0 background=0 age=0 "
+        "locks=0 releases=0 reason=no_delta window=20+53\n"
+        "ballangle az=0.00 el=0.00 coh=0.00 peak=0.0 psi=0.00 conf=0.00 valid=none valid=0\nDone\n"
+    ).angle
+    assert none.azimuth_deg is None and none.elevation_deg is None
+    assert parse_ball_status(STATUS).angle is None, "older firmware prints no angle line"
