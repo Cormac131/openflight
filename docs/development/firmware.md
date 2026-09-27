@@ -329,6 +329,34 @@ the host launch angle and club path, capture cost) from session logs into
 one CSV row per shot, tagged with the firmware SHA, before any of the
 representation work changes them.
 
+### Processing region, retention region and the policy
+
+The HWA window a frame is processed from and the bins a frame stores need
+not be the same. `l3_retain.c` separates them: the PROCESSING region (the
+wide window the detect task reads for its floor, candidates and
+association) from the RETENTION region (the narrower IQ16 window that goes
+into L3). Each capture phase has a fixed retained slot width; the policy
+decides where the slot looks from what the trackers know before the frame
+lands: around the tee or the locked ball while waiting, around the
+predicted club while it approaches (`lastBin + velocityBinsPerFrame`),
+spanning club and ball once they are within `approachBins`, on the ball
+biased toward the arriving club for the impact frames, from the origin
+outward while the departing ball is sought, and ahead of the prediction
+once the flight is confirmed. Every frame gets a retention priority (low,
+track, ball, impact, spin) and a reason, and `l3_frame_desc_t` records
+what each stored frame is. `l3_retain_budget` spends L3 in priority order:
+every impact frame first, then the first ball frames, then the last club
+frames; when the request does not fit it cuts the oldest club history
+before the flight's tail and never the impact.
+
+The policy is mirrored in the replay harness: `replay_iwr_track.py
+--retain 16/24/16/7` decides a window for every frame of a recording from
+the same tracker state the board would have and reports how many of the
+points the trackers appended fell inside it. On the five recorded swings
+the state-aware windows hold every club and ball point while keeping
+37-40% of the processed bins; the centred windows of a plain compact
+format miss the club.
+
 ### Profiling and adaptive windows
 
 `triggerLog perf` prints per-stage counts, last, mean and maximum in

@@ -24,6 +24,7 @@ from openflight.iwr6843.dump import SAMPLE_INT16_IQ, SAMPLE_RANGE_FFT_IQ16, pack
 from openflight.iwr6843.firmware_replay import (
     RECORDINGS_DIR,
     ReplayConfig,
+    RetainReplay,
     bin_observations,
     channel_snapshot,
     format_report,
@@ -543,3 +544,66 @@ def test_a_static_ball_on_the_tee_gives_the_destination_a_direction(lib):
 def test_an_empty_destination_bin_keeps_boresight(lib, swing):
     result = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN + 20), lib=lib)
     assert result.ball_angle is None
+
+
+def test_adaptive_retention_keeps_every_club_and_ball_point_of_the_synthetic_shot(lib):
+    """The mirror's windows must hold the points the trackers appended, while
+    storing far fewer bins than the processing window."""
+    raw = synth_shot_dump(path_deg=0.0, hla_deg=0.0, vla_deg=12.0)
+    config = ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN, retain=RetainReplay())
+    result = replay_dump(raw, config, lib=lib)
+
+    covered, judged = result.retain_coverage
+    assert judged >= len(result.points) + len(result.ball_points) - 2
+    missed = [w for w in result.retain_windows if w.covered is False]
+    # The club is acquired from the wide processing window; its first point can
+    # land outside the ball-centred slot of a frame that had no club to follow
+    # yet. Every point after acquisition, and every ball point, is kept.
+    assert len(missed) <= 1 and all(w.why in ("ball", "tee") for w in missed), missed
+    assert covered >= judged - 1
+    kept, processed = result.retain_bins_saved
+    assert 0 < kept < 0.6 * processed
+    reasons = [w.why for w in result.retain_windows]
+    assert reasons[0] in ("ball", "tee"), "before the club shows, the window sits on the ball"
+    assert "club" in reasons or "approach" in reasons
+    assert any(r in ("impact", "ballsearch") for r in reasons)
+    assert "ballfollow" in reasons, "a confirmed flight is followed"
+    assert all(w.bins in (16, 24) for w in result.retain_windows)
+    assert all(
+        w.end <= frame.first_bin + frame.count or frame.count == 0
+        for w, frame in zip(result.retain_windows, [f for f in result.frames if f.retain])
+    )
+    report = format_report(result)
+    assert "retention:" in report and f"{covered}/{judged} points inside" in report
+
+
+def test_centred_retention_is_the_compact16_baseline_and_can_miss_the_club(lib):
+    raw = synth_shot_dump(path_deg=0.0)
+    adaptive = replay_dump(
+        raw,
+        ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN, retain=RetainReplay(pre_bins=8)),
+        lib=lib,
+    )
+    centred = replay_dump(
+        raw,
+        ReplayConfig(
+            tee_bin=TEE_BIN, dest_bin=TEE_BIN, retain=RetainReplay(pre_bins=8, enabled=False)
+        ),
+        lib=lib,
+    )
+    assert all(w.why == "centred" for w in centred.retain_windows)
+    assert centred.retain_coverage[0] < adaptive.retain_coverage[0]
+    assert centred.retain_coverage[1] == adaptive.retain_coverage[1], (
+        "same points appended: the mirror never alters the replay"
+    )
+    assert centred.points == adaptive.points
+
+
+def test_retention_config_is_checked_by_the_firmware(lib, swing):
+    with pytest.raises(ValueError, match="retention configuration"):
+        replay_dump(
+            swing, ReplayConfig(tee_bin=TEE_BIN, retain=RetainReplay(approach_bins=0)), lib=lib
+        )
+    plain = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    assert plain.retain_windows == [] and plain.retain_coverage == (0, 0)
+    assert "retention:" not in format_report(plain)

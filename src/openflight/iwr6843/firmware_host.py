@@ -38,6 +38,7 @@ HOST_SOURCES = (
     "l3_profile.c",
     "l3_adaptive.c",
     "l3_iq8.c",
+    "l3_retain.c",
 )
 
 # l3_observation.h
@@ -140,6 +141,19 @@ QUALITY_FLAGS = {
 # l3_iq8.h
 IQ8_PATH_CPU, IQ8_PATH_EDMA, IQ8_PATH_DUMP = 0, 1, 2
 IQ8_PATH_NAMES = {"cpu": IQ8_PATH_CPU, "edma": IQ8_PATH_EDMA, "dump": IQ8_PATH_DUMP}
+
+# l3_retain.h
+RETAIN_PRIORITY_NAMES = ("low", "track", "ball", "impact", "spin")
+RETAIN_WHY_NAMES = (
+    "centred",
+    "tee",
+    "ball",
+    "club",
+    "approach",
+    "impact",
+    "ballsearch",
+    "ballfollow",
+)
 
 # l3_profile.h
 PROFILE_STAGE_NAMES = (
@@ -625,6 +639,107 @@ class Iq8Mode(ctypes.Structure):
     ]
 
 
+class Roi(ctypes.Structure):
+    """l3_roi_t"""
+
+    _fields_ = [
+        ("processStart", ctypes.c_uint8),
+        ("processBins", ctypes.c_uint8),
+        ("retainStart", ctypes.c_uint8),
+        ("retainBins", ctypes.c_uint8),
+    ]
+
+
+class RetainCfg(ctypes.Structure):
+    """l3_retain_cfg_t"""
+
+    _fields_ = [
+        ("enabled", ctypes.c_uint8),
+        ("approachBins", ctypes.c_uint8),
+        ("approachMarginBins", ctypes.c_uint8),
+        ("impactBiasBins", ctypes.c_uint8),
+        ("ballSearchLeadBins", ctypes.c_uint8),
+        ("ballFollowLeadBins", ctypes.c_uint8),
+        ("spinFrames", ctypes.c_uint8),
+    ]
+
+
+class RetainState(ctypes.Structure):
+    """l3_retain_state_t"""
+
+    _fields_ = [
+        ("shotState", ctypes.c_uint8),
+        ("ballLocked", ctypes.c_uint8),
+        ("ballBin", ctypes.c_float),
+        ("clubActive", ctypes.c_uint8),
+        ("clubBin", ctypes.c_float),
+        ("postFrame", ctypes.c_uint8),
+        ("postIndex", ctypes.c_uint32),
+        ("ballTrackConfirmed", ctypes.c_uint8),
+        ("ballTrackBin", ctypes.c_float),
+    ]
+
+
+class RetainWindow(ctypes.Structure):
+    """l3_retain_window_t"""
+
+    _fields_ = [
+        ("start", ctypes.c_uint8),
+        ("bins", ctypes.c_uint8),
+        ("priority", ctypes.c_uint8),
+        ("why", ctypes.c_uint8),
+    ]
+
+
+class FrameDesc(ctypes.Structure):
+    """l3_frame_desc_t"""
+
+    _fields_ = [
+        ("timestampUs", ctypes.c_uint32),
+        ("dataOffset", ctypes.c_uint32),
+        ("bytes", ctypes.c_uint32),
+        ("frame", ctypes.c_uint16),
+        ("globalBinStart", ctypes.c_uint8),
+        ("binCount", ctypes.c_uint8),
+        ("processStart", ctypes.c_uint8),
+        ("processBins", ctypes.c_uint8),
+        ("shotState", ctypes.c_uint8),
+        ("priority", ctypes.c_uint8),
+        ("why", ctypes.c_uint8),
+        ("isPost", ctypes.c_uint8),
+    ]
+
+
+class RetainRequest(ctypes.Structure):
+    """l3_retain_request_t"""
+
+    _fields_ = [
+        ("bytesPerBin", ctypes.c_uint32),
+        ("capacityBytes", ctypes.c_uint32),
+        ("maxFrames", ctypes.c_uint32),
+        ("preBins", ctypes.c_uint8),
+        ("impactBins", ctypes.c_uint8),
+        ("ballBins", ctypes.c_uint8),
+        ("preFrames", ctypes.c_uint8),
+        ("impactFrames", ctypes.c_uint8),
+        ("ballFrames", ctypes.c_uint8),
+    ]
+
+
+class RetainBudget(ctypes.Structure):
+    """l3_retain_budget_t"""
+
+    _fields_ = [
+        ("preFrames", ctypes.c_uint8),
+        ("impactFrames", ctypes.c_uint8),
+        ("ballFrames", ctypes.c_uint8),
+        ("cutPre", ctypes.c_uint8),
+        ("cutBall", ctypes.c_uint8),
+        ("usedBytes", ctypes.c_uint32),
+        ("freeBytes", ctypes.c_uint32),
+    ]
+
+
 class AdaptiveWindows(ctypes.Structure):
     """``l3_adaptive_windows_t``."""
 
@@ -768,6 +883,21 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
         [_P(Iq8Mode), _P(ctypes.c_int16), _P(ctypes.c_int8), _U32, _P(ctypes.c_uint16)],
         _U32,
     ),
+    # l3_retain.h
+    "l3_retain_cfg_defaults": ([_P(RetainCfg)], None),
+    "l3_retain_cfg_check": ([_P(RetainCfg)], ctypes.c_int32),
+    "l3_retain_predict": ([_F32, _F32], _F32),
+    "l3_retain_window": (
+        [_P(RetainCfg), _P(RetainState), _U32, _U32, _U32, _P(RetainWindow)],
+        None,
+    ),
+    "l3_retain_roi": ([_U32, _U32, _P(RetainWindow), _P(Roi)], None),
+    "l3_retain_budget": ([_P(RetainRequest), _P(RetainBudget)], ctypes.c_int32),
+    "l3_retain_priority_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_retain_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_retain_format": ([_P(RetainWindow), *_TEXT], ctypes.c_int32),
+    "l3_retain_format_budget": ([_P(RetainBudget), *_TEXT], ctypes.c_int32),
+    "l3_frame_desc_format": ([_P(FrameDesc), *_TEXT], ctypes.c_int32),
     # l3_shot.h
     "l3_shot_cfg_defaults": ([_P(ShotCfg)], None),
     "l3_shot_init": ([_P(Shot), _P(ShotCfg)], None),

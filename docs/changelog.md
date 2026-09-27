@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Retention policy for adaptive IQ16 capture.** `firmware/iwr6843/l3_retain.c`
+  separates the processing region (what the detect task reads) from the
+  retention region (what L3 stores) and chooses each frame's stored window
+  from the shot state, the predicted club and the predicted ball, with a
+  priority and reason per frame, a priority-ordered L3 budget and a stored
+  frame descriptor. The replay harness mirrors it (`--retain`) and on the
+  recorded swings keeps every tracked point in about 40% of the bins.
 - **Exact IQ8 emulation and an IQ16-vs-IQ8 A/B tool.** The firmware's three
   IQ8 quantisers now live in `firmware/iwr6843/l3_iq8.c`, compiled into the
   board and the host library, so `scripts/analysis/ab_iq16_iq8.py` can turn
