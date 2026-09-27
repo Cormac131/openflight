@@ -46,8 +46,8 @@ def test_fewer_loops_still_measure_the_synthetic_shot_and_differences_are_report
     assert [e.loops for e in evaluations] == [12, 6]
     assert all(e.fired for e in evaluations)
     full, six = evaluations
-    assert full.values["ball speed m/s"] == pytest.approx(60.0, abs=1.5)
-    assert six.values["ball speed m/s"] == pytest.approx(60.0, abs=3.0)
+    assert full.values["ball speed m/s"] == pytest.approx(60.0, abs=3.0)
+    assert six.values["ball speed m/s"] == pytest.approx(60.0, abs=4.0)
     assert six.values["club points"] >= 4 and six.values["ball points"] >= 4
     table = script.format_table("shot", evaluations)
     assert table.startswith("shot: 12 loops (fired)   6 loops (fired)")

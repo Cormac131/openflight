@@ -118,6 +118,7 @@ def test_defaults_are_a_wide_gate_a_fast_departure_and_six_launch_points(lib):
     assert cfg.core.gateBins == pytest.approx(6.0) and cfg.core.maxMisses == 1
     assert cfg.minDepartureMps == pytest.approx(10.0) and cfg.maxSpeedMps == pytest.approx(100.0)
     assert cfg.originGateBins == pytest.approx(8.0) and cfg.launchPoints == 6
+    assert cfg.minDepartureBins == pytest.approx(1.0) and cfg.snr == pytest.approx(3.0)
 
 
 def test_unarmed_track_ignores_everything(lib):
@@ -199,13 +200,16 @@ def test_launch_needs_a_confirmed_flight_with_three_points(lib):
     assert ball.launch()[0] == 3
 
 
-def test_targets_short_of_the_origin_are_never_the_ball(lib):
+def test_targets_at_or_short_of_the_origin_are_never_the_ball(lib):
+    """Recorded shots: the impact echo sits at the origin with the strongest
+    return of the whole capture; the ball is already a bin or more out."""
     ball = Ball(lib)
     ball.arm()
     assert ball.update(8, [target(8, 44.0), target(8, 40.0)]) is False
     assert ball.why == "nocandidate"
-    # A bin behind the origin is tolerated (sub-bin scatter), further is not.
-    assert ball.update(9, [target(9, 46.2)]) is True
+    assert ball.update(8, [target(8, ORIGIN_BIN + 0.4, confidence=0.99)]) is False
+    assert ball.why == "nocandidate"
+    assert ball.update(9, [target(9, ORIGIN_BIN + 1.2)]) is True
 
 
 def test_targets_far_beyond_the_origin_cannot_start_a_track(lib):
@@ -216,15 +220,21 @@ def test_targets_far_beyond_the_origin_cannot_start_a_track(lib):
     assert ball.update(8, [target(8, ORIGIN_BIN + 7.0)]) is True
 
 
-def test_the_resting_club_at_the_origin_is_dropped_as_too_slow(lib):
+def test_the_resting_club_at_the_origin_is_excluded_and_a_slow_mover_dropped(lib):
+    """The club at rest sits within a bin of the origin: never offered. A
+    return a bin out that then crawls (a bin over two frames is 8 m/s) is
+    acquired, coasts, and is dropped as too slow when it finally moves."""
     ball = Ball(lib)
     ball.arm()
-    assert ball.update(8, [target(8, 47.5)]) is True
-    assert ball.update(9, [target(9, 47.6)]) is False
+    assert ball.update(8, [target(8, 47.5)]) is False
+    assert ball.why == "nocandidate" and ball.track.core.count == 0
+    assert ball.update(9, [target(9, 48.2)]) is True and ball.why == "acquired"
+    assert ball.update(10, [target(10, 48.3)]) is False and ball.why == "coasted"
+    assert ball.update(11, [target(11, 49.3)]) is False
     assert ball.why == "tooslow" and ball.track.core.count == 0 and ball.track.confirmed == 0
     # The search restarts and a real departure is still taken.
-    assert ball.update(10, [target(10, 50.0)]) is True and ball.why == "acquired"
-    assert ball.update(11, [target(11, 54.0)]) is True and ball.why == "confirmed"
+    assert ball.update(12, [target(12, 50.0)]) is True and ball.why == "acquired"
+    assert ball.update(13, [target(13, 54.0)]) is True and ball.why == "confirmed"
 
 
 def test_an_impossibly_fast_return_is_dropped(lib):
@@ -288,3 +298,82 @@ def test_why_names_and_formats(lib):
     assert " hla=2.0" in text and " vla=12.0" in text and text.endswith(" valid=shv")
     empty = fw.Launch()
     assert fw.c_text(lib.l3_launch_format, ctypes.byref(empty)).endswith(" valid=none")
+
+
+def test_the_departure_band_excludes_the_follow_through_behind_the_ball(lib):
+    """Recorded shot 001: after impact the clubhead carried on at 15 m/s
+    (bins 48.6, 49.9, 50.9) while the ball was at 51.7 then 54.1. Only
+    candidates a bin or more beyond the origin, then beyond the first point,
+    are offered, so the club is never the more confident choice."""
+    ball = Ball(lib)
+    ball.arm(origin_bin=49.0)
+    assert (
+        ball.update(10, [target(10, 48.6, confidence=0.64), target(10, 51.7, confidence=0.55)])
+        is True
+    )
+    assert ball.track.core.lastBin == pytest.approx(51.7)
+    assert (
+        ball.update(11, [target(11, 48.4, confidence=0.86), target(11, 54.1, confidence=0.82)])
+        is True
+    )
+    assert ball.why == "confirmed" and ball.track.core.lastBin == pytest.approx(54.1)
+    # Once flying, nothing behind the last point is offered to the track, so
+    # the static return at the origin cannot pull it back when the ball fades.
+    assert (
+        ball.update(12, [target(12, 49.9, confidence=0.84), target(12, 56.0, confidence=0.40)])
+        is True
+    )
+    assert ball.track.core.lastBin == pytest.approx(56.0)
+    assert ball.update(13, [target(13, 49.0, confidence=0.9)]) is False
+    assert ball.why == "coasted"
+    assert ball.update(14, [target(14, 61.2, confidence=0.3)]) is True
+    assert ball.why == "tracked"
+
+
+def test_scattered_launch_angles_fall_back_to_the_radial_speed(lib):
+    """Shot 003 gave 40 m/s radial with azimuths that swung by 30 degrees; the
+    launch must report the radial speed and no angles, not a 54 m/s ball at
+    -27 degrees."""
+    ball = Ball(lib)
+    ball.arm()
+    for frame, (b, az) in enumerate(
+        [(50.7, 0.1), (53.3, -0.4), (55.8, 0.5), (58.4, -0.5), (61.1, 0.4), (63.7, -0.3)], start=9
+    ):
+        assert ball.update(frame, [target(frame, b)])
+        ball.set_angles(az, 0.2)
+    used, launch = ball.launch()
+    assert used == 6 and launch.speedValid
+    assert not launch.hlaValid and not launch.vlaValid
+    assert launch.speedMps == pytest.approx(launch.radialSpeedMps)
+    assert launch.speedMps == pytest.approx(2.6 * BIN_M / (FRAME_US * 1e-6), rel=0.05)
+
+
+def test_the_confirmation_frame_offers_only_the_band_beyond_the_first_point(lib):
+    """Recorded shot 002: one point at 52.2 predicts 52.2; the nearest candidate
+    was a static return at 51.9 while the ball had moved on to 54.6. From a
+    single point only departure can be predicted, so only candidates a bin or
+    more beyond it are offered for confirmation."""
+    ball = Ball(lib)
+    ball.arm(origin_bin=49.0)
+    assert (
+        ball.update(9, [target(9, 48.3, confidence=0.95), target(9, 52.2, confidence=0.5)]) is True
+    )
+    assert (
+        ball.update(
+            10,
+            [
+                target(10, 48.4, confidence=0.9),
+                target(10, 54.6, confidence=0.4),
+                target(10, 51.9, confidence=0.3),
+            ],
+        )
+        is True
+    )
+    assert ball.why == "confirmed" and ball.track.core.lastBin == pytest.approx(54.6)
+    # A single point with nothing departing beyond it coasts rather than
+    # confirming on the static return.
+    ball = Ball(lib)
+    ball.arm(origin_bin=49.0)
+    ball.update(9, [target(9, 52.2)])
+    assert ball.update(10, [target(10, 51.9), target(10, 52.4)]) is False
+    assert ball.why == "coasted"

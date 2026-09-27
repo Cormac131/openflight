@@ -5,9 +5,13 @@
  * because what is looked for differs. Before impact the target is the
  * approaching club; after it, a coherent return leaving the ball's origin
  * fast: acquired only at or beyond the origin bin, within a short gate, and
- * confirmed by the range rate its second point shows. A return that fails
- * the departure test (the resting club, the tee, the golfer) is dropped and
- * the search restarts.
+ * confirmed by the range rate its second point shows. Until then only
+ * candidates at least a bin BEYOND the reference (the origin, then the first
+ * point) are offered, which excludes the impact echo, the resting club and
+ * the clubhead's follow-through behind the ball; once flying, the ball never
+ * comes back toward the radar, so a candidate behind the last point is never
+ * it. A return that fails the departure test is dropped and the search
+ * restarts.
  *
  * The launch is fitted over the EARLIEST clean points of the flight, not
  * the newest, because drag takes speed off from the first metre: the
@@ -28,7 +32,11 @@ typedef struct {
     float    minDepartureMps;     /* range rate the second point must show */
     float    maxSpeedMps;         /* physical ceiling; faster is not a ball */
     float    originGateBins;      /* acquire within this many bins beyond the origin */
+    float    minDepartureBins;    /* ... and at least this many beyond it: the impact
+                                   * echo and the resting club sit at the origin */
     uint32_t launchPoints;        /* earliest points fitted for the launch */
+    float    snr;                 /* extraction threshold over the floor for the post
+                                   * window: a departing ball is a weak return */
 } l3_ball_track_cfg_t;
 
 enum {

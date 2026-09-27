@@ -83,6 +83,14 @@ def _parser() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
         help="ignore frames after the trigger fires, as the board does",
     )
+    parser.add_argument(
+        "--post-from",
+        dest="post_from_frame",
+        type=int,
+        default=argparse.SUPPRESS,
+        help="treat this frame as the first post-impact one (sound-triggered captures: the "
+        "plan's pre frame count, 9 on the wide profile) so the ball tracker is judged alone",
+    )
     return parser
 
 
@@ -90,7 +98,7 @@ def _overrides(args: argparse.Namespace) -> dict:
     """ReplayConfig fields the command line set explicitly."""
     chosen = {
         key: getattr(args, key)
-        for key in ("dest_bin", "snr", "track_frames", "stat", "stop_at_fire")
+        for key in ("dest_bin", "snr", "track_frames", "stat", "stop_at_fire", "post_from_frame")
         if hasattr(args, key)
     }
     if hasattr(args, "loop_period_us"):

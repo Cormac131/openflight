@@ -250,12 +250,25 @@ CLUB_ACQUIRE, CLUB_TRACK, IMPACT, BALL_TRACK, SOLVE, RESULT. IMPACT freezes
 the ball origin, the delivery, the impact time and the club trajectory;
 nothing after reads a live tracker. Kept post-impact frames are published to
 the detect task (IQ16 rings) and routed to `l3_ball_track.c`, which looks
-for a coherent return leaving the origin: acquired at or beyond the origin
-bin within a short gate, confirmed by its second point's range rate, dropped
-when it is the resting club or impossibly fast. The launch is fitted over
-the earliest clean points and extrapolated to the impact time: ball speed,
-horizontal launch and vertical launch. `triggerLog shot` prints the machine,
-the ball track, the launch and the ball points.
+for a coherent return leaving the origin against the post window's own
+noise floor and a lower threshold than the trigger's (the ball is a weak
+return): acquired a bin or more beyond the origin within a short gate, which
+excludes the impact echo, the resting club and the clubhead's follow-through
+behind the ball; confirmed by its second point's range rate; once flying,
+never associated with anything behind its last point; dropped when it is
+too slow or impossibly fast. The launch is fitted over the earliest clean
+points and extrapolated to the impact time: ball speed, horizontal launch
+and vertical launch. When the angled positions do not lie on a line (a fast
+ball crosses bins within a burst), the launch keeps the radial speed and
+reports no angles rather than a precise-looking wrong direction; the club
+delivery applies the same rule. `triggerLog shot` prints the machine, the
+ball track, the launch and the ball points.
+
+The first ten recorded swings (`tests/radar/recordings/`) shaped these
+rules: a strong return at bin 44 (hands or body) is the most confident
+target in every frame, so club acquisition prefers a target whose aliased
+Doppler reads at least 1 m/s; the ball departs from about bin 49 at 33 to
+41 m/s radial and is tracked for 14 frames on five of the six real shots.
 
 `l3_result.c` assembles the versioned result when the machine reaches
 RESULT: nine measurements (ball speed, vertical and horizontal launch, club

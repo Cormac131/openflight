@@ -19,7 +19,9 @@ void l3_ball_track_cfg_defaults(l3_ball_track_cfg_t *cfg)
     cfg->minDepartureMps = 10.0F;     /* the slowest chip leaves faster than this */
     cfg->maxSpeedMps = 100.0F;
     cfg->originGateBins = 8.0F;       /* the first post frame is at most ~5 bins out */
+    cfg->minDepartureBins = 1.0F;     /* the impact echo sits at the origin itself */
     cfg->launchPoints = 6U;
+    cfg->snr = 3.0F;                  /* half the trigger's: the ball is weak and moving */
 }
 
 void l3_ball_track_init(l3_ball_track_t *track, const l3_ball_track_cfg_t *cfg)
@@ -72,18 +74,34 @@ int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targ
     if (track->done) {
         return l3_ball_track_note(track, L3_BALL_TRACK_WHY_LOST, 0);
     }
-    /* A ball never comes back toward the radar; before acquisition it is
-     * also still close to where it was struck. */
-    for (i = 0U; i < n && kept < L3_OBS_MAX_TARGETS; i++) {
-        float beyond = targets[i].rangeBin - track->originBin;
+    /* A ball never comes back toward the radar: nothing behind the last point
+     * (or, before acquisition, at or short of the origin) can be it. Before
+     * acquisition only the farthest candidate inside the origin gate is
+     * offered, since the ball outruns the club's follow-through at once. */
+    if (track->core.active && track->confirmed) {
+        for (i = 0U; i < n && kept < L3_OBS_MAX_TARGETS; i++) {
+            if (targets[i].rangeBin < track->core.lastBin - 0.5F) {
+                continue;
+            }
+            candidates[kept++] = targets[i];
+        }
+    } else {
+        /* Acquiring, or confirming from a single point (whose prediction is
+         * the point itself): only candidates in the departure band beyond the
+         * reference (the origin, then the first point) are offered, which
+         * excludes the impact echo, the resting club and the follow-through
+         * behind the ball; the core then takes the most confident. */
+        float reference = track->core.active ? track->core.lastBin : track->originBin;
+        float span = track->core.active ? track->cfg.core.gateBins : track->cfg.originGateBins;
 
-        if (beyond < -1.0F) {
-            continue;
+        for (i = 0U; i < n && kept < L3_OBS_MAX_TARGETS; i++) {
+            float beyond = targets[i].rangeBin - reference;
+
+            if (beyond < track->cfg.minDepartureBins || beyond > span) {
+                continue;
+            }
+            candidates[kept++] = targets[i];
         }
-        if (!track->core.active && beyond > track->cfg.originGateBins) {
-            continue;
-        }
-        candidates[kept++] = targets[i];
     }
     if (kept == 0U && !track->core.active) {
         return l3_ball_track_note(track, L3_BALL_TRACK_WHY_NO_CANDIDATE, 0);

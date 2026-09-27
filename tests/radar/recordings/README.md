@@ -37,6 +37,12 @@ the failures and exits 2:
 }
 ```
 
+For captures the sound trigger froze (everything recorded before the
+self-trigger), set `post_from_frame` to the plan's pre frame count (9 on the
+wide profile): the recorded freeze is the impact, so the ball tracker is
+judged on the true post frames whatever the range gate did earlier. Set
+`dest_bin` to where the ball actually was when the configured tee was wrong.
+
 Keys: `fires`, `impact_frame`, `geometric_frame`, `club_points_min`,
 `club_direction` ("approaching"), `acquisitions_max`, `ball_origin_bin`,
 `ball_speed_mps`, `club_speed_mps`.

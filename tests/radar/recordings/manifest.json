@@ -1,0 +1,101 @@
+{
+  "default": {
+    "tee_bin": 34,
+    "dest_bin": 49,
+    "post_from_frame": 9,
+    "notes": "2026-09-16 range session, wide 24f3ms IQ16 profile, sound-triggered (9 pre / 7 impact / 8 ball frames). triggerCfg was armed at bin 34 (1.59 m) but the ball sat at about bin 49 (2.3 m): dest_bin says where it was, post_from_frame that the recorded freeze is impact. A strong return at bin 44 (hands or body) is present in every frame."
+  },
+  "iwr6843_20260916_184748_410_001.l3dump": {
+    "notes": "ball departs from ~49 at ~33 m/s radial, tracked to bin 76",
+    "expect": {
+      "ball_origin_bin": [
+        50,
+        54
+      ],
+      "ball_speed_mps": [
+        28,
+        45
+      ]
+    }
+  },
+  "iwr6843_20260916_184825_011_002.l3dump": {
+    "notes": "ball at ~38 m/s radial, tracked 52 to 77",
+    "expect": {
+      "ball_origin_bin": [
+        50,
+        54
+      ],
+      "ball_speed_mps": [
+        30,
+        48
+      ]
+    }
+  },
+  "iwr6843_20260916_184851_109_003.l3dump": {
+    "notes": "ball at ~40 m/s radial, tracked 48 to 82",
+    "expect": {
+      "ball_origin_bin": [
+        49,
+        54
+      ],
+      "ball_speed_mps": [
+        32,
+        48
+      ]
+    }
+  },
+  "iwr6843_20260916_184937_318_004.l3dump": {
+    "notes": "weak ball (SNR 3-4): a few points at ~21 m/s radial before it fades; no ball expectation",
+    "expect": {}
+  },
+  "iwr6843_20260916_185013_572_005.l3dump": {
+    "notes": "ball 52 to 85 at ~40 m/s radial",
+    "expect": {
+      "ball_origin_bin": [
+        50,
+        57
+      ],
+      "ball_speed_mps": [
+        30,
+        48
+      ]
+    }
+  },
+  "iwr6843_20260916_185042_422_006.l3dump": {
+    "notes": "no swing: only a slow mover at bin 43 (2.0 m) and a static return at 96",
+    "expect": {
+      "fires": false
+    }
+  },
+  "iwr6843_20260916_190858_810_001.l3dump": {
+    "notes": "empty capture: nothing above the floor in any frame",
+    "expect": {
+      "fires": false
+    }
+  },
+  "iwr6843_20260916_190937_131_002.l3dump": {
+    "notes": "ball at ~33 m/s radial, tracked 53 to 80 with usable angles",
+    "expect": {
+      "ball_origin_bin": [
+        50,
+        55
+      ],
+      "ball_speed_mps": [
+        28,
+        45
+      ]
+    }
+  },
+  "iwr6843_20260916_194050_599_001.l3dump": {
+    "notes": "empty capture: nothing above the floor in any frame",
+    "expect": {
+      "fires": false
+    }
+  },
+  "iwr6843_20260916_194058_617_002.l3dump": {
+    "notes": "empty capture: nothing above the floor in any frame",
+    "expect": {
+      "fires": false
+    }
+  }
+}

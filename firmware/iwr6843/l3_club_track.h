@@ -52,6 +52,15 @@ typedef struct {
     float    weightQuality;       /*       + wQ * (1 - confidence) */
     float    velocitySpanMps;     /* Doppler alias span (2 * wavelength / 4T) */
     l3_radar_cal_t cal;           /* attitude, offsets and range bias for positions */
+    /* Acquisition prefers a target whose aliased Doppler reads at least this
+     * (m/s): a body standing in the lane reads under 1 m/s, a clubhead reads
+     * anywhere across the alias span, so the club is missed on a frame only
+     * when it happens to alias near zero. 0 disables the preference. */
+    float    minAcquireDopplerMps;
+    /* Beyond this 3D fit residual (metres) the angles are not trusted: the
+     * delivery falls back to the radial speed and marks path and attack
+     * invalid instead of reporting a precise-looking wrong direction. */
+    float    maxAngleResidualM;
 } l3_track_cfg_t;
 
 /* Club delivery from a regression of position against time over the newest

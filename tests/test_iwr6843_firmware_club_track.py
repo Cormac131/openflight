@@ -46,7 +46,7 @@ def target(
     range_bin: float,
     *,
     confidence: float = 0.9,
-    doppler: float = 0.0,
+    doppler: float = 3.0,  # a mover; acquisition prefers |Doppler| >= 1 m/s
     energy: float = 5000.0,
 ) -> Target:
     t = Target()
@@ -474,3 +474,69 @@ def test_reset_forgets_the_last_target_but_keeps_the_calibration(lib):
     lib.l3_track_reset(ctypes.byref(tr.track))
     assert tr.track.lastTargetIndex == TRACK_NO_TARGET
     assert tr.track.cfg.cal.radarPitchRad == pytest.approx(0.1)
+
+
+# --- lessons from the first recorded swings ------------------------------------
+
+
+def test_acquisition_prefers_a_mover_over_a_stronger_stationary_return(lib):
+    """Recorded swings: hands or body at bin 44 read as the most confident
+    target in every frame while the club passed at 3 to 7 m/s of Doppler."""
+    tr = Tracker(lib)
+    body = target(1, 44.0, confidence=0.95, doppler=0.3)
+    club = target(1, 40.0, confidence=0.6, doppler=4.7)
+    assert tr.update(1, [body, club]) is True
+    assert tr.points()[-1].rangeBin == 40.0 and tr.track.lastTargetIndex == 1
+    # With nothing moving, the most confident target is still acquired.
+    tr = Tracker(lib)
+    assert (
+        tr.update(
+            1,
+            [
+                target(1, 44.0, confidence=0.95, doppler=0.3),
+                target(1, 40.0, confidence=0.6, doppler=0.2),
+            ],
+        )
+        is True
+    )
+    assert tr.points()[-1].rangeBin == 44.0
+    # The preference can be switched off.
+    tr = Tracker(lib, minAcquireDopplerMps=0.0)
+    assert tr.update(1, [body, club]) is True
+    assert tr.points()[-1].rangeBin == 44.0
+    cfg = Cfg()
+    lib.l3_track_cfg_defaults(ctypes.byref(cfg))
+    assert cfg.minAcquireDopplerMps == pytest.approx(1.0)
+    assert cfg.maxAngleResidualM == pytest.approx(2 * BIN_M)
+
+
+def test_angles_that_do_not_fit_a_line_are_dropped_in_favour_of_the_radial_speed(lib):
+    """A fast ball crossing bins within a burst gives azimuths that scatter by
+    tens of degrees; the delivery keeps the range walk and no direction."""
+    tr = Tracker(lib)
+    for frame, (b, az) in enumerate(
+        [(50.0, 0.0), (52.6, 0.4), (55.2, -0.4), (57.8, 0.5), (60.4, -0.5), (63.0, 0.3)], start=1
+    ):
+        tr.update(frame, [target(frame, b)])
+        lib.l3_track_set_angles(ctypes.byref(tr.track), az, 0.0, ANGLE_AZIMUTH | ANGLE_ELEVATION)
+    used, out = delivery(lib, tr)
+    assert used == 6 and out.speedValid
+    assert not out.pathValid and not out.attackValid
+    assert out.azimuthPoints == 0 and out.elevationPoints == 0
+    assert out.speedMps == pytest.approx(out.radialSpeedMps)
+    assert out.speedMps == pytest.approx(2.6 * BIN_M / (FRAME_US * 1e-6), rel=0.05)
+    assert out.velocity.y == 0.0 and out.velocity.z == 0.0
+    # Consistent angles keep the direction.
+    tr = Tracker(lib)
+    for frame, b in enumerate([50.0, 52.6, 55.2, 57.8, 60.4, 63.0], start=1):
+        tr.update(frame, [target(frame, b)])
+        lib.l3_track_set_angles(ctypes.byref(tr.track), 0.05, 0.2, ANGLE_AZIMUTH | ANGLE_ELEVATION)
+    _, steady = delivery(lib, tr)
+    assert steady.pathValid and steady.attackValid
+    # The guard can be disabled.
+    tr = Tracker(lib, maxAngleResidualM=0.0)
+    for frame, (b, az) in enumerate([(50.0, 0.0), (52.6, 0.4), (55.2, -0.4), (57.8, 0.5)], start=1):
+        tr.update(frame, [target(frame, b)])
+        lib.l3_track_set_angles(ctypes.byref(tr.track), az, 0.0, ANGLE_AZIMUTH | ANGLE_ELEVATION)
+    _, raw = delivery(lib, tr)
+    assert raw.pathValid

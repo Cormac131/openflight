@@ -529,7 +529,13 @@ def test_ball_tracker_runs_the_whole_post_window_against_the_trigger_floor():
     assert "gPostTimestampUs += gFrameDeltaUs[slot];" in consider
     assert "frame = gPreFramesCaptured + gPostFramesScored;" in consider
     assert "l3_verticalResidual(slot, bin, NULL, &obs[bin]);" in consider
-    assert "gTrig.floor, targets, L3_OBS_MAX_TARGETS);" in consider
+    assert "gBallFloor, targets, L3_OBS_MAX_TARGETS);" in consider
+    assert (
+        "l3_obs_floor_update(&gBallFloor, gTrigCfg.stat, obs, count, L3_TRIG_FLOOR_SHIFT);"
+        in consider
+    )
+    assert "params.snr = gBallTrackCfg.snr;" in consider, "the ball is a weaker return"
+    assert "gBallFloor = 0.0F;" in _function("static void l3_trigRearm(")
     assert "l3_ball_track_update(&gBallTrack, targets, found, frame, gPostTimestampUs)" in consider
     assert "gBallTrack.core.count > 1U" in consider, "angles once the flight has a range rate"
     assert "l3_ball_track_set_angles(&gBallTrack, angle.azimuthRad," in consider

@@ -22,6 +22,13 @@ void l3_track_cfg_defaults(l3_track_cfg_t *cfg)
     cfg->weightQuality = 1.0F;   /* ... equals a target of no confidence */
     cfg->velocitySpanMps = 2.0F * L3_OBS_WAVELENGTH_M / (4.0F * 135.0e-6F);
     l3_cal_identity(&cfg->cal, L3_CAL_MAX_VIRTUAL);
+    cfg->minAcquireDopplerMps = 1.0F;
+    cfg->maxAngleResidualM = 2.0F * cfg->binWidthM;  /* two bins of scatter */
+}
+
+static float l3_track_absf(float value)
+{
+    return (value < 0.0F) ? -value : value;
 }
 
 /* A point's golf-frame position from its range and whatever angles it has. */
@@ -112,12 +119,22 @@ int32_t l3_track_update(l3_club_track_t *track, const l3_target_obs_t *targets, 
 
     track->lastTargetIndex = L3_TRACK_NO_TARGET;
     if (!track->active) {
-        /* Acquire the most confident target that clears the bar. */
+        /* Acquire the most confident target that clears the bar, preferring
+         * one that reads as moving: a stationary body in the lane is often
+         * the strongest return and must not become the club. */
         const l3_target_obs_t *best = NULL;
+        uint8_t bestMoves = 0U;
         for (i = 0U; i < n; i++) {
-            if (targets[i].confidence >= cfg->minConfidence &&
-                (best == NULL || targets[i].confidence > best->confidence)) {
+            uint8_t moves = (uint8_t)(cfg->minAcquireDopplerMps <= 0.0F ||
+                                      l3_track_absf(targets[i].dopplerAliasMps) >=
+                                          cfg->minAcquireDopplerMps);
+            if (targets[i].confidence < cfg->minConfidence) {
+                continue;
+            }
+            if (best == NULL || (moves && !bestMoves) ||
+                (moves == bestMoves && targets[i].confidence > best->confidence)) {
                 best = &targets[i];
+                bestMoves = moves;
                 track->lastTargetIndex = i;
             }
         }
@@ -355,6 +372,19 @@ uint32_t l3_track_delivery_range(const l3_club_track_t *track, uint32_t first, u
     out->radialSpeedMps = (radialSlope < 0.0F) ? -radialSlope : radialSlope;
     out->speedMps = l3_frames_speed(&out->velocity);
     out->speedValid = 1U;
+    if (required != 0U && track->cfg.maxAngleResidualM > 0.0F &&
+        out->residualM > track->cfg.maxAngleResidualM) {
+        /* The angled positions do not lie on a line: the angles are noise
+         * (a fast ball crossing bins within a burst does this). Keep the
+         * range walk, which is a measurement, and drop the direction. */
+        required = 0U;
+        out->azimuthPoints = 0U;
+        out->elevationPoints = 0U;
+        out->velocity.x = out->radialSpeedMps;
+        out->velocity.y = 0.0F;
+        out->velocity.z = 0.0F;
+        out->speedMps = out->radialSpeedMps;
+    }
     if (required & L3_OBS_ANGLE_AZIMUTH) {
         out->pathRad = l3_frames_horizontal_rad(&out->velocity);
         out->pathValid = 1U;

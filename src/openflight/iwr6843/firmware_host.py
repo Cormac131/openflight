@@ -357,6 +357,8 @@ class TrackCfg(ctypes.Structure):
         ("weightQuality", ctypes.c_float),
         ("velocitySpanMps", ctypes.c_float),
         ("cal", RadarCal),
+        ("minAcquireDopplerMps", ctypes.c_float),
+        ("maxAngleResidualM", ctypes.c_float),
     ]
 
 
@@ -504,7 +506,9 @@ class BallTrackCfg(ctypes.Structure):
         ("minDepartureMps", ctypes.c_float),
         ("maxSpeedMps", ctypes.c_float),
         ("originGateBins", ctypes.c_float),
+        ("minDepartureBins", ctypes.c_float),
         ("launchPoints", ctypes.c_uint32),
+        ("snr", ctypes.c_float),
     ]
 
 

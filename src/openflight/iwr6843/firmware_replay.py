@@ -177,6 +177,10 @@ class ReplayConfig:
     # Frames after the trigger fires go to the ball tracker, as the board's
     # post movie does; a locked ball at dest_bin makes the shot require one.
     post_impact: bool = True
+    # Treat this frame as the first post-impact frame whatever the gate does:
+    # for captures the sound trigger froze, the plan's first post slot IS
+    # impact, so the ball tracker can be judged on its own. None: the gate.
+    post_from_frame: int | None = None
 
     @property
     def destination(self) -> int:
@@ -507,6 +511,7 @@ def replay_dump(
     lib.l3_ball_track_init(ctypes.byref(ball_track), ctypes.byref(ball_cfg))
     launch = fw.Launch()
     ball_points: list[PointSummary] = []
+    ball_floor = ctypes.c_float(0.0)  # the post window's own floor, as gBallFloor
 
     params = fw.ObsParams(trig_cfg.stat, trig_cfg.snr, loop_period_s)
     targets = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
@@ -520,11 +525,35 @@ def replay_dump(
     geometric_frame: int | None = None
     for frame in range(int(meta["n_frames"])):
         ended = fired_frame is not None or (config.impact_armed and geometric_frame is not None)
-        if config.stop_at_fire and ended:
+        forced = config.post_from_frame is not None and frame >= config.post_from_frame
+        if config.stop_at_fire and ended and not forced:
             break
         window_start, window_bins = frame_window(meta, frame)
         timestamp_us = timestamps[frame]
-        if ended and config.post_impact:
+        if forced and frame == config.post_from_frame:
+            # The recorded freeze is the impact: (re)arm the ball tracker at
+            # the destination as IMPACT would have, whatever the gate did
+            # earlier, and let the machine follow. Points gathered before it
+            # belong to the gate's early fire, not to the flight.
+            ball_points.clear()
+            lib.l3_frames_observe(
+                ctypes.byref(cal), destination * bin_width_m, 0.0, 0.0, ctypes.byref(ball_position)
+            )
+            lib.l3_ball_track_arm(
+                ctypes.byref(ball_track),
+                float(destination),
+                ctypes.byref(ball_position),
+                timestamp_us,
+            )
+            forced_in = fw.ShotInput()
+            forced_in.ballLocked = 1 if config.dest_bin is not None else 0
+            forced_in.ballPosition = ball_position
+            forced_in.gateFired = 1
+            forced_in.impactTimestampUs = timestamp_us
+            forced_in.delivery = ctypes.pointer(delivery)
+            forced_in.club = ctypes.pointer(track)
+            lib.l3_shot_update(ctypes.byref(shot), ctypes.byref(forced_in), frame)
+        if (ended or forced) and config.post_impact:
             # The board's post movie: the ball tracker, not the trigger.
             frames.append(
                 _replay_post_frame(
@@ -536,7 +565,7 @@ def replay_dump(
                     window_bins,
                     n_tx,
                     params,
-                    trig.floor,
+                    ball_floor,
                     targets,
                     cal,
                     chirp_period_s,
@@ -718,7 +747,7 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
     window_bins,
     n_tx,
     params,
-    floor,
+    ball_floor,
     targets,
     cal,
     chirp_period_s,
@@ -730,13 +759,16 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
     trig_state,
     track_why,
 ) -> ReplayFrame:
-    """``l3_considerBallTrack``: the whole window as targets into the ball
-    tracker, angles for the appended point, the launch fit and the shot
-    machine's post-impact transitions."""
+    """``l3_considerBallTrack``: the whole window as targets against the post
+    window's own floor into the ball tracker, angles for the appended point,
+    the launch fit and the shot machine's post-impact transitions."""
     count = min(window_bins, fw.TRIG_MAX_BINS)
     obs = bin_observations(cube, frame, 0, count, n_tx)
+    ball_params = fw.ObsParams(params.stat, ball_track.cfg.snr, params.loopPeriodS)
+    lib.l3_obs_floor_update(ctypes.byref(ball_floor), params.stat, obs, count, FLOOR_SHIFT)
+    floor = ball_floor.value
     found = lib.l3_obs_extract(
-        ctypes.byref(params),
+        ctypes.byref(ball_params),
         frame,
         timestamp_us,
         window_start,

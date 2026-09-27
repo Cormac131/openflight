@@ -419,6 +419,9 @@ static l3_ball_track_t     gBallTrack;
 static l3_launch_t         gLaunch;
 static uint32_t            gPostTimestampUs;   /* time of the newest post frame scored */
 static uint32_t            gPostFramesScored;
+/* The post window's own noise floor: the pre region's floor sits under the
+ * golfer's returns and would hide the weak departing ball. */
+static float               gBallFloor;
 /* The shot result, built once per shot when the machine reaches RESULT;
  * "triggerLog result" prints it with its packet. */
 static l3_shot_result_t    gShotResult;
@@ -2987,6 +2990,7 @@ static void l3_trigRearm(void)
     gTrigFireSource = 0U;
     gPostTimestampUs = 0U;
     gPostFramesScored = 0U;
+    gBallFloor = 0.0F;
     gShotResultReady = 0U;
 }
 
@@ -3132,10 +3136,11 @@ static void l3_considerBallTrack(uint32_t slot)
         l3_verticalResidual(slot, bin, NULL, &obs[bin]);
     }
     params.stat = gTrigCfg.stat;
-    params.snr = gTrigCfg.snr;
+    params.snr = gBallTrackCfg.snr;   /* a departing ball is a weaker return than a club */
     params.loopPeriodS = gTrigLoopPeriodS;
+    l3_obs_floor_update(&gBallFloor, gTrigCfg.stat, obs, count, L3_TRIG_FLOOR_SHIFT);
     found = l3_obs_extract(&params, frame, gPostTimestampUs, gFrameBinStart[slot], obs, count,
-                           gTrig.floor, targets, L3_OBS_MAX_TARGETS);
+                           gBallFloor, targets, L3_OBS_MAX_TARGETS);
     if (l3_ball_track_update(&gBallTrack, targets, found, frame, gPostTimestampUs) &&
         gBallTrack.core.lastTargetIndex < found && gBallTrack.core.count > 1U &&
         l3_track_point(&gBallTrack.core, gBallTrack.core.count - 1U, &newest)) {
