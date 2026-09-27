@@ -377,3 +377,20 @@ def test_the_confirmation_frame_offers_only_the_band_beyond_the_first_point(lib)
     ball.update(9, [target(9, 52.2)])
     assert ball.update(10, [target(10, 51.9), target(10, 52.4)]) is False
     assert ball.why == "coasted"
+
+
+def test_the_appended_target_is_reported_by_its_index_into_the_caller_list(lib):
+    ball = Ball(lib)
+    assert ball.track.lastTargetIndex == fw.TRACK_NO_TARGET
+    ball.arm(origin_bin=49.0)
+    assert (
+        ball.update(9, [target(9, 48.3, confidence=0.95), target(9, 52.2, confidence=0.5)]) is True
+    )
+    assert ball.track.lastTargetIndex == 1, "the caller's index, not the filtered candidate's"
+    assert (
+        ball.update(10, [target(10, 48.4), target(10, 51.9), target(10, 54.6, confidence=0.4)])
+        is True
+    )
+    assert ball.track.lastTargetIndex == 2
+    assert ball.update(11, []) is False
+    assert ball.track.lastTargetIndex == fw.TRACK_NO_TARGET

@@ -8,6 +8,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Spin probe A/B and the IQ16 roadmap status.** `scripts/analysis/spin_probe.py
+  --iq8` runs the micro-Doppler probe on the firmware-exact IQ8 of the same
+  capture and prints the frame-by-frame spread, off-bulk and spectrum
+  correlation differences. The firmware guide gains a phase-by-phase status
+  table and the rig protocols (compact formats on hardware, HWA rounding,
+  angles, shots, cadence, HWA/DSP, spin and face) the remaining phases wait on.
+- **OPS-versus-IWR validation and confidence calibration.** Every shot with an
+  onboard result logs an `iwr_ops_comparison` entry (OPS and IWR speeds side by
+  side, never averaged); `scripts/analysis/ops_validation.py` and
+  `scripts/analysis/reference_validation.py` give bias, MAE, RMSE and P95 over
+  sessions and labelled datasets (with the thin cells of the club x speed x
+  shape matrix named), and `openflight.iwr6843.confidence_calibration` turns
+  confidence-versus-error pairs into per-band bounds and rejection thresholds.
+  The host packet reports a per-domain confidence.
+- **Angle confidence, readable calibration and angular validation tooling.**
+  Angle estimates carry a 0..1 confidence from the beam's sharpness and the
+  azimuth coherence; `triggerLog cal` prints the calibration in force and the
+  host parses the ball detector's measured direction. A static reflector
+  protocol (`scripts/hardware-test/iwr6843_angle_static.py`) and a moving
+  reflector replay (`scripts/analysis/iwr6843_angle_moving.py`, with an IQ16
+  versus IQ8 comparison) produce per-position bias, spread, repeatability and
+  error against speed through `openflight.iwr6843.angle_validation`.
+- **Exact IQ16 observation statistics and a log-parabolic sub-bin range.**
+  `firmware/iwr6843/l3_iq16_stats.c` accumulates the residual energy, per-loop
+  power and lag-1 autocorrelation in integers with one float conversion at the
+  end, and targets read their sub-bin range from the log parabola through the
+  peak and its neighbours (`trackCfg subbin`). The estimator's bias on the
+  unwindowed range lobe is measured and pinned.
+- **Compact IQ16 capture formats in the firmware.** `captureFormat compact16`
+  and `adaptive16` process every frame at full IQ16 precision from the
+  accelerator's scratch and store only the retained window in L3 (16/24/16
+  bins by default, `captureCfg retain`), placed per frame by the retention
+  policy in adaptive16. A stale-scratch guard drops a frame the HWA reused
+  before the detect task finished, `stats` and `triggerLog frames` report the
+  compaction and the stored frames, and
+  `config/iwr6843_l3dump_adaptive_47f3ms_53bin_a16.cfg` fits a 141 ms movie
+  into the memory that held 72 ms of wide IQ16. Firmware built and flashed
+  from this source is needed; nothing here has run on a board yet.
+- **Retention policy for adaptive IQ16 capture.** `firmware/iwr6843/l3_retain.c`
+  separates the processing region (what the detect task reads) from the
+  retention region (what L3 stores) and chooses each frame's stored window
+  from the shot state, the predicted club and the predicted ball, with a
+  priority and reason per frame, a priority-ordered L3 budget and a stored
+  frame descriptor. The replay harness mirrors it (`--retain`) and on the
+  recorded swings keeps every tracked point in about 40% of the bins.
+- **Exact IQ8 emulation and an IQ16-vs-IQ8 A/B tool.** The firmware's three
+  IQ8 quantisers now live in `firmware/iwr6843/l3_iq8.c`, compiled into the
+  board and the host library, so `scripts/analysis/ab_iq16_iq8.py` can turn
+  an IQ16 recording into the exact IQ8 the board would store and replay both
+  through the onboard pipeline with a measurement-by-measurement delta table
+  and a corpus summary. `scripts/analysis/baseline_dataset.py` freezes the
+  current per-shot numbers from session logs as the reference dataset, and
+  `scripts/hardware-test/iwr6843_iq8_hwa_probe.py` settles the HWA's shift
+  rounding on a board.
+- **The IWR6843 firmware's shot result reaches the shot and the kiosk.** After
+  a self-triggered capture the server reads `triggerLog result`, keeps the
+  100-byte packet on the shot as `iwr6843_onboard`, logs it beside the OPS and
+  host numbers, and the Live view shows a "TI onboard" strip with MEASURED /
+  ESTIMATED and confidence on each metric. `--iwr6843-onboard-metrics` lets
+  the firmware's usable launch angles, club path and attack angle replace the
+  host pipeline's; ball speed stays the OPS measurement.
+- **Setup banner from the ball-placement detector.** `--iwr6843-ball-detector`
+  (default `on`) turns the firmware detector on at startup and the server
+  polls `ball status` every `--iwr6843-setup-poll-s` seconds, emitting
+  `iwr_setup`. The kiosk shows the ball range and how far to move OpenFlight
+  (`too-close` to `too-far`), or asks for a ball on the tee.
+- **IQ8 profiles get the onboard detect path.** The trigger, club track and
+  ball track read int8 rings with the frame scale, so the dense IQ8 profiles
+  can self-trigger; the monitor no longer refuses them.
 - **The IWR6843 can pick its own track cells (`l3track`).** The firmware now
   runs the ball tracker and cell selection the Pi ran for `l3sparse`
   (`firmware/iwr6843/track_select.c`). It streams only the chosen cells, so

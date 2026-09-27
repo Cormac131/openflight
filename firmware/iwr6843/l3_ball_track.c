@@ -28,6 +28,7 @@ void l3_ball_track_init(l3_ball_track_t *track, const l3_ball_track_cfg_t *cfg)
 {
     memset(track, 0, sizeof(*track));
     track->cfg = *cfg;
+    track->lastTargetIndex = L3_TRACK_NO_TARGET;
     l3_track_init(&track->core, &cfg->core);
 }
 
@@ -40,6 +41,7 @@ void l3_ball_track_reset(l3_ball_track_t *track)
     track->why = L3_BALL_TRACK_WHY_NONE;
     track->impactTimestampUs = 0U;
     track->originBin = 0.0F;
+    track->lastTargetIndex = L3_TRACK_NO_TARGET;
     memset(&track->origin, 0, sizeof(track->origin));
 }
 
@@ -64,10 +66,13 @@ int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targ
                              uint32_t frame, uint32_t timestampUs)
 {
     l3_target_obs_t candidates[L3_OBS_MAX_TARGETS];
+    uint32_t indices[L3_OBS_MAX_TARGETS];  /* candidate -> targets index */
     uint32_t kept = 0U;
     uint32_t i;
     int32_t appended;
 
+    memset(candidates, 0, sizeof(candidates));
+    track->lastTargetIndex = L3_TRACK_NO_TARGET;
     if (!track->armed) {
         return l3_ball_track_note(track, L3_BALL_TRACK_WHY_UNARMED, 0);
     }
@@ -83,6 +88,7 @@ int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targ
             if (targets[i].rangeBin < track->core.lastBin - 0.5F) {
                 continue;
             }
+            indices[kept] = i;
             candidates[kept++] = targets[i];
         }
     } else {
@@ -100,6 +106,7 @@ int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targ
             if (beyond < track->cfg.minDepartureBins || beyond > span) {
                 continue;
             }
+            indices[kept] = i;
             candidates[kept++] = targets[i];
         }
     }
@@ -107,6 +114,9 @@ int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targ
         return l3_ball_track_note(track, L3_BALL_TRACK_WHY_NO_CANDIDATE, 0);
     }
     appended = l3_track_update(&track->core, candidates, kept, frame, timestampUs);
+    if (appended && track->core.lastTargetIndex < kept) {
+        track->lastTargetIndex = indices[track->core.lastTargetIndex];
+    }
     if (!appended) {
         if (!track->core.active) {
             if (track->confirmed) {

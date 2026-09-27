@@ -175,3 +175,43 @@ def test_horizontal_launch_convention_agrees_with_the_ballistics_world_frame():
     la_h = 2.5 * DEG
     vx, vy = math.cos(la_h), math.sin(la_h)
     assert math.atan2(vy, vx) == pytest.approx(la_h)
+
+
+def test_element_calibration_round_trips_gain_and_phase(lib):
+    c = fw.RadarCal()
+    lib.l3_cal_identity(ctypes.byref(c), 8)
+    assert lib.l3_cal_set_element(ctypes.byref(c), 3, 1.25, 0.4) == 0
+    gain = ctypes.c_float()
+    phase = ctypes.c_float()
+    assert lib.l3_cal_element(ctypes.byref(c), 3, ctypes.byref(gain), ctypes.byref(phase)) == 0
+    assert gain.value == pytest.approx(1.25, abs=1e-5)
+    assert phase.value == pytest.approx(0.4, abs=1e-5)
+    # The stored correction is exp(-j phase) / gain, as l3_angle applies it.
+    assert c.correctionRe[3] == pytest.approx(math.cos(-0.4) / 1.25, abs=1e-6)
+    assert c.correctionIm[3] == pytest.approx(math.sin(-0.4) / 1.25, abs=1e-6)
+    # Untouched elements read as unit gain, zero phase.
+    assert lib.l3_cal_element(ctypes.byref(c), 0, ctypes.byref(gain), ctypes.byref(phase)) == 0
+    assert (gain.value, phase.value) == (1.0, 0.0)
+    assert lib.l3_cal_set_element(ctypes.byref(c), 8, 1.0, 0.0) == -1, "past the array"
+    assert lib.l3_cal_set_element(ctypes.byref(c), 1, 0.0, 0.0) == -1, "a gain must be positive"
+    assert lib.l3_cal_set_element(ctypes.byref(c), 1, -1.0, 0.0) == -1
+    assert lib.l3_cal_element(ctypes.byref(c), 9, ctypes.byref(gain), ctypes.byref(phase)) == -1
+    # Setting an element beyond the count in force extends it.
+    lib.l3_cal_identity(ctypes.byref(c), 4)
+    assert lib.l3_cal_set_element(ctypes.byref(c), 6, 1.0, 0.1) == 0
+    assert c.virtualElements == 7
+
+
+def test_calibration_formats_attitude_offsets_and_elements(lib):
+    c = fw.RadarCal()
+    lib.l3_cal_identity(ctypes.byref(c), 8)
+    c.azimuthOffsetRad, c.elevationOffsetRad, c.rangeBiasM = 0.05, -0.02, 0.031
+    c.radarPitchRad, c.radarYawRad, c.radarRollRad = math.radians(3.0), math.radians(-1.5), 0.0
+    text = fw.c_text(lib.l3_cal_format, ctypes.byref(c))
+    assert text == "cal elems=8 az0=0.05 el0=-0.02 pitch=3.00 yaw=-1.50 roll=0.00 bias=0.03"
+    lib.l3_cal_set_element(ctypes.byref(c), 2, 0.9, -0.25)
+    assert (
+        fw.c_text(lib.l3_cal_format_element, ctypes.byref(c), 2) == "elem 2 gain=0.90 phase=-0.25"
+    )
+    assert fw.c_text(lib.l3_cal_format_element, ctypes.byref(c), 0) == "elem 0 gain=1.00 phase=0.00"
+    assert fw.c_text(lib.l3_cal_format_element, ctypes.byref(c), 9) == "elem 9 invalid"

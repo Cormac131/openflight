@@ -440,10 +440,16 @@ class TestShutdownCleanup:
         )
         monkeypatch.setattr(server_module, "shutdown_cleanup_started", False)
         monkeypatch.setattr(server_module, "stop_monitor", lambda: calls.append("ops243"))
+        monkeypatch.setattr(
+            server_module,
+            "iwr6843_setup_poller",
+            SimpleNamespace(stop=lambda: calls.append("setup-poll")),
+        )
 
         server_module._cleanup_hardware_for_shutdown()
 
-        assert calls == ["iwr6843", "ops243"]
+        assert calls == ["setup-poll", "iwr6843", "ops243"]
+        assert server_module.iwr6843_setup_poller is None
 
     def test_shutdown_step_logs_elapsed_time(self, caplog):
         """Hardware logs should identify which cleanup step is slow in the field."""
@@ -556,6 +562,152 @@ class TestIWR6843ShotIntegration:
         assert server_module.iwr6843_runtime.tdm_sign_policy == "positive"
         assert server_module.iwr6843_runtime_config["tdm_sign_policy"] == "positive"
         server_module.iwr6843_runtime = None
+
+    def _init_with_ball_detector(self, monkeypatch, tmp_path, mode, emitted):
+        submitted = []
+        calibration = Calibration.identity()
+
+        class FakeCaptureMonitor:
+            def __init__(self, **kwargs):
+                del kwargs
+                self.port = "/dev/ttyUSB0"
+                self.self_trigger = None
+                self.onboard_tracking = False
+
+            def start(self, *, armed=True, onboard_track_config=None):
+                del armed, onboard_track_config
+
+            def submit(self, name, job):
+                submitted.append((name, job))
+                return True
+
+            def stop(self):
+                return None
+
+        monkeypatch.setattr(Calibration, "load", lambda _path: calibration)
+        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
+        monkeypatch.setattr(
+            "openflight.iwr6843.monitor.tx_order_from_config", lambda _path: "normal"
+        )
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda event, payload: emitted.append((event, payload))
+        )
+        monkeypatch.setattr(server_module, "iwr6843_setup_poller", None)
+        assert server_module.init_iwr6843(
+            port="/dev/ttyUSB0",
+            config_path="snapshot.cfg",
+            calibration_path="cal.json",
+            output_dir=tmp_path,
+            trigger_pin=17,
+            tee_range_m=1.575,
+            net_range_m=4.6,
+            tx_order="auto",
+            capture_timeout_s=12.0,
+            ball_detector=mode,
+            setup_poll_s=0.5,
+        )
+        return submitted
+
+    def test_init_iwr6843_ball_detector_off_starts_no_poll(self, monkeypatch, tmp_path):
+        emitted = []
+        submitted = self._init_with_ball_detector(monkeypatch, tmp_path, "off", emitted)
+        try:
+            assert submitted == []
+            assert server_module.iwr6843_setup_poller is None
+            assert server_module.iwr6843_runtime_config["ball_detector"] == "off"
+            assert server_module._iwr6843_setup_status()["enabled"] is False
+        finally:
+            server_module.iwr6843_runtime = None
+
+    @pytest.mark.parametrize("mode, follow", [("on", False), ("follow", True)])
+    def test_init_iwr6843_ball_detector_enables_it_through_the_job_queue(
+        self, monkeypatch, tmp_path, mode, follow
+    ):
+        emitted = []
+        submitted = self._init_with_ball_detector(monkeypatch, tmp_path, mode, emitted)
+        try:
+            assert [name for name, _ in submitted] == ["ball-cfg"]
+            poller = server_module.iwr6843_setup_poller
+            assert poller is not None and not poller.running, "poll waits for ball cfg"
+            assert poller.interval_s == 0.5
+            configured = []
+            radar = SimpleNamespace(
+                configure_ball=lambda enable, fol: configured.append((enable, fol))
+            )
+            submitted[0][1](radar)
+            assert configured == [(True, follow)]
+            assert poller.running
+            assert server_module.iwr6843_runtime_config["ball_detector"] == mode
+            # A connecting client gets "no lock yet" until the first poll lands.
+            status = server_module._iwr6843_setup_status()
+            assert status["enabled"] is True and status["state"] == "off"
+            # The poll publishes over the socket as iwr_setup.
+            poller.poll(
+                SimpleNamespace(
+                    ball_status=lambda: (
+                        "ball state=locked follow=0 bin=34 ratio=8 confidence=0.9 delta=1 "
+                        "background=1 age=1 locks=1 releases=0 reason=none window=20+53\nDone\n"
+                    )
+                )
+            )
+            assert emitted[-1][0] == "iwr_setup" and emitted[-1][1]["label"] == "ideal"
+            assert server_module._iwr6843_setup_status() is poller.latest
+        finally:
+            server_module._stop_iwr6843_setup_poller()
+            server_module.iwr6843_runtime = None
+
+    def test_init_iwr6843_ball_detector_refused_by_firmware_reports_it_off(
+        self, monkeypatch, tmp_path
+    ):
+        emitted = []
+        submitted = self._init_with_ball_detector(monkeypatch, tmp_path, "on", emitted)
+        try:
+
+            def refuse(enable, follow):
+                del enable, follow
+                raise RuntimeError("ball cfg: not recognized")
+
+            submitted[0][1](SimpleNamespace(configure_ball=refuse))
+            assert not server_module.iwr6843_setup_poller.running
+            assert emitted[-1][0] == "iwr_setup"
+            assert (
+                emitted[-1][1]["enabled"] is False and "not recognized" in emitted[-1][1]["error"]
+            )
+        finally:
+            server_module._stop_iwr6843_setup_poller()
+            server_module.iwr6843_runtime = None
+
+    def test_init_iwr6843_rejects_an_unknown_ball_detector_mode(self, tmp_path):
+        with pytest.raises(ValueError, match="ball-detector"):
+            server_module.init_iwr6843(
+                port=None,
+                config_path="snapshot.cfg",
+                calibration_path="cal.json",
+                output_dir=tmp_path,
+                trigger_pin=17,
+                tee_range_m=1.575,
+                net_range_m=4.6,
+                tx_order="auto",
+                capture_timeout_s=12.0,
+                ball_detector="sometimes",
+            )
+
+    def test_get_iwr_setup_replies_with_the_latest_status(self, monkeypatch):
+        emitted = []
+        monkeypatch.setattr(
+            server_module.socketio, "emit", lambda event, payload: emitted.append((event, payload))
+        )
+        monkeypatch.setattr(server_module, "iwr6843_setup_poller", None)
+        server_module.handle_get_iwr_setup()
+        assert emitted == [("iwr_setup", emitted[0][1])]
+        assert emitted[0][1]["enabled"] is False and emitted[0][1]["state"] == "off"
+
+        latest = {"enabled": True, "state": "locked", "label": "far"}
+        monkeypatch.setattr(
+            server_module, "iwr6843_setup_poller", SimpleNamespace(latest=latest, running=True)
+        )
+        server_module.handle_get_iwr_setup()
+        assert emitted[-1] == ("iwr_setup", latest)
 
     def test_init_iwr6843_wires_horizontal_calibration_into_runtime(self, monkeypatch, tmp_path):
         """Horizontal calibration must reach IWR6843Runtime, not just be parsed.
@@ -890,6 +1042,156 @@ class TestIWR6843ShotIntegration:
         assert shot.experimental_club_path_status == "accepted"
         assert shot.experimental_attack_angle_deg == pytest.approx(-4.1)
         assert shot.experimental_attack_angle_status == "candidate_available"
+
+    @staticmethod
+    def _onboard_packet(verdict="valid", vertical=14.5, horizontal=-1.2, path=2.5, attack=-3.0):
+        from openflight.iwr6843 import firmware_host as fw
+        from openflight.iwr6843.shot_result import Measurement, ShotResultPacket
+
+        values = {
+            "ball_speed": 60.0,
+            "vertical_launch": vertical,
+            "horizontal_launch": horizontal,
+            "club_speed": 40.0,
+            "club_path": path,
+            "angle_of_attack": attack,
+            "spin_rate": None,
+            "spin_axis": None,
+            "impact_range": 1.6,
+        }
+        metrics = {
+            name: Measurement(
+                name=name,
+                value=values[name],
+                confidence=0.8 if values[name] is not None else 0.0,
+                measured=values[name] is not None and name != "impact_range",
+                radial_only=False,
+                implausible=False,
+                fallback=False,
+            )
+            for name in fw.RESULT_METRIC_NAMES
+        }
+        return ShotResultPacket(
+            version=1,
+            shot_id=4,
+            metrics=metrics,
+            quality=frozenset({"ball_locked", "impact_geometric"}),
+            impact_timestamp_us=23000,
+            verdict=verdict,
+            impact_source="geometry",
+            club_points=7,
+            ball_points=9,
+            smash=1.5,
+        )
+
+    def _onboard_shot(self, monkeypatch, onboard):
+        measurement = SimpleNamespace(
+            accepted=False,
+            status="rejected_track_quality",
+            to_dict=lambda: {"status": "rejected_track_quality"},
+        )
+        capture = SimpleNamespace(
+            trigger_timestamp=100.01,
+            path=None,
+            raw=b"raw",
+            dump_duration_s=4.5,
+            error=None,
+            valid=True,
+            sequence=1,
+            onboard_result=onboard,
+        )
+        runtime = FakeIWRRuntime(
+            process_shot=lambda **kwargs: SimpleNamespace(
+                capture=capture,
+                measurement=measurement,
+                club_path=None,
+                onboard=onboard,
+            )
+        )
+        monkeypatch.setattr(server_module, "iwr6843_runtime", runtime)
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: None)
+        monkeypatch.setattr(server_module, "debug_mode", False)
+        shot = Shot(
+            ball_speed_mph=100.0,
+            club_speed_mph=80.0,
+            timestamp=datetime.now(),
+            impact_timestamp=100.0,
+            club=ClubType.IRON_9,
+        )
+        server_module._process_iwr6843_angle(shot)
+        return shot
+
+    def test_onboard_result_rides_on_the_shot_but_is_not_applied_by_default(self, monkeypatch):
+        monkeypatch.setattr(server_module, "iwr6843_onboard_metrics", False)
+        shot = self._onboard_shot(monkeypatch, self._onboard_packet())
+
+        assert shot.iwr6843_onboard is not None
+        assert shot.iwr6843_onboard["verdict"] == "valid"
+        assert shot.iwr6843_onboard["metrics"]["ball_speed"]["label"] == "MEASURED"
+        assert shot.iwr6843_onboard["metrics"]["spin_rate"]["value"] is None
+        assert shot.launch_angle_vertical is None, "the host pipeline still owns the angles"
+        assert shot.launch_angle_horizontal is None
+        assert shot.experimental_club_path_deg is None
+        assert shot.ball_speed_mph == 100.0
+        assert shot.to_dict()["iwr6843_onboard"]["shot_id"] == 4
+
+    def test_onboard_metrics_flag_applies_usable_angles_and_keeps_ops_ball_speed(self, monkeypatch):
+        monkeypatch.setattr(server_module, "iwr6843_onboard_metrics", True)
+        shot = self._onboard_shot(monkeypatch, self._onboard_packet())
+
+        assert shot.launch_angle_vertical == pytest.approx(14.5)
+        assert shot.launch_angle_vertical_source == "radar_onboard"
+        assert shot.launch_angle_vertical_confidence == pytest.approx(0.8)
+        assert shot.angle_source == "radar"
+        assert shot.launch_angle_horizontal == pytest.approx(-1.2)
+        assert shot.launch_angle_horizontal_source == "radar_onboard"
+        assert shot.experimental_club_path_deg == pytest.approx(2.5)
+        assert shot.experimental_club_path_status == "onboard"
+        assert shot.experimental_attack_angle_deg == pytest.approx(-3.0)
+        assert shot.experimental_attack_angle_status == "onboard"
+        assert shot.ball_speed_mph == 100.0, "OPS ball speed is never overridden"
+
+    def test_onboard_metrics_flag_skips_invalid_results_and_unusable_metrics(self, monkeypatch):
+        monkeypatch.setattr(server_module, "iwr6843_onboard_metrics", True)
+        shot = self._onboard_shot(monkeypatch, self._onboard_packet(verdict="invalid"))
+        assert shot.launch_angle_vertical is None
+        assert shot.iwr6843_onboard["verdict"] == "invalid"
+
+        partial = self._onboard_packet(verdict="partial", vertical=None, path=None)
+        shot = self._onboard_shot(monkeypatch, partial)
+        assert shot.launch_angle_vertical is None
+        assert shot.launch_angle_horizontal == pytest.approx(-1.2)
+        assert shot.experimental_club_path_deg is None
+        assert shot.experimental_attack_angle_deg == pytest.approx(-3.0)
+
+    def test_onboard_result_writes_an_ops_comparison_to_the_session_log(self, monkeypatch):
+        logged = []
+        session = SimpleNamespace(
+            stats={"shots_detected": 1},
+            log_iwr6843_capture=lambda **kwargs: None,
+            log_iwr_ops_comparison=logged.append,
+        )
+        monkeypatch.setattr(server_module, "iwr6843_onboard_metrics", False)
+        monkeypatch.setattr(
+            server_module, "iwr6843_runtime_config", {"capture_format": "adaptive16"}
+        )
+        shot = self._onboard_shot(monkeypatch, self._onboard_packet())
+        # _onboard_shot patched the logger to None; run once more with ours.
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: session)
+        server_module._process_iwr6843_angle(shot)
+
+        assert len(logged) == 1
+        record = logged[0]
+        assert record["ops_ball_speed_mph"] == 100.0 and record["capture_format"] == "adaptive16"
+        assert record["iwr_ball_speed_mph"] == pytest.approx(60.0 * 2.23694)
+        assert record["ball_delta_mph"] == pytest.approx(60.0 * 2.23694 - 100.0)
+        assert record["verdict"] == "valid" and record["iwr_club_confidence"] == pytest.approx(0.8)
+
+    def test_shot_without_onboard_result_carries_none(self, monkeypatch):
+        monkeypatch.setattr(server_module, "iwr6843_onboard_metrics", True)
+        shot = self._onboard_shot(monkeypatch, None)
+        assert shot.iwr6843_onboard is None
+        assert shot.to_dict()["iwr6843_onboard"] is None
 
     def test_debug_mode_exposes_club_rejection_without_candidate(self, monkeypatch):
         measurement = SimpleNamespace(

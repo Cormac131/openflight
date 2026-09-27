@@ -61,12 +61,18 @@ typedef struct {
     float    chirpPeriodS;       /* TDM tau */
 } l3_angle_snapshot_t;
 
+/* Peak-to-mean ratio at which the elevation confidence reaches 1: an
+ * 8-element Bartlett beam on a single clean source peaks near 8x its mean. */
+#define L3_ANGLE_PEAK_RATIO_FULL 6.0F
+
 typedef struct {
     float   azimuthRad;
     float   elevationRad;
     float   azimuthCoherence;    /* 0..1, |coherent mean| of the baseline phasor */
     float   elevationPeakRatio;  /* beamformer peak over mean power; 1 is flat */
     float   chirpPhaseRad;       /* TDM phase per chirp used for the correction */
+    float   confidence;          /* 0..1: the elevation peak's sharpness, and the
+                                  * azimuth coherence when azimuth was measured */
     uint8_t azimuthValid;
     uint8_t elevationValid;
 } l3_angle_obs_t;
@@ -85,7 +91,10 @@ float l3_angle_bartlett(const l3_cpx_t *elements, uint32_t n, float *peakRatio);
  * Azimuth needs three TX. */
 int32_t l3_angle_estimate(const l3_radar_cal_t *cal, const l3_angle_snapshot_t *snapshot,
                           l3_angle_obs_t *out);
-/* "angle az=1.20 el=-3.40 coh=0.91 peak=6.2 psi=0.35 valid=ae" */
+/* 0..1 from a peak ratio (1 flat .. L3_ANGLE_PEAK_RATIO_FULL) and, when the
+ * azimuth was measured, its coherence: the smaller of the two. */
+float l3_angle_confidence(float elevationPeakRatio, float azimuthCoherence, uint8_t azimuthValid);
+/* "angle az=1.20 el=-3.40 coh=0.91 peak=6.2 psi=0.35 conf=0.84 valid=ae" */
 int32_t l3_angle_format(const l3_angle_obs_t *obs, char *out, uint32_t cap);
 
 #endif /* L3_ANGLE_H */

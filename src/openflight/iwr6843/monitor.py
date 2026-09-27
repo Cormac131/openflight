@@ -253,6 +253,10 @@ class IWR6843Capture:
     temperature_report: dict[str, int] | None = None
     noise_power: float | None = None
     onboard_track: OnboardTrack | None = None
+    # The firmware's own shot result (shot_result.ShotResultPacket), read before
+    # the readback rearms the ring; None on firmware without it or without a
+    # RESULT this shot.
+    onboard_result: object | None = None
 
     @property
     def valid(self) -> bool:
@@ -340,10 +344,18 @@ class IWR6843CaptureMonitor:
         if not self.config_path.is_file():
             raise FileNotFoundError(f"IWR6843 config not found: {self.config_path}")
         if self.watch_self_trigger:
-            # The clubhead detector reads IQ16 residuals.
+            # The detect path reads IQ8 rings too (int8 times the frame scale)
+            # since the ring readers took a component width; older firmware
+            # would score garbage, so say which format is in use.
             capture_format = read_capture_config(self.config_path).capture_format
             if capture_format == "iq8":
-                raise ValueError("IQ8 capture does not support the IWR6843 self-trigger")
+                logger.info("[IWR6843] Self-trigger on an IQ8 ring: needs firmware with IQ8 detect")
+            elif capture_format in ("compact16", "adaptive16"):
+                logger.info(
+                    "[IWR6843] %s capture: the detect path reads the IQ16 scratch and L3 keeps "
+                    "the retained windows; needs firmware with the compact formats",
+                    capture_format,
+                )
         if self.save_dumps:
             self.output_dir.mkdir(parents=True, exist_ok=True)
         configured = False
@@ -561,6 +573,28 @@ class IWR6843CaptureMonitor:
                 time.sleep(_LISTENER_ERROR_BACKOFF_S)
         return _STOP
 
+    def _read_onboard_result(self):
+        """The firmware's result packet for this shot, or None.
+
+        Read before the readback because l3track/l3sparse rearm the ring at
+        the end, which resets the result. A failure here never costs the
+        capture: it is logged and the shot goes on without onboard metrics.
+        """
+        try:
+            result = self.radar.shot_result()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("[IWR6843] Onboard result unreadable: %s", exc)
+            return None
+        if result is not None:
+            logger.info(
+                "[IWR6843] Onboard result: shot %d %s, %d club / %d ball points",
+                result.shot_id,
+                result.verdict,
+                result.club_points,
+                result.ball_points,
+            )
+        return result
+
     def _read_capture(self) -> tuple[bytes, float | None, OnboardTrack | None]:
         """Read one frozen capture, preferring the least serial traffic.
 
@@ -637,6 +671,7 @@ class IWR6843CaptureMonitor:
         metadata = None
         noise_power = None
         onboard_track = None
+        onboard_result = self._read_onboard_result() if self.watch_self_trigger else None
         try:
             logger.info("[IWR6843] Trigger #%d: reading track samples", sequence)
             raw, noise_power, onboard_track = self._read_capture()
@@ -662,6 +697,7 @@ class IWR6843CaptureMonitor:
             ),
             noise_power=noise_power,
             onboard_track=onboard_track,
+            onboard_result=onboard_result,
         )
         with self._condition:
             self._capture_active = False

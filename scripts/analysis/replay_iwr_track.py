@@ -32,6 +32,7 @@ from openflight.iwr6843.firmware_replay import (
     DEFAULT_TRACK_FRAMES,
     ReplayConfig,
     ReplayResult,
+    RetainReplay,
     format_report,
     recording_configs,
     recording_expectations,
@@ -72,6 +73,12 @@ def _parser() -> argparse.ArgumentParser:
         help="peak (default) or energy",
     )
     parser.add_argument(
+        "--subbin",
+        choices=sorted(fw.SUBBIN_NAMES),
+        default=argparse.SUPPRESS,
+        help="sub-bin range of a target: parabolic (default) or centroid",
+    )
+    parser.add_argument(
         "--loop-period-us",
         type=float,
         default=argparse.SUPPRESS,
@@ -82,6 +89,20 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         default=argparse.SUPPRESS,
         help="ignore frames after the trigger fires, as the board does",
+    )
+    parser.add_argument(
+        "--retain",
+        nargs="?",
+        const="16/24/16/7",
+        default=None,
+        metavar="PRE/IMPACT/POST/IMPACTFRAMES",
+        help="mirror adaptive16 retention with these slot widths (bins) and impact frame count "
+        "(default 16/24/16/7) and report how many appended points the kept windows held",
+    )
+    parser.add_argument(
+        "--retain-centred",
+        action="store_true",
+        help="with --retain: compact16's centred windows instead of the state-aware policy",
     )
     parser.add_argument(
         "--post-from",
@@ -98,12 +119,34 @@ def _overrides(args: argparse.Namespace) -> dict:
     """ReplayConfig fields the command line set explicitly."""
     chosen = {
         key: getattr(args, key)
-        for key in ("dest_bin", "snr", "track_frames", "stat", "stop_at_fire", "post_from_frame")
+        for key in (
+            "dest_bin",
+            "snr",
+            "track_frames",
+            "stat",
+            "subbin",
+            "stop_at_fire",
+            "post_from_frame",
+        )
         if hasattr(args, key)
     }
     if hasattr(args, "loop_period_us"):
         chosen["loop_period_s"] = args.loop_period_us * 1e-6
     chosen["fft_size"] = args.fft_size
+    if args.retain is not None:
+        try:
+            pre, impact, post, impact_frames = (int(v) for v in args.retain.split("/"))
+        except ValueError as error:
+            raise SystemExit(
+                f"--retain wants PRE/IMPACT/POST/IMPACTFRAMES, got {args.retain!r}"
+            ) from error
+        chosen["retain"] = RetainReplay(
+            pre_bins=pre,
+            impact_bins=impact,
+            post_bins=post,
+            impact_frames=impact_frames,
+            enabled=not args.retain_centred,
+        )
     return chosen
 
 
@@ -136,7 +179,17 @@ def _summary_line(name: str, result: ReplayResult) -> str:
         f"run={result.longest_run:3d} acq={result.acquisitions:2d} "
         f"coast={result.track_counters['coasted']:2d} drop={result.track_counters['dropped']:2d} "
         f"approach={100.0 * result.approach_fraction:3.0f}% speed={result.speed_mps:5.1f}"
+        + _retain_column(result)
     )
+
+
+def _retain_column(result: ReplayResult) -> str:
+    if not result.retain_windows:
+        return ""
+    covered, judged = result.retain_coverage
+    kept, processed = result.retain_bins_saved
+    share = f"{100.0 * kept / processed:3.0f}%" if processed else "  -"
+    return f" kept={covered:2d}/{judged:2d} bins={share}"
 
 
 def main(argv: list[str] | None = None) -> int:

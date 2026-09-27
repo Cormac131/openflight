@@ -21,7 +21,7 @@ from __future__ import annotations
 import ctypes
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -115,6 +115,28 @@ def channel_snapshot(
     return snap
 
 
+def static_channel_snapshot(
+    cube: np.ndarray, frame: int, local_bin: int, n_tx: int, *, chirp_period_s: float
+) -> fw.AngleSnapshot:
+    """``l3_channelSnapshotStatic``: the raw samples of every channel at one bin
+    summed over the loops, for a stationary target such as the ball on its tee."""
+    chirps, n_rx = cube.shape[1], cube.shape[2]
+    loops = chirps // n_tx
+    summed = cube[frame, :, :, local_bin].reshape(loops, n_tx, n_rx).sum(axis=0)
+    snap = fw.AngleSnapshot()
+    _default_library().l3_angle_snapshot_init(ctypes.byref(snap), n_tx, n_rx)
+    for tx in range(snap.ntx):
+        for rx in range(snap.nrx):
+            value = summed[tx, rx]
+            snap.channel[tx * snap.nrx + rx] = fw.Cpx(float(value.real), float(value.imag))
+    snap.lag1PhaseRad = 0.0
+    snap.radialVelocityMps = 0.0
+    snap.chirpPeriodS = chirp_period_s
+    return snap
+
+
+BALL_ANGLE_MIN_PEAK_RATIO = 3.0  # L3_BALL_ANGLE_MIN_PEAK_RATIO
+
 _LIBRARY: ctypes.CDLL | None = None
 
 
@@ -154,6 +176,39 @@ def frame_timestamps_us(meta: dict) -> tuple[int, ...]:
 
 
 @dataclass(frozen=True)
+class RetainReplay:
+    """The adaptive16 retention plan to mirror: slot widths per phase and the policy."""
+
+    pre_bins: int = 16
+    impact_bins: int = 24
+    post_bins: int = 16
+    impact_frames: int = 7  # first post frames stored at impact_bins
+    enabled: bool = True  # False: compact16's centred windows
+    approach_bins: int | None = None  # l3_retain_cfg_t overrides; None keeps the defaults
+    approach_margin_bins: int | None = None
+    impact_bias_bins: int | None = None
+    ball_search_lead_bins: int | None = None
+    ball_follow_lead_bins: int | None = None
+    spin_frames: int | None = None
+
+
+@dataclass(frozen=True)
+class RetainSummary:
+    """The window one frame would have kept, and whether the frame's point fell inside it."""
+
+    start: int
+    bins: int
+    priority: str
+    why: str
+    point_bin: float | None  # the club or ball point appended this frame
+    covered: bool | None  # None when no point was appended
+
+    @property
+    def end(self) -> int:
+        return self.start + self.bins
+
+
+@dataclass(frozen=True)
 class ReplayConfig:
     """What ``triggerCfg`` and the capture profile would have told the board."""
 
@@ -161,6 +216,7 @@ class ReplayConfig:
     snr: float = DEFAULT_SNR
     track_frames: int = DEFAULT_TRACK_FRAMES
     stat: str = "peak"  # "peak" or "energy"
+    subbin: str = "parabolic"  # how targets read their sub-bin range: "parabolic" or "centroid"
     dest_bin: int | None = None  # a locked ball's global bin; None uses the tee
     loop_period_s: float | None = None  # None: n_tx x the shipped chirp period
     fft_size: int = DEFAULT_FFT_SIZE
@@ -177,10 +233,18 @@ class ReplayConfig:
     # Frames after the trigger fires go to the ball tracker, as the board's
     # post movie does; a locked ball at dest_bin makes the shot require one.
     post_impact: bool = True
+    # With a locked ball (dest_bin), read its direction from the static return
+    # in the first frame, as the firmware does from the ball detector's lock,
+    # so the destination is a 3D position rather than a point on boresight.
+    ball_angles: bool = True
     # Treat this frame as the first post-impact frame whatever the gate does:
     # for captures the sound trigger froze, the plan's first post slot IS
     # impact, so the ball tracker can be judged on its own. None: the gate.
     post_from_frame: int | None = None
+    # Retention mirror (l3_retain.c): the IQ16 bins each frame would have
+    # kept in an adaptive16 capture, judged against the points the trackers
+    # appended. None replays without it.
+    retain: RetainReplay | None = None
 
     @property
     def destination(self) -> int:
@@ -206,6 +270,7 @@ class AngleSummary:
     elevation_deg: float | None
     azimuth_coherence: float
     elevation_peak_ratio: float
+    confidence: float = 0.0  # l3_angle_confidence: 0..1
 
 
 @dataclass(frozen=True)
@@ -256,6 +321,7 @@ class ReplayFrame:
     shot_state: str = "waiting_for_ball"
     ball_why: str = "none"  # the ball tracker's verdict on a post-impact frame
     ball_bin: float | None = None  # the ball point appended this frame
+    retain: RetainSummary | None = None  # the retention mirror's window for this frame
 
 
 @dataclass(frozen=True)
@@ -284,6 +350,7 @@ class ReplayResult:
     impact_status: str  # l3_impact_format at the end of the replay
     launch: LaunchSummary | None  # from the ball tracker, when a flight was confirmed
     ball_points: list[PointSummary]
+    ball_angle: AngleSummary | None  # the locked ball's measured direction, when trusted
     shot_status: str  # l3_shot_format at the end
     ball_status: str  # l3_ball_track_format_status at the end
     track_counters: dict[str, int]
@@ -298,6 +365,23 @@ class ReplayResult:
     impact: fw.Impact = field(repr=False)
     shot: fw.Shot = field(repr=False)
     ball_track: fw.BallTrack = field(repr=False)
+
+    @property
+    def retain_windows(self) -> list[RetainSummary]:
+        return [frame.retain for frame in self.frames if frame.retain is not None]
+
+    @property
+    def retain_coverage(self) -> tuple[int, int]:
+        """(points inside their frame's retained window, points appended) over the replay."""
+        judged = [w for w in self.retain_windows if w.covered is not None]
+        return sum(1 for w in judged if w.covered), len(judged)
+
+    @property
+    def retain_bins_saved(self) -> tuple[int, int]:
+        """(bins retained, bins processed) over the frames the mirror judged."""
+        kept = sum(w.bins for w in self.retain_windows)
+        processed = sum(frame.count for frame in self.frames if frame.retain is not None)
+        return kept, processed
 
     @property
     def acquisitions(self) -> int:
@@ -357,6 +441,7 @@ def _angle_summary(obs: fw.AngleObs) -> AngleSummary:
         elevation_deg=math.degrees(obs.elevationRad) if obs.elevationValid else None,
         azimuth_coherence=float(obs.azimuthCoherence),
         elevation_peak_ratio=float(obs.elevationPeakRatio),
+        confidence=float(obs.confidence),
     )
 
 
@@ -447,6 +532,94 @@ def _point_summary(point: fw.TrackPoint) -> PointSummary:
     )
 
 
+def _retain_cfg(lib: ctypes.CDLL, retain: RetainReplay) -> fw.RetainCfg:
+    cfg = fw.RetainCfg()
+    lib.l3_retain_cfg_defaults(ctypes.byref(cfg))
+    cfg.enabled = 1 if retain.enabled else 0
+    for field_name, value in (
+        ("approachBins", retain.approach_bins),
+        ("approachMarginBins", retain.approach_margin_bins),
+        ("impactBiasBins", retain.impact_bias_bins),
+        ("ballSearchLeadBins", retain.ball_search_lead_bins),
+        ("ballFollowLeadBins", retain.ball_follow_lead_bins),
+        ("spinFrames", retain.spin_frames),
+    ):
+        if value is not None:
+            setattr(cfg, field_name, value)
+    if lib.l3_retain_cfg_check(ctypes.byref(cfg)) != 0:
+        raise ValueError(f"the firmware rejects this retention configuration: {retain}")
+    return cfg
+
+
+def _retain_window(  # pylint: disable=too-many-arguments
+    lib: ctypes.CDLL,
+    cfg: fw.RetainCfg,
+    *,
+    shot: fw.Shot,
+    locked: bool,
+    destination: int,
+    track: fw.ClubTrack,
+    ball_track: fw.BallTrack,
+    post: bool,
+    post_index: int,
+    process_start: int,
+    process_bins: int,
+    retain_bins: int,
+) -> fw.RetainWindow:
+    """``l3_retain_window`` for the coming frame from the trackers' predictions,
+    as the firmware's rearm task would call it before the frame lands."""
+    state = fw.RetainState()
+    state.shotState = shot.state
+    state.ballLocked = 1 if locked else 0
+    state.ballBin = float(destination)
+    state.clubActive = 1 if track.active else 0
+    state.clubBin = lib.l3_retain_predict(track.lastBin, track.velocityBinsPerFrame)
+    state.postFrame = 1 if post else 0
+    state.postIndex = post_index
+    state.ballTrackConfirmed = 1 if ball_track.confirmed else 0
+    core = ball_track.core
+    state.ballTrackBin = lib.l3_retain_predict(core.lastBin, core.velocityBinsPerFrame)
+    out = fw.RetainWindow()
+    lib.l3_retain_window(
+        ctypes.byref(cfg),
+        ctypes.byref(state),
+        process_start,
+        process_bins,
+        retain_bins,
+        ctypes.byref(out),
+    )
+    return out
+
+
+def _attach_retention(
+    frames: list[ReplayFrame], windows: dict[int, fw.RetainWindow]
+) -> list[ReplayFrame]:
+    """Pair each frame with the window decided for it and the point it appended."""
+    out = []
+    for frame in frames:
+        window = windows.get(frame.frame)
+        if window is None:
+            out.append(frame)
+            continue
+        point_bin = frame.ball_bin if frame.ball_bin is not None else frame.track_bin
+        out.append(replace(frame, retain=_retain_summary(window, point_bin)))
+    return out
+
+
+def _retain_summary(window: fw.RetainWindow, point_bin: float | None) -> RetainSummary:
+    covered = None
+    if point_bin is not None:
+        covered = window.start <= point_bin < window.start + window.bins
+    return RetainSummary(
+        start=int(window.start),
+        bins=int(window.bins),
+        priority=fw.RETAIN_PRIORITY_NAMES[window.priority],
+        why=fw.RETAIN_WHY_NAMES[window.why],
+        point_bin=point_bin,
+        covered=covered,
+    )
+
+
 def replay_dump(
     raw: bytes, config: ReplayConfig, *, lib: ctypes.CDLL | None = None
 ) -> ReplayResult:
@@ -463,6 +636,8 @@ def replay_dump(
         raise ValueError("replay needs a range-FFT snapshot dump, not raw ADC samples")
     if config.stat not in fw.STAT_NAMES:
         raise ValueError(f"stat must be one of {sorted(fw.STAT_NAMES)}, got {config.stat!r}")
+    if config.subbin not in fw.SUBBIN_NAMES:
+        raise ValueError(f"subbin must be one of {sorted(fw.SUBBIN_NAMES)}, got {config.subbin!r}")
     n_tx = int(meta["n_tx"])
     loop_period_s = config.loop_period_s or same_tx_loop_period_s(n_tx)
     timestamps = frame_timestamps_us(meta)
@@ -512,8 +687,31 @@ def replay_dump(
     launch = fw.Launch()
     ball_points: list[PointSummary] = []
     ball_floor = ctypes.c_float(0.0)  # the post window's own floor, as gBallFloor
+    # The destination's direction: the locked ball's static return, else boresight.
+    ball_azimuth = 0.0
+    ball_elevation = 0.0
+    ball_angle: AngleSummary | None = None
+    if config.dest_bin is not None and config.ball_angles and meta["n_frames"] > 0:
+        first_start, first_count = frame_window(meta, 0)
+        if first_start <= config.destination < first_start + first_count:
+            static_obs = fw.AngleObs()
+            static_snap = static_channel_snapshot(
+                cube, 0, config.destination - first_start, n_tx, chirp_period_s=chirp_period_s
+            )
+            if (
+                lib.l3_angle_estimate(
+                    ctypes.byref(cal), ctypes.byref(static_snap), ctypes.byref(static_obs)
+                )
+                and static_obs.elevationValid
+                and static_obs.elevationPeakRatio >= BALL_ANGLE_MIN_PEAK_RATIO
+            ):
+                ball_azimuth = float(static_obs.azimuthRad) if static_obs.azimuthValid else 0.0
+                ball_elevation = float(static_obs.elevationRad)
+                ball_angle = _angle_summary(static_obs)
 
-    params = fw.ObsParams(trig_cfg.stat, trig_cfg.snr, loop_period_s)
+    params = fw.ObsParams(
+        trig_cfg.stat, trig_cfg.snr, loop_period_s, fw.SUBBIN_NAMES[config.subbin]
+    )
     targets = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
     first_local = ctypes.c_uint32()
     count = ctypes.c_uint32()
@@ -523,6 +721,9 @@ def replay_dump(
     points: list[PointSummary] = []
     fired_frame: int | None = None
     geometric_frame: int | None = None
+    retain_cfg = _retain_cfg(lib, config.retain) if config.retain is not None else None
+    retain_windows: dict[int, fw.RetainWindow] = {}
+    post_index = 0
     for frame in range(int(meta["n_frames"])):
         ended = fired_frame is not None or (config.impact_armed and geometric_frame is not None)
         forced = config.post_from_frame is not None and frame >= config.post_from_frame
@@ -530,6 +731,36 @@ def replay_dump(
             break
         window_start, window_bins = frame_window(meta, frame)
         timestamp_us = timestamps[frame]
+        retain_window = None
+        if retain_cfg is not None and config.retain is not None:
+            # Decided before the frame lands, from the previous frame's state,
+            # as the rearm task decides where the next slot looks.
+            post = (ended or forced) and config.post_impact
+            if post:
+                retain_bins = (
+                    config.retain.impact_bins
+                    if post_index < config.retain.impact_frames
+                    else config.retain.post_bins
+                )
+            else:
+                retain_bins = config.retain.pre_bins
+            retain_window = _retain_window(
+                lib,
+                retain_cfg,
+                shot=shot,
+                locked=config.dest_bin is not None,
+                destination=destination,
+                track=track,
+                ball_track=ball_track,
+                post=post,
+                post_index=post_index,
+                process_start=window_start,
+                process_bins=window_bins,
+                retain_bins=retain_bins,
+            )
+            retain_windows[frame] = retain_window
+            if post:
+                post_index += 1
         if forced and frame == config.post_from_frame:
             # The recorded freeze is the impact: (re)arm the ball tracker at
             # the destination as IMPACT would have, whatever the gate did
@@ -537,7 +768,11 @@ def replay_dump(
             # belong to the gate's early fire, not to the flight.
             ball_points.clear()
             lib.l3_frames_observe(
-                ctypes.byref(cal), destination * bin_width_m, 0.0, 0.0, ctypes.byref(ball_position)
+                ctypes.byref(cal),
+                destination * bin_width_m,
+                ball_azimuth,
+                ball_elevation,
+                ctypes.byref(ball_position),
             )
             lib.l3_ball_track_arm(
                 ctypes.byref(ball_track),
@@ -653,7 +888,11 @@ def replay_dump(
             track_bin = float(newest.rangeBin)
         lib.l3_track_delivery(ctypes.byref(track), 8, ctypes.byref(delivery))
         lib.l3_frames_observe(
-            ctypes.byref(cal), destination * bin_width_m, 0.0, 0.0, ctypes.byref(ball_position)
+            ctypes.byref(cal),
+            destination * bin_width_m,
+            ball_azimuth,
+            ball_elevation,
+            ctypes.byref(ball_position),
         )
         geometric = lib.l3_impact_update(
             ctypes.byref(impact), ctypes.byref(delivery), ctypes.byref(ball_position), 1
@@ -705,6 +944,8 @@ def replay_dump(
             )
         )
 
+    if retain_cfg is not None:
+        frames = _attach_retention(frames, retain_windows)
     slope = ctypes.c_float()
     residual = ctypes.c_float()
     used = lib.l3_track_fit(
@@ -721,6 +962,7 @@ def replay_dump(
         impact_status=fw.c_text(lib.l3_impact_format, ctypes.byref(impact), cap=240),
         launch=_launch_summary(launch),
         ball_points=ball_points,
+        ball_angle=ball_angle,
         shot_status=fw.c_text(lib.l3_shot_format, ctypes.byref(shot), cap=240),
         ball_status=fw.c_text(lib.l3_ball_track_format_status, ctypes.byref(ball_track), cap=240),
         track_counters={name: int(track.counters[i]) for i, name in enumerate(fw.TRACK_WHY_NAMES)},
@@ -764,7 +1006,7 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
     the launch fit and the shot machine's post-impact transitions."""
     count = min(window_bins, fw.TRIG_MAX_BINS)
     obs = bin_observations(cube, frame, 0, count, n_tx)
-    ball_params = fw.ObsParams(params.stat, ball_track.cfg.snr, params.loopPeriodS)
+    ball_params = fw.ObsParams(params.stat, ball_track.cfg.snr, params.loopPeriodS, params.subBin)
     lib.l3_obs_floor_update(ctypes.byref(ball_floor), params.stat, obs, count, FLOOR_SHIFT)
     floor = ball_floor.value
     found = lib.l3_obs_extract(
@@ -787,10 +1029,8 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
         newest = fw.TrackPoint()
         core = ball_track.core
         lib.l3_track_point(ctypes.byref(core), core.count - 1, ctypes.byref(newest))
-        if core.count > 1:
-            hit = next(
-                (targets[i] for i in range(found) if targets[i].rangeBin == newest.rangeBin), None
-            )
+        if core.count > 1 and ball_track.lastTargetIndex < found:
+            hit = targets[ball_track.lastTargetIndex]
             if hit is not None:
                 obs_angle, flags = _estimate_angles(
                     lib,
@@ -1005,8 +1245,19 @@ def _point_angles(result: ReplayResult, point: PointSummary) -> str:
         if frame.frame == point.frame and frame.angle is not None:
             az = "-" if frame.angle.azimuth_deg is None else f"{frame.angle.azimuth_deg:+.1f}"
             el = "-" if frame.angle.elevation_deg is None else f"{frame.angle.elevation_deg:+.1f}"
-            return f" az={az} el={el}"
+            return f" az={az} el={el} aconf={frame.angle.confidence:.2f}"
     return ""
+
+
+def _ball_angle_line(result: ReplayResult) -> str:
+    angle = result.ball_angle
+    if angle is None:
+        return (
+            "ball direction: boresight (no locked ball, or its static return did not stand clear)"
+        )
+    az = "-" if angle.azimuth_deg is None else f"{angle.azimuth_deg:+.1f} deg"
+    el = "-" if angle.elevation_deg is None else f"{angle.elevation_deg:+.1f} deg"
+    return f"ball direction: az {az}, el {el} (peak ratio {angle.elevation_peak_ratio:.1f})"
 
 
 def _launch_line(result: ReplayResult) -> str:
@@ -1019,6 +1270,26 @@ def _launch_line(result: ReplayResult) -> str:
         f"launch: {launch.points} points, ball speed {launch.speed_mps:.1f} m/s "
         f"(radial {launch.radial_speed_mps:.1f}), hla {hla}, vla {vla}, "
         f"residual {1000 * launch.residual_m:.1f} mm, confidence {launch.confidence:.2f}"
+    )
+
+
+def _retention_line(result: ReplayResult) -> str:
+    covered, judged = result.retain_coverage
+    kept, processed = result.retain_bins_saved
+    reasons: dict[str, int] = {}
+    for window in result.retain_windows:
+        reasons[window.why] = reasons.get(window.why, 0) + 1
+    why = " ".join(f"{name}={count}" for name, count in sorted(reasons.items()))
+    share = f"{100.0 * kept / processed:.0f}%" if processed else "-"
+    missed = [
+        f"{w.why}@{w.point_bin:.1f}!in[{w.start},{w.end})"
+        for w in result.retain_windows
+        if w.covered is False
+    ]
+    tail = f"; missed {', '.join(missed[:4])}" if missed else ""
+    return (
+        f"retention: {covered}/{judged} points inside the kept window, "
+        f"{kept}/{processed} bins kept ({share}); {why}{tail}"
     )
 
 
@@ -1036,9 +1307,12 @@ def format_report(result: ReplayResult, *, name: str = "", points: bool = False)
         "  " + _delivery_line(result),
         f"  {result.impact_status}",
         "  " + _launch_line(result),
+        "  " + _ball_angle_line(result),
         f"  {result.shot_status}",
         f"  {result.ball_status}",
     ]
+    if result.retain_windows:
+        lines.append("  " + _retention_line(result))
     if points:
         distance = result.config.destination
         for point in result.points:
@@ -1073,10 +1347,13 @@ __all__ = [
     "ReplayConfig",
     "ReplayFrame",
     "ReplayResult",
+    "RetainReplay",
+    "RetainSummary",
     "TargetSummary",
     "bin_observations",
     "channel_snapshot",
     "format_report",
+    "static_channel_snapshot",
     "frame_timestamps_us",
     "frame_window",
     "recording_configs",

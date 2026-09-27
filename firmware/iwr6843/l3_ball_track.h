@@ -63,6 +63,8 @@ typedef struct {
     uint32_t  impactTimestampUs;
     float     originBin;          /* global bin of the ball at impact */
     l3_vec3_t origin;             /* golf frame */
+    uint32_t  lastTargetIndex;    /* index into the last update's targets that was
+                                   * appended, L3_TRACK_NO_TARGET when none */
     uint32_t  counters[L3_BALL_TRACK_WHY_COUNT];
 } l3_ball_track_t;
 

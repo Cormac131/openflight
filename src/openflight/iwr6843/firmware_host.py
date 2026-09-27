@@ -37,6 +37,9 @@ HOST_SOURCES = (
     "l3_result.c",
     "l3_profile.c",
     "l3_adaptive.c",
+    "l3_iq8.c",
+    "l3_retain.c",
+    "l3_iq16_stats.c",
 )
 
 # l3_observation.h
@@ -46,6 +49,8 @@ OBS_WAVELENGTH_M = 0.00484
 OBS_FLOOR_MIN = 1.0
 STAT_ENERGY, STAT_PEAK = 0, 1
 STAT_NAMES = {"energy": STAT_ENERGY, "peak": STAT_PEAK}
+SUBBIN_CENTROID, SUBBIN_PARABOLIC = 0, 1
+SUBBIN_NAMES = {"centroid": SUBBIN_CENTROID, "parabolic": SUBBIN_PARABOLIC}
 
 # l3_trigger.h
 TRIG_MAX_BINS = 64
@@ -136,6 +141,23 @@ QUALITY_FLAGS = {
     "geometric_impact": 1024,
 }
 
+# l3_iq8.h
+IQ8_PATH_CPU, IQ8_PATH_EDMA, IQ8_PATH_DUMP = 0, 1, 2
+IQ8_PATH_NAMES = {"cpu": IQ8_PATH_CPU, "edma": IQ8_PATH_EDMA, "dump": IQ8_PATH_DUMP}
+
+# l3_retain.h
+RETAIN_PRIORITY_NAMES = ("low", "track", "ball", "impact", "spin")
+RETAIN_WHY_NAMES = (
+    "centred",
+    "tee",
+    "ball",
+    "club",
+    "approach",
+    "impact",
+    "ballsearch",
+    "ballfollow",
+)
+
 # l3_profile.h
 PROFILE_STAGE_NAMES = (
     "residual",
@@ -169,7 +191,12 @@ class BinObs(ctypes.Structure):
 class ObsParams(ctypes.Structure):
     """``l3_obs_params_t``."""
 
-    _fields_ = [("stat", ctypes.c_uint32), ("snr", ctypes.c_float), ("loopPeriodS", ctypes.c_float)]
+    _fields_ = [
+        ("stat", ctypes.c_uint32),
+        ("snr", ctypes.c_float),
+        ("loopPeriodS", ctypes.c_float),
+        ("subBin", ctypes.c_uint32),
+    ]
 
 
 class TargetObs(ctypes.Structure):
@@ -257,6 +284,7 @@ class AngleObs(ctypes.Structure):
         ("azimuthCoherence", ctypes.c_float),
         ("elevationPeakRatio", ctypes.c_float),
         ("chirpPhaseRad", ctypes.c_float),
+        ("confidence", ctypes.c_float),
         ("azimuthValid", ctypes.c_uint8),
         ("elevationValid", ctypes.c_uint8),
     ]
@@ -525,6 +553,7 @@ class BallTrack(ctypes.Structure):
         ("impactTimestampUs", ctypes.c_uint32),
         ("originBin", ctypes.c_float),
         ("origin", Vec3),
+        ("lastTargetIndex", ctypes.c_uint32),
         ("counters", ctypes.c_uint32 * len(BALL_TRACK_WHY_NAMES)),
     ]
 
@@ -608,6 +637,145 @@ class AdaptiveCfg(ctypes.Structure):
     ]
 
 
+class Iq8Mode(ctypes.Structure):
+    """l3_iq8_mode_t"""
+
+    _fields_ = [
+        ("path", ctypes.c_uint8),
+        ("hwaShift", ctypes.c_uint8),
+        ("hwaRounding", ctypes.c_uint8),
+        ("sparseStride", ctypes.c_uint8),
+    ]
+
+
+class Iq16ChannelStats(ctypes.Structure):
+    """l3_iq16_channel_stats_t"""
+
+    _fields_ = [
+        ("loops", ctypes.c_uint32),
+        ("sumIm", ctypes.c_int32),
+        ("sumRe", ctypes.c_int32),
+        ("energy", ctypes.c_int64),
+        ("loopPower", ctypes.c_int64 * 16),
+        ("r1Re", ctypes.c_int64),
+        ("r1Im", ctypes.c_int64),
+    ]
+
+
+class Iq16BinStats(ctypes.Structure):
+    """l3_iq16_bin_stats_t"""
+
+    _fields_ = [
+        ("loops", ctypes.c_uint32),
+        ("channels", ctypes.c_uint32),
+        ("energy", ctypes.c_int64),
+        ("loopPower", ctypes.c_int64 * 16),
+        ("r1Re", ctypes.c_int64),
+        ("r1Im", ctypes.c_int64),
+    ]
+
+
+class Roi(ctypes.Structure):
+    """l3_roi_t"""
+
+    _fields_ = [
+        ("processStart", ctypes.c_uint8),
+        ("processBins", ctypes.c_uint8),
+        ("retainStart", ctypes.c_uint8),
+        ("retainBins", ctypes.c_uint8),
+    ]
+
+
+class RetainCfg(ctypes.Structure):
+    """l3_retain_cfg_t"""
+
+    _fields_ = [
+        ("enabled", ctypes.c_uint8),
+        ("approachBins", ctypes.c_uint8),
+        ("approachMarginBins", ctypes.c_uint8),
+        ("impactBiasBins", ctypes.c_uint8),
+        ("ballSearchLeadBins", ctypes.c_uint8),
+        ("ballFollowLeadBins", ctypes.c_uint8),
+        ("spinFrames", ctypes.c_uint8),
+    ]
+
+
+class RetainState(ctypes.Structure):
+    """l3_retain_state_t"""
+
+    _fields_ = [
+        ("shotState", ctypes.c_uint8),
+        ("ballLocked", ctypes.c_uint8),
+        ("ballBin", ctypes.c_float),
+        ("clubActive", ctypes.c_uint8),
+        ("clubBin", ctypes.c_float),
+        ("postFrame", ctypes.c_uint8),
+        ("postIndex", ctypes.c_uint32),
+        ("ballTrackConfirmed", ctypes.c_uint8),
+        ("ballTrackBin", ctypes.c_float),
+    ]
+
+
+class RetainWindow(ctypes.Structure):
+    """l3_retain_window_t"""
+
+    _fields_ = [
+        ("start", ctypes.c_uint8),
+        ("bins", ctypes.c_uint8),
+        ("priority", ctypes.c_uint8),
+        ("why", ctypes.c_uint8),
+    ]
+
+
+class FrameDesc(ctypes.Structure):
+    """l3_frame_desc_t"""
+
+    _fields_ = [
+        ("timestampUs", ctypes.c_uint32),
+        ("dataOffset", ctypes.c_uint32),
+        ("bytes", ctypes.c_uint32),
+        ("frame", ctypes.c_uint16),
+        ("globalBinStart", ctypes.c_uint8),
+        ("binCount", ctypes.c_uint8),
+        ("processStart", ctypes.c_uint8),
+        ("processBins", ctypes.c_uint8),
+        ("shotState", ctypes.c_uint8),
+        ("priority", ctypes.c_uint8),
+        ("why", ctypes.c_uint8),
+        ("isPost", ctypes.c_uint8),
+    ]
+
+
+class RetainRequest(ctypes.Structure):
+    """l3_retain_request_t"""
+
+    _fields_ = [
+        ("bytesPerBin", ctypes.c_uint32),
+        ("capacityBytes", ctypes.c_uint32),
+        ("maxFrames", ctypes.c_uint32),
+        ("preBins", ctypes.c_uint8),
+        ("impactBins", ctypes.c_uint8),
+        ("ballBins", ctypes.c_uint8),
+        ("preFrames", ctypes.c_uint8),
+        ("impactFrames", ctypes.c_uint8),
+        ("ballFrames", ctypes.c_uint8),
+    ]
+
+
+class RetainBudget(ctypes.Structure):
+    """l3_retain_budget_t"""
+
+    _fields_ = [
+        ("preFrames", ctypes.c_uint8),
+        ("impactFrames", ctypes.c_uint8),
+        ("ballFrames", ctypes.c_uint8),
+        ("cutPre", ctypes.c_uint8),
+        ("cutBall", ctypes.c_uint8),
+        ("usedBytes", ctypes.c_uint32),
+        ("freeBytes", ctypes.c_uint32),
+    ]
+
+
 class AdaptiveWindows(ctypes.Structure):
     """``l3_adaptive_windows_t``."""
 
@@ -636,6 +804,18 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
         _U32,
     ),
     "l3_obs_format_target": ([_P(TargetObs), *_TEXT], ctypes.c_int32),
+    "l3_obs_parabolic_offset": ([_F32, _F32, _F32], _F32),
+    # l3_iq16_stats.h
+    "l3_iq16_channel_stats": (
+        [_P(ctypes.c_int16), _U32, _U32, _P(Iq16ChannelStats)],
+        ctypes.c_int32,
+    ),
+    "l3_iq16_bin_stats_init": ([_P(Iq16BinStats), _U32], None),
+    "l3_iq16_bin_stats_add": ([_P(Iq16BinStats), _P(Iq16ChannelStats)], None),
+    "l3_iq16_bin_stats_finish": (
+        [_P(Iq16BinStats), _P(_F32), _P(_F32), _P(_F32), _P(_F32), _P(_F32), _P(_F32)],
+        None,
+    ),
     # l3_frames.h
     "l3_cal_identity": ([_P(RadarCal), _U32], None),
     "l3_frames_from_spherical": ([_P(Spherical), _P(Vec3)], None),
@@ -652,6 +832,11 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_angle_bartlett": ([_P(Cpx), _U32, _P(_F32)], _F32),
     "l3_angle_estimate": ([_P(RadarCal), _P(AngleSnapshot), _P(AngleObs)], ctypes.c_int32),
     "l3_angle_format": ([_P(AngleObs), *_TEXT], ctypes.c_int32),
+    "l3_angle_confidence": ([_F32, _F32, ctypes.c_uint8], _F32),
+    "l3_cal_set_element": ([_P(RadarCal), _U32, _F32, _F32], ctypes.c_int32),
+    "l3_cal_element": ([_P(RadarCal), _U32, _P(_F32), _P(_F32)], ctypes.c_int32),
+    "l3_cal_format": ([_P(RadarCal), *_TEXT], ctypes.c_int32),
+    "l3_cal_format_element": ([_P(RadarCal), _U32, *_TEXT], ctypes.c_int32),
     # l3_text.h
     "l3_text_fixed": ([_F32, _U32, *_TEXT], None),
     "l3_text_fixed2": ([_F32, *_TEXT], None),
@@ -738,6 +923,34 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     ),
     "l3_adaptive_differs": ([_P(AdaptiveWindows), _U32, _U32, _U32, _U32], ctypes.c_int32),
     "l3_adaptive_format": ([_P(AdaptiveCfg), _P(AdaptiveWindows), *_TEXT], ctypes.c_int32),
+    # l3_iq8.h
+    "l3_iq8_mode_defaults": ([_P(Iq8Mode), ctypes.c_uint8], None),
+    "l3_iq8_hwa_scale": ([ctypes.c_int16, ctypes.c_uint8, ctypes.c_uint8], ctypes.c_int16),
+    "l3_iq8_pack_shift": ([_P(ctypes.c_int16), _U32, _U32], ctypes.c_uint8),
+    "l3_iq8_quantize_shift": ([ctypes.c_int16, ctypes.c_uint8, _P(_U32)], ctypes.c_int8),
+    "l3_iq8_quantize_scale": ([ctypes.c_int16, ctypes.c_uint16], ctypes.c_int8),
+    "l3_iq8_dump_scale": ([_U32], ctypes.c_uint16),
+    "l3_iq8_low_byte": ([ctypes.c_int16], ctypes.c_int8),
+    "l3_iq8_max_abs": ([_P(ctypes.c_int16), _U32], _U32),
+    "l3_iq8_emulate_frame": (
+        [_P(Iq8Mode), _P(ctypes.c_int16), _P(ctypes.c_int8), _U32, _P(ctypes.c_uint16)],
+        _U32,
+    ),
+    # l3_retain.h
+    "l3_retain_cfg_defaults": ([_P(RetainCfg)], None),
+    "l3_retain_cfg_check": ([_P(RetainCfg)], ctypes.c_int32),
+    "l3_retain_predict": ([_F32, _F32], _F32),
+    "l3_retain_window": (
+        [_P(RetainCfg), _P(RetainState), _U32, _U32, _U32, _P(RetainWindow)],
+        None,
+    ),
+    "l3_retain_roi": ([_U32, _U32, _P(RetainWindow), _P(Roi)], None),
+    "l3_retain_budget": ([_P(RetainRequest), _P(RetainBudget)], ctypes.c_int32),
+    "l3_retain_priority_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_retain_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_retain_format": ([_P(RetainWindow), *_TEXT], ctypes.c_int32),
+    "l3_retain_format_budget": ([_P(RetainBudget), *_TEXT], ctypes.c_int32),
+    "l3_frame_desc_format": ([_P(FrameDesc), *_TEXT], ctypes.c_int32),
     # l3_shot.h
     "l3_shot_cfg_defaults": ([_P(ShotCfg)], None),
     "l3_shot_init": ([_P(Shot), _P(ShotCfg)], None),

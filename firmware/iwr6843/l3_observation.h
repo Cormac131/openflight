@@ -48,10 +48,22 @@ typedef struct {
     float r1Im;
 } l3_bin_obs_t;
 
+/* How the sub-bin range of a target is read off the peak and its neighbours:
+ * the statistic-weighted centroid over peak +/- 1 (above the floor), or the
+ * vertex of the parabola through the three values. The parabola is exact for
+ * a windowed FFT main lobe and does not lean toward a strong neighbouring
+ * target the way a centroid does; it falls back to the centroid when the
+ * three values do not form a peak. */
+enum {
+    L3_OBS_SUBBIN_CENTROID = 0,
+    L3_OBS_SUBBIN_PARABOLIC = 1
+};
+
 typedef struct {
     uint32_t stat;          /* L3_OBS_STAT_* */
     float    snr;           /* a target needs stat >= floor * snr */
     float    loopPeriodS;   /* for the Doppler readout; 0 disables it */
+    uint32_t subBin;        /* L3_OBS_SUBBIN_* */
 } l3_obs_params_t;
 
 /* One extracted target. */
@@ -78,6 +90,11 @@ typedef struct {
 
 /* The configured statistic of one bin. */
 float l3_obs_stat(uint32_t stat, const l3_bin_obs_t *obs);
+/* Sub-bin offset (-0.5..0.5) of a peak from the statistic at its left
+ * neighbour, itself and its right neighbour: the vertex of the parabola
+ * through the three LOG values (linear when any is not positive), clamped to
+ * the centre bin's half. Returns 0 when the three do not form a peak. */
+float l3_obs_parabolic_offset(float left, float centre, float right);
 /* Median of the statistic over count bins (count <= L3_OBS_MAX_BINS). */
 float l3_obs_median(uint32_t stat, const l3_bin_obs_t *obs, uint32_t count);
 /* Adaptive floor: seed from the first median, then floor += (median - floor)

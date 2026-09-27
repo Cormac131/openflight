@@ -24,6 +24,9 @@ int32_t l3plan_build(L3CapturePlan *plan,
     uint32_t preFrames;
     uint32_t frame;
     uint32_t cursor;
+    uint32_t storedPre;
+    uint32_t storedImpact;
+    uint32_t storedPost;
 
     if (loops < geom->minLoops || loops > geom->maxLoops || (loops & 1U) != 0U) {
         (void)snprintf(err, errLen, "Error: loops must be even and between %u and %u\n",
@@ -62,14 +65,33 @@ int32_t l3plan_build(L3CapturePlan *plan,
         return -1;
     }
 
+    /* What each slot stores: the whole processing window, or the compact
+     * formats' retained widths, which must fit inside it. */
+    storedPre = plan->preBins;
+    storedImpact = plan->impactBins;
+    storedPost = plan->postBins;
+    if (plan->compact) {
+        if (plan->retainPreBins == 0U || plan->retainPostBins == 0U ||
+            plan->retainPreBins > plan->preBins || plan->retainPostBins > plan->postBins ||
+            (plan->phased &&
+             (plan->retainImpactBins == 0U || plan->retainImpactBins > plan->impactBins))) {
+            (void)snprintf(err, errLen,
+                           "Error: captureCfg retain widths must be 1..the processing window\n");
+            return -1;
+        }
+        storedPre = plan->retainPreBins;
+        storedPost = plan->retainPostBins;
+        storedImpact = plan->phased ? plan->retainImpactBins : 0U;
+    }
+
     plan->loops = (uint16_t)loops;
     plan->chirpsPerFrame = (uint16_t)(geom->nTx * loops);
     captureBytes = capacityBytes;
     bytesPerBin = (uint32_t)plan->chirpsPerFrame *
                   geom->nRx * bytesPerComplex;
-    plan->preFrameBytes = bytesPerBin * plan->preBins;
-    plan->postFrameBytes = bytesPerBin * plan->postBins;
-    plan->impactFrameBytes = bytesPerBin * plan->impactBins;
+    plan->preFrameBytes = bytesPerBin * storedPre;
+    plan->postFrameBytes = bytesPerBin * storedPost;
+    plan->impactFrameBytes = bytesPerBin * storedImpact;
     postBytes = plan->phased
                     ? (plan->impactFrameBytes * plan->impactFrames) +
                       (plan->postFrameBytes * plan->ballFrames)
@@ -106,7 +128,7 @@ int32_t l3plan_build(L3CapturePlan *plan,
     for (frame = 0U; frame < preFrames; frame++) {
         tables->offset[frame] = cursor;
         tables->binStart[frame] = plan->preStart;
-        tables->binCount[frame] = plan->preBins;
+        tables->binCount[frame] = (uint8_t)storedPre;
         tables->deltaUs[frame] = (uint16_t)framePeriodUs;
         tables->bytes[frame] = plan->preFrameBytes;
         cursor += plan->preFrameBytes;
@@ -117,7 +139,7 @@ int32_t l3plan_build(L3CapturePlan *plan,
             uint32_t slot = preFrames + frame;
             tables->offset[slot] = cursor;
             tables->binStart[slot] = plan->impactStart;
-            tables->binCount[slot] = plan->impactBins;
+            tables->binCount[slot] = (uint8_t)storedImpact;
             tables->deltaUs[slot] = (uint16_t)framePeriodUs;
             tables->bytes[slot] = plan->impactFrameBytes;
             cursor += plan->impactFrameBytes;
@@ -128,7 +150,7 @@ int32_t l3plan_build(L3CapturePlan *plan,
             tables->binStart[slot] =
                 (frame < (plan->ballFrames / 2U))
                     ? plan->postStart : plan->lateStart;
-            tables->binCount[slot] = plan->postBins;
+            tables->binCount[slot] = (uint8_t)storedPost;
             tables->deltaUs[slot] =
                 (frame == 0U)
                     ? (uint16_t)framePeriodUs
@@ -143,7 +165,7 @@ int32_t l3plan_build(L3CapturePlan *plan,
             tables->binStart[slot] =
                 (frame < (plan->postFrames / 2U))
                     ? plan->postStart : plan->lateStart;
-            tables->binCount[slot] = plan->postBins;
+            tables->binCount[slot] = (uint8_t)storedPost;
             tables->deltaUs[slot] =
                 (frame == 0U)
                     ? (uint16_t)framePeriodUs

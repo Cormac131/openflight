@@ -24,6 +24,7 @@ from openflight.iwr6843.dump import SAMPLE_INT16_IQ, SAMPLE_RANGE_FFT_IQ16, pack
 from openflight.iwr6843.firmware_replay import (
     RECORDINGS_DIR,
     ReplayConfig,
+    RetainReplay,
     bin_observations,
     channel_snapshot,
     format_report,
@@ -32,6 +33,7 @@ from openflight.iwr6843.firmware_replay import (
     recording_configs,
     recording_expectations,
     replay_dump,
+    static_channel_snapshot,
     vertical_tx_indices,
 )
 
@@ -486,3 +488,118 @@ def test_report_carries_launch_shot_and_ball_lines(lib, whole_shot):
         lib=lib,
     )
     assert "launch: none" in format_report(without)
+
+
+# --- the locked ball's own direction --------------------------------------------
+
+
+def test_static_channel_snapshot_sums_the_raw_loops_without_mean_removal():
+    rng = np.random.default_rng(5)
+    shape = (1, 36, 4, 8)
+    cube = rng.integers(-500, 500, shape) + 1j * rng.integers(-500, 500, shape)
+    snap = static_channel_snapshot(cube, 0, 3, 3, chirp_period_s=45e-6)
+    for tx in range(3):
+        for rx in range(4):
+            expected = sum(cube[0, loop * 3 + tx, rx, 3] for loop in range(12))
+            got = snap.channel[tx * 4 + rx]
+            assert complex(got.re, got.im) == pytest.approx(expected, abs=1e-2)
+    assert snap.lag1PhaseRad == 0.0 and snap.radialVelocityMps == 0.0
+
+
+def test_a_static_ball_on_the_tee_gives_the_destination_a_direction(lib):
+    """A stationary reflector at the destination bin with a known direction:
+    the replay reads it back and aims the impact test at it."""
+    n_tx, n_rx, bins, loops, frames = 3, 4, 128, 12, 12
+    cube = np.zeros((frames, loops * n_tx, n_rx, bins), dtype=complex)
+    el, az = math.radians(-6.0), math.radians(4.0)
+    physical = 3000.0 * np.exp(1j * math.pi * math.sin(el) * np.arange(2 * n_rx))
+    logical = physical[::-1]
+    az_phase = -math.pi * math.sin(az)
+    for frame in range(frames):
+        for loop in range(loops):
+            cube[frame, loop * n_tx + 0, :, 40] = logical[:n_rx]
+            cube[frame, loop * n_tx + 2, :, 40] = logical[n_rx:]
+            cube[frame, loop * n_tx + 1, :, 40] = (
+                0.5 * (logical[:n_rx] + logical[n_rx:]) * np.exp(1j * az_phase)
+            )
+    raw = pack_dump(
+        cube, n_tx=n_tx, version=3, frame_period_us=3000, sample_fmt=SAMPLE_RANGE_FFT_IQ16
+    )
+    result = replay_dump(raw, ReplayConfig(tee_bin=34, dest_bin=40), lib=lib)
+    assert result.ball_angle is not None
+    assert result.ball_angle.elevation_deg == pytest.approx(-6.0, abs=0.3)
+    assert result.ball_angle.azimuth_deg == pytest.approx(4.0, abs=0.3)
+    assert "ball direction: az +4.0 deg, el -6.0 deg" in format_report(result)
+    # Without a locked ball, or with the direction switched off, boresight.
+    assert replay_dump(raw, ReplayConfig(tee_bin=40), lib=lib).ball_angle is None
+    assert (
+        replay_dump(
+            raw, ReplayConfig(tee_bin=34, dest_bin=40, ball_angles=False), lib=lib
+        ).ball_angle
+        is None
+    )
+    assert "boresight" in format_report(replay_dump(raw, ReplayConfig(tee_bin=40), lib=lib))
+
+
+def test_an_empty_destination_bin_keeps_boresight(lib, swing):
+    result = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN + 20), lib=lib)
+    assert result.ball_angle is None
+
+
+def test_adaptive_retention_keeps_every_club_and_ball_point_of_the_synthetic_shot(lib):
+    """The mirror's windows must hold the points the trackers appended, while
+    storing far fewer bins than the processing window."""
+    raw = synth_shot_dump(path_deg=0.0, hla_deg=0.0, vla_deg=12.0)
+    config = ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN, retain=RetainReplay())
+    result = replay_dump(raw, config, lib=lib)
+
+    covered, judged = result.retain_coverage
+    assert judged >= len(result.points) + len(result.ball_points) - 2
+    missed = [w for w in result.retain_windows if w.covered is False]
+    # The club is acquired from the wide processing window; its first point can
+    # land outside the ball-centred slot of a frame that had no club to follow
+    # yet. Every point after acquisition, and every ball point, is kept.
+    assert len(missed) <= 1 and all(w.why in ("ball", "tee") for w in missed), missed
+    assert covered >= judged - 1
+    kept, processed = result.retain_bins_saved
+    assert 0 < kept < 0.6 * processed
+    reasons = [w.why for w in result.retain_windows]
+    assert reasons[0] in ("ball", "tee"), "before the club shows, the window sits on the ball"
+    assert "club" in reasons or "approach" in reasons
+    assert any(r in ("impact", "ballsearch") for r in reasons)
+    assert "ballfollow" in reasons, "a confirmed flight is followed"
+    assert all(w.bins in (16, 24) for w in result.retain_windows)
+    report = format_report(result)
+    assert "retention:" in report and f"{covered}/{judged} points inside" in report
+
+
+def test_centred_retention_is_the_compact16_baseline_and_can_miss_the_club(lib):
+    raw = synth_shot_dump(path_deg=0.0)
+    adaptive = replay_dump(
+        raw,
+        ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN, retain=RetainReplay(pre_bins=8)),
+        lib=lib,
+    )
+    centred = replay_dump(
+        raw,
+        ReplayConfig(
+            tee_bin=TEE_BIN, dest_bin=TEE_BIN, retain=RetainReplay(pre_bins=8, enabled=False)
+        ),
+        lib=lib,
+    )
+    assert all(w.why == "centred" for w in centred.retain_windows)
+    assert centred.retain_coverage[0] < adaptive.retain_coverage[0]
+    assert centred.retain_coverage[1] == adaptive.retain_coverage[1], (
+        "same points appended: the mirror never alters the replay"
+    )
+    assert centred.points == adaptive.points
+
+
+def test_retention_config_is_checked_by_the_firmware(lib, swing):
+    with pytest.raises(ValueError, match="retention configuration"):
+        replay_dump(
+            swing, ReplayConfig(tee_bin=TEE_BIN, retain=RetainReplay(approach_bins=0)), lib=lib
+        )
+    plain = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    assert plain.retain_windows == [] and plain.retain_coverage == (0, 0)
+    assert "retention:" not in format_report(plain)

@@ -407,6 +407,12 @@ class SessionLogger:
             },
         )
 
+    def log_iwr_ops_comparison(self, record: Dict[str, Any]) -> None:
+        """Log the OPS-versus-IWR speed comparison for one shot (openflight.iwr6843.ops_compare)."""
+        if not self.enabled:
+            return
+        self._write_entry("iwr_ops_comparison", dict(record))
+
     def log_late_window(self, *, shot_number: int, record: Dict[str, Any]) -> None:
         """Log the open-flight late looks, measured after the shot was published."""
         if not self.enabled:

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import threading
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -122,13 +124,15 @@ def test_capture_config_reports_physical_timing_and_format(tmp_path):
     assert summary.capture_format == "iq16"
 
 
-def test_capture_monitor_rejects_iq8_self_trigger_before_configuring_hardware(tmp_path):
+def test_capture_monitor_accepts_iq8_self_trigger_and_says_so(tmp_path, caplog):
+    """IQ8 rings are read by the firmware's detect path (int8 times the frame
+    scale), so the monitor no longer refuses them; it notes the firmware need."""
     config = tmp_path / "radar.cfg"
     config.write_text(
         "captureFormat iq8\nphaseCaptureCfg 20 53 14 32 53 10 47 53 64 12 1\n",
         encoding="utf-8",
     )
-    radar = FakeRadar(_raw_dump())
+    radar = SelfTriggerRadar(_raw_dump())
     monitor = IWR6843CaptureMonitor(
         config_path=config,
         output_dir=tmp_path / "dumps",
@@ -136,10 +140,14 @@ def test_capture_monitor_rejects_iq8_self_trigger_before_configuring_hardware(tm
         self_trigger=SelfTriggerConfig(tee_bin=1, snr=2.0, track_frames=2),
     )
 
-    with pytest.raises(ValueError, match="IQ8.*self-trigger"):
-        monitor.start()
-
-    assert radar.configs == []
+    with caplog.at_level(logging.INFO):
+        monitor.start(armed=False)
+    try:
+        assert radar.configs == [str(config)]
+        assert radar.commands[0][0] == "triggerCfg 1 2.0 2"
+        assert any("IQ8 detect" in record.getMessage() for record in caplog.records)
+    finally:
+        monitor.stop()
 
 
 def test_capture_monitor_matches_gpio_edge_to_ops_impact(tmp_path):
@@ -423,11 +431,20 @@ class SelfTriggerRadar(FakeRadar):
         self.releases = 0
         self.sparse = None
         self.sparse_error: Exception | None = None
+        self.result = None
+        self.result_error: Exception | None = None
+        self.result_reads = 0
 
     def cmd(self, line: str, window: float = 1.5) -> str:
         del window
         self.commands.append((line, threading.current_thread().name))
         return self.cmd_reply
+
+    def shot_result(self):
+        self.result_reads += 1
+        if self.result_error is not None:
+            raise self.result_error
+        return self.result
 
     def wait_trigger_notice(self, pending: bytes = b"") -> tuple[bool, bytes]:
         if not self.notices:
@@ -486,6 +503,62 @@ def test_self_trigger_notice_starts_the_shot_listeners(tmp_path):
     assert len(heard) == 1
     assert heard[0] == capture.trigger_timestamp
     monitor.stop()
+
+
+def test_self_trigger_capture_carries_the_firmware_result(tmp_path):
+    """The result packet is read before the readback (which rearms the ring
+    and resets it) and rides on the capture for the shot pipeline."""
+    radar = SelfTriggerRadar(_raw_dump())
+    radar.result = SimpleNamespace(shot_id=3, verdict="valid", club_points=4, ball_points=9)
+    monitor = _self_trigger_monitor(tmp_path, radar)
+    monitor.start(armed=False)
+    monitor.arm()
+    radar.notices.append(b"Triggered\n")
+
+    capture = monitor.capture_for_shot(None, timeout_s=1.0)
+
+    assert capture is not None and capture.valid
+    assert capture.onboard_result is radar.result
+    assert radar.result_reads == 1
+    assert radar.read_started_at is not None
+    monitor.stop()
+
+
+def test_unreadable_firmware_result_never_costs_the_capture(tmp_path, caplog):
+    radar = SelfTriggerRadar(_raw_dump())
+    radar.result_error = RuntimeError("serial timeout")
+    monitor = _self_trigger_monitor(tmp_path, radar)
+    monitor.start(armed=False)
+    monitor.arm()
+    radar.notices.append(b"Triggered\n")
+
+    with caplog.at_level(logging.WARNING):
+        capture = monitor.capture_for_shot(None, timeout_s=1.0)
+
+    assert capture is not None and capture.valid
+    assert capture.onboard_result is None
+    assert any("Onboard result unreadable" in r.getMessage() for r in caplog.records)
+    monitor.stop()
+
+
+def test_gpio_captures_do_not_ask_for_a_firmware_result(tmp_path):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    radar = FakeRadar(_raw_dump())
+    monitor = IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=radar,
+        button_factory=FakeButton,
+    )
+    monitor.start()
+    edge = time.time()
+    assert monitor.notify_trigger(edge)
+    capture = monitor.capture_for_shot(edge, timeout_s=1.0)
+    monitor.stop()
+
+    assert capture is not None and capture.valid
+    assert capture.onboard_result is None
 
 
 def test_self_trigger_config_is_sent_before_the_worker_owns_the_port(tmp_path):

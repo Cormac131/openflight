@@ -9,8 +9,9 @@ per-bin observations the R4F computes (`l3_verticalResidual` in
 change to `l3_trigger.c`, `l3_observation.c` or `l3_club_track.c` can be
 judged against every swing here before it is flashed.
 
-The directory ships empty apart from this file: the repository holds no
-session data. To add captures, copy them from the Pi's session directory
+The captures here are the swings the trackers were tuned on (see
+`manifest.json` for what each one holds and what a replay must reproduce).
+To add captures, copy them from the Pi's session directory
 (`~/openflight_sessions/iwr6843_<timestamp>_<seq>.l3dump`) and describe them
 in `manifest.json`:
 

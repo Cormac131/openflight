@@ -32,6 +32,15 @@ typedef struct {
     uint8_t  impactFrames;
     uint8_t  ballFrames;
     uint32_t impactFrameBytes;
+    /* Compact IQ16 formats (compact16, adaptive16): the HWA still produces
+     * the pre/impact/post windows above (the PROCESSING region the detect
+     * task reads), but each slot stores only retain*Bins of them (the
+     * RETENTION region, placed per frame by l3_retain.c). compact == 0
+     * stores the whole processing window and ignores the retain widths. */
+    uint8_t  compact;
+    uint8_t  retainPreBins;
+    uint8_t  retainImpactBins;
+    uint8_t  retainPostBins;
 } L3CapturePlan;
 
 typedef struct {

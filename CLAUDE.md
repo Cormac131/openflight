@@ -184,6 +184,8 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
 - `ballistics.py` - Numerical ballistic trajectory simulation (drag + Magnus RK4)
 - `iwr6843/` - TI IWR6843 mmWave radar driver, L3 raw dump parser, LCMF-v1 launch angle & club path
 - `iwr6843/firmware_host.py`, `firmware_replay.py` - host build of the pure-C firmware modules (`firmware/iwr6843/l3_*.c`) and the recorded-capture replay harness
+- `iwr6843/iq8_emulation.py`, `ab_compare.py`, `baseline.py` - firmware-exact IQ8 emulation, the IQ16-vs-IQ8 A/B and the baseline dataset extractor
+- `iwr6843/ops_compare.py`, `angle_validation.py`, `confidence_calibration.py`, `datasets.py` - OPS and reference validation statistics and confidence calibration
 - `environment.py`, `delivery.py` - air density for the flight model; inferred face angle, smash and plausibility gates
 - `inclinometer.py` - LIS3DH accelerometer tilt compensation service
 - `sim/` - Simulator connectors (OpenGolfSim, GSPro, E6 Connect, Garmin) and network transports

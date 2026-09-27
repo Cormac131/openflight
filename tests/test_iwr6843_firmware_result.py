@@ -9,6 +9,7 @@ serialises is parsed by the host and every field compared.
 from __future__ import annotations
 
 import ctypes
+import json
 import math
 
 import pytest
@@ -293,6 +294,41 @@ def test_host_parser_reads_implausible_radial_and_fallback_from_the_packet(lib):
     assert not packet["ball_speed"].usable
     assert packet["club_speed"].radial_only and not packet["ball_speed"].radial_only
     assert packet["ball_speed"].fallback and "ball_locked" not in packet.quality
+
+
+def test_packet_to_dict_keeps_provenance_beside_every_metric(lib):
+    result = build(lib, make_shot(lib), make_ball(lib), make_launch(hla_deg=-1.5), shot_id=7)
+    buffer = ctypes.create_string_buffer(fw.RESULT_PACKET_BYTES)
+    lib.l3_result_serialize(ctypes.byref(result), buffer, fw.RESULT_PACKET_BYTES)
+    packet = shot_result.parse_packet(buffer.raw)
+
+    payload = packet.to_dict()
+
+    assert payload["version"] == 1 and payload["shot_id"] == 7 and payload["verdict"] == "valid"
+    assert payload["impact_source"] == "geometry" and payload["impact_timestamp_us"] == 23218
+    assert payload["club_points"] == 7 and payload["ball_points"] == 6
+    assert payload["smash"] == pytest.approx(1.5)
+    assert payload["quality"] == sorted(fw.QUALITY_FLAGS)
+    assert set(payload["metrics"]) == set(fw.RESULT_METRIC_NAMES)
+    ball = payload["metrics"]["ball_speed"]
+    assert ball["value"] == pytest.approx(60.0) and ball["label"] == "MEASURED"
+    assert ball["measured"] and ball["usable"] and not ball["radial_only"]
+    spin = payload["metrics"]["spin_rate"]
+    assert spin["value"] is None and spin["label"] == "-" and not spin["usable"]
+    assert json.dumps(payload), "the record is JSON-serialisable as it stands"
+    # Per-domain confidence: the weakest usable metric of each domain; spin has none.
+    domains = payload["domains"]
+    assert set(domains) == {"club", "ball", "angle", "spin"}
+    assert domains["ball"] == pytest.approx(0.9)
+    assert domains["spin"] == 0.0
+    club_metrics = [payload["metrics"][n] for n in ("club_speed", "club_path", "angle_of_attack")]
+    assert domains["club"] == pytest.approx(
+        min(m["confidence"] for m in club_metrics if m["usable"]), abs=1e-3
+    )
+    assert domains["angle"] == pytest.approx(
+        min(payload["metrics"][n]["confidence"] for n in ("vertical_launch", "horizontal_launch")),
+        abs=1e-3,
+    )
 
 
 def test_host_parser_rejects_wrong_sizes_versions_and_bad_hex():

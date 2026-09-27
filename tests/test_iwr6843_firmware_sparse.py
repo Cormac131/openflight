@@ -125,11 +125,8 @@ def test_trigger_scores_every_loop_not_just_loop_zero():
 
     assert "l3_verticalPowerAt" not in source
     assert "perLoop[0]" not in source
-    assert "l3_verticalResidual(slot, first + bin, NULL, &obs[bin]);" in consider
-    assert (
-        "l3_trig_update(&gTrig, gPreFramesCaptured, teeBin, gFrameBinStart[slot] + first,"
-        in consider
-    )
+    assert "l3_verticalResidual(&frame, first + bin, NULL, &obs[bin]);" in consider
+    assert "l3_trig_update(&gTrig, gPreFramesCaptured, teeBin, frame.binStart + first," in consider
 
 
 def test_trigger_no_longer_gates_on_the_tee_bin_or_a_toward_away_sequence():
@@ -166,10 +163,12 @@ def test_trigger_config_waits_for_a_frame_in_progress_before_resetting():
         < cfg.index("l3_trig_init(&gTrig")
     )
     consider = _function("static void l3_considerSelfTrigger(")
+    # The stale-frame bail-out drops the busy flag early; the normal path
+    # drops it after the update.
     assert (
         consider.index("gTrigBusy = 1U;")
         < consider.index("l3_trig_update(")
-        < consider.index("gTrigBusy = 0U;")
+        < consider.rindex("gTrigBusy = 0U;")
     )
 
 
@@ -315,7 +314,7 @@ def test_club_track_rides_the_trigger_pass_and_prints_from_trigger_log():
     assert consider.count("l3_verticalResidual(") == 1, "one residual pass feeds both"
     assert "gTrig.floor," in consider[extract:track], "targets use the trigger's floor"
     assert "gClubTrackDest = teeBin;" in consider
-    assert consider.index("gTrigBusy = 0U;") > track, "the track update is inside the busy window"
+    assert consider.rindex("gTrigBusy = 0U;") > track, "the track update is inside the busy window"
 
     assert "l3_track_reset(&gClubTrack);" in _function("static void l3_trigRearm(")
     configure = _function("static void l3_clubTrackConfigure(")
@@ -329,10 +328,12 @@ def test_club_track_rides_the_trigger_pass_and_prints_from_trigger_log():
     assert 'strcmp(argv[1], "track") == 0' in log
     assert "l3_track_format_status(&gClubTrack, gClubTrackDest, line, sizeof(line));" in log
     assert "l3_track_format_point(&point, gClubTrackDest, line, sizeof(line));" in log
-    assert 'CLI_write("Error: triggerLog [trace|track|shot|result|perf|clear]\\n");' in log
     assert (
-        "triggerLog [trace|track|shot|result|perf|clear]: log, trace, club, shot, result, perf"
-        in source
+        'CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|cal|clear]\\n");' in log
+    )
+    assert (
+        "triggerLog [trace|track|shot|result|perf|frames|cal|clear]: log, trace, club, shot, result, "
+        "perf, stored frames, calibration" in source
     )
 
 
@@ -353,8 +354,13 @@ def test_loop_means_are_computed_once_per_bin():
     # The other two are the per-loop init and the final peak/copy pass.
     assert "meanLoop" not in residual
     assert len(re.findall(r"for \(loop = 0U; loop < loops; loop\+\+\)", residual)) == 4
+    # IQ8 rings hold int8 pairs times a per-frame scale; both read alike,
+    # through the detect frame that says where the samples are.
+    assert "uint32_t cb = source->cb;" in residual
+    assert "float scale = source->scale;" in residual
+    assert "(l3_ringComponent(sample, cb) - meanIm) * scale;" in residual
     # The sparse rows and the trigger share that one pass.
-    assert "l3_verticalResidual(slot, localBin, out, NULL);" in _function(
+    assert "l3_verticalResidual(&frame, localBin, out, NULL);" in _function(
         "static void l3_verticalPowerLoops("
     )
 
@@ -363,7 +369,7 @@ def test_residual_walks_loops_by_stride_instead_of_recomputing_indices():
     residual = _function("static void l3_verticalResidual(")
 
     assert "l3_iq16Sample" not in residual
-    assert "uint32_t loopStride = ntx * N_RX * binCount * 2U;" in residual
+    assert "uint32_t loopStride = ntx * N_RX * binCount * 2U * cb;" in residual
     assert residual.count("sample += loopStride;") == 2
     # Energy, strongest loop and the Doppler autocorrelation come from the
     # same pass; no second walk over the samples.
@@ -419,7 +425,7 @@ def test_angles_are_estimated_for_the_associated_target_only():
     assert "gClubTrack.lastTargetIndex < found && gClubTrack.count > 1U" in consider
     assert "const l3_target_obs_t *hit = &targets[gClubTrack.lastTargetIndex];" in consider
     assert (
-        "l3_channelSnapshot(slot, (uint32_t)hit->peakBin - gFrameBinStart[slot],\n"
+        "l3_channelSnapshot(&frame, (uint32_t)hit->peakBin - frame.binStart,\n"
         "                               hit->dopplerPhaseRad, newest.radialVelocityMps, &snapshot);"
     ) in consider
     assert "l3_angle_estimate(&gRadarCal, &snapshot, &gLastAngle)" in consider
@@ -449,10 +455,12 @@ def test_geometric_impact_records_every_frame_and_fires_only_when_armed():
     consider = _function("static void l3_considerSelfTrigger(")
 
     assert "(void)l3_track_delivery(&gClubTrack, 8U, &gDelivery);" in consider
+    assert "if (gTrigDestBall && gBallAngleValid) {" in consider
+    assert "gBallAngle.azimuthValid ? gBallAngle.azimuthRad : 0.0F," in consider
     assert (
         "l3_frames_observe(&gRadarCal, (float)teeBin * gClubTrack.cfg.binWidthM, 0.0F, 0.0F,\n"
-        "                          &gBallPosition);"
-    ) in consider
+        "                              &gBallPosition);"
+    ) in consider, "boresight when the ball has no measured direction"
     assert "geometric = l3_impact_update(&gImpact, &gDelivery, &gBallPosition, 1U);" in consider
     assert "gTrigFireSource = (uint8_t)((fired ? 1U : 0U) | (geometric ? 2U : 0U));" in consider
     assert "if (geometric && gImpactArmed) {\n        fired = 1;\n    }" in consider
@@ -474,7 +482,7 @@ def test_calibration_and_impact_are_configured_through_track_cfg_sub_modes():
     assert "gRadarCal.radarPitchRad = values[0] * (L3_FRAMES_PI / 180.0F);" in cal
     assert "gRadarCal.rangeBiasM = values[5];" in cal
     elem = _function("static int32_t l3_cli_trackCfgElem(")
-    assert "gRadarCal.correctionRe[index] = cosf(-values[1]) / values[2];" in elem
+    assert "l3_cal_set_element(&gRadarCal, index, values[2], values[1])" in elem
     assert "values[0] >= (float)L3_CAL_MAX_VIRTUAL" in elem
     impact = _function("static int32_t l3_cli_trackCfgImpact(")
     assert "gImpactArmed = (values[4] != 0.0F) ? 1U : 0U;" in impact
@@ -512,7 +520,11 @@ def test_kept_post_frames_reach_the_detect_task_for_the_ball_tracker():
     assert done.index("gPostFramesCaptured++;") < done.index(
         "l3_publishDetectFrame(completedPostSlot"
     )
-    assert "if (!l3_captureUsesIq8())" in done, "IQ8 rings hold int8; the trackers read int16"
+    assert "if (!l3_captureUsesIq8())  /* IQ8 frames publish after packing */" in done
+    # IQ8: a kept post frame is packed first, then published with the post epoch.
+    assert "gIq8PendingDetect = 1U;\n            gIq8PendingEpoch = L3_DETECT_POST_EPOCH;" in done
+    rearm = _function("static void l3_hwaRearmTask(")
+    assert "pendingSlot < gCapturePlan.preFrames" not in rearm, "post slots publish too"
     assert "if (epoch == L3_DETECT_POST_EPOCH && queuedSlot >= gCapturePlan.preFrames) {" in task
     assert "l3_considerBallTrack(queuedSlot);" in task
     assert task.index("l3_considerBallTrack(") < task.index("l3detect_slot_live(")
@@ -528,7 +540,7 @@ def test_ball_tracker_runs_the_whole_post_window_against_the_trigger_floor():
     assert "if (!gBallTrack.armed || gCapturePlan.loops == 0U)" in consider
     assert "gPostTimestampUs += gFrameDeltaUs[slot];" in consider
     assert "frame = gPreFramesCaptured + gPostFramesScored;" in consider
-    assert "l3_verticalResidual(slot, bin, NULL, &obs[bin]);" in consider
+    assert "l3_verticalResidual(&frame, bin, NULL, &obs[bin]);" in consider
     assert "gBallFloor, targets, L3_OBS_MAX_TARGETS);" in consider
     assert (
         "l3_obs_floor_update(&gBallFloor, gTrigCfg.stat, obs, count, L3_TRIG_FLOOR_SHIFT);"
@@ -538,6 +550,7 @@ def test_ball_tracker_runs_the_whole_post_window_against_the_trigger_floor():
     assert "gBallFloor = 0.0F;" in _function("static void l3_trigRearm(")
     assert "l3_ball_track_update(&gBallTrack, targets, found, frame, gPostTimestampUs)" in consider
     assert "gBallTrack.core.count > 1U" in consider, "angles once the flight has a range rate"
+    assert "const l3_target_obs_t *hit = &targets[gBallTrack.lastTargetIndex];" in consider
     assert "l3_ball_track_set_angles(&gBallTrack, angle.azimuthRad," in consider
     assert "(void)l3_ball_track_launch(&gBallTrack, &gLaunch);" in consider
     assert "in.postFrame = 1U;" in consider
@@ -580,10 +593,12 @@ def test_trigger_log_shot_prints_the_machine_the_ball_track_and_the_launch():
     assert "l3_ball_track_format_status(&gBallTrack, line, sizeof(line));" in log
     assert "l3_launch_format(&gLaunch, line, sizeof(line));" in log
     assert "l3_track_point(&gBallTrack.core, index, &point)" in log
-    assert 'CLI_write("Error: triggerLog [trace|track|shot|result|perf|clear]\\n");' in log
     assert (
-        "triggerLog [trace|track|shot|result|perf|clear]: log, trace, club, shot, result, perf"
-        in source
+        'CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|cal|clear]\\n");' in log
+    )
+    assert (
+        "triggerLog [trace|track|shot|result|perf|frames|cal|clear]: log, trace, club, shot, result, "
+        "perf, stored frames, calibration" in source
     )
 
 
@@ -633,7 +648,9 @@ def test_every_stage_is_profiled_with_the_cpu_clock_and_printed_by_perf():
     assert 'strcmp(argv[1], "perf") == 0' in log
     assert "l3_profile_format_summary(&gProfile, line, sizeof(line));" in log
     assert "l3_profile_format(&gProfile, index, line, sizeof(line));" in log
-    assert 'CLI_write("Error: triggerLog [trace|track|shot|result|perf|clear]\\n");' in log
+    assert (
+        'CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|cal|clear]\\n");' in log
+    )
 
 
 def test_adaptive_windows_apply_between_shots_from_the_locked_ball():
@@ -663,3 +680,65 @@ def test_adaptive_windows_apply_between_shots_from_the_locked_ball():
     assert 'strcmp(argv[1], "adaptive") == 0' in capture_cfg
     assert "gAdaptiveCfg.enabled = (values[0] != 0U) ? 1U : 0U;" in adaptive
     assert "l3_adaptive_format(&gAdaptiveCfg, &gAdaptiveWindows, line, sizeof(line));" in log
+
+
+def test_the_locked_ball_gets_its_own_direction_from_the_static_return():
+    ball = _function("static void l3_considerBall(")
+    snapshot = _function("static void l3_channelSnapshotStatic(")
+    status = _function("static int32_t l3_cli_ball(")
+
+    assert "out->lag1PhaseRad = 0.0F;" in snapshot and "out->radialVelocityMps = 0.0F;" in snapshot
+    assert "sumIm += l3_ringComponent(sample, cb) * scale;" in snapshot and "meanIm" not in snapshot
+    assert "l3_channelSnapshotStatic(&frame, ballBin - frame.binStart, &snapshot);" in ball
+    assert "gBallAngle.elevationPeakRatio >=" in ball
+    assert "L3_BALL_ANGLE_MIN_PEAK_RATIO" in ball
+    assert "l3_angle_format(&gBallAngle, line, sizeof(line));" in status
+    assert "(unsigned)gBallAngleValid" in status
+
+
+def test_every_ring_reader_handles_iq8_samples_with_the_frame_scale():
+    source = _source()
+    for name in (
+        "static void l3_verticalResidual(",
+        "static float l3_verticalStaticPower(",
+        "static void l3_channelSnapshot(",
+        "static void l3_channelSnapshotStatic(",
+    ):
+        body = _function(name)
+        assert "const uint8_t *frame = source->base;" in body, name
+        assert "uint32_t cb = source->cb;" in body and "float scale = source->scale;" in body, name
+        assert "(const int16_t *)&g_ring" not in body, name
+    ring = _function("static l3_detect_frame_t l3_ringFrameOf(")
+    assert (
+        "frame.cb = l3_ringComponentBytes();" in ring
+        and "frame.scale = l3_ringScale(slot);" in ring
+    )
+    scale = _function("static float l3_ringScale(")
+    assert "return (float)gFrameIq8Scale[slot];" in scale
+    component = _function("static float l3_ringComponent(")
+    assert "return (float)*(const int8_t *)component;" in component
+    assert source.count("l3_ringComponentBytes()") >= 2
+
+
+def test_iq8_quantisation_in_the_firmware_is_the_shared_module():
+    """The host emulator compiles l3_iq8.c; l3_dump.c must not keep a copy of the arithmetic."""
+    source = _source()
+    assert '#include "l3_iq8.h"' in source
+    for gone in (
+        "static int8_t l3_quantizeIq8(",
+        "static uint8_t l3_iq8PackShift(",
+        "static uint8_t l3_iq8SampledPackShift(",
+        "static int8_t l3_quantizeIq8Shift(",
+    ):
+        assert gone not in source, gone
+    pack = _function("static void l3_packIq8CompletedFrame(")
+    assert "l3_iq8_pack_shift(source, components, L3_IQ8_SCALE_COMPLEX_STRIDE)" in pack
+    assert "l3_iq8_pack_shift(source, components, 1U)" in pack
+    assert "l3_iq8_quantize_shift(source[component], packShift, &clippedComponents)" in pack
+    assert "gIq8ClippedComponents += clippedComponents;" in pack
+    scale = _function("static uint16_t l3_iq8FrameScale(")
+    assert "l3_iq8_dump_scale(l3_iq8_max_abs(src, words))" in scale
+    write = _function("static void l3_writeCompressedIq8Frame(")
+    assert "l3_iq8_quantize_scale(src[word], scale)" in write
+    makefile = (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
+    assert "l3_iq8.c" in makefile

@@ -11,6 +11,33 @@ float l3_obs_stat(uint32_t stat, const l3_bin_obs_t *obs)
     return (stat == L3_OBS_STAT_PEAK) ? obs->peak : obs->energy;
 }
 
+float l3_obs_parabolic_offset(float left, float centre, float right)
+{
+    float denominator;
+    float offset;
+
+    /* In the log domain when every value is positive: a Gaussian-shaped lobe
+     * is then fitted exactly, and on the unwindowed range FFT's sinc^2 lobe
+     * the log parabola's worst error is 0.17 bin against 0.28 for the
+     * linear one (tests/test_iwr6843_firmware_iq16_stats.py). */
+    if (left > 0.0F && centre > 0.0F && right > 0.0F) {
+        left = logf(left);
+        centre = logf(centre);
+        right = logf(right);
+    }
+    denominator = left - 2.0F * centre + right;
+    if (denominator >= 0.0F) {
+        return 0.0F;  /* not a maximum: flat or a valley */
+    }
+    offset = 0.5F * (left - right) / denominator;
+    if (offset > 0.5F) {
+        offset = 0.5F;
+    } else if (offset < -0.5F) {
+        offset = -0.5F;
+    }
+    return offset;
+}
+
 float l3_obs_median(uint32_t stat, const l3_bin_obs_t *obs, uint32_t count)
 {
     /* Static: the caller's task stack is small and only one task scores
@@ -78,23 +105,32 @@ static void l3_obs_fill(const l3_obs_params_t *params, uint32_t frame, uint32_t 
     target->frame = frame;
     target->timestampUs = timestampUs;
     target->peakBin = (uint8_t)(firstBin + index);
-    /* Sub-bin range: the statistic's centroid over the peak and its
-     * neighbours, above the floor so noise does not pull it. */
-    if (index > 0U) {
-        float side = l3_obs_stat(params->stat, &obs[index - 1U]) - floor;
-        if (side > 0.0F) {
-            weight += side;
-            moment += side * (float)(firstBin + index - 1U);
+    /* Sub-bin range: the parabola's vertex through the peak and both
+     * neighbours when it has both (the main lobe of a windowed FFT is one to
+     * within a hundredth of a bin), else the statistic's centroid over the
+     * peak and its neighbours above the floor, so noise does not pull it. */
+    if (params->subBin == L3_OBS_SUBBIN_PARABOLIC && index > 0U && index + 1U < count) {
+        float left = l3_obs_stat(params->stat, &obs[index - 1U]);
+        float right = l3_obs_stat(params->stat, &obs[index + 1U]);
+
+        target->rangeBin = (float)(firstBin + index) + l3_obs_parabolic_offset(left, stat, right);
+    } else {
+        if (index > 0U) {
+            float side = l3_obs_stat(params->stat, &obs[index - 1U]) - floor;
+            if (side > 0.0F) {
+                weight += side;
+                moment += side * (float)(firstBin + index - 1U);
+            }
         }
-    }
-    if (index + 1U < count) {
-        float side = l3_obs_stat(params->stat, &obs[index + 1U]) - floor;
-        if (side > 0.0F) {
-            weight += side;
-            moment += side * (float)(firstBin + index + 1U);
+        if (index + 1U < count) {
+            float side = l3_obs_stat(params->stat, &obs[index + 1U]) - floor;
+            if (side > 0.0F) {
+                weight += side;
+                moment += side * (float)(firstBin + index + 1U);
+            }
         }
+        target->rangeBin = (weight > 0.0F) ? (moment / weight) : (float)(firstBin + index);
     }
-    target->rangeBin = (weight > 0.0F) ? (moment / weight) : (float)(firstBin + index);
     target->energy = bin->energy;
     target->peak = bin->peak;
     target->loop0 = bin->loop0;
