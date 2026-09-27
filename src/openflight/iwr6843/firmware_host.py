@@ -33,6 +33,8 @@ HOST_SOURCES = (
     "l3_club_track.c",
     "l3_impact.c",
     "l3_shot.c",
+    "l3_ball_track.c",
+    "l3_result.c",
 )
 
 # l3_observation.h
@@ -86,6 +88,51 @@ SHOT_STATE_NAMES = (
     "result",
 )
 SHOT_IMPACT_GATE, SHOT_IMPACT_GEOMETRY = 1, 2
+
+# l3_ball_track.h
+BALL_TRACK_WHY_NAMES = (
+    "none",
+    "unarmed",
+    "nocandidate",
+    "acquired",
+    "confirmed",
+    "tooslow",
+    "toofast",
+    "tracked",
+    "coasted",
+    "lost",
+)
+
+# l3_result.h
+RESULT_VERSION = 1
+RESULT_METRICS = 9
+RESULT_PACKET_BYTES = 100
+RESULT_METRIC_NAMES = (
+    "ball_speed",
+    "vertical_launch",
+    "horizontal_launch",
+    "club_speed",
+    "club_path",
+    "angle_of_attack",
+    "spin_rate",
+    "spin_axis",
+    "impact_range",
+)
+RESULT_VERDICT_NAMES = ("invalid", "partial", "valid")
+MEAS_VALID, MEAS_MEASURED, MEAS_RADIAL_ONLY, MEAS_IMPLAUSIBLE, MEAS_FALLBACK = 1, 2, 4, 8, 16
+QUALITY_FLAGS = {
+    "ball_locked": 1,
+    "club_track": 2,
+    "impact_identified": 4,
+    "ball_from_origin": 8,
+    "club_continuous": 16,
+    "ball_continuous": 32,
+    "speeds_plausible": 64,
+    "residuals_ok": 128,
+    "angles_plausible": 256,
+    "smash_plausible": 512,
+    "geometric_impact": 1024,
+}
 
 # l3_club_track.h
 TRACK_POINTS = 32
@@ -435,6 +482,82 @@ class Shot(ctypes.Structure):
     ]
 
 
+class BallTrackCfg(ctypes.Structure):
+    """``l3_ball_track_cfg_t``."""
+
+    _fields_ = [
+        ("core", TrackCfg),
+        ("minDepartureMps", ctypes.c_float),
+        ("maxSpeedMps", ctypes.c_float),
+        ("originGateBins", ctypes.c_float),
+        ("launchPoints", ctypes.c_uint32),
+    ]
+
+
+class BallTrack(ctypes.Structure):
+    """``l3_ball_track_t``: the departing ball over the trajectory core."""
+
+    _fields_ = [
+        ("cfg", BallTrackCfg),
+        ("core", ClubTrack),
+        ("armed", ctypes.c_uint8),
+        ("confirmed", ctypes.c_uint8),
+        ("why", ctypes.c_uint8),
+        ("done", ctypes.c_uint8),
+        ("impactTimestampUs", ctypes.c_uint32),
+        ("originBin", ctypes.c_float),
+        ("origin", Vec3),
+        ("counters", ctypes.c_uint32 * len(BALL_TRACK_WHY_NAMES)),
+    ]
+
+
+class Launch(ctypes.Structure):
+    """``l3_launch_t``: ball speed, horizontal and vertical launch at impact."""
+
+    _fields_ = [
+        ("points", ctypes.c_uint32),
+        ("velocity", Vec3),
+        ("launchPosition", Vec3),
+        ("speedMps", ctypes.c_float),
+        ("radialSpeedMps", ctypes.c_float),
+        ("hlaRad", ctypes.c_float),
+        ("vlaRad", ctypes.c_float),
+        ("residualM", ctypes.c_float),
+        ("confidence", ctypes.c_float),
+        ("speedValid", ctypes.c_uint8),
+        ("hlaValid", ctypes.c_uint8),
+        ("vlaValid", ctypes.c_uint8),
+    ]
+
+
+class Measurement(ctypes.Structure):
+    """``l3_measurement_t``: value, confidence, flags."""
+
+    _fields_ = [
+        ("value", ctypes.c_float),
+        ("confidence", ctypes.c_float),
+        ("flags", ctypes.c_uint32),
+    ]
+
+
+class ShotResult(ctypes.Structure):
+    """``l3_shot_result_t`` (the in-memory form; the packet is serialised byte by byte)."""
+
+    _fields_ = [
+        ("version", ctypes.c_uint32),
+        ("shotId", ctypes.c_uint32),
+        ("metric", Measurement * RESULT_METRICS),
+        ("validFlags", ctypes.c_uint32),
+        ("qualityFlags", ctypes.c_uint32),
+        ("impactTimestampUs", ctypes.c_uint32),
+        ("verdict", ctypes.c_uint8),
+        ("impactSource", ctypes.c_uint8),
+        ("clubPoints", ctypes.c_uint8),
+        ("ballPoints", ctypes.c_uint8),
+        ("smash", ctypes.c_float),
+    ]
+
+
 _U32 = ctypes.c_uint32
 _F32 = ctypes.c_float
 _P = ctypes.POINTER
@@ -499,6 +622,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_track_set_angles": ([_P(ClubTrack), _F32, _F32, ctypes.c_uint8], ctypes.c_int32),
     "l3_track_point": ([_P(ClubTrack), _U32, _P(TrackPoint)], ctypes.c_int32),
     "l3_track_delivery": ([_P(ClubTrack), _U32, _P(Delivery)], _U32),
+    "l3_track_delivery_range": ([_P(ClubTrack), _U32, _U32, _U32, _P(Delivery)], _U32),
     "l3_track_format_delivery": ([_P(Delivery), *_TEXT], ctypes.c_int32),
     "l3_track_fit": ([_P(ClubTrack), _U32, _P(_F32), _P(_F32)], _U32),
     "l3_track_speed_mps": ([_P(ClubTrack), _U32], _F32),
@@ -512,6 +636,28 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_impact_update": ([_P(Impact), _P(Delivery), _P(Vec3), ctypes.c_uint8], ctypes.c_int32),
     "l3_impact_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_impact_format": ([_P(Impact), *_TEXT], ctypes.c_int32),
+    # l3_ball_track.h
+    "l3_ball_track_cfg_defaults": ([_P(BallTrackCfg)], None),
+    "l3_ball_track_init": ([_P(BallTrack), _P(BallTrackCfg)], None),
+    "l3_ball_track_reset": ([_P(BallTrack)], None),
+    "l3_ball_track_arm": ([_P(BallTrack), _F32, _P(Vec3), _U32], None),
+    "l3_ball_track_update": ([_P(BallTrack), _P(TargetObs), _U32, _U32, _U32], ctypes.c_int32),
+    "l3_ball_track_set_angles": ([_P(BallTrack), _F32, _F32, ctypes.c_uint8], ctypes.c_int32),
+    "l3_ball_track_launch": ([_P(BallTrack), _P(Launch)], _U32),
+    "l3_ball_track_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_ball_track_format_status": ([_P(BallTrack), *_TEXT], ctypes.c_int32),
+    "l3_launch_format": ([_P(Launch), *_TEXT], ctypes.c_int32),
+    # l3_result.h
+    "l3_result_build": (
+        [_P(Shot), _P(BallTrack), _P(Launch), _U32, ctypes.c_uint8, _P(ShotResult)],
+        None,
+    ),
+    "l3_result_serialize": ([_P(ShotResult), ctypes.c_char_p, _U32], _U32),
+    "l3_result_metric_name": ([_U32], ctypes.c_char_p),
+    "l3_result_verdict_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_result_format": ([_P(ShotResult), *_TEXT], ctypes.c_int32),
+    "l3_result_format_metric": ([_P(ShotResult), _U32, *_TEXT], ctypes.c_int32),
+    "l3_result_format_hex": ([_P(ShotResult), *_TEXT], ctypes.c_int32),
     # l3_shot.h
     "l3_shot_cfg_defaults": ([_P(ShotCfg)], None),
     "l3_shot_init": ([_P(Shot), _P(ShotCfg)], None),
@@ -622,9 +768,13 @@ __all__ = [
     "ANGLE_MAX_RX",
     "ANGLE_MAX_TX",
     "CAL_MAX_VIRTUAL",
+    "BALL_TRACK_WHY_NAMES",
     "AngleObs",
     "AngleSnapshot",
+    "BallTrack",
+    "BallTrackCfg",
     "BinObs",
+    "Launch",
     "ANGLE_AZIMUTH",
     "ANGLE_ELEVATION",
     "TRACK_NO_TARGET",
@@ -632,6 +782,19 @@ __all__ = [
     "Cpx",
     "Delivery",
     "IMPACT_WHY_NAMES",
+    "MEAS_FALLBACK",
+    "MEAS_IMPLAUSIBLE",
+    "MEAS_MEASURED",
+    "MEAS_RADIAL_ONLY",
+    "MEAS_VALID",
+    "QUALITY_FLAGS",
+    "RESULT_METRIC_NAMES",
+    "RESULT_METRICS",
+    "RESULT_PACKET_BYTES",
+    "RESULT_VERDICT_NAMES",
+    "RESULT_VERSION",
+    "Measurement",
+    "ShotResult",
     "SHOT_IMPACT_GATE",
     "SHOT_IMPACT_GEOMETRY",
     "SHOT_STATE_NAMES",

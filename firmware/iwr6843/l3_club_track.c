@@ -262,13 +262,24 @@ static int32_t l3_track_fitAxis(const float *t, const float *value, uint32_t n, 
 
 uint32_t l3_track_delivery(const l3_club_track_t *track, uint32_t maxPoints, l3_delivery_t *out)
 {
+    uint32_t used;
+
+    if (maxPoints > L3_TRACK_POINTS) {
+        maxPoints = L3_TRACK_POINTS;
+    }
+    used = (track->count < maxPoints) ? track->count : maxPoints;
+    return l3_track_delivery_range(track, track->count - used, used, L3_TRACK_FULL_POINTS, out);
+}
+
+uint32_t l3_track_delivery_range(const l3_club_track_t *track, uint32_t first, uint32_t count,
+                                 uint32_t fullPoints, l3_delivery_t *out)
+{
     float t[L3_TRACK_POINTS];
     float x[L3_TRACK_POINTS];
     float y[L3_TRACK_POINTS];
     float z[L3_TRACK_POINTS];
     float r[L3_TRACK_POINTS];
-    uint32_t first;
-    uint32_t used;
+    uint32_t last;
     uint32_t n = 0U;
     uint32_t withAzimuth = 0U;
     uint32_t withElevation = 0U;
@@ -283,15 +294,17 @@ uint32_t l3_track_delivery(const l3_club_track_t *track, uint32_t maxPoints, l3_
     l3_track_point_t point;
 
     memset(out, 0, sizeof(*out));
-    if (maxPoints > L3_TRACK_POINTS) {
-        maxPoints = L3_TRACK_POINTS;
-    }
-    used = (track->count < maxPoints) ? track->count : maxPoints;
-    if (used < 3U) {
+    if (first >= track->count) {
         return 0U;
     }
-    first = track->count - used;
-    for (i = first; i < track->count; i++) {
+    last = first + count;
+    if (last > track->count) {
+        last = track->count;
+    }
+    if (last - first < 3U) {
+        return 0U;
+    }
+    for (i = first; i < last; i++) {
         (void)l3_track_point(track, i, &point);
         if (point.anglesValid & L3_OBS_ANGLE_AZIMUTH) {
             withAzimuth++;
@@ -307,10 +320,10 @@ uint32_t l3_track_delivery(const l3_club_track_t *track, uint32_t maxPoints, l3_
     } else if (withElevation >= 3U) {
         required = L3_OBS_ANGLE_ELEVATION;
     }
-    (void)l3_track_point(track, track->count - 1U, &point);
+    (void)l3_track_point(track, last - 1U, &point);
     newestUs = (float)point.timestampUs;
     out->timestampUs = point.timestampUs;
-    for (i = first; i < track->count; i++) {
+    for (i = first; i < last; i++) {
         (void)l3_track_point(track, i, &point);
         if ((point.anglesValid & required) != required) {
             continue;
@@ -354,7 +367,7 @@ uint32_t l3_track_delivery(const l3_club_track_t *track, uint32_t maxPoints, l3_
         /* Residual against two range bins of scatter, points against the
          * count a clean approach yields, and the points' own confidence. */
         float residualScore = 1.0F - out->residualM / (2.0F * track->cfg.binWidthM);
-        float countScore = (float)n / (float)L3_TRACK_FULL_POINTS;
+        float countScore = (float)n / (float)((fullPoints > 0U) ? fullPoints : 1U);
 
         if (residualScore < 0.0F) {
             residualScore = 0.0F;

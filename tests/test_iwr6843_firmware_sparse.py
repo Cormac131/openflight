@@ -329,8 +329,11 @@ def test_club_track_rides_the_trigger_pass_and_prints_from_trigger_log():
     assert 'strcmp(argv[1], "track") == 0' in log
     assert "l3_track_format_status(&gClubTrack, gClubTrackDest, line, sizeof(line));" in log
     assert "l3_track_format_point(&point, gClubTrackDest, line, sizeof(line));" in log
-    assert 'CLI_write("Error: triggerLog [trace|track|clear]\\n");' in log
-    assert "triggerLog [trace|track|clear]: frame log, raw-input trace or club track" in source
+    assert 'CLI_write("Error: triggerLog [trace|track|shot|result|clear]\\n");' in log
+    assert (
+        "triggerLog [trace|track|shot|result|clear]: frame log, trace, club track, shot, result"
+        in source
+    )
 
 
 def test_loop_period_for_doppler_comes_from_the_accepted_profile():
@@ -487,8 +490,115 @@ def test_trigger_log_track_prints_delivery_angle_and_impact_lines():
     assert "l3_angle_format(&gLastAngle, line, sizeof(line));" in log
     assert "l3_impact_format(&gImpact, line, sizeof(line));" in log
     assert 'CLI_write("%s armed=%u source=%u\\n", line, (unsigned)gImpactArmed,' in log
+    track = log[log.index('strcmp(argv[1], "track") == 0') :]
     assert (
-        log.index("l3_track_format_status(")
-        < log.index("l3_track_format_delivery(")
-        < log.index("l3_track_format_point(")
+        track.index("l3_track_format_status(")
+        < track.index("l3_track_format_delivery(")
+        < track.index("l3_track_format_point(")
     )
+
+
+def test_kept_post_frames_reach_the_detect_task_for_the_ball_tracker():
+    """Post-impact slots were never published; now every kept IQ16 post frame
+    is, under an epoch that marks it as never stale, and routed to the ball
+    tracker instead of the trigger."""
+    source = _source()
+    done = _function("static void l3_hwaOutputDoneCB(")
+    task = _function("static void l3_detectTask(")
+
+    assert "#define L3_DETECT_POST_EPOCH 0xFFFFFFFFU" in source
+    assert "uint32_t completedPostSlot = gCapturePlan.preFrames + gPostFramesCaptured;" in done
+    assert "l3_publishDetectFrame(completedPostSlot, L3_DETECT_POST_EPOCH);" in done
+    assert done.index("gPostFramesCaptured++;") < done.index(
+        "l3_publishDetectFrame(completedPostSlot"
+    )
+    assert "if (!l3_captureUsesIq8())" in done, "IQ8 rings hold int8; the trackers read int16"
+    assert "if (epoch == L3_DETECT_POST_EPOCH && queuedSlot >= gCapturePlan.preFrames) {" in task
+    assert "l3_considerBallTrack(queuedSlot);" in task
+    assert task.index("l3_considerBallTrack(") < task.index("l3detect_slot_live(")
+    for unit in ("l3_shot.c", "l3_ball_track.c"):
+        makefile = (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
+        assert unit in makefile, unit
+    assert '#include "l3_shot.h"' in source and '#include "l3_ball_track.h"' in source
+
+
+def test_ball_tracker_runs_the_whole_post_window_against_the_trigger_floor():
+    consider = _function("static void l3_considerBallTrack(")
+
+    assert "if (!gBallTrack.armed || gCapturePlan.loops == 0U)" in consider
+    assert "gPostTimestampUs += gFrameDeltaUs[slot];" in consider
+    assert "frame = gPreFramesCaptured + gPostFramesScored;" in consider
+    assert "l3_verticalResidual(slot, bin, NULL, &obs[bin]);" in consider
+    assert "gTrig.floor, targets, L3_OBS_MAX_TARGETS);" in consider
+    assert "l3_ball_track_update(&gBallTrack, targets, found, frame, gPostTimestampUs)" in consider
+    assert "gBallTrack.core.count > 1U" in consider, "angles once the flight has a range rate"
+    assert "l3_ball_track_set_angles(&gBallTrack, angle.azimuthRad," in consider
+    assert "(void)l3_ball_track_launch(&gBallTrack, &gLaunch);" in consider
+    assert "in.postFrame = 1U;" in consider
+    assert "in.ballTrackDone = gBallTrack.done;" in consider
+    assert "if (l3_shot_update(&gShot, &in, frame) == L3_SHOT_SOLVE) {" in consider
+    assert "in.solved = 1U;" in consider
+
+
+def test_shot_machine_sees_every_pre_frame_and_arms_the_ball_tracker_at_impact():
+    consider = _function("static void l3_considerSelfTrigger(")
+    observe = _function("static void l3_shotObserve(")
+
+    assert "l3_shotObserve(teeBin, fired, geometric && gImpactArmed);" in consider
+    assert consider.index("l3_shotObserve(") < consider.index("if (!fired) {")
+    assert "in.ballLocked = gTrigDestBall;" in observe
+    assert "in.clubActive = gClubTrack.active;" in observe
+    assert (
+        "in.impactTimestampUs = (geometric && gImpact.fired) ? gImpact.impactTimestampUs : frameUs;"
+    ) in observe
+    assert "gShot.impactFrame == gPreFramesCaptured" in observe
+    assert (
+        "l3_ball_track_arm(&gBallTrack, (float)teeBin, &gBallPosition, in.impactTimestampUs);"
+        in observe
+    )
+    rearm = _function("static void l3_trigRearm(")
+    assert "l3_shot_rearm(&gShot);" in rearm and "l3_ball_track_reset(&gBallTrack);" in rearm
+    assert "gPostTimestampUs = 0U;" in rearm and "gPostFramesScored = 0U;" in rearm
+    configure = _function("static void l3_clubTrackConfigure(")
+    assert "gBallTrackCfg.core.cal = gRadarCal;" in configure
+    assert "gShotCfg.requireBall = gBallCfg.follow;" in configure
+    assert "gShotCfg.ballTrackFrames = gCapturePlan.postFrames;" in configure
+
+
+def test_trigger_log_shot_prints_the_machine_the_ball_track_and_the_launch():
+    log = _function("static int32_t l3_cli_triggerLog(")
+    source = _source()
+
+    assert 'strcmp(argv[1], "shot") == 0' in log
+    assert "l3_shot_format(&gShot, line, sizeof(line));" in log
+    assert "l3_ball_track_format_status(&gBallTrack, line, sizeof(line));" in log
+    assert "l3_launch_format(&gLaunch, line, sizeof(line));" in log
+    assert "l3_track_point(&gBallTrack.core, index, &point)" in log
+    assert 'CLI_write("Error: triggerLog [trace|track|shot|result|clear]\\n");' in log
+    assert (
+        "triggerLog [trace|track|shot|result|clear]: frame log, trace, club track, shot, result"
+        in source
+    )
+
+
+def test_the_result_is_built_once_the_shot_reaches_result_and_printed_with_its_packet():
+    source = _source()
+    consider = _function("static void l3_considerBallTrack(")
+    log = _function("static int32_t l3_cli_triggerLog(")
+
+    assert '#include "l3_result.h"' in source
+    assert "l3_result.c" in (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
+    assert "if (gShot.state == L3_SHOT_RESULT && !gShotResultReady) {" in consider
+    assert (
+        "l3_result_build(&gShot, &gBallTrack, &gLaunch, ++gShotId, gTrigDestBall, &gShotResult);"
+        in consider
+    )
+    assert "gShotResultReady = 1U;" in consider
+    assert 'strcmp(argv[1], "result") == 0' in log
+    assert "l3_result_format(&gShotResult, line, sizeof(line));" in log
+    assert "l3_result_format_metric(&gShotResult, index, line, sizeof(line));" in log
+    assert "l3_result_format_hex(&gShotResult, hex, sizeof(hex));" in log
+    assert "static char hex[L3_RESULT_PACKET_BYTES * 2U + 1U];" in log
+    assert 'CLI_write("packet %s\\n", line);' in log
+    assert 'CLI_write("packet+ %s\\n", &hex[L3_RESULT_PACKET_BYTES]);' in log
+    assert "gShotResultReady = 0U;" in _function("static void l3_trigRearm(")

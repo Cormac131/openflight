@@ -165,6 +165,9 @@ class ReplayConfig:
     range_bias_m: float = 0.0
     # Geometric impact detector: armed lets it end the replay like the gate.
     impact_armed: bool = False
+    # Frames after the trigger fires go to the ball tracker, as the board's
+    # post movie does; a locked ball at dest_bin makes the shot require one.
+    post_impact: bool = True
 
     @property
     def destination(self) -> int:
@@ -207,6 +210,20 @@ class DeliverySummary:
 
 
 @dataclass(frozen=True)
+class LaunchSummary:
+    """``l3_launch_t`` copied out: ball speed and launch angles at impact."""
+
+    points: int
+    speed_mps: float
+    radial_speed_mps: float
+    hla_deg: float | None
+    vla_deg: float | None
+    residual_m: float
+    confidence: float
+    velocity: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
 class ReplayFrame:
     """What one frame did to the trigger, the track and the impact detector."""
 
@@ -223,6 +240,9 @@ class ReplayFrame:
     angle: AngleSummary | None = None  # for the point appended this frame
     delivery: DeliverySummary | None = None
     impact_why: str = "none"
+    shot_state: str = "waiting_for_ball"
+    ball_why: str = "none"  # the ball tracker's verdict on a post-impact frame
+    ball_bin: float | None = None  # the ball point appended this frame
 
 
 @dataclass(frozen=True)
@@ -249,6 +269,10 @@ class ReplayResult:
     impact_timestamp_us: int | None  # interpolated impact time from the geometry
     delivery: DeliverySummary | None  # at the end of the replay
     impact_status: str  # l3_impact_format at the end of the replay
+    launch: LaunchSummary | None  # from the ball tracker, when a flight was confirmed
+    ball_points: list[PointSummary]
+    shot_status: str  # l3_shot_format at the end
+    ball_status: str  # l3_ball_track_format_status at the end
     track_counters: dict[str, int]
     trig_counters: dict[str, int]
     speed_mps: float
@@ -259,6 +283,8 @@ class ReplayResult:
     trig: fw.Trig = field(repr=False)
     track: fw.ClubTrack = field(repr=False)
     impact: fw.Impact = field(repr=False)
+    shot: fw.Shot = field(repr=False)
+    ball_track: fw.BallTrack = field(repr=False)
 
     @property
     def acquisitions(self) -> int:
@@ -340,6 +366,51 @@ def _delivery_summary(delivery: fw.Delivery) -> DeliverySummary | None:
     )
 
 
+def _launch_summary(launch: fw.Launch) -> LaunchSummary | None:
+    if not launch.speedValid:
+        return None
+    return LaunchSummary(
+        points=int(launch.points),
+        speed_mps=float(launch.speedMps),
+        radial_speed_mps=float(launch.radialSpeedMps),
+        hla_deg=math.degrees(launch.hlaRad) if launch.hlaValid else None,
+        vla_deg=math.degrees(launch.vlaRad) if launch.vlaValid else None,
+        residual_m=float(launch.residualM),
+        confidence=float(launch.confidence),
+        velocity=(float(launch.velocity.x), float(launch.velocity.y), float(launch.velocity.z)),
+    )
+
+
+def _estimate_angles(
+    lib: ctypes.CDLL,
+    cal: fw.RadarCal,
+    cube: np.ndarray,
+    frame: int,
+    window_start: int,
+    n_tx: int,
+    hit: fw.TargetObs,
+    radial_velocity_mps: float,
+    chirp_period_s: float,
+) -> tuple[fw.AngleObs | None, int]:
+    """One target's angles as the board would estimate them; (obs, flags)."""
+    snapshot = channel_snapshot(
+        cube,
+        frame,
+        int(hit.peakBin) - window_start,
+        n_tx,
+        lag1_phase_rad=float(hit.dopplerPhaseRad),
+        radial_velocity_mps=radial_velocity_mps,
+        chirp_period_s=chirp_period_s,
+    )
+    obs = fw.AngleObs()
+    if not lib.l3_angle_estimate(ctypes.byref(cal), ctypes.byref(snapshot), ctypes.byref(obs)):
+        return None, 0
+    flags = (fw.ANGLE_AZIMUTH if obs.azimuthValid else 0) | (
+        fw.ANGLE_ELEVATION if obs.elevationValid else 0
+    )
+    return obs, flags
+
+
 def _radar_cal(lib: ctypes.CDLL, config: ReplayConfig) -> fw.RadarCal:
     cal = fw.RadarCal()
     lib.l3_cal_identity(ctypes.byref(cal), fw.CAL_MAX_VIRTUAL)
@@ -412,6 +483,22 @@ def replay_dump(
     bin_width_m = RANGE_SPAN_M / config.fft_size
     chirp_period_s = loop_period_s / n_tx
 
+    shot_cfg = fw.ShotCfg()
+    lib.l3_shot_cfg_defaults(ctypes.byref(shot_cfg))
+    shot_cfg.requireBall = 1 if config.dest_bin is not None else 0
+    shot_cfg.ballTrackFrames = int(meta["n_frames"])
+    shot = fw.Shot()
+    lib.l3_shot_init(ctypes.byref(shot), ctypes.byref(shot_cfg))
+    ball_cfg = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(ball_cfg))
+    ball_cfg.core.binWidthM = bin_width_m
+    ball_cfg.core.velocitySpanMps = track_cfg.velocitySpanMps
+    ball_cfg.core.cal = cal
+    ball_track = fw.BallTrack()
+    lib.l3_ball_track_init(ctypes.byref(ball_track), ctypes.byref(ball_cfg))
+    launch = fw.Launch()
+    ball_points: list[PointSummary] = []
+
     params = fw.ObsParams(trig_cfg.stat, trig_cfg.snr, loop_period_s)
     targets = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
     first_local = ctypes.c_uint32()
@@ -428,6 +515,32 @@ def replay_dump(
             break
         window_start, window_bins = frame_window(meta, frame)
         timestamp_us = timestamps[frame]
+        if ended and config.post_impact:
+            # The board's post movie: the ball tracker, not the trigger.
+            frames.append(
+                _replay_post_frame(
+                    lib,
+                    cube,
+                    frame,
+                    timestamp_us,
+                    window_start,
+                    window_bins,
+                    n_tx,
+                    params,
+                    trig.floor,
+                    targets,
+                    cal,
+                    chirp_period_s,
+                    ball_track,
+                    launch,
+                    shot,
+                    ball_position,
+                    ball_points,
+                    fw.TRIG_STATE_NAMES[trig.state],
+                    fw.TRACK_WHY_NAMES[track.why],
+                )
+            )
+            continue
         in_window = lib.l3_trig_region(
             ctypes.byref(trig_cfg),
             destination,
@@ -480,23 +593,18 @@ def replay_dump(
             # track's range-rate resolving the TDM alias, so a track's first
             # point (no range rate yet) stays range-only.
             lib.l3_track_point(ctypes.byref(track), track.count - 1, ctypes.byref(newest))
-            hit = targets[track.lastTargetIndex]
-            snapshot = channel_snapshot(
+            obs_angle, flags = _estimate_angles(
+                lib,
+                cal,
                 cube,
                 frame,
-                int(hit.peakBin) - window_start,
+                window_start,
                 n_tx,
-                lag1_phase_rad=float(hit.dopplerPhaseRad),
-                radial_velocity_mps=float(newest.radialVelocityMps),
-                chirp_period_s=chirp_period_s,
+                targets[track.lastTargetIndex],
+                float(newest.radialVelocityMps),
+                chirp_period_s,
             )
-            obs_angle = fw.AngleObs()
-            if lib.l3_angle_estimate(
-                ctypes.byref(cal), ctypes.byref(snapshot), ctypes.byref(obs_angle)
-            ):
-                flags = (fw.ANGLE_AZIMUTH if obs_angle.azimuthValid else 0) | (
-                    fw.ANGLE_ELEVATION if obs_angle.elevationValid else 0
-                )
+            if obs_angle is not None:
                 lib.l3_track_set_angles(
                     ctypes.byref(track), obs_angle.azimuthRad, obs_angle.elevationRad, flags
                 )
@@ -516,6 +624,30 @@ def replay_dump(
             geometric_frame = frame
         if fired:
             fired_frame = frame
+        # The shot machine, as l3_shotObserve feeds it; IMPACT arms the ball tracker.
+        shot_in = fw.ShotInput()
+        shot_in.ballLocked = 1 if config.dest_bin is not None else 0
+        shot_in.ballPosition = ball_position
+        shot_in.clubActive = track.active
+        shot_in.clubPoints = track.count
+        shot_in.gateFired = 1 if fired else 0
+        shot_in.geometricFired = 1 if (geometric and config.impact_armed) else 0
+        shot_in.impactTimestampUs = (
+            int(impact.impactTimestampUs) if (geometric and config.impact_armed) else timestamp_us
+        )
+        shot_in.delivery = ctypes.pointer(delivery)
+        shot_in.club = ctypes.pointer(track)
+        if (
+            lib.l3_shot_update(ctypes.byref(shot), ctypes.byref(shot_in), frame)
+            == fw.SHOT_STATE_NAMES.index("impact")
+            and shot.impactFrame == frame
+        ):
+            lib.l3_ball_track_arm(
+                ctypes.byref(ball_track),
+                float(destination),
+                ctypes.byref(ball_position),
+                shot_in.impactTimestampUs,
+            )
         frames.append(
             ReplayFrame(
                 frame,
@@ -531,6 +663,7 @@ def replay_dump(
                 angle,
                 _delivery_summary(delivery),
                 fw.IMPACT_WHY_NAMES[impact.why],
+                fw.SHOT_STATE_NAMES[shot.state],
             )
         )
 
@@ -548,6 +681,10 @@ def replay_dump(
         impact_timestamp_us=int(impact.impactTimestampUs) if impact.fired else None,
         delivery=_delivery_summary(delivery),
         impact_status=fw.c_text(lib.l3_impact_format, ctypes.byref(impact), cap=240),
+        launch=_launch_summary(launch),
+        ball_points=ball_points,
+        shot_status=fw.c_text(lib.l3_shot_format, ctypes.byref(shot), cap=240),
+        ball_status=fw.c_text(lib.l3_ball_track_format_status, ctypes.byref(ball_track), cap=240),
         track_counters={name: int(track.counters[i]) for i, name in enumerate(fw.TRACK_WHY_NAMES)},
         trig_counters={name: int(trig.counters[i]) for i, name in enumerate(_TRIG_COUNTERS)},
         speed_mps=float(lib.l3_track_speed_mps(ctypes.byref(track), fw.TRACK_POINTS)),
@@ -558,6 +695,111 @@ def replay_dump(
         trig=trig,
         track=track,
         impact=impact,
+        shot=shot,
+        ball_track=ball_track,
+    )
+
+
+def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
+    lib,
+    cube,
+    frame,
+    timestamp_us,
+    window_start,
+    window_bins,
+    n_tx,
+    params,
+    floor,
+    targets,
+    cal,
+    chirp_period_s,
+    ball_track,
+    launch,
+    shot,
+    ball_position,
+    ball_points,
+    trig_state,
+    track_why,
+) -> ReplayFrame:
+    """``l3_considerBallTrack``: the whole window as targets into the ball
+    tracker, angles for the appended point, the launch fit and the shot
+    machine's post-impact transitions."""
+    count = min(window_bins, fw.TRIG_MAX_BINS)
+    obs = bin_observations(cube, frame, 0, count, n_tx)
+    found = lib.l3_obs_extract(
+        ctypes.byref(params),
+        frame,
+        timestamp_us,
+        window_start,
+        obs,
+        count,
+        floor,
+        targets,
+        fw.OBS_MAX_TARGETS,
+    )
+    appended = lib.l3_ball_track_update(
+        ctypes.byref(ball_track), targets, found, frame, timestamp_us
+    )
+    ball_bin = None
+    angle = None
+    if appended:
+        newest = fw.TrackPoint()
+        core = ball_track.core
+        lib.l3_track_point(ctypes.byref(core), core.count - 1, ctypes.byref(newest))
+        if core.count > 1:
+            hit = next(
+                (targets[i] for i in range(found) if targets[i].rangeBin == newest.rangeBin), None
+            )
+            if hit is not None:
+                obs_angle, flags = _estimate_angles(
+                    lib,
+                    cal,
+                    cube,
+                    frame,
+                    window_start,
+                    n_tx,
+                    hit,
+                    float(newest.radialVelocityMps),
+                    chirp_period_s,
+                )
+                if obs_angle is not None:
+                    lib.l3_ball_track_set_angles(
+                        ctypes.byref(ball_track),
+                        obs_angle.azimuthRad,
+                        obs_angle.elevationRad,
+                        flags,
+                    )
+                    angle = _angle_summary(obs_angle)
+        lib.l3_track_point(ctypes.byref(core), core.count - 1, ctypes.byref(newest))
+        ball_points.append(_point_summary(newest))
+        ball_bin = float(newest.rangeBin)
+    lib.l3_ball_track_launch(ctypes.byref(ball_track), ctypes.byref(launch))
+    shot_in = fw.ShotInput()
+    shot_in.ballPosition = ball_position
+    shot_in.postFrame = 1
+    shot_in.ballTrackDone = ball_track.done
+    if lib.l3_shot_update(
+        ctypes.byref(shot), ctypes.byref(shot_in), frame
+    ) == fw.SHOT_STATE_NAMES.index("solve"):
+        shot_in.solved = 1
+        lib.l3_shot_update(ctypes.byref(shot), ctypes.byref(shot_in), frame)
+    return ReplayFrame(
+        frame,
+        timestamp_us,
+        window_start,
+        count,
+        float(floor),
+        trig_state,
+        False,
+        tuple(_target_summary(targets[i]) for i in range(found)),
+        track_why,
+        None,
+        angle,
+        None,
+        "none",
+        fw.SHOT_STATE_NAMES[shot.state],
+        fw.BALL_TRACK_WHY_NAMES[ball_track.why],
+        ball_bin,
     )
 
 
@@ -624,6 +866,19 @@ def _point_angles(result: ReplayResult, point: PointSummary) -> str:
     return ""
 
 
+def _launch_line(result: ReplayResult) -> str:
+    launch = result.launch
+    if launch is None:
+        return "launch: none"
+    hla = "-" if launch.hla_deg is None else f"{launch.hla_deg:+.1f} deg"
+    vla = "-" if launch.vla_deg is None else f"{launch.vla_deg:+.1f} deg"
+    return (
+        f"launch: {launch.points} points, ball speed {launch.speed_mps:.1f} m/s "
+        f"(radial {launch.radial_speed_mps:.1f}), hla {hla}, vla {vla}, "
+        f"residual {1000 * launch.residual_m:.1f} mm, confidence {launch.confidence:.2f}"
+    )
+
+
 def format_report(result: ReplayResult, *, name: str = "", points: bool = False) -> str:
     """A human-readable verdict on one capture: continuity first, then the detail."""
     fired = "no fire" if result.fired_frame is None else f"fired frame {result.fired_frame}"
@@ -637,6 +892,9 @@ def format_report(result: ReplayResult, *, name: str = "", points: bool = False)
         f"  {result.trigger_summary}",
         "  " + _delivery_line(result),
         f"  {result.impact_status}",
+        "  " + _launch_line(result),
+        f"  {result.shot_status}",
+        f"  {result.ball_status}",
     ]
     if points:
         distance = result.config.destination
@@ -645,6 +903,12 @@ def format_report(result: ReplayResult, *, name: str = "", points: bool = False)
                 f"  p frame={point.frame} t={point.timestamp_us / 1000.0:.1f}ms "
                 f"bin={point.range_bin:.2f} dist={distance - point.range_bin:.1f} "
                 f"range={point.range_m:.3f} vd={point.doppler_mps:.2f} "
+                f"conf={point.confidence:.2f}" + _point_angles(result, point)
+            )
+        for point in result.ball_points:
+            lines.append(
+                f"  b frame={point.frame} t={point.timestamp_us / 1000.0:.1f}ms "
+                f"bin={point.range_bin:.2f} range={point.range_m:.3f} vd={point.doppler_mps:.2f} "
                 f"conf={point.confidence:.2f}" + _point_angles(result, point)
             )
     return "\n".join(lines)
@@ -658,6 +922,7 @@ __all__ = [
     "DEFAULT_TRACK_FRAMES",
     "AngleSummary",
     "DeliverySummary",
+    "LaunchSummary",
     "PointSummary",
     "ReplayConfig",
     "ReplayFrame",

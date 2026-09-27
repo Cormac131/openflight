@@ -126,6 +126,12 @@ int32_t l3_track_point(const l3_club_track_t *track, uint32_t index, l3_track_po
 /* The delivery from the newest maxPoints points (at least 3). Returns the
  * points used, 0 when too few; out is fully written either way. */
 uint32_t l3_track_delivery(const l3_club_track_t *track, uint32_t maxPoints, l3_delivery_t *out);
+/* The same fit over points [first, first + count) in oldest-first order, so a
+ * caller can fit the EARLIEST points (the ball's first clean flight) as well
+ * as the newest. timestampUs and position refer to the last point fitted;
+ * fullPoints is the count that earns full confidence for this kind of fit. */
+uint32_t l3_track_delivery_range(const l3_club_track_t *track, uint32_t first, uint32_t count,
+                                 uint32_t fullPoints, l3_delivery_t *out);
 /* "delivery points=8 az=8 el=8 speed=22.40 radial=22.00 path=2.10 attack=-3.40
  *  residual=0.012 conf=0.81 valid=spa" */
 int32_t l3_track_format_delivery(const l3_delivery_t *delivery, char *out, uint32_t cap);

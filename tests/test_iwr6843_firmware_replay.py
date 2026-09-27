@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from iwr6843_synth import CLUB_SPEED_MS, FRAME_PERIOD_S, synth_club_dump
+from iwr6843_synth import CLUB_SPEED_MS, FRAME_PERIOD_S, synth_club_dump, synth_shot_dump
 
 from openflight.iwr6843 import firmware_host as fw
 from openflight.iwr6843.dump import SAMPLE_INT16_IQ, SAMPLE_RANGE_FFT_IQ16, pack_dump, parse_dump
@@ -133,9 +133,16 @@ def test_frame_window_and_timestamps_prefer_the_per_frame_metadata():
     assert frame_timestamps_us(timed) == (0, 3000, 15000)
 
 
+# The club-only synth has no ball: its club keeps going through the tee, so
+# these club-track tests keep scoring it after the gate fires (post_impact
+# off) as the first replay did. With post_impact on, post frames go to the
+# ball tracker instead, which the whole-shot tests below cover.
+CLUB_ONLY = ReplayConfig(tee_bin=TEE_BIN, post_impact=False)
+
+
 def test_the_synthetic_swing_replays_as_one_continuous_approach_track(lib, swing):
     """The acceptance criterion: an approach trajectory without reacquisition."""
-    result = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    result = replay_dump(swing, CLUB_ONLY, lib=lib)
 
     assert result.fired_frame is not None
     assert result.acquisitions == 1
@@ -203,7 +210,7 @@ def test_replay_rejects_raw_adc_dumps_bad_stats_and_bad_trigger_configs(lib, swi
 
 
 def test_report_leads_with_the_continuity_numbers(lib, swing):
-    result = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    result = replay_dump(swing, CLUB_ONLY, lib=lib)
     report = format_report(result, name="swing", points=True)
     head = report.splitlines()[0]
     assert head.startswith("swing: fired frame")
@@ -319,7 +326,9 @@ def test_replay_reads_club_path_and_speed_from_the_three_tx_synth(lib, path_deg)
     replay must give back the path it was built with, a level attack and the
     club speed from the 3D fit, not just the radial projection."""
     result = replay_dump(
-        synth_club_dump(path_deg, tee_range_m=TEE_RANGE_M), ReplayConfig(tee_bin=TEE_BIN), lib=lib
+        synth_club_dump(path_deg, tee_range_m=TEE_RANGE_M),
+        ReplayConfig(tee_bin=TEE_BIN, post_impact=False),
+        lib=lib,
     )
     assert result.delivery is not None
     assert result.delivery.path_deg == pytest.approx(path_deg, abs=0.5)
@@ -382,3 +391,77 @@ def test_report_points_carry_angles_and_the_manifest_takes_calibration_keys(lib,
     )
     config = recording_configs(tmp_path)[0][1]
     assert config.pitch_deg == 10.4 and config.range_bias_m == 0.066
+
+
+# --- the whole shot: ball tracker, launch and the shot machine ------------------
+
+
+@pytest.fixture(scope="module")
+def whole_shot() -> bytes:
+    return synth_shot_dump(
+        path_deg=3.0, hla_deg=2.0, vla_deg=12.0, ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M
+    )
+
+
+def test_post_impact_frames_go_to_the_ball_tracker_and_the_launch_is_recovered(lib, whole_shot):
+    """The acceptance for items 11-15: from the frames after the trigger the
+    replay finds the departing ball and reads its speed, HLA and VLA back."""
+    result = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    assert result.fired_frame is not None
+    assert result.launch is not None
+    assert result.launch.speed_mps == pytest.approx(60.0, abs=1.5)
+    assert result.launch.hla_deg == pytest.approx(2.0, abs=0.5)
+    assert result.launch.vla_deg == pytest.approx(12.0, abs=0.5)
+    assert result.launch.points >= 5 and result.launch.confidence > 0.6
+    assert len(result.ball_points) >= 6
+    bins = [p.range_bin for p in result.ball_points]
+    assert all(b > a for a, b in zip(bins, bins[1:])), "the ball only ever departs"
+    assert "balltrack armed=1 confirmed=1" in result.ball_status
+
+
+def test_the_shot_machine_walks_the_whole_sequence_on_the_replay(lib, whole_shot):
+    result = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    states = [f.shot_state for f in result.frames]
+    assert states[0] == "ready"
+    assert "club_track" in states and "impact" in states and "ball_track" in states
+    assert states[-1] == "result"
+    order = [states.index(s) for s in ("ready", "club_track", "impact", "ball_track", "result")]
+    assert order == sorted(order)
+    assert result.frames[result.fired_frame].shot_state == "impact"
+    assert "shot state=result" in result.shot_status and "source=gate" in result.shot_status
+    verdicts = [f.ball_why for f in result.frames if f.shot_state in ("ball_track", "result")]
+    assert verdicts[:3] == ["acquired", "confirmed", "tracked"]
+
+
+def test_the_club_delivery_is_read_from_the_pre_impact_frames_alone(lib, whole_shot):
+    """After the gate fires the club track stops (post frames feed the ball
+    tracker), so the delivery rests on the five angled approach points. The
+    synth's one-spike-per-loop club quantises the sub-bin centroid, which
+    with fewer points leaves about a metre per second of bias."""
+    result = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    assert result.delivery is not None
+    assert result.delivery.points == 5
+    assert len(result.points) == result.fired_frame + 1
+    assert result.delivery.path_deg == pytest.approx(3.0, abs=1.0)
+    assert result.delivery.speed_mps == pytest.approx(CLUB_SPEED_MS, abs=1.5)
+    assert result.delivery.attack_deg == pytest.approx(0.0, abs=0.3)
+
+
+def test_post_impact_can_be_disabled_to_keep_scoring_the_trigger(lib, whole_shot):
+    result = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN, post_impact=False), lib=lib)
+    assert result.launch is None and result.ball_points == []
+    assert all(f.ball_why == "none" for f in result.frames)
+
+
+def test_report_carries_launch_shot_and_ball_lines(lib, whole_shot):
+    result = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    report = format_report(result, name="shot", points=True)
+    assert "launch: " in report and "ball speed 6" in report
+    assert "shot state=result" in report and "balltrack armed=1" in report
+    assert report.count("\n  b frame=") == len(result.ball_points)
+    without = replay_dump(
+        synth_club_dump(0.0, tee_range_m=TEE_RANGE_M),
+        ReplayConfig(tee_bin=TEE_BIN, post_impact=False),
+        lib=lib,
+    )
+    assert "launch: none" in format_report(without)

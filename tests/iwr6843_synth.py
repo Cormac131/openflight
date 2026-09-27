@@ -127,3 +127,82 @@ def synth_club_dump(
         trigger_frame=0,
         sample_fmt=SAMPLE_RANGE_FFT_IQ16,
     )
+
+
+def synth_shot_dump(
+    *,
+    path_deg=0.0,
+    club_speed_ms=CLUB_SPEED_MS,
+    ball_speed_ms=60.0,
+    hla_deg=0.0,
+    vla_deg=12.0,
+    tee_range_m=1.372,
+    n_samples=128,
+    n_frames=18,
+    loops=12,
+    t_impact_s=None,
+    amp=1000.0,
+):
+    """A club approaching the tee, then a ball leaving it: the whole shot.
+
+    The club follows ``synth_club_dump``'s straight line up to impact and
+    stops there (it is the ball, not the club, the post-impact frames must
+    find). From impact the ball leaves the tee at ``ball_speed_ms`` with the
+    horizontal launch ``hla_deg`` (positive right, the +y direction) and the
+    vertical launch ``vla_deg`` (positive up, +z) of l3_frames.h. Azimuth
+    goes on TX1 as in ``synth_club_dump``; elevation goes on the 8-element
+    vertical array as ``music.steer(el)`` in physical order (the flipped
+    [tx0.rx0..3, tx2.rx0..3] vector), matching ``doa.canonicalize_tx_blocks``.
+    """
+    n_tx, n_rx = 3, 4
+    res = 6.0 / n_samples
+    t_impact = IMPACT_S if t_impact_s is None else t_impact_s
+    path_rad = math.radians(path_deg)
+    club_v = (club_speed_ms * math.cos(path_rad), club_speed_ms * math.sin(path_rad), 0.0)
+    hla, vla = math.radians(hla_deg), math.radians(vla_deg)
+    ball_v = (
+        ball_speed_ms * math.cos(vla) * math.cos(hla),
+        ball_speed_ms * math.cos(vla) * math.sin(hla),
+        ball_speed_ms * math.sin(vla),
+    )
+    tdm_offsets = (0.0, doa.TDM_TAU_S, doa.TX2_VERTICAL_TDM_TAU_S)
+    cube = np.zeros((n_frames, loops * n_tx, n_rx, n_samples), dtype=complex)
+    for frame in range(n_frames):
+        for loop in range(loops):
+            t = frame * FRAME_PERIOD_S + loop * TX2_LOOP_PERIOD_S
+            s = t - t_impact
+            velocity = club_v if s < 0 else ball_v
+            x = tee_range_m + s * velocity[0]
+            y = s * velocity[1]
+            z = s * velocity[2]
+            range_m = math.sqrt(x * x + y * y + z * z)
+            bin_at = int(range_m / res)
+            if not 0 <= bin_at < n_samples:
+                continue
+            az_rad = math.atan2(y, x)
+            el_rad = math.atan2(z, math.hypot(x, y))
+            phase_az = -math.pi * math.sin(az_rad)
+            v_r = (x * velocity[0] + y * velocity[1] + z * velocity[2]) / range_m
+            doppler_phase = 4.0 * math.pi * range_m / doa.LAM
+            # Elevation: physical element m carries exp(j pi sin(el) m); the
+            # logical [tx0.rx, tx2.rx] order is the reverse of physical.
+            physical = np.exp(1j * math.pi * math.sin(el_rad) * np.arange(2 * n_rx))
+            logical = physical[::-1]
+            for tx in range(n_tx):
+                tdm_phase = 4.0 * np.pi * v_r * tdm_offsets[tx] / doa.LAM
+                common = amp * np.exp(1j * (tdm_phase + doppler_phase))
+                if tx == 1:
+                    elevation = 0.5 * (logical[:n_rx] + logical[n_rx:])
+                    value = common * elevation * np.exp(1j * phase_az)
+                else:
+                    elevation = logical[:n_rx] if tx == 0 else logical[n_rx:]
+                    value = common * elevation
+                cube[frame, loop * n_tx + tx, :, bin_at] = value
+    return pack_dump(
+        cube,
+        n_tx=n_tx,
+        version=3,
+        frame_period_us=int(FRAME_PERIOD_S * 1e6),
+        trigger_frame=0,
+        sample_fmt=SAMPLE_RANGE_FFT_IQ16,
+    )
