@@ -131,7 +131,7 @@ The detector is armed and tuned over the CLI:
 
 ```text
 triggerCfg <globalBin> <snr> <frames> [approach gate minCoh minStep stat minSpeed]
-triggerLog [trace|clear]
+triggerLog [trace|track|clear]
 ```
 
 `snr` is the candidate threshold over the running noise floor (default 6 on
@@ -153,6 +153,67 @@ configured statistic's units), apparent velocity, coherence, track age, and
 (`acquired`, `advanced`, `jumped`, `missed`, `lost`, `lowcoh`, `young`,
 `slow`, `fired`). Read it after a missed swing before re-arming: the ring
 re-arm after `l3sparse` keeps the log, `triggerCfg` clears it.
+### Observation layer and club track
+
+The per-bin residuals are not the trigger's alone. `l3_observation.c` owns
+what is done with them before anyone decides anything: the statistic
+(`stat`), the adaptive floor, and target extraction (local maxima at or above
+floor x snr, strongest first, at most eight) with a sub-bin range centroid
+over the peak and its neighbours, SNR, coherence (|lag-1 autocorrelation| /
+energy), the aliased Doppler readout and a 0..1 confidence from the margin
+over threshold and the coherence. Angle fields exist on every target and read
+invalid until azimuth and elevation estimation lands. The trigger reads its
+statistic and floor from this layer, so the two never disagree about what a
+bin is worth.
+
+`l3_club_track.c` keeps the persistent trajectory the trigger's own
+`trackBin`/`trackAge` is not: the last 32 clubhead observations as a ring.
+Each frame's targets (the same observations the trigger just scored, ranked
+by `l3_obs_extract` against the trigger's floor) are associated by predicting
+where the club should be, `lastBin + velocity x elapsed frames`, and scoring
+every target inside a 3-bin gate by range error, Doppler continuity (wrapped
+across the alias span) and quality (1 - confidence), so the shaft, hands and
+body cannot steal the track just by being stronger. A frame with nothing in
+the gate coasts the prediction; two in a row drop the track. A least-squares
+fit of range bin against time over the held points gives a club speed that
+does not depend on the aliased Doppler. `triggerLog track` prints the status
+line (`clubtrack active= count= bin= dest= dist= vel= speed= fit= residual=
+acq= assoc= coast= drop=`) then every held point oldest first (`p frame= t=
+bin= dist= range= vr= vd= coh= conf= angles=`), distances in bins short of
+the destination. The track is reset with every ring rearm and configured
+with every `triggerCfg`: bin width from the accepted `trackCfg` range
+resolution, Doppler span from the profile's loop period.
+
+Both modules are pure C. `tests/test_iwr6843_firmware_observation.py` and
+`tests/test_iwr6843_firmware_club_track.py` build them with the host compiler
+through `openflight.iwr6843.firmware_host`, which holds the ctypes mirrors of
+every `l3_*.h` structure in one place.
+
+### Replaying recorded swings
+
+`openflight.iwr6843.firmware_replay` runs a recorded `.l3dump` through the
+same compiled modules the board runs. It computes the per-bin observations
+exactly as `l3_verticalResidual` does in `l3_dump.c` (vertical TX pair, all
+RX, burst-MTI residual, energy, strongest loop, loop 0, lag-1
+autocorrelation), takes the watch region from `l3_trig_region`, feeds
+`l3_trig_update`, `l3_obs_extract` and `l3_track_update` frame by frame, and
+reports what the board would have decided: the fired frame, every trajectory
+point, the longest unbroken run of points, acquisitions, coasts and drops,
+the share of steps that closed on the destination, and the fitted speed.
+
+```bash
+uv run python scripts/analysis/replay_iwr_track.py capture.l3dump --tee-range-m 1.575 --points
+uv run python scripts/analysis/replay_iwr_track.py tests/radar/recordings
+```
+
+Captures copied into `tests/radar/recordings/` with a `manifest.json` (see
+its README) are replayed by `tests/test_iwr6843_firmware_replay.py`, which
+also proves the harness on a synthetic swing: one acquisition, no missed
+frame, a fitted speed equal to the club's radial speed. Judge a change to the
+trigger or the track against every recorded swing there before flashing it;
+the acceptance criterion is a continuous approach trajectory without
+constant reacquisition.
+
 ### Global range bins
 
 Every bin the trigger and the ball detector speak of is a global range-FFT
@@ -285,7 +346,9 @@ matching host-parser change and regression tests in the same commit.
 | Path | Responsibility |
 |---|---|
 | `firmware/iwr6843/l3_dump.c` | RF control, HWA/EDMA pipeline, circular ring, freeze/rearm, CLI, and dump streaming |
-| `firmware/iwr6843/l3_trigger.c`, `l3_trigger.h` | Self-trigger detector: noise floor, clubhead track, impact gate, frame log (host-testable, no hardware) |
+| `firmware/iwr6843/l3_observation.c`, `l3_observation.h` | Observation layer: statistic, adaptive floor, target extraction with sub-bin range, coherence, Doppler readout, confidence (host-testable, no hardware) |
+| `firmware/iwr6843/l3_trigger.c`, `l3_trigger.h` | Self-trigger detector: impact gate over the observation layer, frame log and trace (host-testable, no hardware) |
+| `firmware/iwr6843/l3_club_track.c`, `l3_club_track.h` | Persistent club trajectory: predictive association, coasting, range-over-time speed fit (host-testable, no hardware) |
 | `firmware/iwr6843/l3_ball.c`, `l3_ball.h` | Ball placement detector: static background, compact-reflector appearance, confidence (host-testable, no hardware) |
 | `firmware/iwr6843/dump_format.h` | Packed firmware-side wire contract |
 | `firmware/iwr6843/makefile` | TI mmWave SDK application build and meta-image generation |
@@ -298,6 +361,9 @@ matching host-parser change and regression tests in the same commit.
 | `config/iwr6843_l3dump_dense_45f2ms_53bin_iq8.cfg` | Dense IQ8 capture profile with a 54 ms ball phase |
 | `config/iwr6843_l3dump_dense_36f2ms_53bin_iq8_wide_late.cfg` | Experimental dense IQ8 capture with the wide late-flight window |
 | `src/openflight/iwr6843/dump.py` | Python decoder and executable format reference |
+| `src/openflight/iwr6843/firmware_host.py` | Host build of the pure-C modules and their ctypes mirrors |
+| `src/openflight/iwr6843/firmware_replay.py` | Replays recorded captures through the compiled trigger, observation layer and club track |
+| `tests/radar/recordings/` | Recorded `.l3dump` swings with a `manifest.json` for the replay test |
 
 ## Where To Build, Flash, And Run
 
@@ -622,6 +688,11 @@ Run the firmware contract and host-pipeline tests:
 ```bash
 uv run pytest \
   tests/test_iwr6843_firmware_rearm.py \
+  tests/test_iwr6843_firmware_sparse.py \
+  tests/test_iwr6843_firmware_trigger.py \
+  tests/test_iwr6843_firmware_observation.py \
+  tests/test_iwr6843_firmware_club_track.py \
+  tests/test_iwr6843_firmware_replay.py \
   tests/test_iwr6843_pipeline.py \
   tests/test_iwr6843_driver.py \
   tests/test_iwr6843_monitor.py \
@@ -640,6 +711,8 @@ Also check:
 5. Vertical and horizontal estimators can replay the new format offline.
 6. Source-of-truth testing is repeated if timing, loops, frame spacing, TX
    schedule, or saved range coverage changed.
+7. Every capture in `tests/radar/recordings/` still replays as one continuous
+   approach track (`scripts/analysis/replay_iwr_track.py tests/radar/recordings`).
 
 ## Troubleshooting
 

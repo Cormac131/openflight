@@ -1,0 +1,287 @@
+"""Tests for the IWR6843 firmware replay harness, openflight.iwr6843.firmware_replay.
+
+The harness must compute the observations ``l3_dump.c`` computes on the
+board (checked against a line-by-line port of ``l3_verticalResidual``) and,
+fed a synthetic swing, must drive the compiled trigger and club track to one
+continuous approach trajectory: one acquisition, no gap, a fitted speed equal
+to the club's radial speed. Recorded captures in tests/radar/recordings run
+through the same path when present.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+import pytest
+from iwr6843_synth import CLUB_SPEED_MS, FRAME_PERIOD_S, synth_club_dump
+
+from openflight.iwr6843 import firmware_host as fw
+from openflight.iwr6843.dump import SAMPLE_INT16_IQ, SAMPLE_RANGE_FFT_IQ16, pack_dump, parse_dump
+from openflight.iwr6843.firmware_replay import (
+    RECORDINGS_DIR,
+    ReplayConfig,
+    bin_observations,
+    format_report,
+    frame_timestamps_us,
+    frame_window,
+    recording_configs,
+    replay_dump,
+    vertical_tx_indices,
+)
+
+SCRIPT = Path(__file__).parents[1] / "scripts" / "analysis" / "replay_iwr_track.py"
+BIN_M = 6.0 / 128
+TEE_RANGE_M = 1.372
+TEE_BIN = int(TEE_RANGE_M / BIN_M)  # 29
+
+
+@pytest.fixture(scope="module")
+def lib(tmp_path_factory):
+    if fw.host_compiler() is None:
+        pytest.skip("no C compiler for the firmware modules")
+    return fw.build_firmware_library(tmp_path_factory.mktemp("l3_host"))
+
+
+@pytest.fixture(scope="module")
+def swing() -> bytes:
+    return synth_club_dump(0.0, tee_range_m=TEE_RANGE_M)
+
+
+def _reference_residual(cube, frame, local_bin, n_tx):
+    """``l3_verticalResidual`` transcribed loop for loop, float64."""
+    chirps, n_rx = cube.shape[1], cube.shape[2]
+    loops = chirps // n_tx
+    loop_power = [0.0] * loops
+    energy = r1re = r1im = 0.0
+    for tx in range(n_tx):
+        if n_tx == 3 and tx == 1:
+            continue
+        for rx in range(n_rx):
+            samples = [cube[frame, loop * n_tx + tx, rx, local_bin] for loop in range(loops)]
+            mean_re = sum(s.real for s in samples) / loops
+            mean_im = sum(s.imag for s in samples) / loops
+            prev_re = prev_im = 0.0
+            for loop, s in enumerate(samples):
+                re, im = s.real - mean_re, s.imag - mean_im
+                power = im * im + re * re
+                energy += power
+                loop_power[loop] += power
+                if loop > 0:
+                    r1re += re * prev_re + im * prev_im
+                    r1im += im * prev_re - re * prev_im
+                prev_re, prev_im = re, im
+    return energy, max(loop_power), loop_power[0], r1re, r1im
+
+
+def _random_cube(seed: int, n_tx: int, loops: int = 12, n_rx: int = 4, bins: int = 20):
+    rng = np.random.default_rng(seed)
+    shape = (2, loops * n_tx, n_rx, bins)
+    return rng.integers(-2000, 2000, shape) + 1j * rng.integers(-2000, 2000, shape)
+
+
+@pytest.mark.parametrize("n_tx", [3, 2, 1])
+def test_bin_observations_match_a_line_by_line_port_of_the_firmware(n_tx):
+    cube = _random_cube(n_tx, n_tx)
+    obs = bin_observations(cube, 1, 3, 9, n_tx)
+    assert len(obs) == 9
+    for i in range(9):
+        expected = _reference_residual(cube, 1, 3 + i, n_tx)
+        got = (obs[i].energy, obs[i].peak, obs[i].loop0, obs[i].r1Re, obs[i].r1Im)
+        for name, e, g in zip(("energy", "peak", "loop0", "r1Re", "r1Im"), expected, got):
+            assert g == pytest.approx(e, rel=1e-5, abs=1e-2), (i, name)
+
+
+def test_three_tx_loops_skip_the_azimuth_element_and_fewer_use_every_transmitter():
+    assert vertical_tx_indices(3) == (0, 2)
+    assert vertical_tx_indices(2) == (0, 1)
+    assert vertical_tx_indices(1) == (0,)
+    with pytest.raises(ValueError):
+        vertical_tx_indices(0)
+
+
+def test_a_static_target_leaves_no_residual():
+    cube = np.zeros((1, 36, 4, 8), dtype=complex)
+    cube[0, :, :, 5] = 1000.0 + 250.0j  # identical in every loop
+    obs = bin_observations(cube, 0, 0, 8, 3)
+    assert all(obs[i].energy == 0.0 and obs[i].peak == 0.0 for i in range(8))
+
+
+def test_bin_observations_reject_a_window_outside_the_frame_or_a_partial_loop():
+    cube = _random_cube(7, 3)
+    with pytest.raises(ValueError):
+        bin_observations(cube, 0, 15, 8, 3)
+    with pytest.raises(ValueError):
+        bin_observations(cube, 0, 0, 4, 5)  # 36 chirps is not a whole number of 5-TX loops
+
+
+def test_frame_window_and_timestamps_prefer_the_per_frame_metadata():
+    fixed = {"n_frames": 3, "n_samples": 128, "range_bin_start": 20, "frame_period_us": 3000}
+    assert frame_window(fixed, 2) == (20, 128)
+    assert frame_timestamps_us(fixed) == (0, 3000, 6000)
+    timed = {
+        **fixed,
+        "range_bin_starts": (20, 20, 47),
+        "range_bin_counts": (53, 53, 40),
+        "frame_time_offsets_us": (0, 3000, 15000),
+    }
+    assert frame_window(timed, 2) == (47, 40)
+    assert frame_timestamps_us(timed) == (0, 3000, 15000)
+
+
+def test_the_synthetic_swing_replays_as_one_continuous_approach_track(lib, swing):
+    """The acceptance criterion: an approach trajectory without reacquisition."""
+    result = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+
+    assert result.fired_frame is not None
+    assert result.acquisitions == 1
+    assert len(result.points) >= 7
+    assert result.longest_run == len(result.points), "no frame of the approach was missed"
+    assert result.approach_fraction == 1.0, "every step closed on the tee"
+    assert result.speed_mps == pytest.approx(CLUB_SPEED_MS, abs=0.5)
+    assert result.fit_residual_bins < 0.3
+    # Points are 4 ms apart at the club's radial rate, in global bins.
+    step = CLUB_SPEED_MS * FRAME_PERIOD_S / BIN_M
+    bins = [point.range_bin for point in result.points]
+    assert all(b - a == pytest.approx(step, abs=0.5) for a, b in zip(bins, bins[1:]))
+    assert bins[-1] > TEE_BIN > bins[0]
+    assert all(
+        point.range_m == pytest.approx(point.range_bin * BIN_M, rel=1e-4) for point in result.points
+    )
+
+
+def test_the_trigger_fires_inside_the_impact_gate_and_frames_carry_the_detector_state(lib, swing):
+    result = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    fired = result.frames[result.fired_frame]
+
+    assert fired.fired and fired.trig_state == "fired"
+    assert all(f.trig_state == "tracking" for f in result.frames[1 : result.fired_frame])
+    assert fired.track_bin is not None and TEE_BIN - fired.track_bin <= 3
+    assert fired.first_bin == TEE_BIN - 12 and fired.count == 16
+    assert len(fired.targets) == 1 and fired.targets[0].confidence > 0.5
+    assert result.trig_counters["fired"] == 1
+    assert result.frames[0].track_why == "acquired"
+    assert result.frames[result.fired_frame].track_why == "associated"
+
+
+def test_stop_at_fire_ends_the_replay_where_the_board_stops_scoring(lib, swing):
+    result = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN, stop_at_fire=True), lib=lib)
+    assert len(result.frames) == result.fired_frame + 1
+    assert result.track_counters["dropped"] == 0
+
+
+def test_a_destination_outside_the_window_scores_nothing(lib, swing):
+    result = replay_dump(swing, ReplayConfig(tee_bin=29, dest_bin=200), lib=lib)
+    assert all(f.count == 0 for f in result.frames)
+    assert result.points == [] and result.fired_frame is None
+    assert result.acquisitions == 0 and result.longest_run == 0
+
+
+def test_energy_statistic_and_an_explicit_loop_period_are_honoured(lib, swing):
+    result = replay_dump(
+        swing, ReplayConfig(tee_bin=TEE_BIN, stat="energy", loop_period_s=100e-6), lib=lib
+    )
+    assert result.trig.cfg.stat == fw.STAT_ENERGY
+    assert result.trig.loopPeriodS == pytest.approx(100e-6)
+    assert result.track.cfg.velocitySpanMps == pytest.approx(2 * fw.OBS_WAVELENGTH_M / 4e-4)
+    assert result.acquisitions == 1
+
+
+def test_replay_rejects_raw_adc_dumps_bad_stats_and_bad_trigger_configs(lib, swing):
+    cube = np.zeros((2, 36, 4, 64), dtype=complex)
+    raw_adc = pack_dump(cube, n_tx=3, version=3, sample_fmt=SAMPLE_INT16_IQ)
+    with pytest.raises(ValueError, match="range-FFT snapshot"):
+        replay_dump(raw_adc, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    with pytest.raises(ValueError, match="stat"):
+        replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN, stat="loop0"), lib=lib)
+    with pytest.raises(ValueError, match="rejects"):
+        replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN, snr=0.5), lib=lib)
+
+
+def test_report_leads_with_the_continuity_numbers(lib, swing):
+    result = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    report = format_report(result, name="swing", points=True)
+    head = report.splitlines()[0]
+    assert head.startswith("swing: fired frame")
+    assert "acquisitions 1" in head and "longest run 8" in head and "approach 100%" in head
+    assert "clubtrack active=" in report and "trig state=fired" in report
+    assert report.count("\n  p frame=") == len(result.points)
+    assert f"dist={TEE_BIN - result.points[0].range_bin:.1f}" in report
+
+
+def test_recording_configs_merge_the_manifest_default_and_per_file_entries(tmp_path):
+    for name in ("b.l3dump", "a.l3dump"):
+        (tmp_path / name).write_bytes(b"")
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"default": {"tee_bin": 34}, "b.l3dump": {"dest_bin": 46, "notes": "ball"}})
+    )
+    configs = recording_configs(tmp_path)
+    assert [path.name for path, _ in configs] == ["a.l3dump", "b.l3dump"]
+    assert configs[0][1] == ReplayConfig(tee_bin=34)
+    assert configs[1][1] == ReplayConfig(tee_bin=34, dest_bin=46)
+    assert recording_configs(tmp_path, default_tee_bin=40)[0][1].tee_bin == 40
+
+
+def test_recording_configs_refuse_to_guess_a_tee_bin(tmp_path):
+    (tmp_path / "a.l3dump").write_bytes(b"")
+    with pytest.raises(ValueError, match="tee_bin"):
+        recording_configs(tmp_path)
+    assert recording_configs(tmp_path, default_tee_bin=34)[0][1].tee_bin == 34
+    assert recording_configs(tmp_path / "missing") == []
+
+
+def _script():
+    spec = importlib.util.spec_from_file_location("replay_iwr_track", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_script_replays_a_file_by_tee_range_and_a_directory_by_manifest(
+    lib, swing, tmp_path, capsys
+):
+    (tmp_path / "one.l3dump").write_bytes(swing)
+    (tmp_path / "two.l3dump").write_bytes(synth_club_dump(4.0, tee_range_m=TEE_RANGE_M))
+    (tmp_path / "manifest.json").write_text(json.dumps({"default": {"tee_bin": TEE_BIN}}))
+    script = _script()
+
+    assert script.main([str(tmp_path / "one.l3dump"), "--tee-range-m", str(TEE_RANGE_M)]) == 0
+    single = capsys.readouterr().out
+    assert single.startswith("one.l3dump: fired frame") and "  p frame=" not in single
+
+    assert script.main([str(tmp_path), "--points", "--stop-at-fire"]) == 0
+    both = capsys.readouterr().out
+    assert "one.l3dump: fired frame" in both and "two.l3dump: fired frame" in both
+    assert "  p frame=0 " in both
+    assert both.rstrip().splitlines()[-1].startswith("two.l3dump")
+    assert "coasted 0" in both, "--stop-at-fire reached the replay config"
+
+
+def test_script_needs_a_tee_for_a_bare_file_and_reports_an_empty_directory(tmp_path, capsys):
+    script = _script()
+    with pytest.raises(SystemExit):
+        script.main([str(tmp_path / "x.l3dump")])
+    assert script.main([str(tmp_path)]) == 1
+    assert "no .l3dump" in capsys.readouterr().err
+
+
+def test_synth_dump_is_a_range_snapshot_the_replay_can_read(swing):
+    meta, _ = parse_dump(swing)
+    assert meta["sample_fmt"] == SAMPLE_RANGE_FFT_IQ16 and meta["n_tx"] == 3
+
+
+_RECORDINGS = recording_configs(RECORDINGS_DIR) if RECORDINGS_DIR.exists() else []
+
+
+@pytest.mark.parametrize("path,config", _RECORDINGS, ids=[p.name for p, _ in _RECORDINGS])
+def test_recorded_swings_track_without_constant_reacquisition(lib, path, config):
+    """Weak, capture-independent form of the acceptance criterion; the script
+    prints the full report for the strong one."""
+    result = replay_dump(path.read_bytes(), config, lib=lib)
+    assert result.points, format_report(result, name=path.name)
+    assert result.acquisitions <= 2, format_report(result, name=path.name)
+    assert result.longest_run >= 3, format_report(result, name=path.name)
+    assert math.isfinite(result.speed_mps)

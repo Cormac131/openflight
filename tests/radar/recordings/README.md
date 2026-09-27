@@ -1,0 +1,41 @@
+# IWR6843 swing recordings
+
+Recorded `.l3dump` captures from a real rig, replayed through the firmware's
+own trigger, observation layer and club track by
+`tests/test_iwr6843_firmware_replay.py` and
+`scripts/analysis/replay_iwr_track.py`. The replay computes exactly the
+per-bin observations the R4F computes (`l3_verticalResidual` in
+`firmware/iwr6843/l3_dump.c`) and feeds them to the compiled C modules, so a
+change to `l3_trigger.c`, `l3_observation.c` or `l3_club_track.c` can be
+judged against every swing here before it is flashed.
+
+The directory ships empty apart from this file: the repository holds no
+session data. To add captures, copy them from the Pi's session directory
+(`~/openflight_sessions/iwr6843_<timestamp>_<seq>.l3dump`) and describe them
+in `manifest.json`:
+
+```json
+{
+  "default": {"tee_bin": 34, "snr": 6.0, "track_frames": 2, "stat": "peak"},
+  "iwr6843_20260920_181204_003.l3dump": {"dest_bin": 46, "notes": "ball locked at 2.16 m"},
+  "iwr6843_20260920_181330_004.l3dump": {"notes": "practice swing, no ball"}
+}
+```
+
+Every key other than `notes` is a `ReplayConfig` field
+(`openflight.iwr6843.firmware_replay`). `tee_bin` and `dest_bin` are GLOBAL
+range-FFT bins (bin = range / (6 m / 128) on the shipped profiles; bin 34 is
+1.59 m). `dest_bin` is the ball detector's locked bin when the firmware was
+following it; without it the tee bin is the destination, as on the board.
+
+Run the replay by hand with:
+
+```bash
+uv run python scripts/analysis/replay_iwr_track.py tests/radar/recordings --points
+```
+
+The acceptance criterion for the club track is a continuous approach
+trajectory: one acquisition per swing, a longest run covering the approach,
+and a fitted speed in the range a clubhead reaches. The test asserts the
+weaker, capture-independent form (a track exists and did not reacquire more
+than once); read the report for the rest.
