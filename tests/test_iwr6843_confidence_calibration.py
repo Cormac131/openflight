@@ -44,13 +44,11 @@ def test_calibration_reports_each_band_highest_first():
 
 
 def test_threshold_for_finds_the_lowest_confidence_meeting_the_bound():
-    threshold = threshold_for(pairs(), bound=2.0, coverage=0.95, min_count=20)
-    assert threshold is not None
-    assert 0.7 <= threshold <= 0.9, (
-        "the medium band still meets 2 deg at 95%; the low band breaks it"
-    )
-    strict = threshold_for(pairs(), bound=1.0, coverage=0.95, min_count=20)
-    assert strict is not None and strict >= 0.9
+    # At 97% coverage the medium band's lowest reading (0.72) still meets 2 deg;
+    # the first low-band reading (0.46) brings the share to 50/52 and breaks it.
+    assert threshold_for(pairs(), bound=2.0, coverage=0.97, min_count=20) == pytest.approx(0.72)
+    # A tighter bound is met only by the high band: its lowest confidence is 0.92.
+    assert threshold_for(pairs(), bound=1.1, coverage=0.96, min_count=20) == pytest.approx(0.92)
     assert threshold_for(pairs(), bound=0.1, coverage=0.95, min_count=20) is None
     assert threshold_for([], bound=1.0) is None
     assert threshold_for([ErrorPair(0.99, 0.1)] * 5, bound=1.0, min_count=20) is None, (
