@@ -1,0 +1,263 @@
+"""Source checks for the compact IQ16 capture formats in firmware/iwr6843/l3_dump.c.
+
+l3_dump.c cannot build here; these pin the integration the host relies on:
+compact16 and adaptive16 route the HWA output to the IQ16 scratch, the
+detect task reads the wide processing frame from that scratch at full
+precision and drops a frame whose scratch was reused, the rearm task
+compacts the retained window into L3 through l3_compact_iq16 with the
+window l3_retain.c chose, and the plan, stats, descriptors and CLI say so.
+The policy itself is tested in test_iwr6843_firmware_retain.py, the copy in
+test_iwr6843_compact_iq16.py and the plan arithmetic in
+test_iwr6843_capture_plan.py.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+FIRMWARE = Path(__file__).parents[1] / "firmware" / "iwr6843" / "l3_dump.c"
+
+
+def _source() -> str:
+    return FIRMWARE.read_text(encoding="utf-8")
+
+
+def _function(name: str) -> str:
+    source = _source()
+    start = source.index(name + "\n{") if (name + "\n{") in source else source.rindex(name)
+    brace = source.index("{", start)
+    depth = 0
+    for index in range(brace, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start : index + 1]
+    raise AssertionError(f"unterminated {name}")
+
+
+def test_the_formats_exist_and_the_cli_accepts_them():
+    source = _source()
+    assert "#define L3_CAPTURE_FORMAT_COMPACT16  2U" in source
+    assert "#define L3_CAPTURE_FORMAT_ADAPTIVE16 3U" in source
+    cli = _function("static int32_t l3_cli_captureFormat(")
+    assert (
+        'strcmp(argv[1], "compact16") == 0' in cli and 'strcmp(argv[1], "adaptive16") == 0' in cli
+    )
+    assert "gRetainCfg.enabled = (uint8_t)(gCaptureFormat == L3_CAPTURE_FORMAT_ADAPTIVE16);" in cli
+    assert "gCapturePlan.retainPreBins = 16U;" in cli, "default retain widths when none were given"
+    assert "l3_captureFormatName()" in cli
+    assert '"captureFormat iq16|iq8|compact16|adaptive16"' in source
+    assert '#include "l3_retain.h"' in source and '#include "compact_iq16.h"' in source
+    makefile = (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
+    assert "l3_retain.c" in makefile and "compact_iq16.c" in makefile
+
+
+def test_scratch_and_compact_helpers_cover_the_right_formats():
+    scratch = _function("static uint8_t l3_captureUsesScratch(")
+    assert "gCaptureFormat != L3_CAPTURE_FORMAT_IQ16" in scratch
+    compact = _function("static uint8_t l3_captureCompactsIq16(")
+    assert "L3_CAPTURE_FORMAT_COMPACT16" in compact and "L3_CAPTURE_FORMAT_ADAPTIVE16" in compact
+    bytes_per = _function("static uint32_t l3_captureBytesPerComplex(")
+    assert "l3_captureUsesIq8()" in bytes_per, "compact formats store IQ16: four bytes per complex"
+
+
+def test_the_hwa_writes_scratch_and_the_output_done_publishes_the_scratch_frame():
+    output = _function("static int32_t l3_configHwaFrameOutput(")
+    assert "destination = l3_captureUsesScratch()" in output
+    assert "gScratchBusy[gIq8ActiveScratch] = 1U;" in output
+    assert "gActiveProcessStart = (uint8_t)binStart;" in output
+    assert "gActiveProcessBins = (uint8_t)binCount;" in output
+    done = _function("static void l3_hwaOutputDoneCB(")
+    assert "if (l3_captureUsesScratch() && gActiveFrameShouldKeep)" in done
+    compact_block = done[done.index("if (l3_captureCompactsIq16())") :]
+    for line in (
+        "gFrameScratch[completedSlot] = gIq8ActiveScratch;",
+        "gFrameProcessStart[completedSlot] = gActiveProcessStart;",
+        "gFrameProcessBins[completedSlot] = gActiveProcessBins;",
+        "gScratchFrame[gIq8ActiveScratch] = gHwaOutputDone;",
+        "gScratchBusy[gIq8ActiveScratch] = 0U;",
+    ):
+        assert line in compact_block, line
+    # Only IQ8 defers the detect publish to after the pack; compact frames
+    # are published at once, from the scratch.
+    assert "if (!l3_captureUsesIq8())  /* IQ8 frames publish after packing */" in done
+    assert done.index("if (l3_captureCompactsIq16())") < done.index("if (!l3_captureUsesIq8())")
+
+
+def test_the_rearm_task_compacts_after_the_hwa_restart_from_the_scratch_it_is_not_writing():
+    rearm = _function("static void l3_hwaRearmTask(")
+    assert (
+        "if (l3_captureUsesScratch()) {\n                key = Hwi_disable();\n                if (gIq8Pending) {"
+        in rearm
+    )
+    assert "} else if (l3_captureCompactsIq16()) {" in rearm
+    toggle = rearm.index("} else if (l3_captureCompactsIq16()) {")
+    restart = rearm.index("errCode = l3_restartCompletedHwaFrame();")
+    store = rearm.index(
+        "if (l3_captureUsesScratch() && hadPending) {\n                l3_storeCompletedFrame(pendingSlot, pendingScratch);"
+    )
+    assert toggle < restart < store, (
+        "toggle the active scratch, restart the HWA, then compact the other"
+    )
+    freeze = rearm.index("if (freezeAfterPack) {")
+    assert "l3_storeCompletedFrame(pendingSlot, pendingScratch);" in rearm[freeze:restart]
+    queue = _function("static void l3_hwaMaybeQueueRearm(")
+    assert queue.count("l3_captureUsesScratch()") == 2 and "l3_captureUsesIq8()" not in queue
+    store_fn = _function("static void l3_storeCompletedFrame(")
+    assert "l3_compactCompletedFrame(slot, scratch);" in store_fn
+    assert "l3_startIq8EdmaPack(slot, scratch)" in store_fn
+
+
+def test_compaction_uses_the_policy_window_and_records_the_descriptor():
+    compact = _function("static void l3_compactCompletedFrame(")
+    assert "l3_retainState(slot, &state);" in compact
+    assert (
+        "l3_retain_window(&gRetainCfg, &state, processStart, processBins, gFrameBinCount[slot],"
+        in compact
+    )
+    assert "l3_compact_iq16(&g_iq16FrameScratch[scratch][0]," in compact
+    assert "(uint16_t)(window.start - processStart), window.bins)" in compact
+    assert "gFrameBinStart[slot] = window.start;" in compact
+    assert "gLastRetain = window;" in compact
+    for field in (
+        "globalBinStart",
+        "binCount",
+        "processStart",
+        "processBins",
+        "shotState",
+        "priority",
+        "why",
+        "isPost",
+    ):
+        assert f"desc->{field} = " in compact, field
+    assert "gCompactMaxUs" in compact and "gCompactErrors++" in compact
+    state = _function("static void l3_retainState(")
+    assert "state->shotState = gShot.state;" in state
+    assert "l3_ball_locked(&gBall, &ballBin)" in state
+    assert "l3_retain_predict(gClubTrack.lastBin, gClubTrack.velocityBinsPerFrame)" in state
+    assert (
+        "l3_retain_predict(gBallTrack.core.lastBin, gBallTrack.core.velocityBinsPerFrame)" in state
+    )
+    assert "state->postIndex = slot - gCapturePlan.preFrames;" in state
+
+
+def test_the_detect_task_reads_the_scratch_frame_and_drops_a_stale_one():
+    of = _function("static l3_detect_frame_t l3_detectFrameOf(")
+    assert "if (l3_captureCompactsIq16() && slot < L3_MAX_CAPTURE_FRAMES &&" in of
+    assert "frame.base = (const uint8_t *)&g_iq16FrameScratch[frame.scratch][0];" in of
+    assert "frame.binStart = gFrameProcessStart[slot];" in of
+    assert "frame.cb = 2U;" in of and "frame.scale = 1.0F;" in of
+    assert "return l3_ringFrameOf(slot);" in of
+    stale = _function("static int32_t l3_detectFrameStale(")
+    assert "gScratchBusy[frame->scratch] || gScratchFrame[frame->scratch] != frame->epoch" in stale
+    for name, guard in (
+        (
+            "static void l3_considerSelfTrigger(uint32_t slot)",
+            "gTrigBusy = 0U;\n        l3_noteTrigger(1U, 0.0F);\n        return;",
+        ),
+        ("static void l3_considerBallTrack(uint32_t slot)", "gTrigBusy = 0U;\n        return;"),
+        ("static void l3_considerBall(uint32_t slot)", "gBallBusy = 0U;\n        return;"),
+    ):
+        body = _function(name)
+        assert "l3_detect_frame_t frame = l3_detectFrameOf(slot);" in body, name
+        assert "gFrameBinStart[slot]" not in body and "gFrameBinCount[slot]" not in body, name
+        stale_at = body.index("if (l3_detectFrameStale(&frame)) {")
+        assert "gDetectScratchStale++;" in body[stale_at:] and guard in body[stale_at:], name
+        # The observations are computed first, the staleness judged before any decision.
+        assert body.index("l3_vertical", 0) < stale_at, name
+    for reader in (
+        "static void l3_verticalResidual(",
+        "static float l3_verticalStaticPower(",
+        "static void l3_channelSnapshot(",
+        "static void l3_channelSnapshotStatic(",
+    ):
+        body = _function(reader)
+        assert "const l3_detect_frame_t *source" in body, reader
+        assert "g_ring[" not in body and "gFrameBinCount[" not in body, reader
+
+
+def test_frozen_ring_readers_stay_on_the_ring():
+    loops = _function("static void l3_verticalPowerLoops(")
+    assert "l3_ringFrameOf(slot)" in loops and "l3_detectFrameOf" not in loops
+    scan = _function("static int32_t l3_ballScan(")
+    assert "l3_ringFrameOf(window.slots[frame])" in scan
+
+
+def test_plan_finalisation_budgets_compact_frames_and_checks_scratch_widths():
+    finalize = _function("static int32_t l3_finalizeCapturePlan(")
+    assert "gCapturePlan.compact = l3_captureCompactsIq16();" in finalize
+    assert "scratch capture windows cannot exceed" in finalize
+    assert "l3_retain_budget(&request, &budget)" in finalize
+    assert "request.preBins = gCapturePlan.retainPreBins;" in finalize
+    assert "gCapturePlan.requestedPreFrames = budget.preFrames;" in finalize
+    assert (
+        "gCapturePlan.postFrames = (uint8_t)(budget.impactFrames + budget.ballFrames);" in finalize
+    )
+    assert finalize.index("l3_retain_budget(") < finalize.index("l3plan_build(")
+    retain = _function("static int32_t l3_cli_captureCfgRetain(")
+    assert (
+        'strcmp(argv[1], "retain") == 0' in retain
+        and "gCapturePlan.retainImpactBins = values[1];" in retain
+    )
+    assert "cfg.approachBins = values[0];" in retain and "l3_retain_cfg_check(&cfg)" in retain
+    header = _function("static void l3_fill_header(")
+    assert (
+        "if (gCapturePlan.compact) {" in header
+        and "h->n_samples = gCapturePlan.retainPreBins;" in header
+    )
+
+
+def test_stats_and_trigger_log_report_the_compact_state():
+    stats = _function("static int32_t l3_cli_stats(")
+    assert "l3_captureFormatName()," in stats
+    assert '"compact frames=%u errors=%u max_us=%u scratch_stale=%u retain=%u/%u/%u %s\\n"' in stats
+    log = _function("static int32_t l3_cli_triggerLog(")
+    assert 'strcmp(argv[1], "frames") == 0' in log
+    assert "l3_frame_desc_format(&gFrameDesc[slot], line, sizeof(line));" in log
+    start = _function("static int32_t l3_cli_sensorStart(")
+    for reset in (
+        "gScratchBusy[0] = 0U;",
+        "gDetectScratchStale = 0U;",
+        "gCompactFrames = 0U;",
+        "memset(gFrameScratch, L3_SCRATCH_NONE, sizeof(gFrameScratch));",
+    ):
+        assert reset in start, reset
+
+
+def test_the_adaptive_profile_asks_for_the_compact_format_and_its_retain_widths():
+    cfg = (
+        FIRMWARE.parents[2] / "config" / "iwr6843_l3dump_adaptive_47f3ms_53bin_a16.cfg"
+    ).read_text()
+    lines = [line.split() for line in cfg.splitlines() if line and not line.startswith("%")]
+    by_name = {line[0]: line[1:] for line in lines}
+    assert by_name["captureFormat"] == ["adaptive16"]
+    assert by_name["captureCfg"] == ["retain", "16", "24", "16"]
+    (
+        pre_start,
+        pre_bins,
+        pre_frames,
+        impact_start,
+        impact_bins,
+        impact_frames,
+        post_start,
+        post_bins,
+        late_start,
+        ball_frames,
+        stride,
+    ) = (int(v) for v in by_name["phaseCaptureCfg"])
+    assert (pre_bins, impact_bins, post_bins) == (53, 53, 53), "processing windows stay wide"
+    assert pre_frames + impact_frames + ball_frames == 47 <= 64
+    per_bin = 36 * 4 * 4
+    assert (
+        pre_frames * 16 * per_bin + impact_frames * 24 * per_bin + ball_frames * 16 * per_bin
+        < 768 * 1024
+    )
+    order = [line[0] if line[0] != "captureCfg" else "captureCfg retain" for line in lines]
+    assert (
+        order.index("captureFormat")
+        < order.index("captureCfg retain")
+        < order.index("phaseCaptureCfg")
+    )
+    assert order[-1] == "sensorStart"

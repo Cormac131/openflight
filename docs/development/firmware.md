@@ -64,7 +64,9 @@ RF chirp
   -> ADCBUF
   -> HWA 128-point range FFT
   -> EDMA copies the configured moving range window
-  -> IQ16 is stored directly, or EDMA compacts HWA-scaled IQ8 into L3
+  -> IQ16 is stored directly, EDMA compacts HWA-scaled IQ8 into L3, or
+     (compact16/adaptive16) the detect task reads the IQ16 scratch and
+     the rearm task copies only the retained window into L3
   -> circular frame ring in L3 RAM
   -> sound trigger freezes the completed pre/post-impact movie
   -> header, timing/window metadata, scale table, and IQ payload stream to Pi
@@ -328,6 +330,39 @@ per-shot numbers (OPS speeds, the onboard result with every confidence,
 the host launch angle and club path, capture cost) from session logs into
 one CSV row per shot, tagged with the firmware SHA, before any of the
 representation work changes them.
+
+### Compact IQ16 capture (compact16, adaptive16)
+
+`captureFormat compact16|adaptive16` (with `captureCfg retain <preBins>
+<impactBins> <postBins>`, default 16/24/16, and `captureCfg retainPolicy
+...` for `l3_retain_cfg_t`) route the HWA's range-FFT output to the IQ16
+scratch in DATA_RAM, as the IQ8 path does. The detect task then reads each
+frame's wide processing window FROM THAT SCRATCH at full precision
+(`l3_detectFrameOf`), and the rearm task copies the retained window into
+the frame's L3 slot with `l3_compact_iq16` after restarting the HWA on the
+other scratch (`l3_compactCompletedFrame`): compact16 centres the window in
+the processing window, adaptive16 asks `l3_retain_window` where the shot
+is. The plan's slot widths are the retain widths (`L3CapturePlan.compact`,
+`retain*Bins`); the dump keeps format 4 with per-frame start and count, so
+the host parser needs no change and `l3sparse`/`l3track` read the retained
+windows. `l3_retain_budget` fits a phased plan that asks for too much by
+cutting the oldest club history first and the flight's tail second, never
+an impact frame, and prints the cut.
+
+The scratch is ping/pong, so a detect frame is valid until the HWA is
+aimed at its scratch again: about one frame period after the frame
+completed. `l3_detectFrameStale` (the scratch is busy, or completed another
+frame since) is checked after the observations are computed and before any
+decision; a stale frame is dropped and counted (`stats`: `compact frames=
+errors= max_us= scratch_stale= retain=` and the last window chosen). The
+compaction's worst-case cost is timed into `max_us`, `triggerLog frames`
+lists every stored slot's descriptor (window, processing window, shot
+state, priority, reason), and IQ8 keeps reading its packed ring as before.
+What is not yet known from hardware: the detect task's per-frame cost at 3
+ms against that one-frame deadline (`scratch_stale` says), the rearm
+budget with the compaction added (`max_us` and `hwa_missed` say), and
+whether the 141 ms adaptive movie changes the shot numbers (the A/B tool
+and the baseline dataset say).
 
 ### Processing region, retention region and the policy
 

@@ -63,6 +63,8 @@
 #include "l3_adaptive.h"
 #include "l3_impact.h"
 #include "l3_iq8.h"
+#include "l3_retain.h"
+#include "compact_iq16.h"
 #include "l3_profile.h"
 #include "l3_result.h"
 #include "l3_shot.h"
@@ -214,6 +216,14 @@
 #define L3_RING_MAX_BINS       64U
 #define L3_CAPTURE_FORMAT_IQ16 0U
 #define L3_CAPTURE_FORMAT_IQ8  1U
+/* Compact IQ16 formats: the HWA writes the wide processing window to the
+ * IQ16 scratch, the detect task reads it there at full precision, and the
+ * rearm task copies only the retained bins into L3 (compact_iq16.c).
+ * compact16 centres the retained window in the processing window;
+ * adaptive16 places it where l3_retain.c says the shot is. */
+#define L3_CAPTURE_FORMAT_COMPACT16  2U
+#define L3_CAPTURE_FORMAT_ADAPTIVE16 3U
+#define L3_SCRATCH_NONE 0xFFU
 #define L3_IQ16_SCRATCH_FRAME_BYTES  \
     (N_TX * L3_MAX_LOOPS * N_RX * L3_RING_MAX_BINS * 2U * \
      (uint32_t)sizeof(int16_t))
@@ -480,6 +490,23 @@ static volatile uint32_t gIq8EdmaWaits;
 static uint16_t gIq8FixedScale = 128U;
 static uint8_t  gIq8FixedShift = 7U;
 #endif
+/* Compact IQ16 formats: which scratch holds each slot's processing frame,
+ * the processing window it covered, and whether that scratch is fresh. */
+static uint8_t  gFrameScratch[L3_MAX_CAPTURE_FRAMES];
+static uint8_t  gFrameProcessStart[L3_MAX_CAPTURE_FRAMES];
+static uint8_t  gFrameProcessBins[L3_MAX_CAPTURE_FRAMES];
+static volatile uint32_t gScratchFrame[2];   /* HWA output count when the scratch last completed */
+static volatile uint8_t  gScratchBusy[2];    /* the HWA is writing (or about to write) it */
+static volatile uint8_t  gActiveProcessStart;
+static volatile uint8_t  gActiveProcessBins;
+static volatile uint32_t gDetectScratchStale; /* detect frames whose scratch was reused first */
+static volatile uint32_t gCompactFrames;
+static volatile uint32_t gCompactErrors;
+static volatile uint32_t gCompactMaxUs;
+static l3_retain_cfg_t   gRetainCfg;
+static uint8_t           gRetainCfgReady;
+static l3_retain_window_t gLastRetain;
+static l3_frame_desc_t   gFrameDesc[L3_MAX_CAPTURE_FRAMES];
 #endif
 #endif
 
@@ -541,6 +568,56 @@ static uint8_t l3_captureUsesIq8(void)
 #endif
 }
 
+/* The HWA writes to the IQ16 scratch (not straight into L3) for IQ8 and the
+ * compact IQ16 formats. */
+static uint8_t l3_captureUsesScratch(void)
+{
+#ifdef L3_RING_IQ8
+    return (uint8_t)(gCaptureFormat != L3_CAPTURE_FORMAT_IQ16);
+#else
+    return 0U;
+#endif
+}
+
+/* The ring holds a retained IQ16 window of each processing frame. */
+static uint8_t l3_captureCompactsIq16(void)
+{
+#ifdef L3_RING_IQ8
+    return (uint8_t)(gCaptureFormat == L3_CAPTURE_FORMAT_COMPACT16 ||
+                     gCaptureFormat == L3_CAPTURE_FORMAT_ADAPTIVE16);
+#else
+    return 0U;
+#endif
+}
+
+static const char *l3_captureFormatName(void)
+{
+#ifdef L3_RING_IQ8
+    switch (gCaptureFormat) {
+    case L3_CAPTURE_FORMAT_IQ8:
+        return "iq8";
+    case L3_CAPTURE_FORMAT_COMPACT16:
+        return "compact16";
+    case L3_CAPTURE_FORMAT_ADAPTIVE16:
+        return "adaptive16";
+    default:
+        return "iq16";
+    }
+#else
+    return "iq16";
+#endif
+}
+
+#ifdef L3_RING_IQ8
+static void l3_ensureRetainCfg(void)
+{
+    if (!gRetainCfgReady) {
+        l3_retain_cfg_defaults(&gRetainCfg);
+        gRetainCfgReady = 1U;
+    }
+}
+#endif
+
 static uint32_t l3_captureCapacityBytes(void)
 {
     /* Both IQ8 and IQ16 capture use the entire L3 arena: the IQ16 ping/pong
@@ -564,21 +641,34 @@ static int32_t l3_cli_captureFormat(int32_t argc, char *argv[])
         return -1;
     }
     if (argc != 2) {
-        CLI_write("Error: captureFormat needs iq16 or iq8\n");
+        CLI_write("Error: captureFormat needs iq16, iq8, compact16 or adaptive16\n");
         return -1;
     }
     if (strcmp(argv[1], "iq16") == 0) {
         gCaptureFormat = L3_CAPTURE_FORMAT_IQ16;
     } else if (strcmp(argv[1], "iq8") == 0) {
         gCaptureFormat = L3_CAPTURE_FORMAT_IQ8;
+    } else if (strcmp(argv[1], "compact16") == 0) {
+        gCaptureFormat = L3_CAPTURE_FORMAT_COMPACT16;
+    } else if (strcmp(argv[1], "adaptive16") == 0) {
+        gCaptureFormat = L3_CAPTURE_FORMAT_ADAPTIVE16;
     } else {
-        CLI_write("Error: captureFormat needs iq16 or iq8\n");
+        CLI_write("Error: captureFormat needs iq16, iq8, compact16 or adaptive16\n");
         return -1;
+    }
+    l3_ensureRetainCfg();
+    /* compact16 keeps the policy off (centred windows); adaptive16 turns it
+     * on. Retain widths default to 16/24/16 until captureCfg retain says. */
+    gRetainCfg.enabled = (uint8_t)(gCaptureFormat == L3_CAPTURE_FORMAT_ADAPTIVE16);
+    if (l3_captureCompactsIq16() && gCapturePlan.retainPreBins == 0U) {
+        gCapturePlan.retainPreBins = 16U;
+        gCapturePlan.retainImpactBins = 24U;
+        gCapturePlan.retainPostBins = 16U;
     }
     gCapturePlan.preFrames = 0U;
     gCapturePlan.totalFrames = 0U;
     gCapturePlan.usedBytes = 0U;
-    CLI_write("Capture format: %s\n", l3_captureUsesIq8() ? "iq8" : "iq16");
+    CLI_write("Capture format: %s\n", l3_captureFormatName());
     return 0;
 }
 
@@ -630,11 +720,58 @@ static int32_t l3_finalizeCapturePlan(uint16_t loops)
     uint32_t captureBytes = l3_captureCapacityBytes();
     char err[128];
 
+    gCapturePlan.compact = l3_captureCompactsIq16();
+    if (l3_captureUsesScratch() &&
+        (gCapturePlan.preBins > L3_RING_MAX_BINS || gCapturePlan.postBins > L3_RING_MAX_BINS ||
+         (gCapturePlan.phased && gCapturePlan.impactBins > L3_RING_MAX_BINS))) {
+        CLI_write("Error: scratch capture windows cannot exceed %u bins\n",
+                  (unsigned)L3_RING_MAX_BINS);
+        return -1;
+    }
+#ifdef L3_RING_IQ8
+    if (gCapturePlan.compact && gCapturePlan.phased) {
+        /* Spend L3 in priority order (l3_retain.h): every impact frame, then
+         * the first ball frames, then the last club frames. A request that
+         * does not fit is cut rather than refused, and the cut is printed. */
+        l3_retain_request_t request;
+        l3_retain_budget_t budget;
+
+        memset(&request, 0, sizeof(request));
+        request.bytesPerBin = (uint32_t)N_TX * loops * N_RX * l3_captureBytesPerComplex();
+        request.capacityBytes = captureBytes;
+        request.maxFrames = L3_MAX_CAPTURE_FRAMES;
+        request.preBins = gCapturePlan.retainPreBins;
+        request.impactBins = gCapturePlan.retainImpactBins;
+        request.ballBins = gCapturePlan.retainPostBins;
+        request.preFrames = gCapturePlan.requestedPreFrames;
+        request.impactFrames = gCapturePlan.impactFrames;
+        request.ballFrames = gCapturePlan.ballFrames;
+        if (l3_retain_budget(&request, &budget) != 0) {
+            CLI_write("Error: the impact frames do not fit L3 at these retain widths\n");
+            return -1;
+        }
+        if (budget.cutPre || budget.cutBall) {
+            static char budgetLine[96];
+
+            (void)l3_retain_format_budget(&budget, budgetLine, sizeof(budgetLine));
+            CLI_write("Capture %s\n", budgetLine);
+            gCapturePlan.requestedPreFrames = budget.preFrames;
+            gCapturePlan.ballFrames = budget.ballFrames;
+            gCapturePlan.postFrames = (uint8_t)(budget.impactFrames + budget.ballFrames);
+        }
+    }
+#endif
     if (l3plan_build(&gCapturePlan, &geometry, &tables, loops, gFramePeriodUs,
                       captureBytes, l3_captureBytesPerComplex(),
                       err, (uint32_t)sizeof(err)) != 0) {
         CLI_write("%s", err);
         return -1;
+    }
+    if (gCapturePlan.compact) {
+        CLI_write("Capture retain: %s pre=%u impact=%u post=%u bins of the processing windows\n",
+                  l3_captureFormatName(), (unsigned)gCapturePlan.retainPreBins,
+                  (unsigned)gCapturePlan.retainImpactBins,
+                  (unsigned)gCapturePlan.retainPostBins);
     }
 
     if (gCapturePlan.phased) {
@@ -711,10 +848,84 @@ static int32_t l3_cli_captureCfgAdaptive(int32_t argc, char *argv[])
     return 0;
 }
 
+/* "captureCfg retain <preBins> <impactBins> <postBins>": the IQ16 bins each
+ * slot stores in the compact formats, inside the processing windows.
+ * "captureCfg retainPolicy <approachBins> <marginBins> <impactBiasBins>
+ * <ballSearchLeadBins> <ballFollowLeadBins> <spinFrames>": l3_retain_cfg_t. */
+static int32_t l3_cli_captureCfgRetain(int32_t argc, char *argv[])
+{
+    uint8_t values[6];
+    int32_t i;
+
+    if (gCaptureActive) {
+        CLI_write("Error: stop the sensor before captureCfg retain\n");
+        return -1;
+    }
+    if (strcmp(argv[1], "retain") == 0) {
+        if (argc != 5) {
+            CLI_write("Error: captureCfg retain <preBins> <impactBins> <postBins>\n");
+            return -1;
+        }
+        for (i = 0; i < 3; i++) {
+            if (l3_parseU8(argv[i + 2], &values[i]) != 0 || values[i] == 0U ||
+                values[i] > L3_RING_MAX_BINS) {
+                CLI_write("Error: captureCfg retain widths are 1..%u bins\n",
+                          (unsigned)L3_RING_MAX_BINS);
+                return -1;
+            }
+        }
+        gCapturePlan.retainPreBins = values[0];
+        gCapturePlan.retainImpactBins = values[1];
+        gCapturePlan.retainPostBins = values[2];
+        gCapturePlan.preFrames = 0U;
+        gCapturePlan.totalFrames = 0U;
+        gCapturePlan.usedBytes = 0U;
+        CLI_write("Done\n");
+        return 0;
+    }
+#ifdef L3_RING_IQ8
+    if (argc != 8) {
+        CLI_write("Error: captureCfg retainPolicy <approachBins> <marginBins> <impactBiasBins> "
+                  "<ballSearchLeadBins> <ballFollowLeadBins> <spinFrames>\n");
+        return -1;
+    }
+    for (i = 0; i < 6; i++) {
+        if (l3_parseU8(argv[i + 2], &values[i]) != 0) {
+            CLI_write("Error: captureCfg retainPolicy values must be uint8 integers\n");
+            return -1;
+        }
+    }
+    l3_ensureRetainCfg();
+    {
+        l3_retain_cfg_t cfg = gRetainCfg;
+
+        cfg.approachBins = values[0];
+        cfg.approachMarginBins = values[1];
+        cfg.impactBiasBins = values[2];
+        cfg.ballSearchLeadBins = values[3];
+        cfg.ballFollowLeadBins = values[4];
+        cfg.spinFrames = values[5];
+        if (l3_retain_cfg_check(&cfg) != 0) {
+            CLI_write("Error: captureCfg retainPolicy (approach 1..64, others <= 32)\n");
+            return -1;
+        }
+        gRetainCfg = cfg;
+    }
+    CLI_write("Done\n");
+    return 0;
+#else
+    CLI_write("Error: this build has no compact IQ16 formats\n");
+    return -1;
+#endif
+}
+
 static int32_t l3_cli_captureCfg(int32_t argc, char *argv[])
 {
     if (argc >= 2 && strcmp(argv[1], "adaptive") == 0) {
         return l3_cli_captureCfgAdaptive(argc, argv);
+    }
+    if (argc >= 2 && (strcmp(argv[1], "retain") == 0 || strcmp(argv[1], "retainPolicy") == 0)) {
+        return l3_cli_captureCfgRetain(argc, argv);
     }
     uint8_t values[7];
     uint32_t valueCount;
@@ -1061,9 +1272,9 @@ static void l3_hwaMaybeQueueRearm(void)
     if (gCaptureActive && gHwaDoneSeen && gHwaOutputSeen && !gHwaRearmPending) {
         if (gHwaShutdownRequested) {
 #if defined(L3_RING_IQ8)
-            if (l3_captureUsesIq8()) {
-                /* Let the task pack the completed scratch frame before
-                 * acknowledging the shutdown boundary. */
+            if (l3_captureUsesScratch()) {
+                /* Let the task pack (or compact) the completed scratch frame
+                 * before acknowledging the shutdown boundary. */
                 gHwaRearmPending = 1U;
                 queue = 1U;
             } else
@@ -1075,9 +1286,10 @@ static void l3_hwaMaybeQueueRearm(void)
             }
         } else {
 #ifdef L3_RING_IQ8
-        if (l3_captureUsesIq8()) {
-            /* The completed IQ16 scratch frame must be packed before scratch
-             * can be reused, including the final retained post frame. */
+        if (l3_captureUsesScratch()) {
+            /* The completed IQ16 scratch frame must be packed or compacted
+             * before scratch can be reused, including the final retained
+             * post frame. */
             if (gHwaFreezeRequested && !gActiveFrameIsPost) {
                 gPostCaptureStarted = 1U;
             }
@@ -1171,7 +1383,7 @@ static void l3_hwaOutputDoneCB(uintptr_t arg, uint8_t tcCode)
     gHwaOutputDone++;
     gRingFrame++;
 #ifdef L3_RING_IQ8
-    if (l3_captureUsesIq8() && gActiveFrameShouldKeep) {
+    if (l3_captureUsesScratch() && gActiveFrameShouldKeep) {
         uint32_t completedSlot = gActiveFrameIsPost
                                      ? gCapturePlan.preFrames + gPostFramesCaptured
                                      : gPreFramesCaptured % gCapturePlan.preFrames;
@@ -1181,8 +1393,17 @@ static void l3_hwaOutputDoneCB(uintptr_t arg, uint8_t tcCode)
         gIq8PendingSlot = completedSlot;
         gIq8PendingScratch = gIq8ActiveScratch;
         gIq8Pending = 1U;
-        if (gActiveFrameIsPost) {
-            /* Kept post frames reach the ball tracker once packed. */
+        if (l3_captureCompactsIq16()) {
+            /* The detect task reads this scratch frame directly, at full
+             * precision, until the HWA is aimed at the scratch again; the
+             * compaction into L3 happens on the rearm task meanwhile. */
+            gFrameScratch[completedSlot] = gIq8ActiveScratch;
+            gFrameProcessStart[completedSlot] = gActiveProcessStart;
+            gFrameProcessBins[completedSlot] = gActiveProcessBins;
+            gScratchFrame[gIq8ActiveScratch] = gHwaOutputDone;
+            gScratchBusy[gIq8ActiveScratch] = 0U;
+        } else if (gActiveFrameIsPost) {
+            /* Kept IQ8 post frames reach the ball tracker once packed. */
             gIq8PendingDetect = 1U;
             gIq8PendingEpoch = L3_DETECT_POST_EPOCH;
         }
@@ -1598,6 +1819,104 @@ static void l3_waitForAllIq8Edma(void)
 #endif
 #endif
 
+#ifdef L3_RING_IQ8
+/* What the retention policy needs to know when a frame completes: the shot
+ * machine's state and the trackers' predictions for the coming frame. Read
+ * on the rearm task while the detect task may be updating them: a bin off
+ * in the window's placement at worst, never a wrong frame. */
+static void l3_retainState(uint32_t slot, l3_retain_state_t *state)
+{
+    uint32_t ballBin = gTrigCfg.teeBin;
+
+    memset(state, 0, sizeof(*state));
+    state->shotState = gShot.state;
+    if (l3_ball_locked(&gBall, &ballBin)) {
+        state->ballLocked = 1U;
+    } else {
+        ballBin = gTrigCfg.teeBin;
+    }
+    state->ballBin = (float)ballBin;
+    state->clubActive = gClubTrack.active;
+    state->clubBin = l3_retain_predict(gClubTrack.lastBin, gClubTrack.velocityBinsPerFrame);
+    if (slot >= gCapturePlan.preFrames) {
+        state->postFrame = 1U;
+        state->postIndex = slot - gCapturePlan.preFrames;
+    }
+    state->ballTrackConfirmed = gBallTrack.confirmed;
+    state->ballTrackBin =
+        l3_retain_predict(gBallTrack.core.lastBin, gBallTrack.core.velocityBinsPerFrame);
+}
+
+/* Copy the retained IQ16 window of a completed processing frame from its
+ * scratch into the slot, and record what the slot now holds. The slot's
+ * width is the plan's per-phase retain width; only the start moves. */
+static void l3_compactCompletedFrame(uint32_t slot, uint8_t scratch)
+{
+    l3_retain_state_t state;
+    l3_retain_window_t window;
+    l3_frame_desc_t *desc;
+    uint32_t processStart;
+    uint32_t processBins;
+    uint32_t ticks = Cycleprofiler_getTimeStamp();
+    uint32_t elapsedUs;
+
+    if (slot >= gCapturePlan.totalFrames || scratch >= 2U) {
+        gCompactErrors++;
+        return;
+    }
+    processStart = gFrameProcessStart[slot];
+    processBins = gFrameProcessBins[slot];
+    l3_ensureRetainCfg();
+    l3_retainState(slot, &state);
+    l3_retain_window(&gRetainCfg, &state, processStart, processBins, gFrameBinCount[slot],
+                     &window);
+    if (l3_compact_iq16(&g_iq16FrameScratch[scratch][0],
+                        (int16_t *)(void *)&g_ring[gFrameOffset[slot]],
+                        gCapturePlan.chirpsPerFrame, N_RX, (uint16_t)processBins,
+                        (uint16_t)(window.start - processStart), window.bins) != 0) {
+        gCompactErrors++;
+        return;
+    }
+    gFrameBinStart[slot] = window.start;
+    gFrameBinCount[slot] = window.bins;
+    gLastRetain = window;
+    desc = &gFrameDesc[slot];
+    desc->frame = (uint16_t)(state.postFrame ? gPreFramesCaptured + state.postIndex + 1U
+                                              : gPreFramesCaptured);
+    desc->timestampUs = (uint32_t)desc->frame * gFramePeriodUs;
+    desc->dataOffset = gFrameOffset[slot];
+    desc->bytes = gFrameBytes[slot];
+    desc->globalBinStart = window.start;
+    desc->binCount = window.bins;
+    desc->processStart = (uint8_t)processStart;
+    desc->processBins = (uint8_t)processBins;
+    desc->shotState = state.shotState;
+    desc->priority = window.priority;
+    desc->why = window.why;
+    desc->isPost = state.postFrame;
+    gCompactFrames++;
+    elapsedUs = (Cycleprofiler_getTimeStamp() - ticks) / (gCpuClock / 1000000U);
+    if (elapsedUs > gCompactMaxUs) {
+        gCompactMaxUs = elapsedUs;
+    }
+}
+
+/* A completed scratch frame into L3: IQ8 packs it, the compact formats keep
+ * the retained IQ16 window. */
+static void l3_storeCompletedFrame(uint32_t slot, uint8_t scratch)
+{
+    if (l3_captureCompactsIq16()) {
+        l3_compactCompletedFrame(slot, scratch);
+        return;
+    }
+#ifdef L3_IQ8_EDMA_PACK
+    (void)l3_startIq8EdmaPack(slot, scratch);
+#else
+    l3_packIq8CompletedFrame(slot, scratch);
+#endif
+}
+#endif
+
 static uint32_t l3_snapshotBinStartForNextFrame(void)
 {
     if (!gPostCaptureStarted) {
@@ -1653,9 +1972,16 @@ static int32_t l3_configHwaFrameOutput(uint32_t ringSlot)
         return -1;
     }
 #ifdef L3_RING_IQ8
-    destination = l3_captureUsesIq8()
+    destination = l3_captureUsesScratch()
                       ? (uint32_t)&g_iq16FrameScratch[gIq8ActiveScratch][0]
                       : (uint32_t)&g_ring[gFrameOffset[ringSlot]];
+    if (l3_captureUsesScratch()) {
+        /* From here the scratch belongs to the HWA: a detect frame still
+         * being read from it is stale (l3_detectFrameStale). */
+        gScratchBusy[gIq8ActiveScratch] = 1U;
+    }
+    gActiveProcessStart = (uint8_t)binStart;
+    gActiveProcessBins = (uint8_t)binCount;
 #else
     destination = (uint32_t)&g_ring[gFrameOffset[ringSlot]];
 #endif
@@ -1949,7 +2275,7 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
             }
             Hwi_restore(key);
 #else
-            if (!l3_captureUsesIq8()) {
+            if (!l3_captureUsesScratch()) {
                 key = Hwi_disable();
                 if (gHwaShutdownRequested) {
                     gCaptureActive = 0U;
@@ -1961,7 +2287,7 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
             }
 #endif
 #ifdef L3_RING_IQ8
-            if (l3_captureUsesIq8()) {
+            if (l3_captureUsesScratch()) {
                 key = Hwi_disable();
                 if (gIq8Pending) {
                     hadPending = 1U;
@@ -2000,11 +2326,7 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
             if (freezeAfterPack) {
 #ifdef L3_RING_IQ8
                 if (hadPending) {
-#ifdef L3_IQ8_EDMA_PACK
-                    (void)l3_startIq8EdmaPack(pendingSlot, pendingScratch);
-#else
-                    l3_packIq8CompletedFrame(pendingSlot, pendingScratch);
-#endif
+                    l3_storeCompletedFrame(pendingSlot, pendingScratch);
                 }
 #ifdef L3_IQ8_EDMA_PACK
                 if (l3_captureUsesIq8()) {
@@ -2023,6 +2345,11 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
 #if defined(L3_RING_IQ8) && defined(L3_IQ8_EDMA_PACK)
             if (l3_captureUsesIq8()) {
                 l3_waitForIq8EdmaScratch(nextScratch);
+                gIq8ActiveScratch = nextScratch;
+            } else if (l3_captureCompactsIq16()) {
+                /* The compaction is synchronous and happens after the HWA
+                 * restart below, so the scratch it reads is the one the HWA
+                 * is NOT writing: toggle first, compact from the other. */
                 gIq8ActiveScratch = nextScratch;
             }
 #endif
@@ -2047,12 +2374,10 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
                 gHwaRearmErrors++;
             }
 #ifdef L3_RING_IQ8
-            if (l3_captureUsesIq8() && hadPending) {
-#ifdef L3_IQ8_EDMA_PACK
-                (void)l3_startIq8EdmaPack(pendingSlot, pendingScratch);
-#else
-                l3_packIq8CompletedFrame(pendingSlot, pendingScratch);
-                if (pendingDetect != 0U) {
+            if (l3_captureUsesScratch() && hadPending) {
+                l3_storeCompletedFrame(pendingSlot, pendingScratch);
+#ifndef L3_IQ8_EDMA_PACK
+                if (pendingDetect != 0U && l3_captureUsesIq8()) {
                     /* Pre slots to the trigger, kept post slots (post epoch)
                      * to the ball tracker. */
                     l3_publishDetectFrame(pendingSlot, pendingEpoch);
@@ -2101,6 +2426,17 @@ static void l3_fill_header(l3_dump_header_t *h, uint16_t n_frames,
     }
     if (gCapturePlan.postBins > h->n_samples) {
         h->n_samples = gCapturePlan.postBins;
+    }
+    if (gCapturePlan.compact) {
+        /* The payload holds the retained windows: their widest is the
+         * maximum frame width the decoder sizes for. */
+        h->n_samples = gCapturePlan.retainPreBins;
+        if (gCapturePlan.phased && gCapturePlan.retainImpactBins > h->n_samples) {
+            h->n_samples = gCapturePlan.retainImpactBins;
+        }
+        if (gCapturePlan.retainPostBins > h->n_samples) {
+            h->n_samples = gCapturePlan.retainPostBins;
+        }
     }
     h->_pad             = 0U;
 #else
@@ -2548,10 +2884,23 @@ static const int16_t *l3_iq16Sample(
     return &frame[index * 2U];
 }
 
-/* Ring samples for the detect path: int16 (Im, Re) pairs in IQ16, int8
- * pairs times the frame's scale in IQ8 (see gFrameIq8Scale), so the trigger,
- * the trackers and the ball detector read either ring. Each component is
- * l3_ringComponentBytes() wide; a complex sample is two of them. */
+/* Samples for the detect path: int16 (Im, Re) pairs in IQ16, int8 pairs
+ * times the frame's scale in IQ8 (see gFrameIq8Scale), so the trigger, the
+ * trackers and the ball detector read either ring. Each component is
+ * l3_ringComponentBytes() wide; a complex sample is two of them. In the
+ * compact IQ16 formats a detect frame is the wide processing window in the
+ * IQ16 scratch, not the retained window in the ring: l3_detectFrameOf says
+ * where a slot's frame is, l3_detectFrameStale whether it is still there. */
+typedef struct {
+    const uint8_t *base;
+    uint32_t binStart;   /* global bin of the first sample */
+    uint32_t binCount;
+    uint32_t cb;         /* bytes per component */
+    float    scale;      /* physical amplitude per stored unit */
+    uint8_t  scratch;    /* L3_SCRATCH_NONE when the frame is in the ring */
+    uint32_t epoch;      /* the scratch's completion count when this was taken */
+} l3_detect_frame_t;
+
 static uint32_t l3_ringComponentBytes(void)
 {
     return l3_captureUsesIq8() ? 1U : 2U;
@@ -2577,21 +2926,75 @@ static float l3_ringComponent(const uint8_t *component, uint32_t bytes)
     return (float)*(const int16_t *)(const void *)component;
 }
 
+/* The slot's frame as stored in the ring (the retained window). */
+static l3_detect_frame_t l3_ringFrameOf(uint32_t slot)
+{
+    l3_detect_frame_t frame;
+
+    frame.base = &g_ring[gFrameOffset[slot]];
+    frame.binStart = gFrameBinStart[slot];
+    frame.binCount = gFrameBinCount[slot];
+    frame.cb = l3_ringComponentBytes();
+    frame.scale = l3_ringScale(slot);
+    frame.scratch = L3_SCRATCH_NONE;
+    frame.epoch = 0U;
+    return frame;
+}
+
+/* The slot's frame as the detect task should read it: the wide IQ16
+ * processing window in the scratch for the compact formats, else the ring. */
+static l3_detect_frame_t l3_detectFrameOf(uint32_t slot)
+{
+#ifdef L3_RING_IQ8
+    if (l3_captureCompactsIq16() && slot < L3_MAX_CAPTURE_FRAMES &&
+        gFrameScratch[slot] < 2U) {
+        l3_detect_frame_t frame;
+
+        frame.scratch = gFrameScratch[slot];
+        frame.base = (const uint8_t *)&g_iq16FrameScratch[frame.scratch][0];
+        frame.binStart = gFrameProcessStart[slot];
+        frame.binCount = gFrameProcessBins[slot];
+        frame.cb = 2U;
+        frame.scale = 1.0F;
+        frame.epoch = gScratchFrame[frame.scratch];
+        return frame;
+    }
+#endif
+    return l3_ringFrameOf(slot);
+}
+
+/* 1 when the scratch a detect frame was read from has been handed back to
+ * the HWA (or completed another frame) since: the observations just
+ * computed from it may mix two frames and must not drive a decision. */
+static int32_t l3_detectFrameStale(const l3_detect_frame_t *frame)
+{
+#ifdef L3_RING_IQ8
+    if (frame->scratch != L3_SCRATCH_NONE) {
+        return (gScratchBusy[frame->scratch] || gScratchFrame[frame->scratch] != frame->epoch)
+                   ? 1
+                   : 0;
+    }
+#else
+    (void)frame;
+#endif
+    return 0;
+}
+
 /* Burst-MTI residual of one bin over every loop of a frame, summed over the
  * vertical TX pair (TX0 and TX2 of three) and all RX. Each (tx, rx) loop
  * mean is computed once, so a bin costs O(loops), not O(loops^2). perLoop[]
  * (gCapturePlan.loops values) receives the residual power of each loop; obs
  * receives the residual energy integrated over every loop and the lag-1
  * loop autocorrelation the trigger reads Doppler from. Either may be NULL. */
-static void l3_verticalResidual(uint32_t slot, uint32_t localBin,
+static void l3_verticalResidual(const l3_detect_frame_t *source, uint32_t localBin,
                                 float *perLoop, l3_trig_obs_t *obs)
 {
-    const uint8_t *frame = &g_ring[gFrameOffset[slot]];
-    uint32_t binCount = gFrameBinCount[slot];
+    const uint8_t *frame = source->base;
+    uint32_t binCount = source->binCount;
     uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
     uint32_t loops = gCapturePlan.loops;
-    uint32_t cb = l3_ringComponentBytes();
-    float scale = l3_ringScale(slot);
+    uint32_t cb = source->cb;
+    float scale = source->scale;
     /* The same (tx, rx) one loop later is ntx chirps on: N_RX * binCount
      * complex samples per chirp, two components each. */
     uint32_t loopStride = ntx * N_RX * binCount * 2U * cb;
@@ -2663,9 +3066,14 @@ static void l3_verticalResidual(uint32_t slot, uint32_t localBin,
 }
 
 /* l3sparse's per-loop residual power rows. */
+/* Per-loop residual power of a FROZEN ring slot, for the l3sparse power map
+ * and the l3track cell selection: always the retained window in the ring,
+ * never the scratch, which the HWA has long since reused. */
 static void l3_verticalPowerLoops(uint32_t slot, uint32_t localBin, float *out)
 {
-    l3_verticalResidual(slot, localBin, out, NULL);
+    l3_detect_frame_t frame = l3_ringFrameOf(slot);
+
+    l3_verticalResidual(&frame, localBin, out, NULL);
 }
 
 /* Static (non-MTI) power of one bin: mean |I + jQ|^2 per complex sample over
@@ -2673,14 +3081,15 @@ static void l3_verticalPowerLoops(uint32_t slot, uint32_t localBin, float *out)
  * exactly this, so it is the view of a stationary ball on the tee that the
  * trigger never sees; teeScan reports it so a ball's presence and range bin
  * can be proved before any swing is judged. Diagnostic only. */
-static float l3_verticalStaticPower(uint32_t slot, uint32_t localBin, uint32_t loopStep)
+static float l3_verticalStaticPower(const l3_detect_frame_t *source, uint32_t localBin,
+                                    uint32_t loopStep)
 {
-    const uint8_t *frame = &g_ring[gFrameOffset[slot]];
-    uint32_t binCount = gFrameBinCount[slot];
+    const uint8_t *frame = source->base;
+    uint32_t binCount = source->binCount;
     uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
     uint32_t loops = gCapturePlan.loops;
-    uint32_t cb = l3_ringComponentBytes();
-    float scale = l3_ringScale(slot);
+    uint32_t cb = source->cb;
+    float scale = source->scale;
     uint32_t loopStride = ntx * N_RX * binCount * 2U * cb * loopStep;
     float total = 0.0F;
     uint32_t samples = 0U;
@@ -2713,15 +3122,15 @@ static float l3_verticalStaticPower(uint32_t slot, uint32_t localBin, uint32_t l
  * with the target's per-loop Doppler phase (the lag-1 phase the observation
  * layer measured) unwound, so the loops add in phase and only the TDM chirp
  * offsets between the TX blocks remain for l3_angle_estimate to remove. */
-static void l3_channelSnapshot(uint32_t slot, uint32_t localBin, float lag1PhaseRad,
+static void l3_channelSnapshot(const l3_detect_frame_t *source, uint32_t localBin, float lag1PhaseRad,
                                float radialVelocityMps, l3_angle_snapshot_t *out)
 {
-    const uint8_t *frame = &g_ring[gFrameOffset[slot]];
-    uint32_t binCount = gFrameBinCount[slot];
+    const uint8_t *frame = source->base;
+    uint32_t binCount = source->binCount;
     uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
     uint32_t loops = gCapturePlan.loops;
-    uint32_t cb = l3_ringComponentBytes();
-    float scale = l3_ringScale(slot);
+    uint32_t cb = source->cb;
+    float scale = source->scale;
     uint32_t loopStride = ntx * N_RX * binCount * 2U * cb;
     float stepRe = cosf(lag1PhaseRad);
     float stepIm = -sinf(lag1PhaseRad);
@@ -2774,14 +3183,14 @@ static void l3_channelSnapshot(uint32_t slot, uint32_t localBin, float lag1Phase
  * samples summed over the loops, no mean removed and no Doppler to unwind,
  * so the TX blocks differ only by their fixed phases and the beamformer
  * reads the target's direction. */
-static void l3_channelSnapshotStatic(uint32_t slot, uint32_t localBin, l3_angle_snapshot_t *out)
+static void l3_channelSnapshotStatic(const l3_detect_frame_t *source, uint32_t localBin, l3_angle_snapshot_t *out)
 {
-    const uint8_t *frame = &g_ring[gFrameOffset[slot]];
-    uint32_t binCount = gFrameBinCount[slot];
+    const uint8_t *frame = source->base;
+    uint32_t binCount = source->binCount;
     uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
     uint32_t loops = gCapturePlan.loops;
-    uint32_t cb = l3_ringComponentBytes();
-    float scale = l3_ringScale(slot);
+    uint32_t cb = source->cb;
+    float scale = source->scale;
     uint32_t loopStride = ntx * N_RX * binCount * 2U * cb;
     uint32_t tx;
 
@@ -3047,8 +3456,9 @@ static void l3_shotObserve(uint32_t teeBin, int32_t gateFired, int32_t geometric
  * of the trigger's own cost per frame. */
 static void l3_considerBall(uint32_t slot)
 {
+    l3_detect_frame_t frame = l3_detectFrameOf(slot);
     static float power[L3_BALL_MAX_BINS];
-    uint32_t count = gFrameBinCount[slot];
+    uint32_t count = frame.binCount;
     uint32_t bin;
     uint32_t ticks;
 
@@ -3062,18 +3472,23 @@ static void l3_considerBall(uint32_t slot)
     gBallBusy = 1U;
     ticks = Cycleprofiler_getTimeStamp();
     for (bin = 0U; bin < count; bin++) {
-        power[bin] = l3_verticalStaticPower(slot, bin, 4U);
+        power[bin] = l3_verticalStaticPower(&frame, bin, 4U);
     }
-    (void)l3_ball_update(&gBall, gFrameBinStart[slot], power, count);
+    if (l3_detectFrameStale(&frame)) {
+        gDetectScratchStale++;
+        gBallBusy = 0U;
+        return;
+    }
+    (void)l3_ball_update(&gBall, frame.binStart, power, count);
     {
         /* The locked ball's direction from its static return. */
         uint32_t ballBin;
 
-        if (l3_ball_locked(&gBall, &ballBin) && ballBin >= gFrameBinStart[slot] &&
-            ballBin - gFrameBinStart[slot] < count) {
+        if (l3_ball_locked(&gBall, &ballBin) && ballBin >= frame.binStart &&
+            ballBin - frame.binStart < count) {
             static l3_angle_snapshot_t snapshot;
 
-            l3_channelSnapshotStatic(slot, ballBin - gFrameBinStart[slot], &snapshot);
+            l3_channelSnapshotStatic(&frame, ballBin - frame.binStart, &snapshot);
             gBallAngleValid = (uint8_t)(l3_angle_estimate(&gRadarCal, &snapshot, &gBallAngle) &&
                                         gBallAngle.elevationValid &&
                                         gBallAngle.elevationPeakRatio >=
@@ -3093,13 +3508,14 @@ static void l3_considerBall(uint32_t slot)
  * task after the freeze was requested, while the post movie is filling. */
 static void l3_considerBallTrack(uint32_t slot)
 {
+    l3_detect_frame_t frame = l3_detectFrameOf(slot);
     static l3_trig_obs_t obs[L3_TRIG_MAX_BINS];
     static l3_target_obs_t targets[L3_OBS_MAX_TARGETS];
     static l3_angle_snapshot_t snapshot;
     l3_obs_params_t params;
     l3_shot_input_t in;
     l3_track_point_t newest;
-    uint32_t count = gFrameBinCount[slot];
+    uint32_t count = frame.binCount;
     uint32_t found;
     uint32_t bin;
     uint32_t frame;
@@ -3117,13 +3533,18 @@ static void l3_considerBallTrack(uint32_t slot)
     gTrigBusy = 1U;
     ticks = Cycleprofiler_getTimeStamp();
     for (bin = 0U; bin < count; bin++) {
-        l3_verticalResidual(slot, bin, NULL, &obs[bin]);
+        l3_verticalResidual(&frame, bin, NULL, &obs[bin]);
+    }
+    if (l3_detectFrameStale(&frame)) {
+        gDetectScratchStale++;
+        gTrigBusy = 0U;
+        return;
     }
     params.stat = gTrigCfg.stat;
     params.snr = gBallTrackCfg.snr;   /* a departing ball is a weaker return than a club */
     params.loopPeriodS = gTrigLoopPeriodS;
     l3_obs_floor_update(&gBallFloor, gTrigCfg.stat, obs, count, L3_TRIG_FLOOR_SHIFT);
-    found = l3_obs_extract(&params, frame, gPostTimestampUs, gFrameBinStart[slot], obs, count,
+    found = l3_obs_extract(&params, frame, gPostTimestampUs, frame.binStart, obs, count,
                            gBallFloor, targets, L3_OBS_MAX_TARGETS);
     if (l3_ball_track_update(&gBallTrack, targets, found, frame, gPostTimestampUs) &&
         gBallTrack.lastTargetIndex < found && gBallTrack.core.count > 1U &&
@@ -3133,7 +3554,7 @@ static void l3_considerBallTrack(uint32_t slot)
         {
             l3_angle_obs_t angle;
 
-            l3_channelSnapshot(slot, (uint32_t)hit->peakBin - gFrameBinStart[slot],
+            l3_channelSnapshot(&frame, (uint32_t)hit->peakBin - frame.binStart,
                                hit->dopplerPhaseRad, newest.radialVelocityMps, &snapshot);
             if (l3_angle_estimate(&gRadarCal, &snapshot, &angle)) {
                 uint8_t flags = 0U;
@@ -3177,6 +3598,7 @@ static void l3_considerBallTrack(uint32_t slot)
  * popped, so a slow read does not score a frame the ring has reused. */
 static void l3_considerSelfTrigger(uint32_t slot)
 {
+    l3_detect_frame_t frame = l3_detectFrameOf(slot);
     /* Static: this runs on the detect task, whose stack is small. */
     static l3_trig_obs_t obs[L3_TRIG_MAX_BINS];
     uint32_t first;
@@ -3218,7 +3640,7 @@ static void l3_considerSelfTrigger(uint32_t slot)
             gTrigFallbackFrames++;
         }
     }
-    if (!l3_trig_region(&gTrigCfg, teeBin, gFrameBinStart[slot], gFrameBinCount[slot],
+    if (!l3_trig_region(&gTrigCfg, teeBin, frame.binStart, frame.binCount,
                         &first, &count)) {
         l3_noteTrigger(2U, 0.0F);
         return;
@@ -3226,12 +3648,19 @@ static void l3_considerSelfTrigger(uint32_t slot)
     gTrigBusy = 1U;
     ticks = Cycleprofiler_getTimeStamp();
     for (bin = 0U; bin < count; bin++) {
-        l3_verticalResidual(slot, first + bin, NULL, &obs[bin]);
+        l3_verticalResidual(&frame, first + bin, NULL, &obs[bin]);
     }
     l3_profileStage(L3_PROF_RESIDUAL, ticks);
+    if (l3_detectFrameStale(&frame)) {
+        /* The scratch went back to the HWA before this read finished. */
+        gDetectScratchStale++;
+        gTrigBusy = 0U;
+        l3_noteTrigger(1U, 0.0F);
+        return;
+    }
     gTrig.loopPeriodS = gTrigLoopPeriodS;
     ticks = Cycleprofiler_getTimeStamp();
-    fired = l3_trig_update(&gTrig, gPreFramesCaptured, teeBin, gFrameBinStart[slot] + first,
+    fired = l3_trig_update(&gTrig, gPreFramesCaptured, teeBin, frame.binStart + first,
                            obs, count);
     l3_profileStage(L3_PROF_TRIGGER, ticks);
     {
@@ -3247,7 +3676,7 @@ static void l3_considerSelfTrigger(uint32_t slot)
         ticks = Cycleprofiler_getTimeStamp();
         found = l3_obs_extract(&params, gPreFramesCaptured,
                                gPreFramesCaptured * (uint32_t)gFramePeriodUs,
-                               gFrameBinStart[slot] + first, obs, count, gTrig.floor,
+                               frame.binStart + first, obs, count, gTrig.floor,
                                targets, L3_OBS_MAX_TARGETS);
         l3_profileStage(L3_PROF_EXTRACT, ticks);
         gClubTrackDest = teeBin;
@@ -3264,7 +3693,7 @@ static void l3_considerSelfTrigger(uint32_t slot)
             const l3_target_obs_t *hit = &targets[gClubTrack.lastTargetIndex];
 
             ticks = Cycleprofiler_getTimeStamp();
-            l3_channelSnapshot(slot, (uint32_t)hit->peakBin - gFrameBinStart[slot],
+            l3_channelSnapshot(&frame, (uint32_t)hit->peakBin - frame.binStart,
                                hit->dopplerPhaseRad, newest.radialVelocityMps, &snapshot);
             if (l3_angle_estimate(&gRadarCal, &snapshot, &gLastAngle)) {
                 uint8_t flags = 0U;
@@ -3997,6 +4426,36 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         CLI_write("Done\n");
         return 0;
     }
+#ifdef L3_RING_IQ8
+    if (argc == 2 && strcmp(argv[1], "frames") == 0) {
+        /* What each stored slot of the compact ring holds: pre slots oldest
+         * first, then the post slots. */
+        uint32_t actualPre = (gPreFramesCaptured < gCapturePlan.preFrames)
+                                 ? gPreFramesCaptured : gCapturePlan.preFrames;
+        uint32_t oldestPre = (gPreFramesCaptured >= gCapturePlan.preFrames)
+                                 ? (gPreFramesCaptured % gCapturePlan.preFrames) : 0U;
+
+        if (!l3_captureCompactsIq16()) {
+            CLI_write("frames: not a compact format\n");
+            CLI_write("Done\n");
+            return 0;
+        }
+        for (index = 0U; index < actualPre; index++) {
+            uint32_t slot = (oldestPre + index) % gCapturePlan.preFrames;
+
+            (void)l3_frame_desc_format(&gFrameDesc[slot], line, sizeof(line));
+            CLI_write("slot %u %s\n", (unsigned)slot, line);
+        }
+        for (index = 0U; index < gPostFramesCaptured && index < gCapturePlan.postFrames; index++) {
+            uint32_t slot = gCapturePlan.preFrames + index;
+
+            (void)l3_frame_desc_format(&gFrameDesc[slot], line, sizeof(line));
+            CLI_write("slot %u %s\n", (unsigned)slot, line);
+        }
+        CLI_write("Done\n");
+        return 0;
+    }
+#endif
     if (argc == 2 && strcmp(argv[1], "perf") == 0) {
         /* Per-stage cost in microseconds, then the adaptive window state. */
         if (gProfileReady) {
@@ -4076,7 +4535,7 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         return 0;
     }
     if (argc != 1) {
-        CLI_write("Error: triggerLog [trace|track|shot|result|perf|clear]\n");
+        CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|clear]\n");
         return -1;
     }
     (void)l3_trig_format_summary(&gTrig, line, sizeof(line));
@@ -4155,7 +4614,9 @@ static int32_t l3_ballScan(uint32_t first, uint32_t count)
         for (bin = 0U; bin < count; bin++) {
             uint32_t global = first + bin;
             if (global >= windowStart && global - windowStart < window.counts[frame]) {
-                power[bin] += l3_verticalStaticPower(window.slots[frame], global - windowStart, 1U);
+                l3_detect_frame_t ringFrame = l3_ringFrameOf(window.slots[frame]);
+
+                power[bin] += l3_verticalStaticPower(&ringFrame, global - windowStart, 1U);
             }
         }
     }
@@ -4296,7 +4757,7 @@ static int32_t l3_cli_stats(int32_t argc, char *argv[])
               (unsigned)gHwaMissedFrameStarts,
               (unsigned)gHwaFreezeRequests, (unsigned)gHwaFreezeCompletions,
               (unsigned)gHwaFreezeTimeouts,
-              l3_captureUsesIq8() ? "iq8" : "iq16",
+              l3_captureFormatName(),
               (unsigned)gCapturePlan.preFrames,
               (unsigned)gCapturePlan.postFrames,
               (unsigned)gCapturePlan.loops,
@@ -4375,6 +4836,19 @@ static int32_t l3_cli_stats(int32_t argc, char *argv[])
               (unsigned)gDetectQueue.dropped,
               (unsigned)gDetectStale,
               (unsigned)gNoticeDropped);
+#ifdef L3_RING_IQ8
+    if (l3_captureCompactsIq16()) {
+        static char retainLine[96];
+
+        (void)l3_retain_format(&gLastRetain, retainLine, sizeof(retainLine));
+        CLI_write("compact frames=%u errors=%u max_us=%u scratch_stale=%u retain=%u/%u/%u %s\n",
+                  (unsigned)gCompactFrames, (unsigned)gCompactErrors,
+                  (unsigned)gCompactMaxUs, (unsigned)gDetectScratchStale,
+                  (unsigned)gCapturePlan.retainPreBins,
+                  (unsigned)gCapturePlan.retainImpactBins,
+                  (unsigned)gCapturePlan.retainPostBins, retainLine);
+    }
+#endif
     CLI_write("rearm_last_us=%u rearm_max_us=%u rearm_timed=%u\n",
               (unsigned)gHwaRearmLastUs,
               (unsigned)gHwaRearmMaxUs,
@@ -4776,6 +5250,17 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     gIq8PackFrames = 0U;
     gIq8PackOverruns = 0U;
     gIq8ClippedComponents = 0U;
+    gScratchFrame[0] = 0U;
+    gScratchFrame[1] = 0U;
+    gScratchBusy[0] = 0U;
+    gScratchBusy[1] = 0U;
+    gDetectScratchStale = 0U;
+    gCompactFrames = 0U;
+    gCompactErrors = 0U;
+    gCompactMaxUs = 0U;
+    memset(gFrameScratch, L3_SCRATCH_NONE, sizeof(gFrameScratch));
+    memset(&gLastRetain, 0, sizeof(gLastRetain));
+    memset(gFrameDesc, 0, sizeof(gFrameDesc));
 #ifdef L3_IQ8_EDMA_PACK
     gIq8PackDetectArm[0] = 0U;
     gIq8PackDetectArm[1] = 0U;
@@ -5053,7 +5538,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[8].cmdHandlerFxn = l3_cli_phaseCaptureCfg;
 #ifdef L3_RING_IQ8
     cliCfg.tableEntry[9].cmd           = "captureFormat";
-    cliCfg.tableEntry[9].helpString    = "captureFormat iq16|iq8";
+    cliCfg.tableEntry[9].helpString    = "captureFormat iq16|iq8|compact16|adaptive16";
     cliCfg.tableEntry[9].cmdHandlerFxn = l3_cli_captureFormat;
 #ifdef L3_IQ8_EDMA_PACK
     cliCfg.tableEntry[10].cmd           = "iq8Scale";
@@ -5087,7 +5572,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
         "ball [status] | ball scan <firstBin> <count> | ball cfg <enable> <follow> [...]";
     cliCfg.tableEntry[18].cmdHandlerFxn = l3_cli_ball;
     cliCfg.tableEntry[17].cmd           = "triggerLog";
-    cliCfg.tableEntry[17].helpString    = "triggerLog [trace|track|shot|result|perf|clear]: log, trace, club, shot, result, perf";
+    cliCfg.tableEntry[17].helpString    = "triggerLog [trace|track|shot|result|perf|frames|clear]: log, trace, club, shot, result, perf, stored frames";
     cliCfg.tableEntry[17].cmdHandlerFxn = l3_cli_triggerLog;
     CLI_open(&cliCfg);
 }

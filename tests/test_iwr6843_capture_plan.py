@@ -43,6 +43,10 @@ class Plan(ctypes.Structure):
         ("impactFrames", ctypes.c_uint8),
         ("ballFrames", ctypes.c_uint8),
         ("impactFrameBytes", ctypes.c_uint32),
+        ("compact", ctypes.c_uint8),
+        ("retainPreBins", ctypes.c_uint8),
+        ("retainImpactBins", ctypes.c_uint8),
+        ("retainPostBins", ctypes.c_uint8),
     ]
 
 
@@ -312,3 +316,49 @@ def test_early_late_split_boundary_is_exact_for_non_phased_plan(lib, post_frames
     boundary = plan.preFrames + (post_frames // 2) - 1
     assert store["binStart"][boundary] == 47
     assert store["binStart"][boundary + 1] == 64
+
+
+def test_compact_plan_stores_the_retained_widths_and_keeps_the_processing_windows(lib):
+    """compact16/adaptive16: the HWA windows stay wide, the slots shrink to the retain widths."""
+    plan = _dense_plan()
+    plan.compact = 1
+    plan.retainPreBins, plan.retainImpactBins, plan.retainPostBins = 16, 24, 16
+    rc, store, err = _build(lib, plan, 786_432, bpc=4)
+    assert rc == 0, err
+    per_bin = 36 * 4 * 4
+    assert plan.preFrameBytes == per_bin * 16
+    assert plan.impactFrameBytes == per_bin * 24
+    assert plan.postFrameBytes == per_bin * 16
+    assert (plan.preBins, plan.impactBins, plan.postBins) == (53, 53, 53), "processing untouched"
+    assert store["binCount"][0] == 16 and store["binStart"][0] == 20
+    assert store["binCount"][plan.preFrames] == 24 and store["binStart"][plan.preFrames] == 32
+    assert store["binCount"][plan.preFrames + plan.impactFrames] == 16
+    assert plan.usedBytes == 8 * per_bin * 16 + 10 * per_bin * 24 + 33 * per_bin * 16
+
+
+def test_compact_plan_rejects_retain_widths_outside_the_processing_window(lib):
+    for pre, impact, post in ((0, 24, 16), (54, 24, 16), (16, 0, 16), (16, 60, 16), (16, 24, 0)):
+        plan = _dense_plan()
+        plan.compact = 1
+        plan.retainPreBins, plan.retainImpactBins, plan.retainPostBins = pre, impact, post
+        rc, _store, err = _build(lib, plan, 786_432, bpc=4)
+        assert rc == -1 and "retain" in err, (pre, impact, post, err)
+
+
+def test_non_compact_plan_ignores_retain_widths(lib):
+    plan = _dense_plan()
+    plan.retainPreBins, plan.retainImpactBins, plan.retainPostBins = 16, 24, 16
+    rc, store, err = _build(lib, plan, 786_432, bpc=2)
+    assert rc == 0, err
+    assert store["binCount"][0] == 53 and plan.preFrameBytes == 36 * 4 * 2 * 53
+
+
+def test_unphased_compact_plan_uses_pre_and_post_retain_widths_only(lib):
+    plan = Plan()
+    plan.preStart, plan.preBins, plan.postStart, plan.postBins = 20, 53, 32, 53
+    plan.lateStart, plan.postFrames, plan.postStride, plan.ballFrames = 47, 16, 1, 16
+    plan.compact, plan.retainPreBins, plan.retainPostBins = 1, 12, 20
+    rc, store, err = _build(lib, plan, 786_432, bpc=4)
+    assert rc == 0, err
+    assert store["binCount"][0] == 12 and store["binCount"][plan.preFrames] == 20
+    assert plan.impactFrameBytes == 0

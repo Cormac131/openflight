@@ -1191,10 +1191,18 @@ def init_iwr6843(
         raise ValueError(f"--iwr6843-ball-detector must be one of {BALL_DETECTOR_MODES}")
     try:
         from .iwr6843 import Calibration
-        from .iwr6843.monitor import IWR6843CaptureMonitor, tx_order_from_config
+        from .iwr6843.monitor import (
+            IWR6843CaptureMonitor,
+            read_capture_config,
+            tx_order_from_config,
+        )
         from .iwr6843.runtime import IWR6843Runtime
 
         configured_order = tx_order_from_config(config_path)
+        try:
+            capture_format = read_capture_config(config_path).capture_format or "iq16"
+        except OSError:
+            capture_format = None  # recorded for the session log only
         resolved_order = configured_order if tx_order == "auto" else tx_order
         if resolved_order != configured_order:
             raise ValueError(
@@ -1284,6 +1292,7 @@ def init_iwr6843(
             "onboard_tracking": onboard_tracking,
             "full_capture": full_capture,
             "ball_detector": ball_detector,
+            "capture_format": capture_format,
             "freeze_delay_ms": 0.0,
             "raw_dump_saved": save_dumps,
             "output_dir": str(Path(output_dir).expanduser()),

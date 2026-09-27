@@ -350,6 +350,12 @@ class IWR6843CaptureMonitor:
             capture_format = read_capture_config(self.config_path).capture_format
             if capture_format == "iq8":
                 logger.info("[IWR6843] Self-trigger on an IQ8 ring: needs firmware with IQ8 detect")
+            elif capture_format in ("compact16", "adaptive16"):
+                logger.info(
+                    "[IWR6843] %s capture: the detect path reads the IQ16 scratch and L3 keeps "
+                    "the retained windows; needs firmware with the compact formats",
+                    capture_format,
+                )
         if self.save_dumps:
             self.output_dir.mkdir(parents=True, exist_ok=True)
         configured = False

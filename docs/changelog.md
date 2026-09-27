@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Compact IQ16 capture formats in the firmware.** `captureFormat compact16`
+  and `adaptive16` process every frame at full IQ16 precision from the
+  accelerator's scratch and store only the retained window in L3 (16/24/16
+  bins by default, `captureCfg retain`), placed per frame by the retention
+  policy in adaptive16. A stale-scratch guard drops a frame the HWA reused
+  before the detect task finished, `stats` and `triggerLog frames` report the
+  compaction and the stored frames, and
+  `config/iwr6843_l3dump_adaptive_47f3ms_53bin_a16.cfg` fits a 141 ms movie
+  into the memory that held 72 ms of wide IQ16. Firmware built and flashed
+  from this source is needed; nothing here has run on a board yet.
 - **Retention policy for adaptive IQ16 capture.** `firmware/iwr6843/l3_retain.c`
   separates the processing region (what the detect task reads) from the
   retention region (what L3 stores) and chooses each frame's stored window
