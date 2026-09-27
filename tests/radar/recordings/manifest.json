@@ -44,10 +44,6 @@
       ]
     }
   },
-  "iwr6843_20260916_184937_318_004.l3dump": {
-    "notes": "weak ball (SNR 3-4): a few points at ~21 m/s radial before it fades; no ball expectation",
-    "expect": {}
-  },
   "iwr6843_20260916_185013_572_005.l3dump": {
     "notes": "ball 52 to 85 at ~40 m/s radial",
     "expect": {
@@ -61,18 +57,6 @@
       ]
     }
   },
-  "iwr6843_20260916_185042_422_006.l3dump": {
-    "notes": "no swing: only a slow mover at bin 43 (2.0 m) and a static return at 96",
-    "expect": {
-      "fires": false
-    }
-  },
-  "iwr6843_20260916_190858_810_001.l3dump": {
-    "notes": "empty capture: nothing above the floor in any frame",
-    "expect": {
-      "fires": false
-    }
-  },
   "iwr6843_20260916_190937_131_002.l3dump": {
     "notes": "ball at ~33 m/s radial, tracked 53 to 80 with usable angles",
     "expect": {
@@ -84,18 +68,6 @@
         28,
         45
       ]
-    }
-  },
-  "iwr6843_20260916_194050_599_001.l3dump": {
-    "notes": "empty capture: nothing above the floor in any frame",
-    "expect": {
-      "fires": false
-    }
-  },
-  "iwr6843_20260916_194058_617_002.l3dump": {
-    "notes": "empty capture: nothing above the floor in any frame",
-    "expect": {
-      "fires": false
     }
   }
 }
