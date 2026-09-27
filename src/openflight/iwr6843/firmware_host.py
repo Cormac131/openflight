@@ -525,6 +525,7 @@ class BallTrack(ctypes.Structure):
         ("impactTimestampUs", ctypes.c_uint32),
         ("originBin", ctypes.c_float),
         ("origin", Vec3),
+        ("lastTargetIndex", ctypes.c_uint32),
         ("counters", ctypes.c_uint32 * len(BALL_TRACK_WHY_NAMES)),
     ]
 

@@ -280,6 +280,21 @@ is measured. `triggerLog result` prints the lines and the fixed 100-byte
 little-endian packet as two hex lines; `openflight.iwr6843.shot_result`
 parses it and labels every metric MEASURED or ESTIMATED for the UI.
 
+The host reads that packet on every self-triggered capture, before the
+readback (`l3track`/`l3sparse` rearm the ring, which resets the result). It
+rides on the capture as `onboard_result`, on the shot as `iwr6843_onboard`
+(the session JSONL keeps it), and the kiosk shows it under the Live tiles
+with each metric's provenance and confidence. By default the host pipeline
+still owns the published numbers; `--iwr6843-onboard-metrics` copies the
+firmware's usable launch angles, club path and attack angle onto the shot
+(sources `radar_onboard` / `onboard`). OPS ball speed is never replaced.
+
+The detect path reads IQ8 rings as well as IQ16: every ring reader takes
+the component width from the capture format and multiplies int8 samples by
+the frame's HWA scale, so the dense IQ8 profiles get the same trigger,
+club track and ball track as the wide IQ16 one. Firmware older than this
+scores garbage on IQ8; the host logs which format is in use at start.
+
 ### Profiling and adaptive windows
 
 `triggerLog perf` prints per-stage counts, last, mean and maximum in
@@ -395,6 +410,17 @@ ball status          the same plus a balldbg line: centroid, width, persistence
 ball scan <bin> <n>  static power of n global bins, pre frames averaged
 ball cfg <enable> <follow> [minRatio stableUpdates buildUpdates]
 ```
+
+The server turns the detector on at startup (`--iwr6843-ball-detector on`,
+the default; `follow` also aims the self-trigger at the locked ball, `off`
+keeps the configured tee bin) through the capture worker's job queue, and
+polls `ball status` every `--iwr6843-setup-poll-s` seconds
+(`openflight.iwr6843.setup_poll`). Each poll becomes an `iwr_setup` socket
+event with the detector state, the ball range and the placement advice
+(`too-close`, `close`, `ideal`, `far`, `too-far`, with how far to move
+OpenFlight); the kiosk shows it as a one-line setup banner above the Live
+tiles. A firmware without `ball cfg` fails the job, not startup, and the
+banner stays hidden.
 
 The trigger's MTI residual removes a stationary ball entirely, and the
 strongest static reflector in the lane is usually furniture (those captures

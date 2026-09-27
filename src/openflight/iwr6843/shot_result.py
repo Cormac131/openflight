@@ -66,6 +66,33 @@ class ShotResultPacket:
     def __getitem__(self, name: str) -> Measurement:
         return self.metrics[name]
 
+    def to_dict(self) -> dict:
+        """JSON for the Shot record and the UI: every metric with its provenance."""
+        return {
+            "version": self.version,
+            "shot_id": self.shot_id,
+            "verdict": self.verdict,
+            "impact_source": self.impact_source,
+            "impact_timestamp_us": self.impact_timestamp_us,
+            "club_points": self.club_points,
+            "ball_points": self.ball_points,
+            "smash": self.smash,
+            "quality": sorted(self.quality),
+            "metrics": {
+                name: {
+                    "value": m.value,
+                    "confidence": m.confidence,
+                    "label": m.label,
+                    "measured": m.measured,
+                    "radial_only": m.radial_only,
+                    "implausible": m.implausible,
+                    "fallback": m.fallback,
+                    "usable": m.usable,
+                }
+                for name, m in self.metrics.items()
+            },
+        }
+
 
 def parse_packet(raw: bytes) -> ShotResultPacket:
     """Decode one packet; raises ValueError on a wrong size or version."""

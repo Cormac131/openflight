@@ -398,6 +398,12 @@ static uint32_t          gClubTrackDest;
 static l3_radar_cal_t    gRadarCal;
 static l3_angle_obs_t    gLastAngle;
 static uint32_t          gAngleEstimates;
+/* The locked ball's own angles from its static return, so the destination
+ * the impact test and the ball tracker aim at is a 3D position, not a
+ * point on boresight. Valid while the beamformer's peak stands clear. */
+static l3_angle_obs_t    gBallAngle;
+static uint8_t           gBallAngleValid;
+#define L3_BALL_ANGLE_MIN_PEAK_RATIO 3.0F
 /* Geometric impact detector over the club delivery and the ball position.
  * It records its verdict every frame; it fires the capture only once armed
  * ("trackCfg impact ... 1"), the range gate being the proven fallback. */
@@ -1175,7 +1181,9 @@ static void l3_hwaOutputDoneCB(uintptr_t arg, uint8_t tcCode)
         gIq8PendingScratch = gIq8ActiveScratch;
         gIq8Pending = 1U;
         if (gActiveFrameIsPost) {
-            gIq8PendingDetect = 0U;
+            /* Kept post frames reach the ball tracker once packed. */
+            gIq8PendingDetect = 1U;
+            gIq8PendingEpoch = L3_DETECT_POST_EPOCH;
         }
     }
 #endif
@@ -1186,7 +1194,7 @@ static void l3_hwaOutputDoneCB(uintptr_t arg, uint8_t tcCode)
 
             gPostFramesCaptured++;
 #if defined(L3_RING_IQ8)
-            if (!l3_captureUsesIq8())
+            if (!l3_captureUsesIq8())  /* IQ8 frames publish after packing */
 #endif
             {
                 /* The ball tracker reads kept post frames as they land. */
@@ -2149,8 +2157,9 @@ static void l3_hwaRearmTask(UArg arg0, UArg arg1)
                 (void)l3_startIq8EdmaPack(pendingSlot, pendingScratch);
 #else
                 l3_packIq8CompletedFrame(pendingSlot, pendingScratch);
-                if (pendingDetect != 0U &&
-                    pendingSlot < gCapturePlan.preFrames) {
+                if (pendingDetect != 0U) {
+                    /* Pre slots to the trigger, kept post slots (post epoch)
+                     * to the ball tracker. */
                     l3_publishDetectFrame(pendingSlot, pendingEpoch);
                 }
 #endif
@@ -2654,6 +2663,35 @@ static const int16_t *l3_iq16Sample(
     return &frame[index * 2U];
 }
 
+/* Ring samples for the detect path: int16 (Im, Re) pairs in IQ16, int8
+ * pairs times the frame's scale in IQ8 (see gFrameIq8Scale), so the trigger,
+ * the trackers and the ball detector read either ring. Each component is
+ * l3_ringComponentBytes() wide; a complex sample is two of them. */
+static uint32_t l3_ringComponentBytes(void)
+{
+    return l3_captureUsesIq8() ? 1U : 2U;
+}
+
+static float l3_ringScale(uint32_t slot)
+{
+#ifdef L3_RING_IQ8
+    if (l3_captureUsesIq8()) {
+        return (float)gFrameIq8Scale[slot];
+    }
+#else
+    (void)slot;
+#endif
+    return 1.0F;
+}
+
+static float l3_ringComponent(const uint8_t *component, uint32_t bytes)
+{
+    if (bytes == 1U) {
+        return (float)*(const int8_t *)component;
+    }
+    return (float)*(const int16_t *)(const void *)component;
+}
+
 /* Burst-MTI residual of one bin over every loop of a frame, summed over the
  * vertical TX pair (TX0 and TX2 of three) and all RX. Each (tx, rx) loop
  * mean is computed once, so a bin costs O(loops), not O(loops^2). perLoop[]
@@ -2663,13 +2701,15 @@ static const int16_t *l3_iq16Sample(
 static void l3_verticalResidual(uint32_t slot, uint32_t localBin,
                                 float *perLoop, l3_trig_obs_t *obs)
 {
-    const int16_t *frame = (const int16_t *)&g_ring[gFrameOffset[slot]];
+    const uint8_t *frame = &g_ring[gFrameOffset[slot]];
     uint32_t binCount = gFrameBinCount[slot];
     uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
     uint32_t loops = gCapturePlan.loops;
+    uint32_t cb = l3_ringComponentBytes();
+    float scale = l3_ringScale(slot);
     /* The same (tx, rx) one loop later is ntx chirps on: N_RX * binCount
-     * complex samples per chirp, two int16 each. */
-    uint32_t loopStride = ntx * N_RX * binCount * 2U;
+     * complex samples per chirp, two components each. */
+    uint32_t loopStride = ntx * N_RX * binCount * 2U * cb;
     /* Per-loop power summed over channels, for the rows and the peak. */
     float loopPower[L3_MAX_LOOPS];
     float energy = 0.0F;
@@ -2688,24 +2728,24 @@ static void l3_verticalResidual(uint32_t slot, uint32_t localBin,
             continue;
         }
         for (rx = 0U; rx < N_RX; rx++) {
-            const int16_t *base = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U];
-            const int16_t *sample = base;
+            const uint8_t *base = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U * cb];
+            const uint8_t *sample = base;
             float meanIm = 0.0F;
             float meanRe = 0.0F;
             float prevIm = 0.0F;
             float prevRe = 0.0F;
 
             for (loop = 0U; loop < loops; loop++) {
-                meanIm += (float)sample[0];
-                meanRe += (float)sample[1];
+                meanIm += l3_ringComponent(sample, cb);
+                meanRe += l3_ringComponent(sample + cb, cb);
                 sample += loopStride;
             }
             meanIm /= (float)loops;
             meanRe /= (float)loops;
             sample = base;
             for (loop = 0U; loop < loops; loop++) {
-                float im = (float)sample[0] - meanIm;
-                float re = (float)sample[1] - meanRe;
+                float im = (l3_ringComponent(sample, cb) - meanIm) * scale;
+                float re = (l3_ringComponent(sample + cb, cb) - meanRe) * scale;
                 float power = im * im + re * re;
                 sample += loopStride;
                 energy += power;
@@ -2750,11 +2790,13 @@ static void l3_verticalPowerLoops(uint32_t slot, uint32_t localBin, float *out)
  * can be proved before any swing is judged. Diagnostic only. */
 static float l3_verticalStaticPower(uint32_t slot, uint32_t localBin, uint32_t loopStep)
 {
-    const int16_t *frame = (const int16_t *)&g_ring[gFrameOffset[slot]];
+    const uint8_t *frame = &g_ring[gFrameOffset[slot]];
     uint32_t binCount = gFrameBinCount[slot];
     uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
     uint32_t loops = gCapturePlan.loops;
-    uint32_t loopStride = ntx * N_RX * binCount * 2U * loopStep;
+    uint32_t cb = l3_ringComponentBytes();
+    float scale = l3_ringScale(slot);
+    uint32_t loopStride = ntx * N_RX * binCount * 2U * cb * loopStep;
     float total = 0.0F;
     uint32_t samples = 0U;
     uint32_t tx;
@@ -2765,13 +2807,13 @@ static float l3_verticalStaticPower(uint32_t slot, uint32_t localBin, uint32_t l
             continue;
         }
         for (rx = 0U; rx < N_RX; rx++) {
-            const int16_t *sample = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U];
+            const uint8_t *sample = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U * cb];
             uint32_t loop;
             /* loopStep > 1 subsamples the loops: a static target does not
              * change between them, and the ball detector runs every frame. */
             for (loop = 0U; loop < loops; loop += loopStep) {
-                float im = (float)sample[0];
-                float re = (float)sample[1];
+                float im = l3_ringComponent(sample, cb) * scale;
+                float re = l3_ringComponent(sample + cb, cb) * scale;
                 total += im * im + re * re;
                 sample += loopStride;
                 samples++;
@@ -2789,11 +2831,13 @@ static float l3_verticalStaticPower(uint32_t slot, uint32_t localBin, uint32_t l
 static void l3_channelSnapshot(uint32_t slot, uint32_t localBin, float lag1PhaseRad,
                                float radialVelocityMps, l3_angle_snapshot_t *out)
 {
-    const int16_t *frame = (const int16_t *)&g_ring[gFrameOffset[slot]];
+    const uint8_t *frame = &g_ring[gFrameOffset[slot]];
     uint32_t binCount = gFrameBinCount[slot];
     uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
     uint32_t loops = gCapturePlan.loops;
-    uint32_t loopStride = ntx * N_RX * binCount * 2U;
+    uint32_t cb = l3_ringComponentBytes();
+    float scale = l3_ringScale(slot);
+    uint32_t loopStride = ntx * N_RX * binCount * 2U * cb;
     float stepRe = cosf(lag1PhaseRad);
     float stepIm = -sinf(lag1PhaseRad);
     uint32_t tx;
@@ -2805,8 +2849,8 @@ static void l3_channelSnapshot(uint32_t slot, uint32_t localBin, float lag1Phase
     for (tx = 0U; tx < out->ntx; tx++) {
         uint32_t rx;
         for (rx = 0U; rx < out->nrx; rx++) {
-            const int16_t *base = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U];
-            const int16_t *sample = base;
+            const uint8_t *base = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U * cb];
+            const uint8_t *sample = base;
             float meanIm = 0.0F;
             float meanRe = 0.0F;
             float sumRe = 0.0F;
@@ -2816,16 +2860,16 @@ static void l3_channelSnapshot(uint32_t slot, uint32_t localBin, float lag1Phase
             uint32_t loop;
 
             for (loop = 0U; loop < loops; loop++) {
-                meanIm += (float)sample[0];
-                meanRe += (float)sample[1];
+                meanIm += l3_ringComponent(sample, cb);
+                meanRe += l3_ringComponent(sample + cb, cb);
                 sample += loopStride;
             }
             meanIm /= (float)loops;
             meanRe /= (float)loops;
             sample = base;
             for (loop = 0U; loop < loops; loop++) {
-                float im = (float)sample[0] - meanIm;
-                float re = (float)sample[1] - meanRe;
+                float im = (l3_ringComponent(sample, cb) - meanIm) * scale;
+                float re = (l3_ringComponent(sample + cb, cb) - meanRe) * scale;
                 float nextRe = rotRe * stepRe - rotIm * stepIm;
                 float nextIm = rotRe * stepIm + rotIm * stepRe;
 
@@ -2833,6 +2877,44 @@ static void l3_channelSnapshot(uint32_t slot, uint32_t localBin, float lag1Phase
                 sumIm += re * rotIm + im * rotRe;
                 rotRe = nextRe;
                 rotIm = nextIm;
+                sample += loopStride;
+            }
+            out->channel[tx * out->nrx + rx].re = sumRe;
+            out->channel[tx * out->nrx + rx].im = sumIm;
+        }
+    }
+}
+
+/* The same channels for a STATIC target (the ball on its tee): the raw
+ * samples summed over the loops, no mean removed and no Doppler to unwind,
+ * so the TX blocks differ only by their fixed phases and the beamformer
+ * reads the target's direction. */
+static void l3_channelSnapshotStatic(uint32_t slot, uint32_t localBin, l3_angle_snapshot_t *out)
+{
+    const uint8_t *frame = &g_ring[gFrameOffset[slot]];
+    uint32_t binCount = gFrameBinCount[slot];
+    uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
+    uint32_t loops = gCapturePlan.loops;
+    uint32_t cb = l3_ringComponentBytes();
+    float scale = l3_ringScale(slot);
+    uint32_t loopStride = ntx * N_RX * binCount * 2U * cb;
+    uint32_t tx;
+
+    l3_angle_snapshot_init(out, ntx, N_RX);
+    out->lag1PhaseRad = 0.0F;
+    out->radialVelocityMps = 0.0F;
+    out->chirpPeriodS = (ntx > 0U) ? (gTrigLoopPeriodS / (float)ntx) : 45.0e-6F;
+    for (tx = 0U; tx < out->ntx; tx++) {
+        uint32_t rx;
+        for (rx = 0U; rx < out->nrx; rx++) {
+            const uint8_t *sample = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U * cb];
+            float sumRe = 0.0F;
+            float sumIm = 0.0F;
+            uint32_t loop;
+
+            for (loop = 0U; loop < loops; loop++) {
+                sumIm += l3_ringComponent(sample, cb) * scale;
+                sumRe += l3_ringComponent(sample + cb, cb) * scale;
                 sample += loopStride;
             }
             out->channel[tx * out->nrx + rx].re = sumRe;
@@ -3098,6 +3180,23 @@ static void l3_considerBall(uint32_t slot)
         power[bin] = l3_verticalStaticPower(slot, bin, 4U);
     }
     (void)l3_ball_update(&gBall, gFrameBinStart[slot], power, count);
+    {
+        /* The locked ball's direction from its static return. */
+        uint32_t ballBin;
+
+        if (l3_ball_locked(&gBall, &ballBin) && ballBin >= gFrameBinStart[slot] &&
+            ballBin - gFrameBinStart[slot] < count) {
+            static l3_angle_snapshot_t snapshot;
+
+            l3_channelSnapshotStatic(slot, ballBin - gFrameBinStart[slot], &snapshot);
+            gBallAngleValid = (uint8_t)(l3_angle_estimate(&gRadarCal, &snapshot, &gBallAngle) &&
+                                        gBallAngle.elevationValid &&
+                                        gBallAngle.elevationPeakRatio >=
+                                            L3_BALL_ANGLE_MIN_PEAK_RATIO);
+        } else {
+            gBallAngleValid = 0U;
+        }
+    }
     l3_profileStage(L3_PROF_BALL_DETECT, ticks);
     gBallBusy = 0U;
 }
@@ -3142,20 +3241,11 @@ static void l3_considerBallTrack(uint32_t slot)
     found = l3_obs_extract(&params, frame, gPostTimestampUs, gFrameBinStart[slot], obs, count,
                            gBallFloor, targets, L3_OBS_MAX_TARGETS);
     if (l3_ball_track_update(&gBallTrack, targets, found, frame, gPostTimestampUs) &&
-        gBallTrack.core.lastTargetIndex < found && gBallTrack.core.count > 1U &&
+        gBallTrack.lastTargetIndex < found && gBallTrack.core.count > 1U &&
         l3_track_point(&gBallTrack.core, gBallTrack.core.count - 1U, &newest)) {
-        /* The candidates the tracker kept are a subset of targets in the
-         * same order, so the appended one is found by its bin. */
-        const l3_target_obs_t *hit = NULL;
-        uint32_t i;
+        const l3_target_obs_t *hit = &targets[gBallTrack.lastTargetIndex];
 
-        for (i = 0U; i < found; i++) {
-            if (targets[i].rangeBin == newest.rangeBin) {
-                hit = &targets[i];
-                break;
-            }
-        }
-        if (hit != NULL) {
+        {
             l3_angle_obs_t angle;
 
             l3_channelSnapshot(slot, (uint32_t)hit->peakBin - gFrameBinStart[slot],
@@ -3311,8 +3401,14 @@ static void l3_considerSelfTrigger(uint32_t slot)
          * ball position until the ball detector measures its angles. */
         ticks = Cycleprofiler_getTimeStamp();
         (void)l3_track_delivery(&gClubTrack, 8U, &gDelivery);
-        l3_frames_observe(&gRadarCal, (float)teeBin * gClubTrack.cfg.binWidthM, 0.0F, 0.0F,
-                          &gBallPosition);
+        if (gTrigDestBall && gBallAngleValid) {
+            l3_frames_observe(&gRadarCal, (float)teeBin * gClubTrack.cfg.binWidthM,
+                              gBallAngle.azimuthValid ? gBallAngle.azimuthRad : 0.0F,
+                              gBallAngle.elevationRad, &gBallPosition);
+        } else {
+            l3_frames_observe(&gRadarCal, (float)teeBin * gClubTrack.cfg.binWidthM, 0.0F, 0.0F,
+                              &gBallPosition);
+        }
         geometric = l3_impact_update(&gImpact, &gDelivery, &gBallPosition, 1U);
         l3_profileStage(L3_PROF_IMPACT, ticks);
     }
@@ -4209,6 +4305,8 @@ static int32_t l3_cli_ball(int32_t argc, char *argv[])
         CLI_write("%s\n", line);
         (void)l3_ball_format_debug(&gBall, line, sizeof(line));
         CLI_write("%s\n", line);
+        (void)l3_angle_format(&gBallAngle, line, sizeof(line));
+        CLI_write("ball%s valid=%u\n", line + 5, (unsigned)gBallAngleValid); /* "ballangle ..." */
         CLI_write("Done\n");
         return 0;
     }

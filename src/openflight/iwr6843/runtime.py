@@ -126,6 +126,11 @@ class IWR6843ShotResult:
     measurement: LCMFResult | None
     club_path: ClubPathResult | None = None
 
+    @property
+    def onboard(self):
+        """The firmware's own result packet for the shot, when the capture carried one."""
+        return getattr(self.capture, "onboard_result", None)
+
 
 @dataclass
 class IWR6843Runtime:

@@ -1,0 +1,106 @@
+/* TI firmware result strip under the Live tiles. */
+.onboard-metrics {
+  flex-shrink: 0;
+  margin: 0 var(--space-lg) var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius);
+  background: rgba(148, 163, 184, 0.06);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  font-size: 0.75rem;
+}
+
+.onboard-metrics__header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xs);
+  min-width: 0;
+}
+
+.onboard-metrics__title {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.onboard-metrics__verdict {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0 0.4em;
+  border-radius: var(--radius);
+}
+.onboard-metrics--valid .onboard-metrics__verdict {
+  color: var(--color-success);
+  background: rgba(74, 222, 128, 0.12);
+}
+.onboard-metrics--partial .onboard-metrics__verdict {
+  color: var(--color-warning);
+  background: rgba(251, 191, 36, 0.12);
+}
+.onboard-metrics--invalid .onboard-metrics__verdict {
+  color: var(--color-danger);
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.onboard-metrics__meta {
+  opacity: 0.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.onboard-metrics__grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 4px var(--space-sm);
+}
+
+.onboard-metrics__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.onboard-metrics__item--empty {
+  opacity: 0.45;
+}
+
+.onboard-metrics__label {
+  opacity: 0.65;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.6875rem;
+}
+
+.onboard-metrics__value {
+  font-weight: 700;
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.onboard-metrics__unit {
+  margin-left: 0.15em;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+.onboard-metrics__tag {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.onboard-metrics__tag--measured {
+  color: var(--color-success);
+}
+.onboard-metrics__tag--estimated {
+  color: var(--color-warning);
+}
+
+@media (max-width: 860px) {
+  .onboard-metrics__grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

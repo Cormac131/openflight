@@ -66,6 +66,68 @@ export interface Shot {
   training_implement?: string;
   training_implement_label?: string;
   camera_replay?: CameraReplay | null;
+  // The IWR6843 firmware's own result packet for this shot, when the
+  // self-trigger fired and the onboard shot machine reached RESULT.
+  iwr6843_onboard?: IWROnboardResult | null;
+}
+
+export type IWROnboardVerdict = 'invalid' | 'partial' | 'valid';
+export type IWROnboardLabel = 'MEASURED' | 'ESTIMATED' | '-';
+
+export interface IWROnboardMetric {
+  value: number | null; // m/s for speeds, degrees for angles, m for range, rpm for spin
+  confidence: number;
+  label: IWROnboardLabel;
+  measured: boolean;
+  radial_only: boolean;
+  implausible: boolean;
+  fallback: boolean;
+  usable: boolean;
+}
+
+export type IWROnboardMetricName =
+  | 'ball_speed'
+  | 'vertical_launch'
+  | 'horizontal_launch'
+  | 'club_speed'
+  | 'club_path'
+  | 'angle_of_attack'
+  | 'spin_rate'
+  | 'spin_axis'
+  | 'impact_range';
+
+export interface IWROnboardResult {
+  version: number;
+  shot_id: number;
+  verdict: IWROnboardVerdict;
+  impact_source: string;
+  impact_timestamp_us: number;
+  club_points: number;
+  ball_points: number;
+  smash: number | null;
+  quality: string[];
+  metrics: Partial<Record<IWROnboardMetricName, IWROnboardMetric>>;
+}
+
+/** The firmware ball-placement detector, polled by the server (`iwr_setup`). */
+export type IWRSetupState = 'off' | 'building' | 'waiting' | 'candidate' | 'locked' | 'error';
+export type IWRSetupLabel = 'too-close' | 'close' | 'ideal' | 'far' | 'too-far';
+
+export interface IWRSetupStatus {
+  enabled: boolean;
+  state: IWRSetupState;
+  follow: boolean;
+  bin: number | null;
+  range_m: number | null;
+  confidence: number;
+  ratio: number;
+  reason: string | null;
+  label: IWRSetupLabel | null;
+  ok: boolean | null;
+  move_cm: number | null;
+  message: string | null;
+  error: string | null;
+  timestamp: number;
 }
 
 export interface SessionStats {

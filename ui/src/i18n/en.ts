@@ -204,6 +204,33 @@ export const en = {
   'display.clubPath': 'Club Path',
 
   'sim.connectors': 'Simulator connectors',
+
+  'setup.title': 'Setup',
+  'setup.ballAt': 'Ball at {range} m',
+  'setup.ready': 'Ready',
+  'setup.usableMove': 'Usable. Move OpenFlight about {cm} cm {direction} for best results',
+  'setup.move': 'Move OpenFlight about {cm} cm {direction}',
+  'setup.closer': 'closer to the ball',
+  'setup.back': 'back from the ball',
+  'setup.building': 'TI radar is learning the background',
+  'setup.waiting': 'Place a ball on the tee',
+  'setup.candidate': 'Ball seen, confirming',
+  'setup.error': 'TI radar setup status unavailable',
+  'onboard.title': 'TI onboard',
+  'onboard.shot': 'Shot {n}',
+  'onboard.verdictValid': 'Valid',
+  'onboard.verdictPartial': 'Partial',
+  'onboard.verdictInvalid': 'Invalid',
+  'onboard.measured': 'Measured',
+  'onboard.estimated': 'Estimated',
+  'onboard.ball': 'Ball',
+  'onboard.vla': 'VLA',
+  'onboard.hla': 'HLA',
+  'onboard.club': 'Club',
+  'onboard.path': 'Path',
+  'onboard.attack': 'AoA',
+  'onboard.smash': 'Smash',
+  'onboard.points': '{club} club / {ball} ball points',
 } as const;
 
 export type MessageKey = keyof typeof en;

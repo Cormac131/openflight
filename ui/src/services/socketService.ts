@@ -9,6 +9,7 @@ import {
   type TriggerDiagnostic,
   type TriggerDiagnosticUpdate,
   type TriggerStatus,
+  type IWRSetupStatus,
 } from '../types/shot';
 import type { DebugReading, RadarConfig, DebugShotLog, SimShotInfo, SimStatus } from '../types/socket';
 import type { PowerStatus } from '../types/power';
@@ -50,6 +51,7 @@ class SocketService {
       useSystemStore.getState().setConnected(true);
       this.socket?.emit('get_session');
       this.socket?.emit('get_trigger_status');
+      this.socket?.emit('get_iwr_setup');
       this.socket?.emit('get_radar_config');
       this.socket?.emit('get_camera_capture_settings');
       this.socket?.emit('get_profiles');
@@ -176,6 +178,10 @@ class SocketService {
 
     this.socket.on('trigger_status', (data: TriggerStatus) => {
       useDebugStore.getState().setTriggerStatus(data);
+    });
+
+    this.socket.on('iwr_setup', (data: IWRSetupStatus) => {
+      useSystemStore.getState().setIwrSetup(data);
     });
 
     this.socket.on(

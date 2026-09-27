@@ -37,6 +37,11 @@ export function registerHandlers(io: Server, session: MockSession): void {
       socket.emit('trigger_status', session.triggerStatus());
     });
 
+    socket.on('get_iwr_setup', () => {
+      // No TI radar in the mock: the kiosk shows no setup banner.
+      socket.emit('iwr_setup', { enabled: false, state: 'off' });
+    });
+
     socket.on('get_radar_config', () => {
       socket.emit('radar_config', session.radarConfig);
     });

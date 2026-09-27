@@ -269,6 +269,10 @@ class Shot:
     # value remains available for replay and comparison.
     iwr6843_horizontal_deg: Optional[float] = None
     iwr6843_horizontal_confidence: Optional[float] = None
+    # The IWR6843 firmware's own shot result (shot_result.ShotResultPacket.to_dict):
+    # verdict, quality flags and every onboard metric with confidence and
+    # MEASURED / ESTIMATED provenance. Shown beside the host pipeline's values.
+    iwr6843_onboard: Optional[dict] = None
     experimental_camera_horizontal_deg: Optional[float] = None
     experimental_camera_horizontal_confidence: Optional[float] = None
     experimental_camera_horizontal_status: Optional[str] = None
@@ -423,6 +427,7 @@ class Shot:
             "experimental_aoa_offset_source": self.experimental_aoa_offset_source,
             "iwr6843_horizontal_deg": self.iwr6843_horizontal_deg,
             "iwr6843_horizontal_confidence": self.iwr6843_horizontal_confidence,
+            "iwr6843_onboard": self.iwr6843_onboard,
             "experimental_camera_horizontal_deg": self.experimental_camera_horizontal_deg,
             "experimental_camera_horizontal_confidence": (
                 self.experimental_camera_horizontal_confidence

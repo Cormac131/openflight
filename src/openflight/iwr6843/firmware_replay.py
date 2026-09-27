@@ -115,6 +115,28 @@ def channel_snapshot(
     return snap
 
 
+def static_channel_snapshot(
+    cube: np.ndarray, frame: int, local_bin: int, n_tx: int, *, chirp_period_s: float
+) -> fw.AngleSnapshot:
+    """``l3_channelSnapshotStatic``: the raw samples of every channel at one bin
+    summed over the loops, for a stationary target such as the ball on its tee."""
+    chirps, n_rx = cube.shape[1], cube.shape[2]
+    loops = chirps // n_tx
+    summed = cube[frame, :, :, local_bin].reshape(loops, n_tx, n_rx).sum(axis=0)
+    snap = fw.AngleSnapshot()
+    _default_library().l3_angle_snapshot_init(ctypes.byref(snap), n_tx, n_rx)
+    for tx in range(snap.ntx):
+        for rx in range(snap.nrx):
+            value = summed[tx, rx]
+            snap.channel[tx * snap.nrx + rx] = fw.Cpx(float(value.real), float(value.imag))
+    snap.lag1PhaseRad = 0.0
+    snap.radialVelocityMps = 0.0
+    snap.chirpPeriodS = chirp_period_s
+    return snap
+
+
+BALL_ANGLE_MIN_PEAK_RATIO = 3.0  # L3_BALL_ANGLE_MIN_PEAK_RATIO
+
 _LIBRARY: ctypes.CDLL | None = None
 
 
@@ -177,6 +199,10 @@ class ReplayConfig:
     # Frames after the trigger fires go to the ball tracker, as the board's
     # post movie does; a locked ball at dest_bin makes the shot require one.
     post_impact: bool = True
+    # With a locked ball (dest_bin), read its direction from the static return
+    # in the first frame, as the firmware does from the ball detector's lock,
+    # so the destination is a 3D position rather than a point on boresight.
+    ball_angles: bool = True
     # Treat this frame as the first post-impact frame whatever the gate does:
     # for captures the sound trigger froze, the plan's first post slot IS
     # impact, so the ball tracker can be judged on its own. None: the gate.
@@ -284,6 +310,7 @@ class ReplayResult:
     impact_status: str  # l3_impact_format at the end of the replay
     launch: LaunchSummary | None  # from the ball tracker, when a flight was confirmed
     ball_points: list[PointSummary]
+    ball_angle: AngleSummary | None  # the locked ball's measured direction, when trusted
     shot_status: str  # l3_shot_format at the end
     ball_status: str  # l3_ball_track_format_status at the end
     track_counters: dict[str, int]
@@ -512,6 +539,27 @@ def replay_dump(
     launch = fw.Launch()
     ball_points: list[PointSummary] = []
     ball_floor = ctypes.c_float(0.0)  # the post window's own floor, as gBallFloor
+    # The destination's direction: the locked ball's static return, else boresight.
+    ball_azimuth = 0.0
+    ball_elevation = 0.0
+    ball_angle: AngleSummary | None = None
+    if config.dest_bin is not None and config.ball_angles and meta["n_frames"] > 0:
+        first_start, first_count = frame_window(meta, 0)
+        if first_start <= config.destination < first_start + first_count:
+            static_obs = fw.AngleObs()
+            static_snap = static_channel_snapshot(
+                cube, 0, config.destination - first_start, n_tx, chirp_period_s=chirp_period_s
+            )
+            if (
+                lib.l3_angle_estimate(
+                    ctypes.byref(cal), ctypes.byref(static_snap), ctypes.byref(static_obs)
+                )
+                and static_obs.elevationValid
+                and static_obs.elevationPeakRatio >= BALL_ANGLE_MIN_PEAK_RATIO
+            ):
+                ball_azimuth = float(static_obs.azimuthRad) if static_obs.azimuthValid else 0.0
+                ball_elevation = float(static_obs.elevationRad)
+                ball_angle = _angle_summary(static_obs)
 
     params = fw.ObsParams(trig_cfg.stat, trig_cfg.snr, loop_period_s)
     targets = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
@@ -537,7 +585,11 @@ def replay_dump(
             # belong to the gate's early fire, not to the flight.
             ball_points.clear()
             lib.l3_frames_observe(
-                ctypes.byref(cal), destination * bin_width_m, 0.0, 0.0, ctypes.byref(ball_position)
+                ctypes.byref(cal),
+                destination * bin_width_m,
+                ball_azimuth,
+                ball_elevation,
+                ctypes.byref(ball_position),
             )
             lib.l3_ball_track_arm(
                 ctypes.byref(ball_track),
@@ -653,7 +705,11 @@ def replay_dump(
             track_bin = float(newest.rangeBin)
         lib.l3_track_delivery(ctypes.byref(track), 8, ctypes.byref(delivery))
         lib.l3_frames_observe(
-            ctypes.byref(cal), destination * bin_width_m, 0.0, 0.0, ctypes.byref(ball_position)
+            ctypes.byref(cal),
+            destination * bin_width_m,
+            ball_azimuth,
+            ball_elevation,
+            ctypes.byref(ball_position),
         )
         geometric = lib.l3_impact_update(
             ctypes.byref(impact), ctypes.byref(delivery), ctypes.byref(ball_position), 1
@@ -721,6 +777,7 @@ def replay_dump(
         impact_status=fw.c_text(lib.l3_impact_format, ctypes.byref(impact), cap=240),
         launch=_launch_summary(launch),
         ball_points=ball_points,
+        ball_angle=ball_angle,
         shot_status=fw.c_text(lib.l3_shot_format, ctypes.byref(shot), cap=240),
         ball_status=fw.c_text(lib.l3_ball_track_format_status, ctypes.byref(ball_track), cap=240),
         track_counters={name: int(track.counters[i]) for i, name in enumerate(fw.TRACK_WHY_NAMES)},
@@ -787,10 +844,8 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
         newest = fw.TrackPoint()
         core = ball_track.core
         lib.l3_track_point(ctypes.byref(core), core.count - 1, ctypes.byref(newest))
-        if core.count > 1:
-            hit = next(
-                (targets[i] for i in range(found) if targets[i].rangeBin == newest.rangeBin), None
-            )
+        if core.count > 1 and ball_track.lastTargetIndex < found:
+            hit = targets[ball_track.lastTargetIndex]
             if hit is not None:
                 obs_angle, flags = _estimate_angles(
                     lib,
@@ -1009,6 +1064,17 @@ def _point_angles(result: ReplayResult, point: PointSummary) -> str:
     return ""
 
 
+def _ball_angle_line(result: ReplayResult) -> str:
+    angle = result.ball_angle
+    if angle is None:
+        return (
+            "ball direction: boresight (no locked ball, or its static return did not stand clear)"
+        )
+    az = "-" if angle.azimuth_deg is None else f"{angle.azimuth_deg:+.1f} deg"
+    el = "-" if angle.elevation_deg is None else f"{angle.elevation_deg:+.1f} deg"
+    return f"ball direction: az {az}, el {el} (peak ratio {angle.elevation_peak_ratio:.1f})"
+
+
 def _launch_line(result: ReplayResult) -> str:
     launch = result.launch
     if launch is None:
@@ -1036,6 +1102,7 @@ def format_report(result: ReplayResult, *, name: str = "", points: bool = False)
         "  " + _delivery_line(result),
         f"  {result.impact_status}",
         "  " + _launch_line(result),
+        "  " + _ball_angle_line(result),
         f"  {result.shot_status}",
         f"  {result.ball_status}",
     ]
@@ -1077,6 +1144,7 @@ __all__ = [
     "bin_observations",
     "channel_snapshot",
     "format_report",
+    "static_channel_snapshot",
     "frame_timestamps_us",
     "frame_window",
     "recording_configs",

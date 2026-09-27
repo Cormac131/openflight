@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The IWR6843 firmware's shot result reaches the shot and the kiosk.** After
+  a self-triggered capture the server reads `triggerLog result`, keeps the
+  100-byte packet on the shot as `iwr6843_onboard`, logs it beside the OPS and
+  host numbers, and the Live view shows a "TI onboard" strip with MEASURED /
+  ESTIMATED and confidence on each metric. `--iwr6843-onboard-metrics` lets
+  the firmware's usable launch angles, club path and attack angle replace the
+  host pipeline's; ball speed stays the OPS measurement.
+- **Setup banner from the ball-placement detector.** `--iwr6843-ball-detector`
+  (default `on`) turns the firmware detector on at startup and the server
+  polls `ball status` every `--iwr6843-setup-poll-s` seconds, emitting
+  `iwr_setup`. The kiosk shows the ball range and how far to move OpenFlight
+  (`too-close` to `too-far`), or asks for a ball on the tee.
+- **IQ8 profiles get the onboard detect path.** The trigger, club track and
+  ball track read int8 rings with the frame scale, so the dense IQ8 profiles
+  can self-trigger; the monitor no longer refuses them.
 - **The IWR6843 can pick its own track cells (`l3track`).** The firmware now
   runs the ball tracker and cell selection the Pi ran for `l3sparse`
   (`firmware/iwr6843/track_select.c`). It streams only the chosen cells, so
