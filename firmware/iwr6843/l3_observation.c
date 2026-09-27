@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "l3_observation.h"
+#include "l3_text.h"
 
 float l3_obs_stat(uint32_t stat, const l3_bin_obs_t *obs)
 {
@@ -168,35 +169,6 @@ uint32_t l3_obs_extract(const l3_obs_params_t *params, uint32_t frame, uint32_t 
     return written;
 }
 
-/* "12.34" or "-12.34" without float printf. */
-static void l3_obs_fmt(float value, uint32_t decimals, char *out, uint32_t cap)
-{
-    const char *sign = (value < 0.0F) ? "-" : "";
-    uint32_t scale = (decimals == 2U) ? 100U : (decimals == 1U) ? 10U : 1U;
-    unsigned whole;
-    unsigned fraction;
-
-    if (value < 0.0F) {
-        value = -value;
-    }
-    if (value > 4.0e9F) {
-        value = 4.0e9F;
-    }
-    whole = (unsigned)value;
-    fraction = (unsigned)((value - (float)whole) * (float)scale + 0.5F);
-    if (fraction >= scale) {
-        whole++;
-        fraction = 0U;
-    }
-    if (decimals == 2U) {
-        (void)snprintf(out, cap, "%s%u.%02u", sign, whole, fraction);
-    } else if (decimals == 1U) {
-        (void)snprintf(out, cap, "%s%u.%01u", sign, whole, fraction);
-    } else {
-        (void)snprintf(out, cap, "%s%u", sign, whole);
-    }
-}
-
 int32_t l3_obs_format_target(const l3_target_obs_t *target, char *out, uint32_t cap)
 {
     char rangeText[16];
@@ -206,12 +178,12 @@ int32_t l3_obs_format_target(const l3_target_obs_t *target, char *out, uint32_t 
     char energyText[16];
     char peakText[16];
 
-    l3_obs_fmt(target->rangeBin, 2U, rangeText, sizeof(rangeText));
-    l3_obs_fmt(target->snr, 1U, snrText, sizeof(snrText));
-    l3_obs_fmt(target->dopplerAliasMps, 2U, velocityText, sizeof(velocityText));
-    l3_obs_fmt(target->confidence, 2U, confidenceText, sizeof(confidenceText));
-    l3_obs_fmt(target->energy, 0U, energyText, sizeof(energyText));
-    l3_obs_fmt(target->peak, 0U, peakText, sizeof(peakText));
+    l3_text_fixed(target->rangeBin, 2U, rangeText, sizeof(rangeText));
+    l3_text_fixed(target->snr, 1U, snrText, sizeof(snrText));
+    l3_text_fixed(target->dopplerAliasMps, 2U, velocityText, sizeof(velocityText));
+    l3_text_fixed(target->confidence, 2U, confidenceText, sizeof(confidenceText));
+    l3_text_fixed(target->energy, 0U, energyText, sizeof(energyText));
+    l3_text_fixed(target->peak, 0U, peakText, sizeof(peakText));
     return snprintf(out, cap,
                     "obs frame=%u bin=%u range=%s snr=%s energy=%s peak=%s coh=%u v=%s "
                     "conf=%s angles=%s",

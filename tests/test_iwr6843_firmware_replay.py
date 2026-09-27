@@ -25,6 +25,7 @@ from openflight.iwr6843.firmware_replay import (
     RECORDINGS_DIR,
     ReplayConfig,
     bin_observations,
+    channel_snapshot,
     format_report,
     frame_timestamps_us,
     frame_window,
@@ -285,3 +286,99 @@ def test_recorded_swings_track_without_constant_reacquisition(lib, path, config)
     assert result.acquisitions <= 2, format_report(result, name=path.name)
     assert result.longest_run >= 3, format_report(result, name=path.name)
     assert math.isfinite(result.speed_mps)
+
+
+# --- angles, delivery and geometric impact -------------------------------------
+
+
+def test_channel_snapshot_matches_a_loop_by_loop_port_of_the_firmware():
+    rng = np.random.default_rng(11)
+    shape = (1, 36, 4, 8)
+    cube = rng.integers(-2000, 2000, shape) + 1j * rng.integers(-2000, 2000, shape)
+    phase = 0.7
+    snap = channel_snapshot(
+        cube, 0, 5, 3, lag1_phase_rad=phase, radial_velocity_mps=20.0, chirp_period_s=45e-6
+    )
+    assert (snap.ntx, snap.nrx) == (3, 4)
+    for tx in range(3):
+        for rx in range(4):
+            samples = [cube[0, loop * 3 + tx, rx, 5] for loop in range(12)]
+            mean = sum(samples) / 12
+            expected = sum(
+                (s - mean) * np.exp(-1j * phase * loop) for loop, s in enumerate(samples)
+            )
+            got = snap.channel[tx * 4 + rx]
+            assert complex(got.re, got.im) == pytest.approx(expected, rel=1e-5, abs=1e-2)
+    assert snap.lag1PhaseRad == pytest.approx(phase)
+    assert snap.radialVelocityMps == 20.0 and snap.chirpPeriodS == pytest.approx(45e-6)
+
+
+@pytest.mark.parametrize("path_deg", [0.0, 6.0, -4.0])
+def test_replay_reads_club_path_and_speed_from_the_three_tx_synth(lib, path_deg):
+    """The synthetic club carries the azimuth on TX1 and the TDM phases, so the
+    replay must give back the path it was built with, a level attack and the
+    club speed from the 3D fit, not just the radial projection."""
+    result = replay_dump(
+        synth_club_dump(path_deg, tee_range_m=TEE_RANGE_M), ReplayConfig(tee_bin=TEE_BIN), lib=lib
+    )
+    assert result.delivery is not None
+    assert result.delivery.path_deg == pytest.approx(path_deg, abs=0.5)
+    assert result.delivery.attack_deg == pytest.approx(0.0, abs=0.3)
+    assert result.delivery.speed_mps == pytest.approx(CLUB_SPEED_MS, abs=0.5)
+    assert result.delivery.points == len(result.points) - 1, "the first point is range-only"
+    assert result.delivery.confidence > 0.6
+    angled = [f for f in result.frames if f.angle is not None]
+    assert len(angled) == len(result.points) - 1
+    assert all(f.angle.elevation_deg == pytest.approx(0.0, abs=0.3) for f in angled)
+    assert all(f.angle.azimuth_coherence > 0.9 for f in angled)
+
+
+def test_the_first_point_of_a_track_carries_no_angles(lib, swing):
+    result = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    first = result.frames[result.points[0].frame]
+    assert first.track_why == "acquired" and first.angle is None
+    second = result.frames[result.points[1].frame]
+    assert second.angle is not None and second.angle.azimuth_deg is not None
+
+
+def test_geometric_impact_fires_at_the_tee_with_a_sub_frame_time(lib, swing):
+    result = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    assert result.geometric_frame is not None
+    assert result.impact_timestamp_us is not None
+    # The club crosses the tee bin between frames 5 and 6 (20 and 24 ms).
+    assert 20_000 < result.impact_timestamp_us < 24_000
+    assert result.frames[result.geometric_frame].impact_why == "fired"
+    assert any(f.impact_why == "pending" for f in result.frames[: result.geometric_frame])
+    assert "impact fired=1 why=fired" in result.impact_status
+    assert "geometric impact frame" in format_report(result)
+
+
+def test_impact_armed_ends_a_stop_at_fire_replay_on_the_geometric_fire(lib, swing):
+    gated = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN, stop_at_fire=True), lib=lib)
+    armed = replay_dump(
+        swing, ReplayConfig(tee_bin=TEE_BIN, stop_at_fire=True, impact_armed=True), lib=lib
+    )
+    assert len(armed.frames) == armed.geometric_frame + 1
+    assert len(armed.frames) <= len(gated.frames)
+
+
+def test_replay_calibration_attitude_rotates_the_delivery_into_the_golf_frame(lib):
+    """A radar yawed 3 degrees right reads a straight swing as 3 degrees left
+    unless the calibration says so; with it the path comes back straight."""
+    raw = synth_club_dump(0.0, tee_range_m=TEE_RANGE_M)
+    unaware = replay_dump(raw, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    aware = replay_dump(raw, ReplayConfig(tee_bin=TEE_BIN, yaw_deg=3.0), lib=lib)
+    assert unaware.delivery.path_deg == pytest.approx(0.0, abs=0.5)
+    assert aware.delivery.path_deg == pytest.approx(3.0, abs=0.5)
+
+
+def test_report_points_carry_angles_and_the_manifest_takes_calibration_keys(lib, swing, tmp_path):
+    result = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    report = format_report(result, name="swing", points=True)
+    assert " az=+0.0 el=+0.0" in report or " az=-0.0 el=+0.0" in report
+    (tmp_path / "a.l3dump").write_bytes(b"")
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"default": {"tee_bin": 34, "pitch_deg": 10.4, "range_bias_m": 0.066}})
+    )
+    config = recording_configs(tmp_path)[0][1]
+    assert config.pitch_deg == 10.4 and config.range_bias_m == 0.066

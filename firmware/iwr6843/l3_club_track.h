@@ -17,9 +17,13 @@
 
 #include <stdint.h>
 
+#include "l3_frames.h"
 #include "l3_observation.h"
 
 #define L3_TRACK_POINTS 32U
+#define L3_TRACK_NO_TARGET 0xFFFFFFFFU
+/* Fit points counted as "enough" for full confidence. */
+#define L3_TRACK_FULL_POINTS 8U
 
 typedef struct {
     uint32_t frame;
@@ -28,12 +32,14 @@ typedef struct {
     float    rangeM;
     float    radialVelocityMps;   /* from the range rate, not Doppler */
     float    dopplerAliasMps;
-    float    azimuthRad;
-    float    elevationRad;
-    uint8_t  anglesValid;
+    float    azimuthRad;          /* positive right */
+    float    elevationRad;        /* positive up */
+    uint8_t  anglesValid;         /* L3_OBS_ANGLE_* bits measured for this point */
     float    energy;
     float    coherence;
     float    confidence;
+    l3_vec3_t position;           /* GOLF frame metres from the antenna; an angle
+                                   * not measured is taken as boresight */
 } l3_track_point_t;
 
 typedef struct {
@@ -45,7 +51,32 @@ typedef struct {
     float    weightVelocity;      /*       + wV * wrapped Doppler diff / span */
     float    weightQuality;       /*       + wQ * (1 - confidence) */
     float    velocitySpanMps;     /* Doppler alias span (2 * wavelength / 4T) */
+    l3_radar_cal_t cal;           /* attitude, offsets and range bias for positions */
 } l3_track_cfg_t;
+
+/* Club delivery from a regression of position against time over the newest
+ * points: the velocity vector at the newest point (GOLF frame), and from it
+ * club speed, club path (horizontal, positive right) and angle of attack
+ * (vertical, positive up). Which of the three are valid depends on which
+ * angles the fitted points carried: range alone gives the radial speed,
+ * elevation adds the attack angle, azimuth adds the path. */
+typedef struct {
+    uint32_t points;              /* points the fit used */
+    uint32_t azimuthPoints;       /* of those, with a measured azimuth */
+    uint32_t elevationPoints;     /* ... with a measured elevation */
+    l3_vec3_t velocity;           /* m/s, golf frame */
+    l3_vec3_t position;           /* fitted position at the newest point's time */
+    uint32_t timestampUs;         /* the newest point's time */
+    float    speedMps;            /* |velocity| */
+    float    radialSpeedMps;      /* from the range-only fit, for cross-checking */
+    float    pathRad;
+    float    attackRad;
+    float    residualM;           /* RMS 3D fit residual */
+    float    confidence;          /* 0..1: residual, point count and point quality */
+    uint8_t  speedValid;
+    uint8_t  pathValid;
+    uint8_t  attackValid;
+} l3_delivery_t;
 
 enum {
     L3_TRACK_WHY_NONE = 0,
@@ -69,6 +100,8 @@ typedef struct {
     float    lastBin;
     float    velocityBinsPerFrame;
     float    predictedBin;
+    uint32_t lastTargetIndex;     /* index into the last update's targets that was
+                                   * appended, L3_TRACK_NO_TARGET when none */
     l3_track_point_t points[L3_TRACK_POINTS];
     uint32_t counters[L3_TRACK_WHY_COUNT];
 } l3_club_track_t;
@@ -82,8 +115,20 @@ void l3_track_reset(l3_club_track_t *track);
  * observations; the prediction uses frame numbers, so call once per frame. */
 int32_t l3_track_update(l3_club_track_t *track, const l3_target_obs_t *targets, uint32_t n,
                         uint32_t frame, uint32_t timestampUs);
+/* Angles for the point the last update appended (the target at
+ * lastTargetIndex), measured after association so only one target per frame
+ * needs an angle estimate. Recomputes that point's golf-frame position.
+ * Returns 0 when the last update appended nothing. */
+int32_t l3_track_set_angles(l3_club_track_t *track, float azimuthRad, float elevationRad,
+                            uint8_t anglesValid);
 /* Point index 0 is the oldest held. Returns 0 when out of range. */
 int32_t l3_track_point(const l3_club_track_t *track, uint32_t index, l3_track_point_t *out);
+/* The delivery from the newest maxPoints points (at least 3). Returns the
+ * points used, 0 when too few; out is fully written either way. */
+uint32_t l3_track_delivery(const l3_club_track_t *track, uint32_t maxPoints, l3_delivery_t *out);
+/* "delivery points=8 az=8 el=8 speed=22.40 radial=22.00 path=2.10 attack=-3.40
+ *  residual=0.012 conf=0.81 valid=spa" */
+int32_t l3_track_format_delivery(const l3_delivery_t *delivery, char *out, uint32_t cap);
 /* Least-squares fit of rangeBin against time over the newest maxPoints
  * points (at least 3). Returns the points used, 0 when too few; slope in
  * bins per second, residual as RMS bins. */

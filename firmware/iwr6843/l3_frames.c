@@ -1,0 +1,130 @@
+/* See l3_frames.h. */
+#include <math.h>
+#include <string.h>
+
+#include "l3_frames.h"
+
+void l3_cal_identity(l3_radar_cal_t *cal, uint32_t virtualElements)
+{
+    uint32_t i;
+
+    memset(cal, 0, sizeof(*cal));
+    if (virtualElements > L3_CAL_MAX_VIRTUAL) {
+        virtualElements = L3_CAL_MAX_VIRTUAL;
+    }
+    cal->virtualElements = virtualElements;
+    for (i = 0U; i < L3_CAL_MAX_VIRTUAL; i++) {
+        cal->correctionRe[i] = 1.0F;
+        cal->correctionIm[i] = 0.0F;
+    }
+}
+
+void l3_frames_from_spherical(const l3_spherical_t *in, l3_vec3_t *radar)
+{
+    float horizontal = in->rangeM * cosf(in->elevationRad);
+
+    radar->x = horizontal * cosf(in->azimuthRad);
+    radar->y = horizontal * sinf(in->azimuthRad);
+    radar->z = in->rangeM * sinf(in->elevationRad);
+}
+
+void l3_frames_to_spherical(const l3_vec3_t *radar, l3_spherical_t *out)
+{
+    float horizontal = sqrtf(radar->x * radar->x + radar->y * radar->y);
+
+    out->rangeM = sqrtf(horizontal * horizontal + radar->z * radar->z);
+    out->azimuthRad = (horizontal > 0.0F || radar->y != 0.0F) ? atan2f(radar->y, radar->x) : 0.0F;
+    out->elevationRad = (out->rangeM > 0.0F) ? atan2f(radar->z, horizontal) : 0.0F;
+}
+
+/* golf = Yaw(psi) . Pitch(theta) . Roll(phi) . radar. Each step undoes one
+ * component of the enclosure's attitude: a radar rolled right-side-down sees
+ * a level target on its right below its own horizon, a radar pitched nose-up
+ * sees a level target ahead below boresight, a radar yawed right sees the
+ * target line to its left. */
+void l3_frames_radar_to_golf(const l3_radar_cal_t *cal, const l3_vec3_t *radar, l3_vec3_t *golf)
+{
+    float cr = cosf(cal->radarRollRad);
+    float sr = sinf(cal->radarRollRad);
+    float cp = cosf(cal->radarPitchRad);
+    float sp = sinf(cal->radarPitchRad);
+    float cy = cosf(cal->radarYawRad);
+    float sy = sinf(cal->radarYawRad);
+    l3_vec3_t rolled;
+    l3_vec3_t pitched;
+
+    rolled.x = radar->x;
+    rolled.y = radar->y * cr - radar->z * sr;
+    rolled.z = radar->y * sr + radar->z * cr;
+
+    pitched.x = rolled.x * cp - rolled.z * sp;
+    pitched.y = rolled.y;
+    pitched.z = rolled.x * sp + rolled.z * cp;
+
+    golf->x = pitched.x * cy - pitched.y * sy;
+    golf->y = pitched.x * sy + pitched.y * cy;
+    golf->z = pitched.z;
+}
+
+void l3_frames_golf_to_radar(const l3_radar_cal_t *cal, const l3_vec3_t *golf, l3_vec3_t *radar)
+{
+    float cr = cosf(cal->radarRollRad);
+    float sr = sinf(cal->radarRollRad);
+    float cp = cosf(cal->radarPitchRad);
+    float sp = sinf(cal->radarPitchRad);
+    float cy = cosf(cal->radarYawRad);
+    float sy = sinf(cal->radarYawRad);
+    l3_vec3_t pitched;
+    l3_vec3_t rolled;
+
+    pitched.x = golf->x * cy + golf->y * sy;
+    pitched.y = -golf->x * sy + golf->y * cy;
+    pitched.z = golf->z;
+
+    rolled.x = pitched.x * cp + pitched.z * sp;
+    rolled.y = pitched.y;
+    rolled.z = -pitched.x * sp + pitched.z * cp;
+
+    radar->x = rolled.x;
+    radar->y = rolled.y * cr + rolled.z * sr;
+    radar->z = -rolled.y * sr + rolled.z * cr;
+}
+
+void l3_frames_observe(const l3_radar_cal_t *cal, float rangeM, float azimuthRad,
+                       float elevationRad, l3_vec3_t *golf)
+{
+    l3_spherical_t spherical;
+    l3_vec3_t radar;
+
+    spherical.rangeM = rangeM - cal->rangeBiasM;
+    if (spherical.rangeM < 0.0F) {
+        spherical.rangeM = 0.0F;
+    }
+    spherical.azimuthRad = azimuthRad - cal->azimuthOffsetRad;
+    spherical.elevationRad = elevationRad - cal->elevationOffsetRad;
+    l3_frames_from_spherical(&spherical, &radar);
+    l3_frames_radar_to_golf(cal, &radar, golf);
+}
+
+float l3_frames_horizontal_rad(const l3_vec3_t *velocity)
+{
+    if (velocity->x == 0.0F && velocity->y == 0.0F) {
+        return 0.0F;
+    }
+    return atan2f(velocity->y, velocity->x);
+}
+
+float l3_frames_vertical_rad(const l3_vec3_t *velocity)
+{
+    float horizontal = sqrtf(velocity->x * velocity->x + velocity->y * velocity->y);
+
+    if (horizontal == 0.0F && velocity->z == 0.0F) {
+        return 0.0F;
+    }
+    return atan2f(velocity->z, horizontal);
+}
+
+float l3_frames_speed(const l3_vec3_t *velocity)
+{
+    return sqrtf(velocity->x * velocity->x + velocity->y * velocity->y + velocity->z * velocity->z);
+}

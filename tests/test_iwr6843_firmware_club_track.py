@@ -10,13 +10,19 @@ fit that yields the club's radial speed. Bins are global range-FFT bins.
 from __future__ import annotations
 
 import ctypes
+import math
 
 import pytest
 
+from openflight.iwr6843 import firmware_host as fw
 from openflight.iwr6843.firmware_host import (
+    ANGLE_AZIMUTH,
+    ANGLE_ELEVATION,
+    TRACK_NO_TARGET,
     TRACK_POINTS as POINTS,
     TRACK_WHY_NAMES as WHY,
     ClubTrack as Track,
+    Delivery,
     TargetObs as Target,
     TrackCfg as Cfg,
     TrackPoint as Point,
@@ -242,3 +248,229 @@ def test_status_and_point_lines_read_without_float_printf(lib):
     assert line.endswith("angles=none")
     for code, name in enumerate(WHY):
         assert tr.lib.l3_track_why_name(code).decode() == name
+
+
+# --- 3D delivery ---------------------------------------------------------------
+
+DEG = math.pi / 180.0
+
+
+def straight_line_track(
+    lib,
+    *,
+    speed: float = 40.0,
+    path_deg: float = 0.0,
+    attack_deg: float = 0.0,
+    frames: int = 8,
+    angles: int = ANGLE_AZIMUTH | ANGLE_ELEVATION,
+    start=(1.2, -0.05, -0.20),
+    frame_s: float = FRAME_US * 1e-6,
+    confidence: float = 0.9,
+    cal_attitude: dict | None = None,
+):
+    """A clubhead on a straight line through the golf frame at constant velocity,
+    observed as (range, azimuth, elevation) each frame. The delivery fit must
+    give back the velocity vector, so path and attack angles are the inputs
+    the assertions read against."""
+    tr = Tracker(lib)
+    if cal_attitude:
+        for name, value in cal_attitude.items():
+            setattr(tr.track.cfg.cal, name, value)
+    vx = speed * math.cos(attack_deg * DEG) * math.cos(path_deg * DEG)
+    vy = speed * math.cos(attack_deg * DEG) * math.sin(path_deg * DEG)
+    vz = speed * math.sin(attack_deg * DEG)
+    cal = tr.track.cfg.cal
+    truth = []
+    for frame in range(1, frames + 1):
+        s = (frame - 1) * frame_s
+        golf = fw.Vec3(start[0] + vx * s, start[1] + vy * s, start[2] + vz * s)
+        radar = fw.Vec3()
+        lib.l3_frames_golf_to_radar(ctypes.byref(cal), ctypes.byref(golf), ctypes.byref(radar))
+        sph = fw.Spherical()
+        lib.l3_frames_to_spherical(ctypes.byref(radar), ctypes.byref(sph))
+        tgt = target(frame, sph.rangeM / BIN_M, confidence=confidence)
+        assert tr.update(frame, [tgt]) is True
+        assert (
+            lib.l3_track_set_angles(
+                ctypes.byref(tr.track), sph.azimuthRad, sph.elevationRad, angles
+            )
+            == 1
+        )
+        truth.append((golf.x, golf.y, golf.z))
+    return tr, (vx, vy, vz), truth
+
+
+def delivery(lib, tr, max_points: int = POINTS):
+    out = Delivery()
+    used = lib.l3_track_delivery(ctypes.byref(tr.track), max_points, ctypes.byref(out))
+    return used, out
+
+
+def test_points_carry_golf_frame_positions_from_range_and_angles(lib):
+    tr, _, truth = straight_line_track(lib, frames=4)
+    for point, (x, y, z) in zip(tr.points(), truth, strict=True):
+        assert (point.position.x, point.position.y, point.position.z) == pytest.approx(
+            (x, y, z), abs=2e-3
+        )
+        assert point.anglesValid == ANGLE_AZIMUTH | ANGLE_ELEVATION
+
+
+def test_set_angles_targets_the_point_the_last_update_appended(lib):
+    tr = Tracker(lib)
+    assert lib.l3_track_set_angles(ctypes.byref(tr.track), 0.1, 0.2, 3) == 0, "nothing yet"
+    tr.update(1, [target(1, 20.0)])
+    assert tr.track.lastTargetIndex == 0
+    tr.update(2, [target(2, 30.0, confidence=0.3), target(2, 22.0)])
+    assert tr.track.lastTargetIndex == 1, "the associated target, not the first"
+    assert lib.l3_track_set_angles(ctypes.byref(tr.track), 0.1, -0.2, ANGLE_ELEVATION) == 1
+    newest = tr.points()[-1]
+    assert newest.anglesValid == ANGLE_ELEVATION
+    assert newest.elevationRad == pytest.approx(-0.2)
+    # Azimuth not measured: the position sits on boresight in y.
+    assert newest.position.y == pytest.approx(0.0)
+    assert newest.position.z == pytest.approx(22.0 * BIN_M * math.sin(-0.2), abs=1e-4)
+    assert tr.update(3, []) is False
+    assert tr.track.lastTargetIndex == TRACK_NO_TARGET
+    assert lib.l3_track_set_angles(ctypes.byref(tr.track), 0.0, 0.0, 3) == 0
+
+
+def test_a_range_only_point_sits_on_boresight_with_the_range_bias_removed(lib):
+    tr = Tracker(lib)
+    tr.track.cfg.cal.rangeBiasM = 0.066
+    tr.update(1, [target(1, 40.0)])
+    point = tr.points()[-1]
+    assert point.position.x == pytest.approx(40.0 * BIN_M - 0.066, abs=1e-5)
+    assert point.position.y == 0.0 and point.position.z == 0.0
+
+
+@pytest.mark.parametrize("path_deg,attack_deg", [(0.0, 0.0), (4.0, -3.0), (-6.0, 2.5), (2.0, -5.0)])
+def test_delivery_recovers_the_velocity_vector_speed_path_and_attack(lib, path_deg, attack_deg):
+    tr, (vx, vy, vz), _ = straight_line_track(lib, path_deg=path_deg, attack_deg=attack_deg)
+    used, out = delivery(lib, tr)
+    assert used == 8 and out.points == 8 and out.azimuthPoints == 8 and out.elevationPoints == 8
+    assert (out.velocity.x, out.velocity.y, out.velocity.z) == pytest.approx((vx, vy, vz), abs=0.3)
+    assert out.speedMps == pytest.approx(40.0, abs=0.3)
+    assert out.pathRad / DEG == pytest.approx(path_deg, abs=0.3)
+    assert out.attackRad / DEG == pytest.approx(attack_deg, abs=0.3)
+    assert out.speedValid and out.pathValid and out.attackValid
+    assert out.residualM < 0.005
+    assert out.confidence > 0.8
+    assert out.timestampUs == 8 * FRAME_US
+
+
+def test_delivery_signs_follow_the_frame_conventions(lib):
+    """Right of the target line is positive path (in-to-out); up is positive attack."""
+    _, in_to_out = delivery(lib, straight_line_track(lib, path_deg=5.0)[0])
+    _, out_to_in = delivery(lib, straight_line_track(lib, path_deg=-5.0)[0])
+    assert in_to_out.pathRad > 0 > out_to_in.pathRad
+    _, descending = delivery(lib, straight_line_track(lib, attack_deg=-4.0)[0])
+    _, ascending = delivery(lib, straight_line_track(lib, attack_deg=4.0)[0])
+    assert descending.attackRad < 0 < ascending.attackRad
+
+
+def test_delivery_is_read_in_the_golf_frame_whatever_the_radar_attitude(lib):
+    """The same swing seen by a pitched, yawed radar: the calibration undoes it."""
+    attitude = {"radarPitchRad": 10.0 * DEG, "radarYawRad": -3.0 * DEG, "radarRollRad": 2.0 * DEG}
+    tr, (vx, vy, vz), _ = straight_line_track(
+        lib, path_deg=3.0, attack_deg=-4.0, cal_attitude=attitude
+    )
+    _, out = delivery(lib, tr)
+    assert (out.velocity.x, out.velocity.y, out.velocity.z) == pytest.approx((vx, vy, vz), abs=0.3)
+    assert out.pathRad / DEG == pytest.approx(3.0, abs=0.3)
+    assert out.attackRad / DEG == pytest.approx(-4.0, abs=0.3)
+
+
+def test_radial_speed_is_the_projection_the_range_walk_alone_can_see(lib):
+    """Down the boresight the two agree; off it the radial speed is smaller."""
+    _, on_axis = delivery(lib, straight_line_track(lib, start=(1.2, 0.0, 0.0))[0])
+    assert on_axis.radialSpeedMps == pytest.approx(on_axis.speedMps, abs=0.2)
+    _, off_axis = delivery(lib, straight_line_track(lib, path_deg=20.0, start=(1.0, -0.6, 0.0))[0])
+    assert off_axis.radialSpeedMps < off_axis.speedMps - 1.0
+
+
+def test_elevation_only_points_give_speed_and_attack_but_no_path(lib):
+    tr, (vx, _, vz), _ = straight_line_track(
+        lib, path_deg=4.0, attack_deg=-3.0, angles=ANGLE_ELEVATION
+    )
+    used, out = delivery(lib, tr)
+    assert used == 8 and out.azimuthPoints == 0 and out.elevationPoints == 8
+    assert out.speedValid and out.attackValid and not out.pathValid
+    assert out.pathRad == 0.0
+    assert out.attackRad / DEG == pytest.approx(-3.0, abs=0.5)
+    # Without azimuth the position is on boresight, so vy reads as nothing.
+    assert out.velocity.y == pytest.approx(0.0, abs=1e-3)
+    assert out.velocity.z == pytest.approx(vz, abs=0.3)
+    assert out.velocity.x == pytest.approx(
+        math.hypot(vx, 40.0 * math.cos(-3.0 * DEG) * math.sin(4.0 * DEG)), abs=0.5
+    )
+
+
+def test_range_only_points_give_the_radial_speed_and_nothing_angular(lib):
+    tr, _, _ = straight_line_track(lib, angles=0)
+    used, out = delivery(lib, tr)
+    assert used == 8 and out.azimuthPoints == 0 and out.elevationPoints == 0
+    assert out.speedValid and not out.pathValid and not out.attackValid
+    assert out.speedMps == pytest.approx(out.radialSpeedMps, abs=1e-3)
+    assert out.velocity.y == 0.0 and out.velocity.z == 0.0
+
+
+def test_measured_angles_never_mix_with_assumed_boresight(lib):
+    """Five angled points and three range-only ones: the fit uses the five, so
+    the boresight assumption cannot bend the path."""
+    tr = Tracker(lib)
+    for frame in range(1, 9):
+        bin_ = 20.0 + 2.0 * frame
+        tr.update(frame, [target(frame, bin_)])
+        if frame <= 5:
+            lib.l3_track_set_angles(
+                ctypes.byref(tr.track), 6.0 * DEG, 0.0, ANGLE_AZIMUTH | ANGLE_ELEVATION
+            )
+    used, out = delivery(lib, tr)
+    assert used == 5 and out.points == 5 and out.azimuthPoints == 5
+    assert out.pathValid
+    # A target at constant azimuth moving along range: path equals that azimuth.
+    assert out.pathRad / DEG == pytest.approx(6.0, abs=0.2)
+
+
+def test_delivery_needs_three_points_and_honours_max_points(lib):
+    tr, _, _ = straight_line_track(lib, frames=2)
+    used, out = delivery(lib, tr)
+    assert used == 0 and not out.speedValid and out.points == 0
+    tr, _, _ = straight_line_track(lib, frames=12)
+    used, out = delivery(lib, tr, max_points=5)
+    assert used == 5 and out.points == 5
+
+
+def test_delivery_confidence_falls_with_scatter_few_points_and_weak_targets(lib):
+    _, clean = delivery(lib, straight_line_track(lib)[0])
+    _, few = delivery(lib, straight_line_track(lib, frames=3)[0])
+    _, weak = delivery(lib, straight_line_track(lib, confidence=0.4)[0])
+    assert few.confidence < clean.confidence
+    assert weak.confidence < clean.confidence
+    tr = Tracker(lib)
+    rng = [22.0, 23.0, 27.0, 26.0, 31.0, 30.0]  # two bins of scatter around a line
+    for frame, b in enumerate(rng, start=1):
+        tr.update(frame, [target(frame, b)])
+    _, scattered = delivery(lib, tr)
+    assert scattered.confidence < clean.confidence
+    assert scattered.residualM > 0.02
+
+
+def test_delivery_format_names_the_metrics_and_their_validity(lib):
+    _, full = delivery(lib, straight_line_track(lib, path_deg=2.0, attack_deg=-3.0)[0])
+    text = fw.c_text(lib.l3_track_format_delivery, ctypes.byref(full))
+    assert text.startswith("delivery points=8 az=8 el=8 speed=40.")
+    assert " path=2.0" in text and " attack=-3.0" in text and text.endswith(" valid=spa")
+    _, radial = delivery(lib, straight_line_track(lib, angles=0)[0])
+    assert fw.c_text(lib.l3_track_format_delivery, ctypes.byref(radial)).endswith(" valid=s")
+    empty = Delivery()
+    assert fw.c_text(lib.l3_track_format_delivery, ctypes.byref(empty)).endswith(" valid=none")
+
+
+def test_reset_forgets_the_last_target_but_keeps_the_calibration(lib):
+    tr = Tracker(lib)
+    tr.track.cfg.cal.radarPitchRad = 0.1
+    tr.update(1, [target(1, 20.0)])
+    lib.l3_track_reset(ctypes.byref(tr.track))
+    assert tr.track.lastTargetIndex == TRACK_NO_TARGET
+    assert tr.track.cfg.cal.radarPitchRad == pytest.approx(0.1)

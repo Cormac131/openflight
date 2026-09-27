@@ -24,7 +24,16 @@ import tempfile
 from pathlib import Path
 
 FIRMWARE_DIR = Path(__file__).resolve().parents[3] / "firmware" / "iwr6843"
-HOST_SOURCES = ("l3_observation.c", "l3_trigger.c", "l3_club_track.c")
+HOST_SOURCES = (
+    "l3_text.c",
+    "l3_frames.c",
+    "l3_angle.c",
+    "l3_observation.c",
+    "l3_trigger.c",
+    "l3_club_track.c",
+    "l3_impact.c",
+    "l3_shot.c",
+)
 
 # l3_observation.h
 OBS_MAX_BINS = 64
@@ -43,8 +52,44 @@ TRIG_NO_BIN = 0xFF
 TRIG_STATE_IDLE, TRIG_STATE_TRACKING, TRIG_STATE_FIRED = 0, 1, 2
 TRIG_STATE_NAMES = ("idle", "tracking", "fired")
 
+# l3_frames.h / l3_angle.h
+CAL_MAX_VIRTUAL = 8
+ANGLE_MAX_TX, ANGLE_MAX_RX = 3, 4
+ANGLE_MAX_CHANNELS = ANGLE_MAX_TX * ANGLE_MAX_RX
+ANGLE_GRID_STEPS = 161
+
+# l3_observation.h anglesValid bits
+ANGLE_AZIMUTH, ANGLE_ELEVATION = 1, 2
+
+# l3_impact.h
+IMPACT_WHY_NAMES = (
+    "none",
+    "noball",
+    "nodelivery",
+    "slow",
+    "unsure",
+    "far",
+    "pending",
+    "passed",
+    "fired",
+)
+
+# l3_shot.h
+SHOT_STATE_NAMES = (
+    "waiting_for_ball",
+    "ready",
+    "club_acquire",
+    "club_track",
+    "impact",
+    "ball_track",
+    "solve",
+    "result",
+)
+SHOT_IMPACT_GATE, SHOT_IMPACT_GEOMETRY = 1, 2
+
 # l3_club_track.h
 TRACK_POINTS = 32
+TRACK_NO_TARGET = 0xFFFFFFFF
 TRACK_WHY_NAMES = ("none", "acquired", "associated", "coasted", "dropped", "idle")
 
 
@@ -88,6 +133,71 @@ class TargetObs(ctypes.Structure):
         ("elevationRad", ctypes.c_float),
         ("anglesValid", ctypes.c_uint8),
         ("confidence", ctypes.c_float),
+    ]
+
+
+class Vec3(ctypes.Structure):
+    """``l3_vec3_t``."""
+
+    _fields_ = [("x", ctypes.c_float), ("y", ctypes.c_float), ("z", ctypes.c_float)]
+
+
+class Spherical(ctypes.Structure):
+    """``l3_spherical_t``: range, azimuth (right positive), elevation (up positive)."""
+
+    _fields_ = [
+        ("rangeM", ctypes.c_float),
+        ("azimuthRad", ctypes.c_float),
+        ("elevationRad", ctypes.c_float),
+    ]
+
+
+class RadarCal(ctypes.Structure):
+    """``l3_radar_cal_t``."""
+
+    _fields_ = [
+        ("virtualElements", ctypes.c_uint32),
+        ("correctionRe", ctypes.c_float * CAL_MAX_VIRTUAL),
+        ("correctionIm", ctypes.c_float * CAL_MAX_VIRTUAL),
+        ("azimuthOffsetRad", ctypes.c_float),
+        ("elevationOffsetRad", ctypes.c_float),
+        ("radarPitchRad", ctypes.c_float),
+        ("radarYawRad", ctypes.c_float),
+        ("radarRollRad", ctypes.c_float),
+        ("rangeBiasM", ctypes.c_float),
+    ]
+
+
+class Cpx(ctypes.Structure):
+    """``l3_cpx_t``."""
+
+    _fields_ = [("re", ctypes.c_float), ("im", ctypes.c_float)]
+
+
+class AngleSnapshot(ctypes.Structure):
+    """``l3_angle_snapshot_t``: tx-major channel values at one target's bin."""
+
+    _fields_ = [
+        ("ntx", ctypes.c_uint32),
+        ("nrx", ctypes.c_uint32),
+        ("channel", Cpx * ANGLE_MAX_CHANNELS),
+        ("lag1PhaseRad", ctypes.c_float),
+        ("radialVelocityMps", ctypes.c_float),
+        ("chirpPeriodS", ctypes.c_float),
+    ]
+
+
+class AngleObs(ctypes.Structure):
+    """``l3_angle_obs_t``."""
+
+    _fields_ = [
+        ("azimuthRad", ctypes.c_float),
+        ("elevationRad", ctypes.c_float),
+        ("azimuthCoherence", ctypes.c_float),
+        ("elevationPeakRatio", ctypes.c_float),
+        ("chirpPhaseRad", ctypes.c_float),
+        ("azimuthValid", ctypes.c_uint8),
+        ("elevationValid", ctypes.c_uint8),
     ]
 
 
@@ -185,6 +295,7 @@ class TrackCfg(ctypes.Structure):
         ("weightVelocity", ctypes.c_float),
         ("weightQuality", ctypes.c_float),
         ("velocitySpanMps", ctypes.c_float),
+        ("cal", RadarCal),
     ]
 
 
@@ -204,6 +315,29 @@ class TrackPoint(ctypes.Structure):
         ("energy", ctypes.c_float),
         ("coherence", ctypes.c_float),
         ("confidence", ctypes.c_float),
+        ("position", Vec3),
+    ]
+
+
+class Delivery(ctypes.Structure):
+    """``l3_delivery_t``: the club's velocity vector and the metrics read from it."""
+
+    _fields_ = [
+        ("points", ctypes.c_uint32),
+        ("azimuthPoints", ctypes.c_uint32),
+        ("elevationPoints", ctypes.c_uint32),
+        ("velocity", Vec3),
+        ("position", Vec3),
+        ("timestampUs", ctypes.c_uint32),
+        ("speedMps", ctypes.c_float),
+        ("radialSpeedMps", ctypes.c_float),
+        ("pathRad", ctypes.c_float),
+        ("attackRad", ctypes.c_float),
+        ("residualM", ctypes.c_float),
+        ("confidence", ctypes.c_float),
+        ("speedValid", ctypes.c_uint8),
+        ("pathValid", ctypes.c_uint8),
+        ("attackValid", ctypes.c_uint8),
     ]
 
 
@@ -222,8 +356,82 @@ class ClubTrack(ctypes.Structure):
         ("lastBin", ctypes.c_float),
         ("velocityBinsPerFrame", ctypes.c_float),
         ("predictedBin", ctypes.c_float),
+        ("lastTargetIndex", ctypes.c_uint32),
         ("points", TrackPoint * TRACK_POINTS),
         ("counters", ctypes.c_uint32 * len(TRACK_WHY_NAMES)),
+    ]
+
+
+class ImpactCfg(ctypes.Structure):
+    """``l3_impact_cfg_t``."""
+
+    _fields_ = [
+        ("toleranceM", ctypes.c_float),
+        ("horizonS", ctypes.c_float),
+        ("minSpeedMps", ctypes.c_float),
+        ("minConfidence", ctypes.c_float),
+    ]
+
+
+class Impact(ctypes.Structure):
+    """``l3_impact_t``: the geometric impact detector."""
+
+    _fields_ = [
+        ("cfg", ImpactCfg),
+        ("fired", ctypes.c_uint8),
+        ("why", ctypes.c_uint8),
+        ("closestM", ctypes.c_float),
+        ("offsetS", ctypes.c_float),
+        ("impactTimestampUs", ctypes.c_uint32),
+        ("contact", Vec3),
+        ("velocity", Vec3),
+        ("counters", ctypes.c_uint32 * len(IMPACT_WHY_NAMES)),
+    ]
+
+
+class ShotCfg(ctypes.Structure):
+    """``l3_shot_cfg_t``."""
+
+    _fields_ = [("requireBall", ctypes.c_uint8), ("ballTrackFrames", ctypes.c_uint32)]
+
+
+class ShotInput(ctypes.Structure):
+    """``l3_shot_input_t``: what the machine reads each frame."""
+
+    _fields_ = [
+        ("ballLocked", ctypes.c_uint8),
+        ("ballPosition", Vec3),
+        ("clubActive", ctypes.c_uint8),
+        ("clubPoints", ctypes.c_uint32),
+        ("gateFired", ctypes.c_uint8),
+        ("geometricFired", ctypes.c_uint8),
+        ("impactTimestampUs", ctypes.c_uint32),
+        ("delivery", ctypes.POINTER(Delivery)),
+        ("club", ctypes.POINTER(ClubTrack)),
+        ("postFrame", ctypes.c_uint8),
+        ("ballTrackDone", ctypes.c_uint8),
+        ("solved", ctypes.c_uint8),
+    ]
+
+
+class Shot(ctypes.Structure):
+    """``l3_shot_t``: the shot state machine and its frozen impact record."""
+
+    _fields_ = [
+        ("cfg", ShotCfg),
+        ("state", ctypes.c_uint8),
+        ("previous", ctypes.c_uint8),
+        ("enteredFrame", ctypes.c_uint32),
+        ("transitions", ctypes.c_uint32),
+        ("postFrames", ctypes.c_uint32),
+        ("impactSource", ctypes.c_uint8),
+        ("impactFrame", ctypes.c_uint32),
+        ("impactTimestampUs", ctypes.c_uint32),
+        ("ballOrigin", Vec3),
+        ("delivery", Delivery),
+        ("clubPoints", ctypes.c_uint32),
+        ("clubTrajectory", TrackPoint * TRACK_POINTS),
+        ("entries", ctypes.c_uint32 * len(SHOT_STATE_NAMES)),
     ]
 
 
@@ -244,6 +452,26 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
         _U32,
     ),
     "l3_obs_format_target": ([_P(TargetObs), *_TEXT], ctypes.c_int32),
+    # l3_frames.h
+    "l3_cal_identity": ([_P(RadarCal), _U32], None),
+    "l3_frames_from_spherical": ([_P(Spherical), _P(Vec3)], None),
+    "l3_frames_to_spherical": ([_P(Vec3), _P(Spherical)], None),
+    "l3_frames_radar_to_golf": ([_P(RadarCal), _P(Vec3), _P(Vec3)], None),
+    "l3_frames_golf_to_radar": ([_P(RadarCal), _P(Vec3), _P(Vec3)], None),
+    "l3_frames_observe": ([_P(RadarCal), _F32, _F32, _F32, _P(Vec3)], None),
+    "l3_frames_horizontal_rad": ([_P(Vec3)], _F32),
+    "l3_frames_vertical_rad": ([_P(Vec3)], _F32),
+    "l3_frames_speed": ([_P(Vec3)], _F32),
+    # l3_angle.h
+    "l3_angle_snapshot_init": ([_P(AngleSnapshot), _U32, _U32], None),
+    "l3_angle_chirp_phase": ([_F32, _U32, _F32, _F32], _F32),
+    "l3_angle_bartlett": ([_P(Cpx), _U32, _P(_F32)], _F32),
+    "l3_angle_estimate": ([_P(RadarCal), _P(AngleSnapshot), _P(AngleObs)], ctypes.c_int32),
+    "l3_angle_format": ([_P(AngleObs), *_TEXT], ctypes.c_int32),
+    # l3_text.h
+    "l3_text_fixed": ([_F32, _U32, *_TEXT], None),
+    "l3_text_fixed2": ([_F32, *_TEXT], None),
+    "l3_text_degrees2": ([_F32, *_TEXT], None),
     # l3_trigger.h
     "l3_trig_cfg_defaults": ([_P(TrigCfg)], None),
     "l3_trig_cfg_check": ([_P(TrigCfg)], ctypes.c_int32),
@@ -268,11 +496,30 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_track_init": ([_P(ClubTrack), _P(TrackCfg)], None),
     "l3_track_reset": ([_P(ClubTrack)], None),
     "l3_track_update": ([_P(ClubTrack), _P(TargetObs), _U32, _U32, _U32], ctypes.c_int32),
+    "l3_track_set_angles": ([_P(ClubTrack), _F32, _F32, ctypes.c_uint8], ctypes.c_int32),
     "l3_track_point": ([_P(ClubTrack), _U32, _P(TrackPoint)], ctypes.c_int32),
+    "l3_track_delivery": ([_P(ClubTrack), _U32, _P(Delivery)], _U32),
+    "l3_track_format_delivery": ([_P(Delivery), *_TEXT], ctypes.c_int32),
     "l3_track_fit": ([_P(ClubTrack), _U32, _P(_F32), _P(_F32)], _U32),
     "l3_track_speed_mps": ([_P(ClubTrack), _U32], _F32),
     "l3_track_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_track_format_status": ([_P(ClubTrack), _U32, *_TEXT], ctypes.c_int32),
+    # l3_impact.h
+    "l3_impact_cfg_defaults": ([_P(ImpactCfg)], None),
+    "l3_impact_init": ([_P(Impact), _P(ImpactCfg)], None),
+    "l3_impact_rearm": ([_P(Impact)], None),
+    "l3_impact_closest": ([_P(Vec3), _P(Vec3), _P(Vec3), _P(_F32), _P(_F32), _P(Vec3)], None),
+    "l3_impact_update": ([_P(Impact), _P(Delivery), _P(Vec3), ctypes.c_uint8], ctypes.c_int32),
+    "l3_impact_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_impact_format": ([_P(Impact), *_TEXT], ctypes.c_int32),
+    # l3_shot.h
+    "l3_shot_cfg_defaults": ([_P(ShotCfg)], None),
+    "l3_shot_init": ([_P(Shot), _P(ShotCfg)], None),
+    "l3_shot_rearm": ([_P(Shot)], None),
+    "l3_shot_update": ([_P(Shot), _P(ShotInput), _U32], ctypes.c_uint8),
+    "l3_shot_wants_departing": ([_P(Shot)], ctypes.c_int32),
+    "l3_shot_state_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_shot_format": ([_P(Shot), *_TEXT], ctypes.c_int32),
     "l3_track_format_point": ([_P(TrackPoint), _U32, *_TEXT], ctypes.c_int32),
 }
 
@@ -370,8 +617,32 @@ __all__ = [
     "TRIG_STATE_NAMES",
     "TRIG_STATE_TRACKING",
     "TRIG_TRACE_DEPTH",
+    "ANGLE_GRID_STEPS",
+    "ANGLE_MAX_CHANNELS",
+    "ANGLE_MAX_RX",
+    "ANGLE_MAX_TX",
+    "CAL_MAX_VIRTUAL",
+    "AngleObs",
+    "AngleSnapshot",
     "BinObs",
+    "ANGLE_AZIMUTH",
+    "ANGLE_ELEVATION",
+    "TRACK_NO_TARGET",
     "ClubTrack",
+    "Cpx",
+    "Delivery",
+    "IMPACT_WHY_NAMES",
+    "SHOT_IMPACT_GATE",
+    "SHOT_IMPACT_GEOMETRY",
+    "SHOT_STATE_NAMES",
+    "Shot",
+    "ShotCfg",
+    "ShotInput",
+    "Impact",
+    "ImpactCfg",
+    "RadarCal",
+    "Spherical",
+    "Vec3",
     "ObsParams",
     "TargetObs",
     "TrackCfg",

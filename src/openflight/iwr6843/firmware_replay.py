@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -82,6 +83,49 @@ def bin_observations(
     return (fw.BinObs * count).from_buffer_copy(table.tobytes())
 
 
+def channel_snapshot(
+    cube: np.ndarray,
+    frame: int,
+    local_bin: int,
+    n_tx: int,
+    *,
+    lag1_phase_rad: float,
+    radial_velocity_mps: float,
+    chirp_period_s: float,
+) -> fw.AngleSnapshot:
+    """``l3_channelSnapshot``: every (tx, rx) channel at one bin, its burst-MTI
+    residual summed over the loops with the target's per-loop Doppler phase
+    unwound, ready for ``l3_angle_estimate``."""
+    chirps, n_rx = cube.shape[1], cube.shape[2]
+    loops = chirps // n_tx
+    data = cube[frame, :, :, local_bin].reshape(loops, n_tx, n_rx)
+    residual = data - data.mean(axis=0, keepdims=True)
+    rotor = np.exp(-1j * lag1_phase_rad * np.arange(loops))
+    summed = (residual * rotor[:, None, None]).sum(axis=0)  # [tx, rx]
+    snap = fw.AngleSnapshot()
+    fw_lib = _default_library()
+    fw_lib.l3_angle_snapshot_init(ctypes.byref(snap), n_tx, n_rx)
+    for tx in range(snap.ntx):
+        for rx in range(snap.nrx):
+            value = summed[tx, rx]
+            snap.channel[tx * snap.nrx + rx] = fw.Cpx(float(value.real), float(value.imag))
+    snap.lag1PhaseRad = lag1_phase_rad
+    snap.radialVelocityMps = radial_velocity_mps
+    snap.chirpPeriodS = chirp_period_s
+    return snap
+
+
+_LIBRARY: ctypes.CDLL | None = None
+
+
+def _default_library() -> ctypes.CDLL:
+    """The compiled firmware modules, built once per process."""
+    global _LIBRARY  # pylint: disable=global-statement
+    if _LIBRARY is None:
+        _LIBRARY = fw.build_firmware_library()
+    return _LIBRARY
+
+
 def frame_window(meta: dict, frame: int) -> tuple[int, int]:
     """(global bin of local bin 0, valid bins) of one frame of a parsed dump."""
     starts = meta.get("range_bin_starts")
@@ -112,6 +156,15 @@ class ReplayConfig:
     loop_period_s: float | None = None  # None: n_tx x the shipped chirp period
     fft_size: int = DEFAULT_FFT_SIZE
     stop_at_fire: bool = False  # True: ignore frames after the trigger fires, as the board does
+    # Radar calibration: "trackCfg cal" values in the firmware's units.
+    pitch_deg: float = 0.0
+    yaw_deg: float = 0.0
+    roll_deg: float = 0.0
+    azimuth_offset_rad: float = 0.0
+    elevation_offset_deg: float = 0.0
+    range_bias_m: float = 0.0
+    # Geometric impact detector: armed lets it end the replay like the gate.
+    impact_armed: bool = False
 
     @property
     def destination(self) -> int:
@@ -132,8 +185,30 @@ class TargetSummary:
 
 
 @dataclass(frozen=True)
+class AngleSummary:
+    azimuth_deg: float | None
+    elevation_deg: float | None
+    azimuth_coherence: float
+    elevation_peak_ratio: float
+
+
+@dataclass(frozen=True)
+class DeliverySummary:
+    """``l3_delivery_t`` copied out: the club's velocity vector and its metrics."""
+
+    points: int
+    speed_mps: float
+    radial_speed_mps: float
+    path_deg: float | None
+    attack_deg: float | None
+    residual_m: float
+    confidence: float
+    velocity: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
 class ReplayFrame:
-    """What one frame did to the trigger and the track."""
+    """What one frame did to the trigger, the track and the impact detector."""
 
     frame: int
     timestamp_us: int
@@ -145,6 +220,9 @@ class ReplayFrame:
     targets: tuple[TargetSummary, ...]
     track_why: str
     track_bin: float | None  # the point appended this frame, global sub-bin
+    angle: AngleSummary | None = None  # for the point appended this frame
+    delivery: DeliverySummary | None = None
+    impact_why: str = "none"
 
 
 @dataclass(frozen=True)
@@ -166,7 +244,11 @@ class ReplayResult:
     config: ReplayConfig
     frames: list[ReplayFrame]
     points: list[PointSummary]  # every appended point, beyond the C ring's depth
-    fired_frame: int | None
+    fired_frame: int | None  # the range gate
+    geometric_frame: int | None  # the geometric impact detector's fire
+    impact_timestamp_us: int | None  # interpolated impact time from the geometry
+    delivery: DeliverySummary | None  # at the end of the replay
+    impact_status: str  # l3_impact_format at the end of the replay
     track_counters: dict[str, int]
     trig_counters: dict[str, int]
     speed_mps: float
@@ -176,6 +258,7 @@ class ReplayResult:
     trigger_summary: str  # l3_trig_format_summary at the end of the replay
     trig: fw.Trig = field(repr=False)
     track: fw.ClubTrack = field(repr=False)
+    impact: fw.Impact = field(repr=False)
 
     @property
     def acquisitions(self) -> int:
@@ -229,6 +312,46 @@ def _target_summary(target: fw.TargetObs) -> TargetSummary:
     )
 
 
+def _angle_summary(obs: fw.AngleObs) -> AngleSummary:
+    return AngleSummary(
+        azimuth_deg=math.degrees(obs.azimuthRad) if obs.azimuthValid else None,
+        elevation_deg=math.degrees(obs.elevationRad) if obs.elevationValid else None,
+        azimuth_coherence=float(obs.azimuthCoherence),
+        elevation_peak_ratio=float(obs.elevationPeakRatio),
+    )
+
+
+def _delivery_summary(delivery: fw.Delivery) -> DeliverySummary | None:
+    if not delivery.speedValid:
+        return None
+    return DeliverySummary(
+        points=int(delivery.points),
+        speed_mps=float(delivery.speedMps),
+        radial_speed_mps=float(delivery.radialSpeedMps),
+        path_deg=math.degrees(delivery.pathRad) if delivery.pathValid else None,
+        attack_deg=math.degrees(delivery.attackRad) if delivery.attackValid else None,
+        residual_m=float(delivery.residualM),
+        confidence=float(delivery.confidence),
+        velocity=(
+            float(delivery.velocity.x),
+            float(delivery.velocity.y),
+            float(delivery.velocity.z),
+        ),
+    )
+
+
+def _radar_cal(lib: ctypes.CDLL, config: ReplayConfig) -> fw.RadarCal:
+    cal = fw.RadarCal()
+    lib.l3_cal_identity(ctypes.byref(cal), fw.CAL_MAX_VIRTUAL)
+    cal.radarPitchRad = math.radians(config.pitch_deg)
+    cal.radarYawRad = math.radians(config.yaw_deg)
+    cal.radarRollRad = math.radians(config.roll_deg)
+    cal.azimuthOffsetRad = config.azimuth_offset_rad
+    cal.elevationOffsetRad = math.radians(config.elevation_offset_deg)
+    cal.rangeBiasM = config.range_bias_m
+    return cal
+
+
 def _point_summary(point: fw.TrackPoint) -> PointSummary:
     return PointSummary(
         frame=int(point.frame),
@@ -250,7 +373,7 @@ def replay_dump(
     floor), then the same observations as ranked targets into
     ``l3_track_update``. The dump must be a range-FFT snapshot.
     """
-    lib = lib or fw.build_firmware_library()
+    lib = lib or _default_library()
     meta, cube = parse_dump(raw)
     if not is_range_snapshot(meta):
         raise ValueError("replay needs a range-FFT snapshot dump, not raw ADC samples")
@@ -275,8 +398,19 @@ def replay_dump(
     lib.l3_track_cfg_defaults(ctypes.byref(track_cfg))
     track_cfg.binWidthM = RANGE_SPAN_M / config.fft_size
     track_cfg.velocitySpanMps = 2.0 * fw.OBS_WAVELENGTH_M / (4.0 * loop_period_s)
+    cal = _radar_cal(lib, config)
+    track_cfg.cal = cal
     track = fw.ClubTrack()
     lib.l3_track_init(ctypes.byref(track), ctypes.byref(track_cfg))
+
+    impact_cfg = fw.ImpactCfg()
+    lib.l3_impact_cfg_defaults(ctypes.byref(impact_cfg))
+    impact = fw.Impact()
+    lib.l3_impact_init(ctypes.byref(impact), ctypes.byref(impact_cfg))
+    delivery = fw.Delivery()
+    ball_position = fw.Vec3()
+    bin_width_m = RANGE_SPAN_M / config.fft_size
+    chirp_period_s = loop_period_s / n_tx
 
     params = fw.ObsParams(trig_cfg.stat, trig_cfg.snr, loop_period_s)
     targets = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
@@ -287,8 +421,10 @@ def replay_dump(
     frames: list[ReplayFrame] = []
     points: list[PointSummary] = []
     fired_frame: int | None = None
+    geometric_frame: int | None = None
     for frame in range(int(meta["n_frames"])):
-        if config.stop_at_fire and fired_frame is not None:
+        ended = fired_frame is not None or (config.impact_armed and geometric_frame is not None)
+        if config.stop_at_fire and ended:
             break
         window_start, window_bins = frame_window(meta, frame)
         timestamp_us = timestamps[frame]
@@ -313,6 +449,9 @@ def replay_dump(
                     (),
                     fw.TRACK_WHY_NAMES[track.why],
                     None,
+                    None,
+                    None,
+                    fw.IMPACT_WHY_NAMES[impact.why],
                 )
             )
             continue
@@ -334,11 +473,47 @@ def replay_dump(
         )
         appended = lib.l3_track_update(ctypes.byref(track), targets, found, frame, timestamp_us)
         track_bin = None
+        angle = None
+        newest = fw.TrackPoint()
+        if appended and track.lastTargetIndex < found and track.count > 1:
+            # As the board does: angles for the associated target only, the
+            # track's range-rate resolving the TDM alias, so a track's first
+            # point (no range rate yet) stays range-only.
+            lib.l3_track_point(ctypes.byref(track), track.count - 1, ctypes.byref(newest))
+            hit = targets[track.lastTargetIndex]
+            snapshot = channel_snapshot(
+                cube,
+                frame,
+                int(hit.peakBin) - window_start,
+                n_tx,
+                lag1_phase_rad=float(hit.dopplerPhaseRad),
+                radial_velocity_mps=float(newest.radialVelocityMps),
+                chirp_period_s=chirp_period_s,
+            )
+            obs_angle = fw.AngleObs()
+            if lib.l3_angle_estimate(
+                ctypes.byref(cal), ctypes.byref(snapshot), ctypes.byref(obs_angle)
+            ):
+                flags = (fw.ANGLE_AZIMUTH if obs_angle.azimuthValid else 0) | (
+                    fw.ANGLE_ELEVATION if obs_angle.elevationValid else 0
+                )
+                lib.l3_track_set_angles(
+                    ctypes.byref(track), obs_angle.azimuthRad, obs_angle.elevationRad, flags
+                )
+                angle = _angle_summary(obs_angle)
         if appended:
-            newest = fw.TrackPoint()
             lib.l3_track_point(ctypes.byref(track), track.count - 1, ctypes.byref(newest))
             points.append(_point_summary(newest))
             track_bin = float(newest.rangeBin)
+        lib.l3_track_delivery(ctypes.byref(track), 8, ctypes.byref(delivery))
+        lib.l3_frames_observe(
+            ctypes.byref(cal), destination * bin_width_m, 0.0, 0.0, ctypes.byref(ball_position)
+        )
+        geometric = lib.l3_impact_update(
+            ctypes.byref(impact), ctypes.byref(delivery), ctypes.byref(ball_position), 1
+        )
+        if geometric and geometric_frame is None:
+            geometric_frame = frame
         if fired:
             fired_frame = frame
         frames.append(
@@ -353,6 +528,9 @@ def replay_dump(
                 tuple(_target_summary(targets[i]) for i in range(found)),
                 fw.TRACK_WHY_NAMES[track.why],
                 track_bin,
+                angle,
+                _delivery_summary(delivery),
+                fw.IMPACT_WHY_NAMES[impact.why],
             )
         )
 
@@ -366,6 +544,10 @@ def replay_dump(
         frames=frames,
         points=points,
         fired_frame=fired_frame,
+        geometric_frame=geometric_frame,
+        impact_timestamp_us=int(impact.impactTimestampUs) if impact.fired else None,
+        delivery=_delivery_summary(delivery),
+        impact_status=fw.c_text(lib.l3_impact_format, ctypes.byref(impact), cap=240),
         track_counters={name: int(track.counters[i]) for i, name in enumerate(fw.TRACK_WHY_NAMES)},
         trig_counters={name: int(trig.counters[i]) for i, name in enumerate(_TRIG_COUNTERS)},
         speed_mps=float(lib.l3_track_speed_mps(ctypes.byref(track), fw.TRACK_POINTS)),
@@ -375,6 +557,7 @@ def replay_dump(
         trigger_summary=fw.c_text(lib.l3_trig_format_summary, ctypes.byref(trig), cap=400),
         trig=trig,
         track=track,
+        impact=impact,
     )
 
 
@@ -418,6 +601,29 @@ def recording_configs(
     return configs
 
 
+def _delivery_line(result: ReplayResult) -> str:
+    d = result.delivery
+    if d is None:
+        return "delivery: none"
+    path = "-" if d.path_deg is None else f"{d.path_deg:+.1f} deg"
+    attack = "-" if d.attack_deg is None else f"{d.attack_deg:+.1f} deg"
+    geometric = "-" if result.geometric_frame is None else str(result.geometric_frame)
+    return (
+        f"delivery: {d.points} points, speed {d.speed_mps:.1f} m/s (radial {d.radial_speed_mps:.1f}), "
+        f"path {path}, attack {attack}, residual {1000 * d.residual_m:.1f} mm, "
+        f"confidence {d.confidence:.2f}; geometric impact frame {geometric}"
+    )
+
+
+def _point_angles(result: ReplayResult, point: PointSummary) -> str:
+    for frame in result.frames:
+        if frame.frame == point.frame and frame.angle is not None:
+            az = "-" if frame.angle.azimuth_deg is None else f"{frame.angle.azimuth_deg:+.1f}"
+            el = "-" if frame.angle.elevation_deg is None else f"{frame.angle.elevation_deg:+.1f}"
+            return f" az={az} el={el}"
+    return ""
+
+
 def format_report(result: ReplayResult, *, name: str = "", points: bool = False) -> str:
     """A human-readable verdict on one capture: continuity first, then the detail."""
     fired = "no fire" if result.fired_frame is None else f"fired frame {result.fired_frame}"
@@ -429,6 +635,8 @@ def format_report(result: ReplayResult, *, name: str = "", points: bool = False)
         f"speed {result.speed_mps:.1f} m/s, fit residual {result.fit_residual_bins:.2f} bins",
         f"  {result.status}",
         f"  {result.trigger_summary}",
+        "  " + _delivery_line(result),
+        f"  {result.impact_status}",
     ]
     if points:
         distance = result.config.destination
@@ -437,7 +645,7 @@ def format_report(result: ReplayResult, *, name: str = "", points: bool = False)
                 f"  p frame={point.frame} t={point.timestamp_us / 1000.0:.1f}ms "
                 f"bin={point.range_bin:.2f} dist={distance - point.range_bin:.1f} "
                 f"range={point.range_m:.3f} vd={point.doppler_mps:.2f} "
-                f"conf={point.confidence:.2f}"
+                f"conf={point.confidence:.2f}" + _point_angles(result, point)
             )
     return "\n".join(lines)
 
@@ -448,12 +656,15 @@ __all__ = [
     "RECORDINGS_DIR",
     "DEFAULT_SNR",
     "DEFAULT_TRACK_FRAMES",
+    "AngleSummary",
+    "DeliverySummary",
     "PointSummary",
     "ReplayConfig",
     "ReplayFrame",
     "ReplayResult",
     "TargetSummary",
     "bin_observations",
+    "channel_snapshot",
     "format_report",
     "frame_timestamps_us",
     "frame_window",

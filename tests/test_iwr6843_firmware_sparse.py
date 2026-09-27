@@ -294,7 +294,7 @@ def test_detector_source_is_built_into_the_firmware():
     makefile = (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
     sources = re.search(r"^SOURCES\s*=(.*)$", makefile, re.MULTILINE).group(1).split()
 
-    for unit in ("l3_observation.c", "l3_trigger.c", "l3_ball.c", "l3_club_track.c"):
+    for unit in ("l3_text.c", "l3_observation.c", "l3_trigger.c", "l3_ball.c", "l3_club_track.c"):
         assert unit in sources, unit
     assert "live_selector.c" in sources
     assert "track_select.c" in sources
@@ -394,3 +394,101 @@ def test_read_line_uses_the_buffered_uart_receive_not_register_polling():
     init = " ".join(source.split())  # the open block aligns its '=' with spaces
     assert "uartParams.readEcho = UART_ECHO_OFF;" in init
     assert init.index("uartParams.readEcho = UART_ECHO_OFF;") < init.index("gCliUart = UART_open(0")
+
+
+def test_geometry_sources_are_built_and_included():
+    makefile = (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
+    sources = re.search(r"^SOURCES\s*=(.*)$", makefile, re.MULTILINE).group(1).split()
+
+    for unit in ("l3_frames.c", "l3_angle.c", "l3_impact.c"):
+        assert unit in sources, unit
+    source = _source()
+    assert '#include "l3_angle.h"' in source
+    assert '#include "l3_impact.h"' in source
+    assert "#include <math.h>" in source
+
+
+def test_angles_are_estimated_for_the_associated_target_only():
+    """One channel snapshot and one estimate per frame, for the target the
+    club track appended, with the track's range-rate resolving the TDM alias."""
+    consider = _function("static void l3_considerSelfTrigger(")
+
+    assert "gClubTrack.lastTargetIndex < found && gClubTrack.count > 1U" in consider
+    assert "const l3_target_obs_t *hit = &targets[gClubTrack.lastTargetIndex];" in consider
+    assert (
+        "l3_channelSnapshot(slot, (uint32_t)hit->peakBin - gFrameBinStart[slot],\n"
+        "                               hit->dopplerPhaseRad, newest.radialVelocityMps, &snapshot);"
+    ) in consider
+    assert "l3_angle_estimate(&gRadarCal, &snapshot, &gLastAngle)" in consider
+    assert (
+        "l3_track_set_angles(&gClubTrack, gLastAngle.azimuthRad,\n"
+        "                                          gLastAngle.elevationRad, flags);"
+    ) in consider
+    assert consider.index("l3_track_update(&gClubTrack") < consider.index("l3_channelSnapshot(")
+
+
+def test_channel_snapshot_sums_loops_coherently_with_the_lag1_phase_unwound():
+    snapshot = _function("static void l3_channelSnapshot(")
+
+    assert "float stepIm = -sinf(lag1PhaseRad);" in snapshot
+    assert "sumRe += re * rotRe - im * rotIm;" in snapshot
+    assert "sumIm += re * rotIm + im * rotRe;" in snapshot
+    assert "l3_angle_snapshot_init(out, ntx, N_RX);" in snapshot
+    assert (
+        "out->chirpPeriodS = (ntx > 0U) ? (gTrigLoopPeriodS / (float)ntx) : 45.0e-6F;" in snapshot
+    )
+    # Every TX, unlike the vertical residual: TX1 carries the azimuth.
+    assert "if (ntx == 3U && tx == 1U)" not in snapshot
+    assert snapshot.count("sample += loopStride;") == 2
+
+
+def test_geometric_impact_records_every_frame_and_fires_only_when_armed():
+    consider = _function("static void l3_considerSelfTrigger(")
+
+    assert "(void)l3_track_delivery(&gClubTrack, 8U, &gDelivery);" in consider
+    assert (
+        "l3_frames_observe(&gRadarCal, (float)teeBin * gClubTrack.cfg.binWidthM, 0.0F, 0.0F,\n"
+        "                          &gBallPosition);"
+    ) in consider
+    assert "geometric = l3_impact_update(&gImpact, &gDelivery, &gBallPosition, 1U);" in consider
+    assert "gTrigFireSource = (uint8_t)((fired ? 1U : 0U) | (geometric ? 2U : 0U));" in consider
+    assert "if (geometric && gImpactArmed) {\n        fired = 1;\n    }" in consider
+    assert consider.index("geometric = l3_impact_update(") < consider.index("if (!fired) {")
+    assert "l3_impact_rearm(&gImpact);" in _function("static void l3_trigRearm(")
+    configure = _function("static void l3_clubTrackConfigure(")
+    assert "cfg.cal = gRadarCal;" in configure
+    assert "l3_impact_init(&gImpact, &gImpactCfg);" in configure
+
+
+def test_calibration_and_impact_are_configured_through_track_cfg_sub_modes():
+    source = _source()
+    track_cfg = _function("static int32_t l3_cli_trackCfg(")
+
+    for mode, handler in (("cal", "Cal"), ("elem", "Elem"), ("impact", "Impact")):
+        assert f'strcmp(argv[1], "{mode}") == 0' in track_cfg
+        assert f"return l3_cli_trackCfg{handler}(argc, argv);" in track_cfg
+    cal = _function("static int32_t l3_cli_trackCfgCal(")
+    assert "gRadarCal.radarPitchRad = values[0] * (L3_FRAMES_PI / 180.0F);" in cal
+    assert "gRadarCal.rangeBiasM = values[5];" in cal
+    elem = _function("static int32_t l3_cli_trackCfgElem(")
+    assert "gRadarCal.correctionRe[index] = cosf(-values[1]) / values[2];" in elem
+    assert "values[0] >= (float)L3_CAL_MAX_VIRTUAL" in elem
+    impact = _function("static int32_t l3_cli_trackCfgImpact(")
+    assert "gImpactArmed = (values[4] != 0.0F) ? 1U : 0U;" in impact
+    assert "l3_impact_init(&gImpact, &gImpactCfg);" in impact
+    assert "tableEntry[19]" not in source, "sub-modes, not new commands"
+    assert "or cal/elem/impact ..." in source
+
+
+def test_trigger_log_track_prints_delivery_angle_and_impact_lines():
+    log = _function("static int32_t l3_cli_triggerLog(")
+
+    assert "l3_track_format_delivery(&gDelivery, line, sizeof(line));" in log
+    assert "l3_angle_format(&gLastAngle, line, sizeof(line));" in log
+    assert "l3_impact_format(&gImpact, line, sizeof(line));" in log
+    assert 'CLI_write("%s armed=%u source=%u\\n", line, (unsigned)gImpactArmed,' in log
+    assert (
+        log.index("l3_track_format_status(")
+        < log.index("l3_track_format_delivery(")
+        < log.index("l3_track_format_point(")
+    )

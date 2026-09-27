@@ -27,6 +27,9 @@
 #define L3_OBS_PI            3.14159265F
 /* A floor never falls below this, so ratios stay finite. */
 #define L3_OBS_FLOOR_MIN     1.0F
+/* anglesValid bits: which of a target's angles were measured. */
+#define L3_OBS_ANGLE_AZIMUTH   1U
+#define L3_OBS_ANGLE_ELEVATION 2U
 
 /* Which per-bin statistic the floor and the threshold use. A fast clubhead can
  * be in a bin for only part of a frame, so the strongest single loop is the
@@ -67,9 +70,9 @@ typedef struct {
     float    r1Im;
     float    dopplerPhaseRad; /* lag-1 phase, -pi..pi */
     float    dopplerAliasMps; /* aliased at +/- wavelength / (4 T) */
-    float    azimuthRad;      /* invalid until angle estimation exists */
-    float    elevationRad;
-    uint8_t  anglesValid;
+    float    azimuthRad;      /* positive right; see l3_frames.h */
+    float    elevationRad;    /* positive up */
+    uint8_t  anglesValid;     /* L3_OBS_ANGLE_* bits; 0 until angles are estimated */
     float    confidence;      /* 0..1 from margin over threshold and coherence */
 } l3_target_obs_t;
 

@@ -55,7 +55,11 @@
 #include "track_select.h"
 #include "l3_trigger.h"
 #include "l3_ball.h"
+#include <math.h>
+
+#include "l3_angle.h"
 #include "l3_club_track.h"
+#include "l3_impact.h"
 
 #if defined(L3_DUMP_IQ8) || defined(L3_RING_IQ8)
 #define L3_ANY_IQ8 1
@@ -383,6 +387,22 @@ static volatile uint32_t gTrigFallbackFrames;
  * the ring; "triggerLog track" prints it. */
 static l3_club_track_t   gClubTrack;
 static uint32_t          gClubTrackDest;
+/* Radar calibration (attitude, element corrections, baseline zeros, range
+ * bias) for angles and golf-frame positions; identity until "trackCfg cal"
+ * and "trackCfg elem" set it. gLastAngle is the newest club point's estimate. */
+static l3_radar_cal_t    gRadarCal;
+static l3_angle_obs_t    gLastAngle;
+static uint32_t          gAngleEstimates;
+/* Geometric impact detector over the club delivery and the ball position.
+ * It records its verdict every frame; it fires the capture only once armed
+ * ("trackCfg impact ... 1"), the range gate being the proven fallback. */
+static l3_impact_cfg_t   gImpactCfg;
+static l3_impact_t       gImpact;
+static uint8_t           gImpactCfgSet;
+static uint8_t           gImpactArmed;
+static l3_delivery_t     gDelivery;        /* the newest frame's delivery fit */
+static l3_vec3_t         gBallPosition;    /* destination in the golf frame */
+static uint8_t           gTrigFireSource;  /* bit 0 range gate, bit 1 geometry */
 /* trackCfg's range resolution, defined with the on-chip selector below. */
 static double            gTrackRangeResM;
 static volatile uint8_t  gTriggerPhase;
@@ -2692,6 +2712,66 @@ static float l3_verticalStaticPower(uint32_t slot, uint32_t localBin, uint32_t l
     return (samples > 0U) ? (total / (float)samples) : 0.0F;
 }
 
+/* One target's antenna channels at localBin of slot, for angle estimation:
+ * each (tx, rx) is its burst-MTI residual summed coherently over the loops
+ * with the target's per-loop Doppler phase (the lag-1 phase the observation
+ * layer measured) unwound, so the loops add in phase and only the TDM chirp
+ * offsets between the TX blocks remain for l3_angle_estimate to remove. */
+static void l3_channelSnapshot(uint32_t slot, uint32_t localBin, float lag1PhaseRad,
+                               float radialVelocityMps, l3_angle_snapshot_t *out)
+{
+    const int16_t *frame = (const int16_t *)&g_ring[gFrameOffset[slot]];
+    uint32_t binCount = gFrameBinCount[slot];
+    uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
+    uint32_t loops = gCapturePlan.loops;
+    uint32_t loopStride = ntx * N_RX * binCount * 2U;
+    float stepRe = cosf(lag1PhaseRad);
+    float stepIm = -sinf(lag1PhaseRad);
+    uint32_t tx;
+
+    l3_angle_snapshot_init(out, ntx, N_RX);
+    out->lag1PhaseRad = lag1PhaseRad;
+    out->radialVelocityMps = radialVelocityMps;
+    out->chirpPeriodS = (ntx > 0U) ? (gTrigLoopPeriodS / (float)ntx) : 45.0e-6F;
+    for (tx = 0U; tx < out->ntx; tx++) {
+        uint32_t rx;
+        for (rx = 0U; rx < out->nrx; rx++) {
+            const int16_t *base = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U];
+            const int16_t *sample = base;
+            float meanIm = 0.0F;
+            float meanRe = 0.0F;
+            float sumRe = 0.0F;
+            float sumIm = 0.0F;
+            float rotRe = 1.0F;   /* exp(-j * loop * lag1) */
+            float rotIm = 0.0F;
+            uint32_t loop;
+
+            for (loop = 0U; loop < loops; loop++) {
+                meanIm += (float)sample[0];
+                meanRe += (float)sample[1];
+                sample += loopStride;
+            }
+            meanIm /= (float)loops;
+            meanRe /= (float)loops;
+            sample = base;
+            for (loop = 0U; loop < loops; loop++) {
+                float im = (float)sample[0] - meanIm;
+                float re = (float)sample[1] - meanRe;
+                float nextRe = rotRe * stepRe - rotIm * stepIm;
+                float nextIm = rotRe * stepIm + rotIm * stepRe;
+
+                sumRe += re * rotRe - im * rotIm;
+                sumIm += re * rotIm + im * rotRe;
+                rotRe = nextRe;
+                rotIm = nextIm;
+                sample += loopStride;
+            }
+            out->channel[tx * out->nrx + rx].re = sumRe;
+            out->channel[tx * out->nrx + rx].im = sumIm;
+        }
+    }
+}
+
 /* --- CLI notices from the detect task ----------------------------------------
  * The detect task runs below the CLI task, so it must not write the CLI UART
  * itself: a host command arriving mid-line preempts it and the CLI task's
@@ -2804,6 +2884,20 @@ static void l3_trigRearm(void)
 {
     l3_trig_rearm(&gTrig);
     l3_track_reset(&gClubTrack);
+    l3_impact_rearm(&gImpact);
+    gTrigFireSource = 0U;
+}
+
+/* The calibration starts as identity; the CLI refines it. */
+static void l3_ensureRadarCal(void)
+{
+    if (gRadarCal.virtualElements == 0U) {
+        l3_cal_identity(&gRadarCal, L3_CAL_MAX_VIRTUAL);
+    }
+    if (!gImpactCfgSet) {
+        l3_impact_cfg_defaults(&gImpactCfg);
+        gImpactCfgSet = 1U;
+    }
 }
 
 /* The club track's configuration follows the trigger's arm: statistic and
@@ -2820,7 +2914,10 @@ static void l3_clubTrackConfigure(void)
     if (gTrigLoopPeriodS > 0.0F) {
         cfg.velocitySpanMps = 2.0F * L3_OBS_WAVELENGTH_M / (4.0F * gTrigLoopPeriodS);
     }
+    l3_ensureRadarCal();
+    cfg.cal = gRadarCal;
     l3_track_init(&gClubTrack, &cfg);
+    l3_impact_init(&gImpact, &gImpactCfg);
 }
 
 /* Every other completed pre-trigger slot: the static power of the whole
@@ -2858,6 +2955,8 @@ static void l3_considerSelfTrigger(uint32_t slot)
     uint32_t count;
     uint32_t bin;
     int32_t fired;
+    int32_t geometric = 0;
+    l3_track_point_t newest;
     uintptr_t key;
 
     uint32_t teeBin = gTrigCfg.teeBin;
@@ -2916,10 +3015,45 @@ static void l3_considerSelfTrigger(uint32_t slot)
                                gFrameBinStart[slot] + first, obs, count, gTrig.floor,
                                targets, L3_OBS_MAX_TARGETS);
         gClubTrackDest = teeBin;
-        (void)l3_track_update(&gClubTrack, targets, found, gPreFramesCaptured,
-                              gPreFramesCaptured * (uint32_t)gFramePeriodUs);
+        if (l3_track_update(&gClubTrack, targets, found, gPreFramesCaptured,
+                            gPreFramesCaptured * (uint32_t)gFramePeriodUs) &&
+            gClubTrack.lastTargetIndex < found && gClubTrack.count > 1U &&
+            l3_track_point(&gClubTrack, gClubTrack.count - 1U, &newest)) {
+            /* Angles for the associated target only: one estimate per frame.
+             * The track's range-rate velocity resolves the TDM alias, so the
+             * first point of a track (no range rate yet) stays range-only. */
+            static l3_angle_snapshot_t snapshot;
+            const l3_target_obs_t *hit = &targets[gClubTrack.lastTargetIndex];
+
+            l3_channelSnapshot(slot, (uint32_t)hit->peakBin - gFrameBinStart[slot],
+                               hit->dopplerPhaseRad, newest.radialVelocityMps, &snapshot);
+            if (l3_angle_estimate(&gRadarCal, &snapshot, &gLastAngle)) {
+                uint8_t flags = 0U;
+
+                if (gLastAngle.azimuthValid) {
+                    flags |= L3_OBS_ANGLE_AZIMUTH;
+                }
+                if (gLastAngle.elevationValid) {
+                    flags |= L3_OBS_ANGLE_ELEVATION;
+                }
+                (void)l3_track_set_angles(&gClubTrack, gLastAngle.azimuthRad,
+                                          gLastAngle.elevationRad, flags);
+                gAngleEstimates++;
+            }
+        }
+        /* The delivery and the geometric impact verdict, every frame. The
+         * destination bin (locked ball, else the tee) on boresight is the
+         * ball position until the ball detector measures its angles. */
+        (void)l3_track_delivery(&gClubTrack, 8U, &gDelivery);
+        l3_frames_observe(&gRadarCal, (float)teeBin * gClubTrack.cfg.binWidthM, 0.0F, 0.0F,
+                          &gBallPosition);
+        geometric = l3_impact_update(&gImpact, &gDelivery, &gBallPosition, 1U);
     }
     gTrigBusy = 0U;
+    gTrigFireSource = (uint8_t)((fired ? 1U : 0U) | (geometric ? 2U : 0U));
+    if (geometric && gImpactArmed) {
+        fired = 1;
+    }
     if (!fired) {
         l3_noteTrigger(gTrig.state == L3_TRIG_STATE_TRACKING ? 7U : 5U, gTrig.floor);
         return;
@@ -3305,17 +3439,117 @@ int32_t l3_cli_track(int32_t argc, char *argv[])
     return l3_sparseRearm();
 }
 
+/* Parse count floats from argv[first..], any value; 0 on success. */
+static int32_t l3_parseFloats(int32_t argc, char *argv[], int32_t first, uint32_t count,
+                              float *values)
+{
+    uint32_t i;
+
+    if (argc != first + (int32_t)count) {
+        return -1;
+    }
+    for (i = 0U; i < count; i++) {
+        char *end;
+        double value = strtod(argv[first + (int32_t)i], &end);
+
+        if (*end != '\0' || end == argv[first + (int32_t)i]) {
+            return -1;
+        }
+        values[i] = (float)value;
+    }
+    return 0;
+}
+
+/* "trackCfg cal <pitchDeg> <yawDeg> <rollDeg> <azOffsetRad> <elOffsetDeg>
+ * <rangeBiasM>": the enclosure attitude and the baseline zeros of
+ * l3_frames.h. Takes effect for the club track on the next triggerCfg. */
+static int32_t l3_cli_trackCfgCal(int32_t argc, char *argv[])
+{
+    float values[6];
+
+    if (l3_parseFloats(argc, argv, 2, 6U, values) != 0) {
+        CLI_write("Error: trackCfg cal <pitchDeg> <yawDeg> <rollDeg> <azOffsetRad> "
+                  "<elOffsetDeg> <rangeBiasM>\n");
+        return -1;
+    }
+    l3_ensureRadarCal();
+    gRadarCal.radarPitchRad = values[0] * (L3_FRAMES_PI / 180.0F);
+    gRadarCal.radarYawRad = values[1] * (L3_FRAMES_PI / 180.0F);
+    gRadarCal.radarRollRad = values[2] * (L3_FRAMES_PI / 180.0F);
+    gRadarCal.azimuthOffsetRad = values[3];
+    gRadarCal.elevationOffsetRad = values[4] * (L3_FRAMES_PI / 180.0F);
+    gRadarCal.rangeBiasM = values[5];
+    CLI_write("Done\n");
+    return 0;
+}
+
+/* "trackCfg elem <index> <phaseRad> <gain>": one virtual element's
+ * correction in PHYSICAL order, as the calibration file stores it:
+ * correction = exp(-j phase) / gain. */
+static int32_t l3_cli_trackCfgElem(int32_t argc, char *argv[])
+{
+    float values[3];
+    uint32_t index;
+
+    if (l3_parseFloats(argc, argv, 2, 3U, values) != 0 || values[0] < 0.0F ||
+        values[0] >= (float)L3_CAL_MAX_VIRTUAL || values[2] <= 0.0F) {
+        CLI_write("Error: trackCfg elem <index 0..7> <phaseRad> <gain>\n");
+        return -1;
+    }
+    l3_ensureRadarCal();
+    index = (uint32_t)values[0];
+    gRadarCal.correctionRe[index] = cosf(-values[1]) / values[2];
+    gRadarCal.correctionIm[index] = sinf(-values[1]) / values[2];
+    CLI_write("Done\n");
+    return 0;
+}
+
+/* "trackCfg impact <toleranceM> <horizonS> <minSpeedMps> <minConfidence>
+ * <armed>": the geometric impact detector. armed 0 records its verdicts
+ * beside the range gate without firing; 1 lets it fire the capture. */
+static int32_t l3_cli_trackCfgImpact(int32_t argc, char *argv[])
+{
+    float values[5];
+
+    if (l3_parseFloats(argc, argv, 2, 5U, values) != 0 || values[0] <= 0.0F ||
+        values[1] <= 0.0F) {
+        CLI_write("Error: trackCfg impact <toleranceM> <horizonS> <minSpeedMps> "
+                  "<minConfidence> <armed>\n");
+        return -1;
+    }
+    l3_ensureRadarCal();
+    gImpactCfg.toleranceM = values[0];
+    gImpactCfg.horizonS = values[1];
+    gImpactCfg.minSpeedMps = values[2];
+    gImpactCfg.minConfidence = values[3];
+    gImpactArmed = (values[4] != 0.0F) ? 1U : 0U;
+    l3_impact_init(&gImpact, &gImpactCfg);
+    CLI_write("Done\n");
+    return 0;
+}
+
 /* CLI "trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM>":
  * the rig limits from IWR6843Runtime.track_config_command. maxRangeM of 0
- * disables the net clamp; clubHiM <= clubLoM disables the club cells. */
+ * disables the net clamp; clubHiM <= clubLoM disables the club cells.
+ * Sub-modes cal, elem and impact configure the geometry stack above. */
 static int32_t l3_cli_trackCfg(int32_t argc, char *argv[])
 {
     double values[5];
     char *end;
     int32_t i;
 
+    if (argc >= 2 && strcmp(argv[1], "cal") == 0) {
+        return l3_cli_trackCfgCal(argc, argv);
+    }
+    if (argc >= 2 && strcmp(argv[1], "elem") == 0) {
+        return l3_cli_trackCfgElem(argc, argv);
+    }
+    if (argc >= 2 && strcmp(argv[1], "impact") == 0) {
+        return l3_cli_trackCfgImpact(argc, argv);
+    }
     if (argc != 6) {
-        CLI_write("Error: trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM>\n");
+        CLI_write("Error: trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM> "
+                  "| cal ... | elem ... | impact ...\n");
         return -1;
     }
     for (i = 0; i < 5; i++) {
@@ -3513,6 +3747,13 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         l3_track_point_t point;
         (void)l3_track_format_status(&gClubTrack, gClubTrackDest, line, sizeof(line));
         CLI_write("%s\n", line);
+        (void)l3_track_format_delivery(&gDelivery, line, sizeof(line));
+        CLI_write("%s\n", line);
+        (void)l3_angle_format(&gLastAngle, line, sizeof(line));
+        CLI_write(" %s estimates=%u\n", line, (unsigned)gAngleEstimates);
+        (void)l3_impact_format(&gImpact, line, sizeof(line));
+        CLI_write("%s armed=%u source=%u\n", line, (unsigned)gImpactArmed,
+                  (unsigned)gTrigFireSource);
         for (index = 0U; l3_track_point(&gClubTrack, index, &point); index++) {
             (void)l3_track_format_point(&point, gClubTrackDest, line, sizeof(line));
             CLI_write("%s\n", line);
@@ -4515,7 +4756,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[13].helpString    = "Freeze, pick ball and club cells on-chip, send them";
     cliCfg.tableEntry[13].cmdHandlerFxn = l3_cli_track;
     cliCfg.tableEntry[14].cmd           = "trackCfg";
-    cliCfg.tableEntry[14].helpString    = "trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM>";
+    cliCfg.tableEntry[14].helpString    = "trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM> or cal/elem/impact ...";
     cliCfg.tableEntry[14].cmdHandlerFxn = l3_cli_trackCfg;
     cliCfg.tableEntry[15].cmd           = "debugCfg";
     cliCfg.tableEntry[15].helpString    = "debugCfg <0|1> stream trigger decisions";

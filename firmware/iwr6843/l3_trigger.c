@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "l3_text.h"
 #include "l3_trigger.h"
 
 #define L3_TRIG_NO_BIN 0xFFU
@@ -464,49 +465,12 @@ const char *l3_trig_why_name(uint8_t why)
     return (why < L3_TRIG_WHY_COUNT) ? kWhyNames[why] : "?";
 }
 
-/* Fixed-point text for a float: "-12.34". Integer-only printf underneath,
- * so it works wherever %f does not. Values beyond +/- 4e9 saturate. */
-static void l3_trig_fmtFixed(float value, uint32_t decimals, char *out, uint32_t cap)
-{
-    const char *sign = "";
-    uint32_t scale = 1U;
-    uint32_t whole;
-    uint32_t fraction;
-    uint32_t i;
-
-    for (i = 0U; i < decimals; i++) {
-        scale *= 10U;
-    }
-    if (value < 0.0F) {
-        sign = "-";
-        value = -value;
-    }
-    if (value > 4.0e9F) {
-        value = 4.0e9F;
-    }
-    whole = (uint32_t)value;
-    fraction = (uint32_t)((value - (float)whole) * (float)scale + 0.5F);
-    if (fraction >= scale) {
-        whole++;
-        fraction = 0U;
-    }
-    /* Fixed formats rather than "%0*u": the R4F runtime's printf subset is
-     * not guaranteed to take a '*' width. */
-    if (decimals == 0U) {
-        (void)snprintf(out, cap, "%s%u", sign, (unsigned)whole);
-    } else if (decimals == 1U) {
-        (void)snprintf(out, cap, "%s%u.%01u", sign, (unsigned)whole, (unsigned)fraction);
-    } else {
-        (void)snprintf(out, cap, "%s%u.%02u", sign, (unsigned)whole, (unsigned)fraction);
-    }
-}
-
 int32_t l3_trig_format_summary(const l3_trig_t *trig, char *out, uint32_t cap)
 {
     char floorText[16];
     const uint32_t *c = trig->counters;
 
-    l3_trig_fmtFixed(trig->floor, 0U, floorText, sizeof(floorText));
+    l3_text_fixed(trig->floor, 0U, floorText, sizeof(floorText));
     return snprintf(out, cap,
                     "trig state=%s floor=%s frames=%u cand=%u acq=%u adv=%u "
                     "jump=%u miss=%u lost=%u lowcoh=%u slowdop=%u young=%u slow=%u "
@@ -536,11 +500,11 @@ int32_t l3_trig_format_config(const l3_trig_t *trig, char *out, uint32_t cap)
     char loopText[16];
     const char *statText = (trig->cfg.stat == L3_TRIG_STAT_PEAK) ? "peak" : "energy";
 
-    l3_trig_fmtFixed(trig->cfg.minSpeedMps, 2U, speedText, sizeof(speedText));
-    l3_trig_fmtFixed(trig->cfg.snr, 2U, snrText, sizeof(snrText));
-    l3_trig_fmtFixed(trig->cfg.minCoherence, 2U, coherenceText, sizeof(coherenceText));
-    l3_trig_fmtFixed(trig->cfg.minStepBins, 2U, stepText, sizeof(stepText));
-    l3_trig_fmtFixed(trig->loopPeriodS * 1.0e6F, 1U, loopText, sizeof(loopText));
+    l3_text_fixed(trig->cfg.minSpeedMps, 2U, speedText, sizeof(speedText));
+    l3_text_fixed(trig->cfg.snr, 2U, snrText, sizeof(snrText));
+    l3_text_fixed(trig->cfg.minCoherence, 2U, coherenceText, sizeof(coherenceText));
+    l3_text_fixed(trig->cfg.minStepBins, 2U, stepText, sizeof(stepText));
+    l3_text_fixed(trig->loopPeriodS * 1.0e6F, 1U, loopText, sizeof(loopText));
     return snprintf(out, cap,
                     "trigcfg tee=%u snr=%s track=%u approach=%u gate=%u "
                     "mincoh=%s minstep=%s stat=%s minspeed=%s loopus=%s",
@@ -565,10 +529,10 @@ int32_t l3_trig_format_record(const l3_trig_record_t *record, char *out, uint32_
     } else {
         (void)snprintf(binText, sizeof(binText), "%u", (unsigned)record->bin);
     }
-    l3_trig_fmtFixed(record->energy, 0U, energyText, sizeof(energyText));
-    l3_trig_fmtFixed(record->peak, 0U, peakText, sizeof(peakText));
-    l3_trig_fmtFixed(record->floor, 0U, floorText, sizeof(floorText));
-    l3_trig_fmtFixed((float)record->velocityCms / 100.0F, 2U, velocityText,
+    l3_text_fixed(record->energy, 0U, energyText, sizeof(energyText));
+    l3_text_fixed(record->peak, 0U, peakText, sizeof(peakText));
+    l3_text_fixed(record->floor, 0U, floorText, sizeof(floorText));
+    l3_text_fixed((float)record->velocityCms / 100.0F, 2U, velocityText,
                      sizeof(velocityText));
     /* floor is in the configured statistic's units; the host divides. */
     /* dist = dest - bin: bins short of impact, comparable across setups. */
@@ -593,8 +557,8 @@ int32_t l3_trig_format_trace_header(const l3_trig_t *trig, char *out, uint32_t c
     char floorText[16];
     char ratioText[16];
 
-    l3_trig_fmtFixed(trig->floor, 0U, floorText, sizeof(floorText));
-    l3_trig_fmtFixed(L3_TRIG_TRACE_RATIO, 1U, ratioText, sizeof(ratioText));
+    l3_text_fixed(trig->floor, 0U, floorText, sizeof(floorText));
+    l3_text_fixed(L3_TRIG_TRACE_RATIO, 1U, ratioText, sizeof(ratioText));
     return snprintf(out, cap,
                     "trigtrace state=%s stat=%s floor=%s bar=%sx frames=%u "
                     "region=%u+%u entries=%u",
@@ -620,13 +584,13 @@ int32_t l3_trig_format_trace(const l3_trig_trace_t *entry, char *out, uint32_t c
     char peakRatio[16];
     float floor = (entry->floor > 0.0F) ? entry->floor : 1.0F;
 
-    l3_trig_fmtFixed(entry->energy, 0U, energyText, sizeof(energyText));
-    l3_trig_fmtFixed(entry->peak, 0U, peakText, sizeof(peakText));
-    l3_trig_fmtFixed(entry->loop0, 0U, loop0Text, sizeof(loop0Text));
-    l3_trig_fmtFixed(entry->floor, 0U, floorText, sizeof(floorText));
-    l3_trig_fmtFixed(entry->threshold, 0U, thresholdText, sizeof(thresholdText));
-    l3_trig_fmtFixed(entry->energy / floor, 1U, energyRatio, sizeof(energyRatio));
-    l3_trig_fmtFixed(entry->peak / floor, 1U, peakRatio, sizeof(peakRatio));
+    l3_text_fixed(entry->energy, 0U, energyText, sizeof(energyText));
+    l3_text_fixed(entry->peak, 0U, peakText, sizeof(peakText));
+    l3_text_fixed(entry->loop0, 0U, loop0Text, sizeof(loop0Text));
+    l3_text_fixed(entry->floor, 0U, floorText, sizeof(floorText));
+    l3_text_fixed(entry->threshold, 0U, thresholdText, sizeof(thresholdText));
+    l3_text_fixed(entry->energy / floor, 1U, energyRatio, sizeof(energyRatio));
+    l3_text_fixed(entry->peak / floor, 1U, peakRatio, sizeof(peakRatio));
     return snprintf(out, cap,
                     "t frame=%u gap=%u bin=%u dest=%u dist=%d state=%s energy=%s peak=%s "
                     "loop0=%s floor=%s thr=%s e/f=%s p/f=%s coh=%u",
@@ -650,7 +614,7 @@ int32_t l3_trig_format_maxhold(const l3_trig_t *trig, uint32_t start, uint32_t c
         if (used < 0 || (uint32_t)used >= cap) {
             break;
         }
-        l3_trig_fmtFixed(trig->maxStat[i], 0U, statText, sizeof(statText));
+        l3_text_fixed(trig->maxStat[i], 0U, statText, sizeof(statText));
         written = snprintf(out + used, cap - (uint32_t)used, " %u:%s@%u",
                            (unsigned)(trig->maxFirstBin + i), statText,
                            (unsigned)trig->maxFrame[i]);
