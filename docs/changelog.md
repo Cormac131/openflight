@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **OPS-versus-IWR validation and confidence calibration.** Every shot with an
+  onboard result logs an `iwr_ops_comparison` entry (OPS and IWR speeds side by
+  side, never averaged); `scripts/analysis/ops_validation.py` and
+  `scripts/analysis/reference_validation.py` give bias, MAE, RMSE and P95 over
+  sessions and labelled datasets (with the thin cells of the club x speed x
+  shape matrix named), and `openflight.iwr6843.confidence_calibration` turns
+  confidence-versus-error pairs into per-band bounds and rejection thresholds.
+  The host packet reports a per-domain confidence.
 - **Angle confidence, readable calibration and angular validation tooling.**
   Angle estimates carry a 0..1 confidence from the beam's sharpness and the
   azimuth coherence; `triggerLog cal` prints the calibration in force and the

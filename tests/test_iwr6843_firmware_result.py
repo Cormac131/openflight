@@ -316,6 +316,19 @@ def test_packet_to_dict_keeps_provenance_beside_every_metric(lib):
     spin = payload["metrics"]["spin_rate"]
     assert spin["value"] is None and spin["label"] == "-" and not spin["usable"]
     assert json.dumps(payload), "the record is JSON-serialisable as it stands"
+    # Per-domain confidence: the weakest usable metric of each domain; spin has none.
+    domains = payload["domains"]
+    assert set(domains) == {"club", "ball", "angle", "spin"}
+    assert domains["ball"] == pytest.approx(0.9)
+    assert domains["spin"] == 0.0
+    club_metrics = [payload["metrics"][n] for n in ("club_speed", "club_path", "angle_of_attack")]
+    assert domains["club"] == pytest.approx(
+        min(m["confidence"] for m in club_metrics if m["usable"]), abs=1e-3
+    )
+    assert domains["angle"] == pytest.approx(
+        min(payload["metrics"][n]["confidence"] for n in ("vertical_launch", "horizontal_launch")),
+        abs=1e-3,
+    )
 
 
 def test_host_parser_rejects_wrong_sizes_versions_and_bad_hex():

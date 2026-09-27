@@ -355,6 +355,26 @@ half a millimetre; parabolic is the default because it is the exact fit
 for a smooth lobe and its bias is characterised, where the centroid's
 depends on the floor estimate.
 
+### Validation against the OPS and a reference monitor
+
+Every shot with an onboard result writes an `iwr_ops_comparison` entry to
+the session log (`openflight.iwr6843.ops_compare`): the OPS ball and club
+speed beside the IWR's, the IWR's confidence for each, the verdict, the
+capture format and the impact range. The two are never averaged; the OPS
+stays the validator. `scripts/analysis/ops_validation.py` reduces sessions
+to bias, MAE, RMSE and P95, overall and grouped by club, capture format,
+verdict and confidence band. `scripts/analysis/reference_validation.py`
+replays every labelled shot under `tests/radar/datasets/` and compares
+ball speed, launch angles, club speed, path and attack with the sidecar's
+reference values, per field and per label, after first naming the thin
+cells of the club x speed x shape matrix (`coverage`), because a hundred
+identical 7-irons validate nothing. `openflight.iwr6843.confidence_calibration`
+then turns (confidence, error) pairs from either source into error bounds
+per confidence band and the lowest confidence that meets a chosen bound at
+95% coverage: the number the shot validation should reject below, measured
+rather than designed. The host packet exposes a per-domain confidence
+(club, ball, angle, spin: the weakest usable metric of each) for that use.
+
 ### Angle confidence, calibration and angular validation
 
 Every angle estimate now carries a confidence (`l3_angle_confidence`): the

@@ -2837,6 +2837,16 @@ def _process_iwr6843_angle(shot: Shot) -> float | None:
         if onboard is not None:
             shot.iwr6843_onboard = onboard.to_dict()
             _log_onboard_comparison(shot, onboard, measurement, club_path)
+            if session_log:
+                # The OPS stays the validator: its speeds and the IWR's, never averaged.
+                from .iwr6843.ops_compare import (  # pylint: disable=import-outside-toplevel
+                    OpsComparison,
+                )
+
+                record = OpsComparison.from_shot(
+                    shot, onboard, capture_format=iwr6843_runtime_config.get("capture_format")
+                )
+                session_log.log_iwr_ops_comparison(record.to_dict())
             if iwr6843_onboard_metrics:
                 _apply_onboard_metrics(shot, onboard)
         # IWR club path/AoA remain experimental even when their internal

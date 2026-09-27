@@ -1164,6 +1164,29 @@ class TestIWR6843ShotIntegration:
         assert shot.experimental_club_path_deg is None
         assert shot.experimental_attack_angle_deg == pytest.approx(-3.0)
 
+    def test_onboard_result_writes_an_ops_comparison_to_the_session_log(self, monkeypatch):
+        logged = []
+        session = SimpleNamespace(
+            stats={"shots_detected": 1},
+            log_iwr6843_capture=lambda **kwargs: None,
+            log_iwr_ops_comparison=logged.append,
+        )
+        monkeypatch.setattr(server_module, "iwr6843_onboard_metrics", False)
+        monkeypatch.setattr(
+            server_module, "iwr6843_runtime_config", {"capture_format": "adaptive16"}
+        )
+        shot = self._onboard_shot(monkeypatch, self._onboard_packet())
+        # _onboard_shot patched the logger to None; run once more with ours.
+        monkeypatch.setattr(server_module, "get_session_logger", lambda: session)
+        server_module._process_iwr6843_angle(shot)
+
+        assert len(logged) == 1
+        record = logged[0]
+        assert record["ops_ball_speed_mph"] == 100.0 and record["capture_format"] == "adaptive16"
+        assert record["iwr_ball_speed_mph"] == pytest.approx(60.0 * 2.23694)
+        assert record["ball_delta_mph"] == pytest.approx(60.0 * 2.23694 - 100.0)
+        assert record["verdict"] == "valid" and record["iwr_club_confidence"] == pytest.approx(0.8)
+
     def test_shot_without_onboard_result_carries_none(self, monkeypatch):
         monkeypatch.setattr(server_module, "iwr6843_onboard_metrics", True)
         shot = self._onboard_shot(monkeypatch, None)

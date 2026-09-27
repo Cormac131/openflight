@@ -171,3 +171,64 @@ def test_manifest_expectations_merge_default_and_per_file_and_stay_out_of_the_co
     configs = dict((p.name, c) for p, c in recording_configs(tmp_path))
     assert configs["b.l3dump"].dest_bin == 46 and configs["a.l3dump"].tee_bin == 34
     assert recording_expectations(tmp_path / "missing") == {}
+
+
+def test_coverage_counts_the_validation_matrix_and_names_thin_cells(tmp_path):
+    from openflight.iwr6843.datasets import DatasetShot, coverage
+
+    def shot(club, labels):
+        return DatasetShot(record(club=club, labels=labels), tmp_path / "x.json")
+
+    shots = [
+        shot("driver", ("driver", "fast", "straight")),
+        shot("7_iron", ("7iron", "medium", "left")),
+        shot("7_iron", ("7iron", "medium", "right")),
+        shot("putter", ()),
+    ]
+    cov = coverage(shots)
+    assert cov.clubs == {"driver": 1, "mid iron": 2}
+    assert cov.speeds == {"fast": 1, "medium": 2} and cov.shapes == {
+        "straight": 1,
+        "left": 1,
+        "right": 1,
+    }
+    assert cov.unclassified_clubs == {"putter": 1}
+    thin = cov.missing(minimum=2)
+    assert "club: driver (1)" in thin and "club: wedge (0)" in thin and "speed: slow (0)" in thin
+    assert "club: mid iron (2)" not in thin
+
+
+def test_validate_dataset_reports_per_field_and_per_label_statistics(tmp_path):
+    from openflight.iwr6843.datasets import (
+        DatasetShot,
+        field_stats,
+        format_field_stats,
+        validate_dataset,
+    )
+
+    shots = [
+        DatasetShot(record(labels=("driver", "fast")), tmp_path / "a.json"),
+        DatasetShot(record(labels=("driver", "slow")), tmp_path / "b.json"),
+    ]
+    measured = iter(
+        [
+            {"ball_speed_mph": 154.3, "vertical_launch_deg": 11.2, "club_speed_mph": None},
+            {"ball_speed_mph": 151.3, "vertical_launch_deg": 12.7, "club_speed_mph": 103.0},
+        ]
+    )
+    results = validate_dataset(shots, lambda shot: next(measured))
+    assert set(results) == {"all", "driver", "fast", "slow"}
+    by_field = {s.field: s for s in results["all"]}
+    assert by_field["ball_speed_mph"].count == 2 and by_field[
+        "ball_speed_mph"
+    ].bias == pytest.approx(0.5)
+    assert by_field["ball_speed_mph"].mae == pytest.approx(1.5)
+    assert by_field["vertical_launch_deg"].bias == pytest.approx(0.25)
+    assert by_field["club_speed_mph"].count == 1 and by_field[
+        "club_speed_mph"
+    ].bias == pytest.approx(-1.0)
+    assert by_field["spin_rpm"].count == 0
+    assert {s.field: s.count for s in results["fast"]}["ball_speed_mph"] == 1
+    text = format_field_stats(results["all"], title="all")
+    assert "ball_speed_mph" in text and "spin_rpm" not in text
+    assert "(no field in common" in format_field_stats(field_stats([]), title="empty")

@@ -66,6 +66,29 @@ class ShotResultPacket:
     def __getitem__(self, name: str) -> Measurement:
         return self.metrics[name]
 
+    @property
+    def domain_confidence(self) -> dict[str, float]:
+        """One confidence per measurement domain, the weakest usable metric's in each.
+
+        club: club speed, path and attack; ball: ball speed; angle: the two
+        launch angles; spin: spin rate. A domain with no usable metric reads 0.
+        """
+        domains = {
+            "club": ("club_speed", "club_path", "angle_of_attack"),
+            "ball": ("ball_speed",),
+            "angle": ("vertical_launch", "horizontal_launch"),
+            "spin": ("spin_rate",),
+        }
+        out: dict[str, float] = {}
+        for domain, names in domains.items():
+            usable = [
+                self.metrics[n].confidence
+                for n in names
+                if n in self.metrics and self.metrics[n].usable
+            ]
+            out[domain] = round(min(usable), 3) if usable else 0.0
+        return out
+
     def to_dict(self) -> dict:
         """JSON for the Shot record and the UI: every metric with its provenance."""
         return {
@@ -78,6 +101,7 @@ class ShotResultPacket:
             "ball_points": self.ball_points,
             "smash": self.smash,
             "quality": sorted(self.quality),
+            "domains": self.domain_confidence,
             "metrics": {
                 name: {
                     "value": m.value,
