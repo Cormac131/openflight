@@ -623,7 +623,7 @@ def test_shot_result_parses_the_packet_only_once_the_machine_reached_result(monk
     packet = bytearray(fw.RESULT_PACKET_BYTES)
     packet[0] = 1  # version
     packet[4] = 9  # shot id
-    packet[90] = 2  # verdict valid
+    packet[92] = 2  # verdict valid (after 2 u32, 9 floats, 2 u32, 9 floats, 1 u32)
     hex_text = packet.hex()
     replies = {
         "triggerLog result": (
