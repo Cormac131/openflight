@@ -14,7 +14,7 @@ static void l3_trig_dropTrack(l3_trig_t *trig);
 
 static const char *const kWhyNames[L3_TRIG_WHY_COUNT] = {
     "quiet", "acquired", "advanced", "jumped", "missed", "lost",
-    "lowcoh", "slowdop", "young", "slow", "fired"
+    "lowcoh", "slowdop", "young", "slow", "short", "fired"
 };
 
 static const char *const kStateNames[3] = { "idle", "tracking", "fired" };
@@ -31,6 +31,7 @@ static const int8_t kWhyCounter[L3_TRIG_WHY_COUNT] = {
     (int8_t)L3_TRIG_COUNT_LOW_DOPPLER,
     (int8_t)L3_TRIG_COUNT_TOO_YOUNG,
     (int8_t)L3_TRIG_COUNT_TOO_SLOW,
+    (int8_t)L3_TRIG_COUNT_TOO_SHORT,
     (int8_t)L3_TRIG_COUNT_FIRED
 };
 
@@ -43,6 +44,7 @@ void l3_trig_cfg_defaults(l3_trig_cfg_t *cfg)
     cfg->minStepBins = L3_TRIG_DEFAULT_MIN_STEP_BINS;
     cfg->stat = L3_TRIG_DEFAULT_STAT;
     cfg->minSpeedMps = L3_TRIG_DEFAULT_MIN_SPEED_MPS;
+    cfg->minApproachBins = L3_TRIG_DEFAULT_MIN_APPROACH_BINS;
 }
 
 int32_t l3_trig_cfg_check(const l3_trig_cfg_t *cfg)
@@ -69,6 +71,10 @@ int32_t l3_trig_cfg_check(const l3_trig_cfg_t *cfg)
         return -1;
     }
     if (!(cfg->minSpeedMps >= 0.0F)) {
+        return -1;
+    }
+    /* The region shows at most approachBins of approach before the gate. */
+    if (cfg->minApproachBins > cfg->approachBins) {
         return -1;
     }
     return 0;
@@ -391,16 +397,24 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t teeBin, uint32_
     }
 
     /* Impact gate: fire on entry, given enough history and a clubhead's
-     * approach rate. No post-impact reversal is needed or waited for. */
+     * approach, in rate and in distance covered, from the track's nearest
+     * point to the radar. No post-impact reversal is needed or waited for. */
     if (haveCandidate &&
         (uint32_t)bin + cfg->gateBins >= teeBin &&
         (uint32_t)bin <= teeBin + cfg->gateBins) {
         uint32_t elapsed = frame - trig->trackStartFrame;
-        int32_t progress = (int32_t)trig->trackBin - (int32_t)trig->trackStartBin;
+        /* Never negative: the start bin is the nearest the track has held. */
+        uint32_t progress = (uint32_t)trig->trackBin - (uint32_t)trig->trackStartBin;
         if (trig->trackAge < cfg->trackFrames) {
             why = L3_TRIG_WHY_TOO_YOUNG;
-        } else if (elapsed > 0U && (float)progress < cfg->minStepBins * (float)elapsed) {
+        } else if (cfg->minStepBins > 0.0F &&
+                   (elapsed == 0U ||
+                    (float)progress < cfg->minStepBins * (float)elapsed)) {
+            /* No approach measured (the nearest point is this frame: a
+             * return standing in the gate) or too slow a one. */
             why = L3_TRIG_WHY_TOO_SLOW;
+        } else if (progress < cfg->minApproachBins) {
+            why = L3_TRIG_WHY_TOO_SHORT;
         } else {
             why = L3_TRIG_WHY_FIRED;
             fired = 1;
@@ -474,7 +488,7 @@ int32_t l3_trig_format_summary(const l3_trig_t *trig, char *out, uint32_t cap)
     return snprintf(out, cap,
                     "trig state=%s floor=%s frames=%u cand=%u acq=%u adv=%u "
                     "jump=%u miss=%u lost=%u lowcoh=%u slowdop=%u young=%u slow=%u "
-                    "fired=%u records=%u",
+                    "short=%u fired=%u records=%u",
                     kStateNames[trig->state], floorText,
                     (unsigned)c[L3_TRIG_COUNT_FRAMES],
                     (unsigned)c[L3_TRIG_COUNT_CANDIDATES],
@@ -487,6 +501,7 @@ int32_t l3_trig_format_summary(const l3_trig_t *trig, char *out, uint32_t cap)
                     (unsigned)c[L3_TRIG_COUNT_LOW_DOPPLER],
                     (unsigned)c[L3_TRIG_COUNT_TOO_YOUNG],
                     (unsigned)c[L3_TRIG_COUNT_TOO_SLOW],
+                    (unsigned)c[L3_TRIG_COUNT_TOO_SHORT],
                     (unsigned)c[L3_TRIG_COUNT_FIRED],
                     (unsigned)trig->logCount);
 }
@@ -507,12 +522,13 @@ int32_t l3_trig_format_config(const l3_trig_t *trig, char *out, uint32_t cap)
     l3_text_fixed(trig->loopPeriodS * 1.0e6F, 1U, loopText, sizeof(loopText));
     return snprintf(out, cap,
                     "trigcfg tee=%u snr=%s track=%u approach=%u gate=%u "
-                    "mincoh=%s minstep=%s stat=%s minspeed=%s loopus=%s",
+                    "mincoh=%s minstep=%s stat=%s minspeed=%s minapproach=%u loopus=%s",
                     (unsigned)trig->cfg.teeBin, snrText,
                     (unsigned)trig->cfg.trackFrames,
                     (unsigned)trig->cfg.approachBins,
                     (unsigned)trig->cfg.gateBins,
-                    coherenceText, stepText, statText, speedText, loopText);
+                    coherenceText, stepText, statText, speedText,
+                    (unsigned)trig->cfg.minApproachBins, loopText);
 }
 
 int32_t l3_trig_format_record(const l3_trig_record_t *record, char *out, uint32_t cap)

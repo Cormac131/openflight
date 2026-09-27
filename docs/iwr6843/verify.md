@@ -175,7 +175,7 @@ diagnosis that follows the same decision table you would apply by hand:
       floor:      325611
       snr:        6
       threshold:  1953666
-      candidates: 0  acquired: 0  jumped: 0  lost: 0  young: 0  slow: 0  lowcoh: 0  slowdop: 0  fired: 0
+      candidates: 0  acquired: 0  jumped: 0  lost: 0  young: 0  slow: 0  short: 0  lowcoh: 0  slowdop: 0  fired: 0
     Swing observation:
       traced frames:       4
       strongest bin:       14

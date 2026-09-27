@@ -61,6 +61,7 @@ WHY = {
             "slowdop",
             "young",
             "slow",
+            "short",
             "fired",
         ]
     )
@@ -80,6 +81,7 @@ COUNT = {
             "slowdop",
             "young",
             "slow",
+            "short",
             "fired",
         ]
     )
@@ -281,6 +283,7 @@ def test_defaults_are_the_documented_ones_and_pass_the_check(lib):
     assert (cfg.approachBins, cfg.gateBins) == (12, 3)
     assert cfg.minCoherence == 0.0
     assert cfg.minStepBins == pytest.approx(1.0)
+    assert cfg.minApproachBins == GATE, "a club must be seen crossing a gate's width"
     assert cfg.stat == STAT_PEAK
     assert lib.l3_trig_cfg_check(ctypes.byref(cfg)) == 0
 
@@ -299,6 +302,7 @@ def test_defaults_are_the_documented_ones_and_pass_the_check(lib):
         {"minStepBins": -1.0},
         {"stat": 2},
         {"minSpeedMps": -1.0},
+        {"minApproachBins": APPROACH + 1},  # more progress than the region can show
         {"teeBin": 253, "gateBins": 3},  # record stores bins in a byte, 0xFF = none
     ],
 )
@@ -444,8 +448,13 @@ def test_club_first_seen_inside_the_gate_waits_one_frame_then_fires(lib):
     assert det.feed({21: CLUB}) is True
 
 
-def test_track_frames_of_one_fires_on_first_sight_in_the_gate(lib):
+def test_track_frames_of_one_fires_on_first_sight_only_without_the_approach_tests(lib):
+    """One observation carries no approach rate and no progress, so with either
+    approach test on it is judged slow; both off admits it deliberately."""
     det = detector(lib, trackFrames=1)
+    assert det.feed({18: CLUB}) is False
+    assert det.whys() == ["slow"]
+    det = detector(lib, trackFrames=1, minStepBins=0.0, minApproachBins=0)
     assert det.feed({18: CLUB}) is True
     assert det.whys() == ["fired"]
 
@@ -566,9 +575,49 @@ def test_a_person_walking_up_to_the_ball_is_too_slow(lib):
     assert det.trig.state == STATE_TRACKING
 
 
-def test_min_step_of_zero_lets_a_slow_target_fire(lib):
-    """The speed test is a tunable, so a putt-speed target can be admitted deliberately."""
-    det = detector(lib, minStepBins=0.0)
+def test_a_target_holding_still_inside_the_gate_never_fires(lib):
+    """Hardware log, shot 2: a hand placing the ball rested at bin 40 (tee 37) and
+    fired on its second frame. Standing still, the track's approach clock restarts
+    every frame, and zero elapsed frames must read as no approach, not as a fast one."""
+    det = detector(lib)
+    for _ in range(6):
+        assert det.feed({22: CLUB}) is False
+    assert det.trig.state == STATE_TRACKING
+    assert det.whys() == ["young"] + ["slow"] * 5
+    assert det.counter("fired") == 0
+
+
+def test_a_hand_settling_at_the_tee_over_two_bins_is_too_short_an_approach(lib):
+    """Hardware log, run 2: an arm tracked at bin 32, then 33, 32, 33, 34 (tee 37) fired
+    at age 18 because two bins over its last two frames read as a bin per frame. A
+    clubhead is seen crossing at least a gate's width before it reaches the gate."""
+    det = detector(lib)
+    path = [15] * 10 + [16] * 5 + [15, 16, 17]  # 17 is the gate's near edge
+    assert not any(det.feed({local_bin: CLUB}) for local_bin in path)
+    assert det.whys()[-1] == "short"
+    assert det.counter("short") == 1
+    assert det.counter("fired") == 0
+    assert det.trig.state == STATE_TRACKING
+
+
+def test_min_approach_bins_of_zero_admits_a_two_bin_approach(lib):
+    det = detector(lib, minApproachBins=0)
+    path = [15] * 10 + [16] * 5 + [15, 16, 17]
+    assert any(det.feed({local_bin: CLUB}) for local_bin in path)
+    assert det.whys()[-1] == "fired"
+
+
+def test_progress_is_judged_before_the_gate_only_from_the_approach_seen(lib):
+    """A club first seen one bin short of the gate and inside it next frame has crossed
+    three bins: exactly the default, so it fires on the second frame as before."""
+    det = detector(lib)
+    assert det.feed({16: CLUB}) is False
+    assert det.feed({19: CLUB}) is True
+
+
+def test_min_step_and_min_approach_of_zero_let_a_slow_target_fire(lib):
+    """Both approach tests are tunables, so a putt-speed target can be admitted deliberately."""
+    det = detector(lib, minStepBins=0.0, minApproachBins=0)
     local_bin = 14
     fired = False
     for frame in range(40):
@@ -919,7 +968,7 @@ def test_summary_line_reports_state_floor_and_counters(lib):
         det.feed({local_bin: CLUB})
     summary = det.summary()
     assert summary.startswith("trig state=fired floor=")
-    for token in ("frames=3", "cand=3", "acq=1", "adv=1", "fired=1", "records=3"):
+    for token in ("frames=3", "cand=3", "acq=1", "adv=1", "short=0", "fired=1", "records=3"):
         assert token in summary
     assert len(summary) < 160
 
@@ -929,7 +978,7 @@ def test_config_line_echoes_the_arming_parameters(lib):
     line = det.config_line()
     assert line == (
         "trigcfg tee=20 snr=6.50 track=2 approach=12 gate=3 mincoh=0.00 minstep=1.25 "
-        "stat=peak minspeed=0.00 loopus=135.0"
+        "stat=peak minspeed=0.00 minapproach=3 loopus=135.0"
     )
 
 

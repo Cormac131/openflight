@@ -177,7 +177,7 @@ def test_trigger_config_disables_on_zero_frames_and_checks_the_rest():
 
     assert "if (cfg.trackFrames != 0U && l3_trig_cfg_check(&cfg) != 0)" in cfg
     assert "gTriggerEnabled = (cfg.trackFrames != 0U) ? 1U : 0U;" in cfg
-    assert "argc < 4 || argc > 10" in cfg
+    assert "argc < 4 || argc > 11" in cfg
 
 
 def test_every_ring_rearm_resets_the_detector_but_keeps_its_log():
@@ -263,9 +263,11 @@ def test_sensor_stop_takes_a_self_trigger_freeze_instead_of_closing_over_it():
     assert stop.index("l3_awaitFrozenRing") < stop.index("MMWave_close")
 
 
-def test_doppler_speed_gate_is_optional_and_rides_the_same_pass():
+def test_doppler_speed_gate_and_min_approach_are_optional_and_ride_the_same_pass():
     cfg = _function("static int32_t l3_cli_triggerCfg(")
     assert "cfg.minSpeedMps = strtof(argv[9], &end);" in cfg
+    assert "cfg.minApproachBins = (uint32_t)value;" in cfg
+    assert cfg.index("argc > 10") < cfg.index("cfg.minApproachBins")
 
 
 def test_tee_scan_reports_static_power_the_trigger_never_sees():

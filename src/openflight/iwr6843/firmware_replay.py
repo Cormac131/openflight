@@ -420,6 +420,7 @@ _TRIG_COUNTERS = (
     "slowdop",
     "young",
     "slow",
+    "short",
     "fired",
 )
 

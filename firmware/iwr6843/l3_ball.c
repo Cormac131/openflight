@@ -77,9 +77,11 @@ static void l3_ball_note(l3_ball_t *ball, uint8_t reason)
 
 /* The cluster around the strongest rise: contiguous bins whose ratio is at
  * least half of it. Sets width and the delta-weighted centroid (global,
- * sub-bin). A ball is one bin wide, two when it straddles; a person or a
- * moved chair raises a stretch of bins together. */
-static void l3_ball_measureCluster(l3_ball_t *ball, uint32_t bestLocal, float bestRatio)
+ * sub-bin) and reports the cluster's window indices. A ball is one bin
+ * wide, two when it straddles; a person or a moved chair raises a stretch
+ * of bins together. */
+static void l3_ball_measureCluster(l3_ball_t *ball, uint32_t bestLocal, float bestRatio,
+                                   uint32_t *clusterLo, uint32_t *clusterHi)
 {
     uint32_t lo = bestLocal;
     uint32_t hi = bestLocal;
@@ -102,32 +104,58 @@ static void l3_ball_measureCluster(l3_ball_t *ball, uint32_t bestLocal, float be
     }
     ball->width = hi - lo + 1U;
     ball->centroid = (weight > 0.0F) ? (moment / weight) : (float)(ball->windowStartBin + bestLocal);
+    *clusterLo = lo;
+    *clusterHi = hi;
 }
 
-/* Window index of the strongest new reflector, or -1 with the reason noted. */
+/* Window index of the strongest compact new reflector, or -1 with the
+ * reason noted. A rise too wide to be a ball (a player standing in the
+ * lane, the hand placing the ball) is set aside, cluster and all, and the
+ * next strongest rise is tried: the ball beside a person is still a ball.
+ * Every pass sets aside at least the bin it examined, so the loop ends. */
 static int32_t l3_ball_findCandidate(l3_ball_t *ball)
 {
-    int32_t best = -1;
-    float bestRatio = 0.0F;
-    uint32_t i;
+    uint64_t setAside = 0U;
+    uint8_t sawWide = 0U;
 
-    for (i = 0U; i < ball->count; i++) {
-        float ratio = l3_ball_ratioAt(ball, i);
-        if (ratio >= ball->cfg.minRatio && (best < 0 || ratio > bestRatio)) {
-            best = (int32_t)i;
-            bestRatio = ratio;
+    for (;;) {
+        int32_t best = -1;
+        float bestRatio = 0.0F;
+        uint32_t lo;
+        uint32_t hi;
+        uint32_t i;
+
+        for (i = 0U; i < ball->count; i++) {
+            float ratio;
+
+            if ((setAside & ((uint64_t)1U << i)) != 0U) {
+                continue;
+            }
+            ratio = l3_ball_ratioAt(ball, i);
+            if (ratio >= ball->cfg.minRatio && (best < 0 || ratio > bestRatio)) {
+                best = (int32_t)i;
+                bestRatio = ratio;
+            }
+        }
+        if (best < 0) {
+            if (sawWide) {
+                /* Counted when it was set aside; the reason still names it. */
+                ball->reason = L3_BALL_REASON_TOO_WIDE;
+            } else {
+                l3_ball_note(ball, L3_BALL_REASON_NO_DELTA);
+            }
+            return -1;
+        }
+        l3_ball_measureCluster(ball, (uint32_t)best, bestRatio, &lo, &hi);
+        if (ball->width <= 2U) {
+            return best;
+        }
+        ball->reasons[L3_BALL_REASON_TOO_WIDE]++;
+        sawWide = 1U;
+        for (i = lo; i <= hi; i++) {
+            setAside |= (uint64_t)1U << i;
         }
     }
-    if (best < 0) {
-        l3_ball_note(ball, L3_BALL_REASON_NO_DELTA);
-        return -1;
-    }
-    l3_ball_measureCluster(ball, (uint32_t)best, bestRatio);
-    if (ball->width > 2U) {
-        l3_ball_note(ball, L3_BALL_REASON_TOO_WIDE);
-        return -1;
-    }
-    return best;
 }
 
 uint8_t l3_ball_update(l3_ball_t *ball, uint32_t windowStartBin, const float *power, uint32_t count)
@@ -175,17 +203,24 @@ uint8_t l3_ball_update(l3_ball_t *ball, uint32_t windowStartBin, const float *po
     /* Slow background learning, except around a locked ball or a candidate:
      * a ball learned into the background while it is being confirmed would
      * shrink its own ratio, and one sitting on the tee for a minute would
-     * become the background. */
+     * become the background. Elsewhere a bin that has clearly risen holds a
+     * new reflector rather than drift and learns at the far slower rise
+     * rate, so a ball that is not yet compact and alone (under the hand
+     * placing it, beside a player) survives to be locked on. */
     for (i = 0U; i < count; i++) {
         uint32_t globalBin = windowStartBin + i;
         uint32_t hold = (ball->state == L3_BALL_STATE_LOCKED) ? ball->ballBin
                         : (ball->state == L3_BALL_STATE_CANDIDATE) ? ball->candidateBin : 0U;
+        uint32_t shift = L3_BALL_BACKGROUND_SHIFT;
+
         if (ball->state != L3_BALL_STATE_WAITING &&
             globalBin + L3_BALL_HOLD_BINS >= hold && globalBin <= hold + L3_BALL_HOLD_BINS) {
             continue;
         }
-        ball->background[i] += (ball->current[i] - ball->background[i]) /
-                               (float)(1U << L3_BALL_BACKGROUND_SHIFT);
+        if (l3_ball_ratioAt(ball, i) >= L3_BALL_RISE_FRACTION * cfg->minRatio) {
+            shift = L3_BALL_RISE_SHIFT;
+        }
+        ball->background[i] += (ball->current[i] - ball->background[i]) / (float)(1U << shift);
     }
 
     if (ball->state == L3_BALL_STATE_LOCKED) {
@@ -220,7 +255,12 @@ uint8_t l3_ball_update(l3_ball_t *ball, uint32_t windowStartBin, const float *po
             ball->goneAge = 0U;
             ball->reason = L3_BALL_REASON_NONE;
             seen = 1U;
-            l3_ball_measureCluster(ball, localBin, l3_ball_ratioAt(ball, localBin));
+            {
+                uint32_t lo;
+                uint32_t hi;
+
+                l3_ball_measureCluster(ball, localBin, l3_ball_ratioAt(ball, localBin), &lo, &hi);
+            }
         }
         ball->history = (ball->history << 1) | seen;
         return ball->state;

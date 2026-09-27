@@ -103,6 +103,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [Electron Kiosk Shell](electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
 
 ### Fixed
+- **Self-trigger fired on a hand placing the ball.** The impact gate judged
+  the approach rate from the track's nearest point to the radar, and a return
+  standing in the gate moved that point to the current frame every frame, so
+  zero elapsed frames skipped the rate test and it fired (`triggerLog` on the
+  rig: bin 40 twice, then `fired`). Zero elapsed now reads as no approach
+  (`slow`), and a new `minApproach` (`triggerCfg`'s tenth optional value,
+  default 3 bins) requires a gate's width of approach before firing, which
+  catches an arm whose strongest scatterer wanders two bins in two frames
+  (`short`). The counters, `triggerLog` summary and diagnosis name the new
+  reason.
+- **Ball detector stayed `waiting` with a ball on the tee.** The hand placing
+  it was a wide rise, and while that was rejected the background learned the
+  ball underneath at the quiet-lane rate, leaving nothing to lock on. Bins
+  that have clearly risen now learn at a rate of minutes, and a rise too wide
+  to be a ball is set aside so the compact rise beside it (the ball next to a
+  standing player) is still found.
+- **`host replay agrees` disagreed with every real swing.** The hardware suite
+  replayed an older host detector on the computed tee bin while the board ran
+  the firmware detector on the bin ball-detect observed. It now runs the same
+  C detector, armed as the board was, over the frozen ring.
 - **A crash-looping boot service no longer kills the desktop kiosk.** Every
   launcher exit ran a `pkill` that matched the Electron binary path, so an
   `openflight.service` that failed at startup (for example because systemd's

@@ -15,7 +15,13 @@
  *   IDLE      no candidate above floor * snr in the watch region
  *   TRACKING  a candidate is followed frame to frame by range continuity
  *   FIRED     the track entered the impact gate around the tee bin old
- *             enough and fast enough
+ *             enough, fast enough and from far enough away
+ *
+ * The approach is measured from the track's nearest point to the radar:
+ * mean rate in bins per frame (minStepBins) and total progress in bins
+ * (minApproachBins). A return standing in the gate resets that nearest
+ * point every frame, so it has no approach to judge and never fires: a
+ * hand placing the ball, a player's arm at address.
  *
  * The club is never required to be seen moving away again: that only makes
  * the trigger late and adds a condition a real swing can fail.
@@ -65,6 +71,9 @@
 #define L3_TRIG_DEFAULT_MIN_COHERENCE 0.0F  /* off until measured */
 #define L3_TRIG_DEFAULT_MIN_STEP_BINS 1.0F  /* ~15 m/s radial at 3 ms */
 #define L3_TRIG_DEFAULT_MIN_SPEED_MPS 0.0F  /* Doppler gate off until measured */
+/* A club is seen crossing at least a gate's width (~0.14 m) before it may
+ * fire; two bins of progress is what an arm settling at the tee showed. */
+#define L3_TRIG_DEFAULT_MIN_APPROACH_BINS 3U
 #define L3_TRIG_DEFAULT_STAT          L3_TRIG_STAT_PEAK
 
 /* The detection statistic is the observation layer's (l3_observation.h). */
@@ -88,7 +97,8 @@ enum {
     L3_TRIG_WHY_LOW_COHERENCE,  /* strongest bin above floor but not coherent */
     L3_TRIG_WHY_LOW_DOPPLER,    /* strongest bin above floor but too slow in Doppler */
     L3_TRIG_WHY_TOO_YOUNG,      /* in the gate before trackFrames observations */
-    L3_TRIG_WHY_TOO_SLOW,       /* in the gate but approaching under minStep */
+    L3_TRIG_WHY_TOO_SLOW,       /* in the gate but approaching under minStep, or not at all */
+    L3_TRIG_WHY_TOO_SHORT,      /* in the gate but fewer than minApproachBins of approach seen */
     L3_TRIG_WHY_FIRED,
     L3_TRIG_WHY_COUNT
 };
@@ -106,6 +116,7 @@ enum {
     L3_TRIG_COUNT_LOW_DOPPLER,
     L3_TRIG_COUNT_TOO_YOUNG,
     L3_TRIG_COUNT_TOO_SLOW,
+    L3_TRIG_COUNT_TOO_SHORT,
     L3_TRIG_COUNT_FIRED,
     L3_TRIG_COUNT_TOTAL
 };
@@ -125,6 +136,13 @@ typedef struct {
      * a gate of v rejects a club frame with probability v / span (~1.5/9),
      * which one bridged miss mostly absorbs. */
     float    minSpeedMps;
+    /* Minimum bins of approach a track must have shown, from its nearest
+     * point to the radar to the frame in the gate, before it may fire. The
+     * mean rate (minStepBins) alone is measured from that nearest point, so
+     * a return that steps two bins in two frames reads as a bin per frame
+     * whether it is a clubhead or the strongest scatterer of an arm
+     * wandering; a clubhead also covers ground. 0 disables. */
+    uint32_t minApproachBins;
 } l3_trig_cfg_t;
 
 /* One range bin of one frame is the observation layer's l3_bin_obs_t. */

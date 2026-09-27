@@ -56,7 +56,7 @@ SUBBIN_NAMES = {"centroid": SUBBIN_CENTROID, "parabolic": SUBBIN_PARABOLIC}
 TRIG_MAX_BINS = 64
 TRIG_LOG_DEPTH = 128
 TRIG_TRACE_DEPTH = 64
-TRIG_COUNT_TOTAL = 12
+TRIG_COUNT_TOTAL = 13
 TRIG_NO_BIN = 0xFF
 TRIG_STATE_IDLE, TRIG_STATE_TRACKING, TRIG_STATE_FIRED = 0, 1, 2
 TRIG_STATE_NAMES = ("idle", "tracking", "fired")
@@ -303,6 +303,7 @@ class TrigCfg(ctypes.Structure):
         ("minStepBins", ctypes.c_float),
         ("stat", ctypes.c_uint32),
         ("minSpeedMps", ctypes.c_float),
+        ("minApproachBins", ctypes.c_uint32),
     ]
 
 

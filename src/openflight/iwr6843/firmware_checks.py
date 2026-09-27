@@ -15,6 +15,7 @@ from typing import Callable
 
 from openflight.iwr6843.driver import IWR6843Radar, UnsupportedCommand
 from openflight.iwr6843.dump import parse_header
+from openflight.iwr6843.firmware_replay import ReplayConfig, replay_dump
 from openflight.iwr6843.monitor import (
     SELF_TRIGGER_OFF_COMMAND,
     SelfTriggerConfig,
@@ -22,7 +23,6 @@ from openflight.iwr6843.monitor import (
     read_capture_config,
     tee_global_bin,
 )
-from openflight.iwr6843.self_trigger import FLOOR_PROBE_LEVEL, replay_dump
 from openflight.iwr6843.sparse import (
     POWER_MAGIC,
     RANGE_FFT_SIZE,
@@ -1197,6 +1197,7 @@ def diagnose_missed_swing(
         f"  candidates: {counters.get('cand', 0)}  acquired: {counters.get('acq', 0)}  "
         f"jumped: {counters.get('jump', 0)}  lost: {counters.get('lost', 0)}  "
         f"young: {counters.get('young', 0)}  slow: {counters.get('slow', 0)}  "
+        f"short: {counters.get('short', 0)}  "
         f"lowcoh: {counters.get('lowcoh', 0)}  slowdop: {counters.get('slowdop', 0)}  "
         f"fired: {counters.get('fired', 0)}",
     ]
@@ -1231,9 +1232,10 @@ def diagnose_missed_swing(
         out.append(
             "  the detector fired but no Triggered notice reached the host: freeze/notification path"
         )
-    elif counters.get("young", 0) + counters.get("slow", 0) > 0:
+    elif counters.get("young", 0) + counters.get("slow", 0) + counters.get("short", 0) > 0:
         out.append(
-            "  club tracked into the gate but rejected as young/slow: tune trackFrames / minStep"
+            "  club tracked into the gate but rejected as young/slow/short: "
+            "tune trackFrames / minStep / minApproach"
         )
     elif counters.get("jump", 0) + counters.get("lost", 0) > 0 and counters.get("acq", 0) > 0:
         out.append(
@@ -1644,20 +1646,36 @@ def _swing_checks(shot: int, state: _SwingState) -> tuple[Check, ...]:
         )
 
     def replay_agrees(ctx: Context) -> CheckResult:
+        """The same C detector the board ran, over the ring it froze, armed as the board was.
+
+        The board was armed on ``_tee_bin(ctx)`` (where ball-detect saw the
+        ball when it ran), so the replay is too: a replay on the computed
+        bin watched a different stretch of air and disagreed with every
+        swing. The floor is learned from the ring's own first frames, so a
+        fire is expected near the plan's pre/post boundary, not at the same
+        frame number the board logged.
+        """
         name = f"{prefix}: host replay agrees"
         if state.last_dump is None:
             return skipped(name, "no ring to replay")
-        observations = replay_dump(
-            state.last_dump,
-            tee_range_m=ctx.tee_m,
-            level=state.threshold or FLOOR_PROBE_LEVEL,
-            hits=ctx.hits,
+        raw, state.last_dump = state.last_dump, None
+        config = ReplayConfig(
+            tee_bin=_tee_bin(ctx), snr=ctx.snr, track_frames=ctx.hits, stop_at_fire=True
         )
-        fired_at = next((i for i, obs in enumerate(observations) if obs.fired), None)
-        state.last_dump = None
-        if fired_at is None:
-            return failed(name, f"host detector did not fire over {len(observations)} frames")
-        return passed(name, f"host detector fired at frame {fired_at}")
+        try:
+            result = replay_dump(raw, config)
+        except ValueError as exc:
+            return failed(name, str(exc))
+        except RuntimeError as exc:
+            # No host C compiler: the firmware modules cannot be built here.
+            return skipped(name, str(exc))
+        frames = len(result.frames)
+        armed = f"armed on bin {config.tee_bin} at snr {ctx.snr:g}, {ctx.hits} frames"
+        if result.fired_frame is None:
+            return failed(name, f"host detector did not fire over {frames} frames ({armed})")
+        return passed(
+            name, f"host detector fired at frame {result.fired_frame} of {frames} ({armed})"
+        )
 
     def rearmed(ctx: Context) -> CheckResult:
         name = f"{prefix}: rearmed"

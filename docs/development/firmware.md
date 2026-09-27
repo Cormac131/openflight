@@ -132,7 +132,7 @@ driver) from a player walking up to the ball (a bin every few frames).
 The detector is armed and tuned over the CLI:
 
 ```text
-triggerCfg <globalBin> <snr> <frames> [approach gate minCoh minStep stat minSpeed]
+triggerCfg <globalBin> <snr> <frames> [approach gate minCoh minStep stat minSpeed minApproach]
 triggerLog [trace|track|shot|result|perf|clear]
 trackCfg cal <pitchDeg> <yawDeg> <rollDeg> <azOffsetRad> <elOffsetDeg> <rangeBiasM>
 trackCfg elem <index> <phaseRad> <gain>
@@ -150,14 +150,20 @@ known to be seen), and no Doppler speed gate (`minSpeed` in m/s; a player
 standing in the approach window moves under 1 m/s and reads as such, while
 a clubhead aliases across the ±9 m/s span, so a gate of 1.5 m/s rejects
 body returns at the cost of about one club frame in six, which the bridged
-miss absorbs). `triggerLog` prints the detector's state and counters,
+miss absorbs), and three bins of approach (`minApproach`) seen before the
+gate may fire. Both approach tests measure from the track's nearest point to
+the radar, so a return standing in the gate (a hand placing the ball, an arm
+at address) has no approach and is logged `slow`, and one whose strongest
+scatterer wanders two bins in two frames is logged `short`; a clubhead
+covers a gate's width at a bin or more per frame. `triggerLog` prints the
+detector's state and counters,
 its configuration, then one line per frame that had a moving return above
 the floor (idle frames only count toward the next line's `gap=`): candidate
 bin, all-loop energy and strongest-loop peak against the floor (in the
 configured statistic's units), apparent velocity, coherence, track age, and
 `why=` the frame did or did not fire
-(`acquired`, `advanced`, `jumped`, `missed`, `lost`, `lowcoh`, `young`,
-`slow`, `fired`). Read it after a missed swing before re-arming: the ring
+(`acquired`, `advanced`, `jumped`, `missed`, `lost`, `lowcoh`, `slowdop`,
+`young`, `slow`, `short`, `fired`). Read it after a missed swing before re-arming: the ring
 re-arm after `l3sparse` keeps the log, `triggerCfg` clears it.
 ### Observation layer and club track
 

@@ -27,6 +27,15 @@
 #define L3_BALL_CURRENT_SHIFT 2U
 /* Slow background learning: 1/256 per update. */
 #define L3_BALL_BACKGROUND_SHIFT 8U
+/* A bin risen at least this fraction of minRatio over its background holds a
+ * new reflector, not drift, and is learned at L3_BALL_RISE_SHIFT instead:
+ * over minutes (8192 updates, ~50 s time constant) rather than the second
+ * of the quiet-lane rate. A ball under a hand that lingers while placing
+ * it, or beside a player standing in the lane, is then still there to lock
+ * on once it is compact and alone; a bag left in view does become
+ * background eventually. */
+#define L3_BALL_RISE_FRACTION 0.5F
+#define L3_BALL_RISE_SHIFT 13U
 /* Static power under this is treated as this, so ratios stay finite. */
 #define L3_BALL_POWER_MIN 1.0F
 /* Updates of history behind the persistence figure (a 64-bit mask). */

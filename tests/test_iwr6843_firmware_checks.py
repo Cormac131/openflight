@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -12,6 +13,7 @@ import pytest
 from openflight.iwr6843 import firmware_checks as fc
 from openflight.iwr6843.driver import UnsupportedCommand
 from openflight.iwr6843.dump import pack_dump
+from openflight.iwr6843.firmware_replay import ReplayConfig
 from openflight.iwr6843.sparse import OnboardTrack
 from tests.iwr6843_fakes import (
     ScriptedSerial,
@@ -1273,6 +1275,11 @@ def _swing_radar(
     return radar, state
 
 
+def _replayed(fired_frame, frames=4):
+    """The firmware replay's result, reduced to what the swing check reads."""
+    return SimpleNamespace(fired_frame=fired_frame, frames=[None] * frames)
+
+
 def test_complete_lines_drops_a_trailing_partial_line():
     text = "trig phase=a bin=1\r\ntrig phase=b bin=2\ntrig phase=c bi"
     assert fc.complete_lines(text) == ["trig phase=a bin=1", "trig phase=b bin=2"]
@@ -1315,7 +1322,7 @@ def test_detector_evidence_collects_trace_and_log_lines_and_skips_missing_comman
 
 def test_missed_swing_prints_the_detector_evidence_before_cleanup_can_clear_it(monkeypatch):
     radar, _state = _swing_radar(_cube(), fire=False)
-    monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [])
+    monkeypatch.setattr(fc, "replay_dump", lambda raw, config, **kw: _replayed(None))
     printed: list[str] = []
     ctx = _ctx(radar, wait_s=5.0, swing_wait_s=1.0, shots=1, out=printed.append)
 
@@ -1624,7 +1631,7 @@ def test_full_swing_run_passes_with_a_scripted_operator(monkeypatch):
     cube = _cube()
     radar, _state = _swing_radar(cube)
     prompts: list[str] = []
-    monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [type("Obs", (), {"fired": True})()])
+    monkeypatch.setattr(fc, "replay_dump", lambda raw, config, **kw: _replayed(3))
     ctx = _ctx(radar, prompt=prompts.append, shots=1)
 
     results = fc.run(ctx, (fc.swing_section(1),), swing=True)
@@ -1636,7 +1643,7 @@ def test_full_swing_run_passes_with_a_scripted_operator(monkeypatch):
 
 def test_swing_fire_check_fails_on_timeout_and_later_checks_skip(monkeypatch):
     radar, _state = _swing_radar(_cube(), fire=False)
-    monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [])
+    monkeypatch.setattr(fc, "replay_dump", lambda raw, config, **kw: _replayed(None))
     ctx = _ctx(radar, wait_s=1.0, shots=1)
 
     results = fc.run(ctx, (fc.swing_section(1),), swing=True)
@@ -1656,7 +1663,7 @@ def test_readback_slower_than_the_limit_fails(monkeypatch):
         slow["now"] += 1.2
         return slow["now"]
 
-    monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [type("Obs", (), {"fired": True})()])
+    monkeypatch.setattr(fc, "replay_dump", lambda raw, config, **kw: _replayed(3))
     results = fc.run(
         _ctx(radar, clock=clock, shots=1, wait_s=30.0, swing_wait_s=30.0),
         (fc.swing_section(1),),
@@ -1669,7 +1676,7 @@ def test_readback_slower_than_the_limit_fails(monkeypatch):
 
 def test_host_replay_disagreement_fails(monkeypatch):
     radar, _state = _swing_radar(_cube())
-    monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [type("Obs", (), {"fired": False})()])
+    monkeypatch.setattr(fc, "replay_dump", lambda raw, config, **kw: _replayed(None))
 
     results = fc.run(_ctx(radar, shots=1), (fc.swing_section(1),), swing=True)
 
@@ -1677,8 +1684,47 @@ def test_host_replay_disagreement_fails(monkeypatch):
     assert replay.status == "FAIL"
 
 
+def test_host_replay_runs_the_firmware_detector_on_the_bin_the_board_was_armed_with(monkeypatch):
+    """Hardware run: the board was armed on the observed bin 37 while the host replayed
+    the computed bin 34 through an older detector, and disagreed on every real swing."""
+    radar, _state = _swing_radar(_cube())
+    seen: dict[str, ReplayConfig] = {}
+
+    def fake_replay(_raw, config, **_kw):
+        seen["config"] = config
+        return _replayed(3)
+
+    monkeypatch.setattr(fc, "replay_dump", fake_replay)
+    ctx = _ctx(radar, shots=1)
+    ctx.observed_tee_bin = 37
+
+    results = fc.run(ctx, (fc.swing_section(1),), swing=True)
+
+    replay = next(r for r in results if r.name.endswith("host replay agrees"))
+    assert replay.status == "PASS", replay.detail
+    assert "frame 3 of 4" in replay.detail
+    config = seen["config"]
+    assert isinstance(config, ReplayConfig)
+    assert (config.tee_bin, config.snr, config.track_frames) == (37, 6.0, 2)
+    assert config.stop_at_fire is True
+
+
+def test_host_replay_that_cannot_read_the_ring_fails_with_the_reason(monkeypatch):
+    radar, _state = _swing_radar(_cube())
+
+    def refuse(_raw, _config, **_kw):
+        raise ValueError("replay needs a range-FFT snapshot dump")
+
+    monkeypatch.setattr(fc, "replay_dump", refuse)
+
+    results = fc.run(_ctx(radar, shots=1), (fc.swing_section(1),), swing=True)
+
+    replay = next(r for r in results if r.name.endswith("host replay agrees"))
+    assert replay.status == "FAIL" and "range-FFT snapshot" in replay.detail
+
+
 def test_rearm_and_reconfigure_failures_are_reported(monkeypatch):
-    monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [type("Obs", (), {"fired": True})()])
+    monkeypatch.setattr(fc, "replay_dump", lambda raw, config, **kw: _replayed(3))
 
     stuck, _ = _swing_radar(_cube(), rearm=False)
     results = fc.run(_ctx(stuck, shots=1), (fc.swing_section(1),), swing=True)

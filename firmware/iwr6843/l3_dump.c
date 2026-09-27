@@ -4332,9 +4332,9 @@ static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
     unsigned long value;
     char *end;
 
-    if (argc < 4 || argc > 10) {
-        CLI_write("Error: triggerCfg <localBin> <snr> <frames> "
-                  "[approach gate minCoh minStep stat minSpeed]\n");
+    if (argc < 4 || argc > 11) {
+        CLI_write("Error: triggerCfg <globalBin> <snr> <frames> "
+                  "[approach gate minCoh minStep stat minSpeed minApproach]\n");
         return -1;
     }
     l3_trig_cfg_defaults(&cfg);
@@ -4400,8 +4400,17 @@ static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
             return -1;
         }
     }
+    if (argc > 10) {
+        value = strtoul(argv[10], &end, 10);
+        if (*end != '\0') {
+            CLI_write("Error: trigger min approach bins\n");
+            return -1;
+        }
+        cfg.minApproachBins = (uint32_t)value;
+    }
     if (cfg.trackFrames != 0U && l3_trig_cfg_check(&cfg) != 0) {
-        CLI_write("Error: trigger config (snr >= 1, gate < approach <= %u)\n",
+        CLI_write("Error: trigger config (snr >= 1, gate < approach <= %u, "
+                  "minApproach <= approach)\n",
                   (unsigned)L3_TRIG_MAX_BINS);
         return -1;
     }

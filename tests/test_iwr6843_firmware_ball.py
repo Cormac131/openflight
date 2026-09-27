@@ -280,13 +280,17 @@ def test_removing_the_ball_releases_and_the_next_ball_locks_again(lib):
 
 
 def test_background_keeps_learning_slow_drift_elsewhere_while_locked(lib):
+    """A bin that warms by a third is drift and follows within seconds; a bin
+    that triples holds something new and is learned at the rise rate instead."""
     lane = Lane(lib)
     lane.run(64)
     lane.run(20, extra={BALL_BIN: BALL_POWER})
     drifted = dict(BACKGROUND)
-    drifted[30] = 3.0e6
+    drifted[30] = 1.3e6
+    drifted[31] = 3.0e6
     lane.run(3000, profile=drifted, extra={BALL_BIN: BALL_POWER})
-    assert lane.ball.background[30 - WINDOW_START] == pytest.approx(3.0e6, rel=0.05)
+    assert lane.ball.background[30 - WINDOW_START] == pytest.approx(1.3e6, rel=0.05)
+    assert 1.2e6 < lane.ball.background[31 - WINDOW_START] < 2.0e6
     assert lane.ball.state == LOCKED
 
 
@@ -331,11 +335,13 @@ def test_a_wide_rise_is_reported_as_too_wide(lib):
 def test_centroid_sits_between_two_bins_the_ball_straddles(lib):
     lane = Lane(lib)
     lane.run(64)
-    lane.run(30, extra={BALL_BIN: 4.0e6, BALL_BIN + 1: 2.5e6})
+    # The neighbour rises 1.6x: clearly over the half-of-the-peak cluster
+    # test (1.5x would sit on its boundary, decided by learning round-off).
+    lane.run(30, extra={BALL_BIN: 4.0e6, BALL_BIN + 1: 2.6e6})
     assert lane.ball.state == LOCKED
     assert lane.ball.width == 2
-    # deltas 3e6 and 1.5e6: centroid = (48*3 + 49*1.5)/4.5 = 48.33
-    assert lane.ball.centroid == pytest.approx(48.33, abs=0.05)
+    # deltas 3e6 and 1.6e6: centroid = (48*3 + 49*1.6)/4.6 = 48.35
+    assert lane.ball.centroid == pytest.approx(48.35, abs=0.05)
     assert "centroid=48.3" in lane.debug() and "width=2" in lane.debug()
 
 
@@ -363,3 +369,45 @@ def test_confidence_falls_when_the_ball_return_drifts_in_range(lib):
     assert lane.ball.state == LOCKED and lane.locked_bin() == BALL_BIN, "the bin stays frozen"
     drifted = lane.lib.l3_ball_confidence(ctypes.byref(lane.ball))
     assert drifted < steady
+
+
+# --- hardware run 2: a ball on the tee left the detector "waiting" ------------
+
+
+def test_a_hand_lingering_over_the_placed_ball_does_not_teach_the_background_the_ball(lib):
+    """The hand placing the ball is a wide rise. While that was rejected as too
+    wide, the background learned everything under it, the ball included, at the
+    quiet-lane rate, so once the hand withdrew nothing was left to lock on."""
+    lane = Lane(lib)
+    lane.run(64)
+    hand = {b: 5.0e6 for b in range(BALL_BIN - 3, BALL_BIN + 3)}
+    hand[BALL_BIN] = BALL_POWER
+    assert lane.run(1500, extra=hand) == WAITING  # ~9 s of hand at 167 updates/s
+    assert lane.reason() == "too_wide"
+    assert lane.run(20, extra={BALL_BIN: BALL_POWER}) == LOCKED
+    assert lane.locked_bin() == BALL_BIN
+    assert lane.lib.l3_ball_ratio(ctypes.byref(lane.ball)) > 2.0
+
+
+def test_a_ball_beside_a_standing_person_still_locks(lib):
+    """The strongest rise is the golfer, ten bins wide; the compact rise beside it is the ball."""
+    lane = Lane(lib)
+    lane.run(64)
+    body = {b: 2.0e7 for b in range(30, 40)}
+    assert lane.run(20, extra={**body, BALL_BIN: BALL_POWER}) == LOCKED
+    assert lane.locked_bin() == BALL_BIN
+    assert lane.ball.reasons[REASONS.index("too_wide")] > 0, "the body was seen and set aside"
+
+
+def test_a_rise_that_never_locks_is_learned_slowly_rather_than_never(lib):
+    """A moved bag must not mask the lane for good: a rise that is not a ball
+    still becomes background, over minutes rather than a second."""
+    lane = Lane(lib)
+    lane.run(64)
+    body = {b: 5.0e6 for b in range(30, 40)}
+    lane.run(2000, extra=body)  # ~12 s
+    assert lane.ball.background[35 - WINDOW_START] < 2.5e6, (
+        "a hand's stay leaves it mostly unlearned"
+    )
+    lane.run(40000, extra=body)  # ~4 minutes
+    assert lane.ball.background[35 - WINDOW_START] == pytest.approx(5.0e6, rel=0.05)
