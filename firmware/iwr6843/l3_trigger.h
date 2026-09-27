@@ -151,6 +151,8 @@ typedef struct {
     float    peak;
     float    loop0;
     float    floor;         /* in the configured statistic's units */
+    float    threshold;     /* floor x snr in force this frame */
+    uint8_t  coherencePct;  /* |lag-1 autocorrelation| / energy */
 } l3_trig_trace_t;
 
 typedef struct {

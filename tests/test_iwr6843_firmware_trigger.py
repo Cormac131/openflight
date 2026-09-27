@@ -118,6 +118,8 @@ class Trace(ctypes.Structure):
         ("peak", ctypes.c_float),
         ("loop0", ctypes.c_float),
         ("floor", ctypes.c_float),
+        ("threshold", ctypes.c_float),
+        ("coherencePct", ctypes.c_uint8),
     ]
 
 
@@ -907,6 +909,8 @@ def test_trace_records_the_strongest_bin_of_frames_the_log_never_sees(lib):
     assert traces[0].peak == pytest.approx(3.0 * NOISE * PEAK_FRACTION)
     assert traces[0].loop0 == pytest.approx(3.0 * NOISE * LOOP0_FRACTION)
     assert traces[0].floor == pytest.approx(NOISE * PEAK_FRACTION, rel=0.05)
+    assert traces[0].threshold == pytest.approx(traces[0].floor * 6.0), "floor x snr in force"
+    assert traces[0].coherencePct == 90
 
 
 def test_trace_bar_is_twice_the_floor_so_noise_stays_out(lib):
@@ -983,6 +987,8 @@ def test_trace_header_and_lines_read_without_float_printf(lib):
     assert f"bar=2.0x frames=4 region={det.first}+{det.count} entries=1" in header
     line = det.trace_line(det.traces()[0])
     assert line.startswith("t frame=4 gap=3 bin=12 state=idle energy=400 peak=100 loop0=33 floor=")
+    # floor ~25 (peak units): threshold ~150, energy/floor ~16, peak/floor ~4.
+    assert " thr=" in line and " e/f=16." in line and " p/f=4.0 coh=90" in line
 
 
 # --- text output (integer-only printf) --------------------------------------

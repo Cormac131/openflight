@@ -154,6 +154,17 @@ static void l3_trig_trace(l3_trig_t *trig, uint32_t frame, uint32_t firstBin,
         entry->peak = obs[strongest].peak;
         entry->loop0 = obs[strongest].loop0;
         entry->floor = trig->floor;
+        entry->threshold = trig->floor * cfg->snr;
+        entry->coherencePct = 0U;
+        if (obs[strongest].energy > 0.0F) {
+            float magnitude = sqrtf(obs[strongest].r1Re * obs[strongest].r1Re +
+                                    obs[strongest].r1Im * obs[strongest].r1Im);
+            float coherence = magnitude / obs[strongest].energy;
+            if (coherence > 1.0F) {
+                coherence = 1.0F;
+            }
+            entry->coherencePct = (uint8_t)(coherence * 100.0F + 0.5F);
+        }
     }
     trig->traceNext = (trig->traceNext + 1U) % L3_TRIG_TRACE_DEPTH;
     if (trig->traceCount < L3_TRIG_TRACE_DEPTH) {
@@ -618,22 +629,34 @@ int32_t l3_trig_format_trace_header(const l3_trig_t *trig, char *out, uint32_t c
                     (unsigned)trig->traceCount);
 }
 
+/* One traced frame. e/f and p/f are energy and peak over the floor, which is
+ * in the configured statistic's units, so the ratio for that statistic is
+ * the one the threshold (thr = floor x snr) applies to. */
 int32_t l3_trig_format_trace(const l3_trig_trace_t *entry, char *out, uint32_t cap)
 {
     char energyText[16];
     char peakText[16];
     char loop0Text[16];
     char floorText[16];
+    char thresholdText[16];
+    char energyRatio[16];
+    char peakRatio[16];
+    float floor = (entry->floor > 0.0F) ? entry->floor : 1.0F;
 
     l3_trig_fmtFixed(entry->energy, 0U, energyText, sizeof(energyText));
     l3_trig_fmtFixed(entry->peak, 0U, peakText, sizeof(peakText));
     l3_trig_fmtFixed(entry->loop0, 0U, loop0Text, sizeof(loop0Text));
     l3_trig_fmtFixed(entry->floor, 0U, floorText, sizeof(floorText));
+    l3_trig_fmtFixed(entry->threshold, 0U, thresholdText, sizeof(thresholdText));
+    l3_trig_fmtFixed(entry->energy / floor, 1U, energyRatio, sizeof(energyRatio));
+    l3_trig_fmtFixed(entry->peak / floor, 1U, peakRatio, sizeof(peakRatio));
     return snprintf(out, cap,
-                    "t frame=%u gap=%u bin=%u state=%s energy=%s peak=%s loop0=%s floor=%s",
+                    "t frame=%u gap=%u bin=%u state=%s energy=%s peak=%s loop0=%s "
+                    "floor=%s thr=%s e/f=%s p/f=%s coh=%u",
                     (unsigned)entry->frame, (unsigned)entry->gap, (unsigned)entry->bin,
                     (entry->state < 3U) ? kStateNames[entry->state] : "?",
-                    energyText, peakText, loop0Text, floorText);
+                    energyText, peakText, loop0Text, floorText, thresholdText,
+                    energyRatio, peakRatio, (unsigned)entry->coherencePct);
 }
 
 int32_t l3_trig_format_maxhold(const l3_trig_t *trig, uint32_t start, uint32_t count,
