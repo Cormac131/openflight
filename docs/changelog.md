@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Spin probe A/B and the IQ16 roadmap status.** `scripts/analysis/spin_probe.py
+  --iq8` runs the micro-Doppler probe on the firmware-exact IQ8 of the same
+  capture and prints the frame-by-frame spread, off-bulk and spectrum
+  correlation differences. The firmware guide gains a phase-by-phase status
+  table and the rig protocols (compact formats on hardware, HWA rounding,
+  angles, shots, cadence, HWA/DSP, spin and face) the remaining phases wait on.
 - **OPS-versus-IWR validation and confidence calibration.** Every shot with an
   onboard result logs an `iwr_ops_comparison` entry (OPS and IWR speeds side by
   side, never averaged); `scripts/analysis/ops_validation.py` and

@@ -478,7 +478,8 @@ out. L3 is then spent on where the shot is rather than on fixed ranges.
 ### Hardware-gated work
 
 The code above is complete and host-tested; what needs the rig is listed
-here so nobody mistakes it for done. The ball detector's acceptance list
+here so nobody mistakes it for done (the table and protocols below say
+where each item stands). The ball detector's acceptance list
 (empty tee reaches waiting, a ball locks within a bin, the golfer does not
 create false locks, removal releases, dest minus club bin behaves) has not
 been run. The angle estimator wants a corner reflector at 0, +/-10 and
@@ -492,6 +493,74 @@ recorded. Loop counts are chosen from
 `scripts/analysis/evaluate_iwr_profiles.py` on real captures, not from
 frame rate; nothing moves to the HWA or DSP before `triggerLog perf` has
 numbers.
+
+### IQ16 roadmap: what is done and what waits for the rig
+
+| Phase | Status | Where |
+| --- | --- | --- |
+| 0 baseline dataset | tool ready; run on the rig | `scripts/analysis/baseline_dataset.py` |
+| 1 IQ16 processing, exact IQ8 emulation | done | `l3_iq8.c`, `iq8_emulation`, `l3_iq16_stats.c` |
+| 2 compact16 primitive and tests | done | `compact_iq16.c`, `test_iwr6843_compact_iq16.py` |
+| 3 processing vs retention ROI | done | `l3_retain.h` (`l3_roi_t`), `L3CapturePlan.retain*` |
+| 4 IQ16 retention ring, variable widths | done per phase (pre / impact / post widths), descriptors in `l3_frame_desc_t`; a fully variable-width arena is not needed while widths are per phase | `l3_retain.c`, `l3_dump.c` |
+| 5-7 state-aware retention, impact protection, adaptive post-impact | done | `l3_retain_window`, `l3_compactCompletedFrame` |
+| 8 compact track history apart from raw IQ | done (the trackers' rings and the result packet outlive the raw frames) | `l3_club_track.c`, `l3_ball_track.c`, `l3_result.c` |
+| 9 IQ16 in the observations | done | `l3_iq16_stats.c` |
+| 10 sub-bin range | done, bias characterised | `l3_obs_parabolic_offset` |
+| 11 club speed IQ16 vs IQ8 | tool ready (the A/B); on five swings IQ8 moves the fit by under 0.04 m/s | `scripts/analysis/ab_iq16_iq8.py` |
+| 12 IQ16 angle pipeline | done (float from IQ16, confidence added) | `l3_angle.c` |
+| 13 antenna calibration | representation and CLI done; the numbers need a reflector | `l3_cal_set_element`, `trackCfg elem`, `triggerLog cal` |
+| 14-15 static and moving angular validation | tools ready; need the rig | `iwr6843_angle_static.py`, `iwr6843_angle_moving.py` |
+| 16-17 path, attack, ball speed, launch from the 3D fits | done | `l3_track_delivery`, `l3_ball_track_launch` |
+| 18 IQ16 vs IQ8 replay tool | done | `ab_iq16_iq8.py` |
+| 19 selectable capture format | done (`iq8`, `iq16`, `compact16`, `adaptive16`) | `captureFormat` |
+| 20-21 memory budget and retention priorities | done | `l3_retain_budget`, `L3_RETAIN_*` |
+| 22-23 spin IQ16 retention and probe | retention priority and the IQ16-vs-IQ8 probe done; a spinning-ball recording is needed | `scripts/analysis/spin_probe.py --iq8` |
+| 24-26 firmware spin, spin axis, face angle | not started: no evidence yet that the observable exists in these captures | — |
+| 27 OPS validation | done | `ops_compare`, `scripts/analysis/ops_validation.py` |
+| 28 reference validation | loop ready; needs the labelled dataset | `scripts/analysis/reference_validation.py` |
+| 29 confidence from real error | tool ready; needs 27 and 28 to have run | `confidence_calibration` |
+| 30 cadence experiment | protocol below; needs the rig | — |
+| 31 HWA/DSP | waits for `triggerLog perf` numbers on the rig | `l3_profile.c` |
+| 32 production result path | done (100-byte packet, per-domain confidence on the host) | `l3_result.c`, `shot_result.py` |
+
+### Rig protocols the code is waiting on
+
+Run these in this order; each one's tool exists and each one's numbers
+change what comes next.
+
+1. **Baseline** (`baseline_dataset.py --firmware-sha`) on the shipped
+   firmware before flashing anything from this branch.
+2. **Compact formats on hardware.** Flash, run `stats` under
+   `config/iwr6843_l3dump_adaptive_47f3ms_53bin_a16.cfg` for a few hundred
+   frames: `scratch_stale` must stay 0 (the detect task finishes inside one
+   frame), `compact max_us` plus the rearm time must fit the frame's idle
+   gap (`hwa_missed` stays at the wide profile's rate), `triggerLog frames`
+   must show the windows following the tee, then the club, then the ball.
+   `iwr6843_cadence_soak.py` is the acceptance gate.
+3. **HWA rounding** (`iwr6843_iq8_hwa_probe.py`), so the A/B's IQ8 is the
+   board's.
+4. **Angles**: the static reflector protocol, then a calibration from its
+   biases (`trackCfg elem`), then the static protocol again, then the
+   moving one with `--iq8`.
+5. **Shots**: sessions on the adaptive profile with the OPS
+   (`ops_validation.py`), a labelled reference session
+   (`reference_validation.py`), and only then the confidence thresholds
+   (`confidence_calibration`).
+6. **Cadence** (phase 30): only after 5 has numbers at 3 ms. Compare 3 ms
+   adaptive16 against 2 ms adaptive16 with the same retain widths, never a
+   cadence change and a format change in one step; 1 ms needs fewer loops
+   than 12 and is a profile experiment of its own
+   (`evaluate_iwr_profiles.py` chooses loop counts from real captures).
+7. **HWA/DSP** (phase 31): move a stage only when `triggerLog perf` names it
+   as the one that does not fit; the residual, the Bartlett search and any
+   spin FFT are the candidates, the state machine and the result stay on
+   the R4F.
+8. **Spin and face** (phases 22-26): record stationary, low-spin and
+   high-spin balls on the adaptive profile (the first post frames are
+   tagged `L3_RETAIN_SPIN`), run `spin_probe.py --iq8` on each; a firmware
+   estimator is written only if the spread separates the three, and a face
+   angle only if the club's own signature does, never as launch minus path.
 
 ### End-state architecture
 

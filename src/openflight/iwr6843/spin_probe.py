@@ -217,6 +217,74 @@ def format_report(results: list[MicroDoppler], signature: SpinSignature) -> str:
     return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class PathDifference:
+    """One frame's micro-Doppler numbers under two processing paths (IQ16 and emulated IQ8)."""
+
+    frame: int
+    bulk_velocity_a_mps: float
+    bulk_velocity_b_mps: float
+    spread_a_mps: float
+    spread_b_mps: float
+    off_bulk_a: float
+    off_bulk_b: float
+    spectrum_correlation: float  # 0..1 between the two normalised spectra
+
+    @property
+    def spread_ratio(self) -> float | None:
+        return self.spread_b_mps / self.spread_a_mps if self.spread_a_mps > 0 else None
+
+
+def compare_paths(
+    results_a: list[MicroDoppler], results_b: list[MicroDoppler]
+) -> list[PathDifference]:
+    """Frame by frame, the same ROI processed two ways (roadmap phase 23: does the
+    spin observable survive IQ8?). Frames are matched by number."""
+    by_frame = {r.frame: r for r in results_b}
+    out: list[PathDifference] = []
+    for a in results_a:
+        b = by_frame.get(a.frame)
+        if b is None:
+            continue
+        sa = a.spectrum / (np.linalg.norm(a.spectrum) or 1.0)
+        sb = b.spectrum / (np.linalg.norm(b.spectrum) or 1.0)
+        out.append(
+            PathDifference(
+                frame=a.frame,
+                bulk_velocity_a_mps=a.bulk_velocity_mps,
+                bulk_velocity_b_mps=b.bulk_velocity_mps,
+                spread_a_mps=a.spread_mps,
+                spread_b_mps=b.spread_mps,
+                off_bulk_a=a.off_bulk_fraction,
+                off_bulk_b=b.off_bulk_fraction,
+                spectrum_correlation=float(np.clip(np.dot(sa, sb), 0.0, 1.0)),
+            )
+        )
+    return out
+
+
+def format_comparison(
+    differences: list[PathDifference], *, label_a: str = "iq16", label_b: str = "iq8"
+) -> str:
+    if not differences:
+        return "spin probe A/B: no frames in common"
+    ratios = [d.spread_ratio for d in differences if d.spread_ratio is not None]
+    corr = float(np.median([d.spectrum_correlation for d in differences]))
+    lines = [
+        f"spin probe A/B {label_a} vs {label_b}: {len(differences)} frames, median spread ratio "
+        f"{(np.median(ratios) if ratios else float('nan')):.2f}, median spectrum correlation {corr:.3f}",
+        f"  {'frame':>5} {'bulk ' + label_a:>10} {'bulk ' + label_b:>10} {'spread ' + label_a:>12} "
+        f"{'spread ' + label_b:>12} {'off-bulk ' + label_a:>13} {'off-bulk ' + label_b:>13} {'corr':>6}",
+    ]
+    for d in differences:
+        lines.append(
+            f"  {d.frame:>5} {d.bulk_velocity_a_mps:>+10.2f} {d.bulk_velocity_b_mps:>+10.2f} "
+            f"{d.spread_a_mps:>12.2f} {d.spread_b_mps:>12.2f} {100 * d.off_bulk_a:>12.0f}% "
+            f"{100 * d.off_bulk_b:>12.0f}% {d.spectrum_correlation:>6.3f}"
+        )
+    return "\n".join(lines)
+
+
 def bin_of_range(range_m: float, fft_size: int = 128) -> int:
     return int(range_m / (RANGE_SPAN_M / fft_size))
 
@@ -229,10 +297,13 @@ __all__ = [
     "WAVELENGTH_M",
     "BallRoi",
     "MicroDoppler",
+    "PathDifference",
     "SpinSignature",
     "ball_roi",
     "bin_of_range",
     "classify_signature",
+    "compare_paths",
+    "format_comparison",
     "format_report",
     "micro_doppler",
     "surface_speed_mps",

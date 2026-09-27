@@ -143,3 +143,35 @@ def test_script_reports_and_saves_the_roi(tmp_path, capsys):
     saved = np.load(out)
     assert saved["roi"].shape == (4, 24, 3, 4, 5) and saved["spectra"].shape[0] == 4
     assert module.main([str(dump), "--frames", "2", "--range-m", "2.4375"]) == 0
+
+
+def test_compare_paths_matches_frames_and_measures_the_spectral_change():
+    from openflight.iwr6843.spin_probe import (
+        MicroDoppler,
+        PathDifference,
+        compare_paths,
+        format_comparison,
+    )
+
+    axis = np.linspace(-1.0, 1.0, 8)
+    spectrum = np.exp(-(axis**2) * 4.0)
+
+    def md(frame, spread, off_bulk, bulk=1.0, spec=spectrum):
+        return MicroDoppler(frame, bulk, spread, off_bulk, spec, axis, 0.25)
+
+    a = [md(3, 0.30, 0.10), md(4, 0.32, 0.12), md(5, 0.31, 0.11)]
+    b = [md(3, 0.45, 0.30, bulk=1.05), md(5, 0.31, 0.11), md(9, 0.5, 0.5)]
+    diffs = compare_paths(a, b)
+    assert [d.frame for d in diffs] == [3, 5], "frame 4 has no partner, frame 9 no original"
+    first = diffs[0]
+    assert isinstance(first, PathDifference)
+    assert first.spread_ratio == pytest.approx(1.5) and first.off_bulk_b == 0.30
+    assert first.bulk_velocity_b_mps == pytest.approx(1.05)
+    assert first.spectrum_correlation == pytest.approx(1.0), "identical shapes correlate fully"
+    noisy = compare_paths([md(3, 0.3, 0.1)], [md(3, 0.3, 0.1, spec=np.roll(spectrum, 3))])
+    assert noisy[0].spectrum_correlation < 0.9
+    text = format_comparison(diffs, label_b="iq8:edma")
+    assert "iq16 vs iq8:edma: 2 frames" in text and "median spread ratio" in text
+    assert format_comparison([]) == "spin probe A/B: no frames in common"
+    zero = compare_paths([md(1, 0.0, 0.0)], [md(1, 0.2, 0.1)])
+    assert zero[0].spread_ratio is None

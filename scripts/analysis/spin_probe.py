@@ -49,6 +49,16 @@ def _parser() -> argparse.ArgumentParser:
         "--loop-period-us", type=float, help="same-TX loop period; default n_tx x 45 us"
     )
     parser.add_argument("--save", help="write the ROI and spectra to this .npz for offline work")
+    parser.add_argument(
+        "--iq8",
+        nargs="?",
+        const="edma",
+        default=None,
+        choices=("cpu", "edma", "dump"),
+        metavar="PATH",
+        help="also run the probe on the firmware-exact IQ8 of this capture (default path edma) "
+        "and print the frame-by-frame difference",
+    )
     return parser
 
 
@@ -66,6 +76,26 @@ def main(argv: list[str] | None = None) -> int:
     results = micro_doppler(roi)
     signature = classify_signature(results)
     print(format_report(results, signature))
+    if args.iq8 is not None:
+        from openflight.iwr6843.iq8_emulation import Iq8Mode, emulate_dump
+        from openflight.iwr6843.spin_probe import compare_paths, format_comparison
+
+        mode = Iq8Mode(args.iq8)
+        emulated = emulate_dump(raw, mode)
+        roi8 = ball_roi(
+            emulated,
+            frames=args.frames,
+            center_bin=center,
+            half_width=args.half_width,
+            loop_period_s=roi.loop_period_s,
+        )
+        results8 = micro_doppler(roi8)
+        print(
+            format_report(results8, classify_signature(results8)).replace(
+                "spin probe:", f"spin probe ({mode.label}):", 1
+            )
+        )
+        print(format_comparison(compare_paths(results, results8), label_b=mode.label))
     if args.save:
         np.savez_compressed(
             args.save,
