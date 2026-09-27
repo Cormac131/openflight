@@ -138,6 +138,30 @@ PASS  ball-detect/stationary return: expected=1.575m expected_bin=14 detected_bi
 
 The self-trigger works from the MTI residual, which removes a stationary ball,
 so this is the only check that proves the radar sees a ball at the tee at all.
+
+A swing that does not fire within `--swing-wait-s` (default 10 s) is not
+silent: the check prints the detector's raw-input trace and frame log, then a
+diagnosis that follows the same decision table you would apply by hand:
+
+```text
+  diagnosis:
+    Ball:
+      expected bin: 14
+      observed bin: 15 (stationary ratio 8.7x)
+    Detector:
+      statistic:  peak
+      floor:      325611
+      snr:        6
+      threshold:  1953666
+      candidates: 0  acquired: 0  jumped: 0  lost: 0  young: 0  slow: 0  lowcoh: 0  slowdop: 0  fired: 0
+    Swing observation:
+      traced frames:       4
+      strongest bin:       14
+      max energy:          1124211  (3.44x floor)
+      max peak:            12531121  (38.30x floor)
+    Likely failure:
+      swing visible but the configured energy statistic peaked at 3.44x floor, under snr 6; peak reached 38.30x and would have crossed
+```
 `--swing` runs it first and arms the swing checks on the detected bin. Repeat
 it a few times: a detected bin that wanders by one is the hand-measured tee
 range; one that is always off by the same amount is the range conversion.

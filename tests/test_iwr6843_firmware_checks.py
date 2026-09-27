@@ -1317,13 +1317,91 @@ def test_missed_swing_prints_the_detector_evidence_before_cleanup_can_clear_it(m
     radar, _state = _swing_radar(_cube(), fire=False)
     monkeypatch.setattr(fc, "replay_dump", lambda raw, **kw: [])
     printed: list[str] = []
-    ctx = _ctx(radar, wait_s=1.0, shots=1, out=printed.append)
+    ctx = _ctx(radar, wait_s=5.0, swing_wait_s=1.0, shots=1, out=printed.append)
 
     fc.run(ctx, (fc.swing_section(1),), swing=True)
 
     assert any("detector evidence (no Triggered within 1 s)" in line for line in printed)
+    assert any(line.strip() == "diagnosis:" for line in printed)
+    assert any("Likely failure:" in line for line in printed)
     assert "triggerLog trace" in radar.ser.written
     assert "triggerLog clear" in radar.ser.written, "the trace starts with the swing"
+
+
+TRACE_CLUB_SEEN_ENERGY_WEAK = [
+    "trigtrace state=idle stat=energy floor=325611 bar=2.0x frames=4000 region=2+16 entries=4",
+    "trigmax 2:400000@10 3:390000@11",
+    "t frame=17291 gap=3 bin=7 state=idle energy=401221 peak=692871 loop0=50000 floor=325611 thr=1953666 e/f=1.2 p/f=2.1 coh=80",
+    "t frame=17293 gap=1 bin=12 state=idle energy=810112 peak=7834921 loop0=60000 floor=326001 thr=1956006 e/f=2.5 p/f=24.0 coh=85",
+    "t frame=17294 gap=0 bin=14 state=idle energy=1124211 peak=12531121 loop0=70000 floor=327192 thr=1963152 e/f=3.4 p/f=38.3 coh=88",
+    "trig state=idle floor=327192 frames=4000 cand=0 acq=0 adv=0 jump=0 miss=0 lost=0 lowcoh=0 slowdop=0 young=0 slow=0 fired=0 records=0",
+]
+
+
+def test_parse_trace_lines_reads_header_and_frames():
+    header, frames = fc.parse_trace_lines(TRACE_CLUB_SEEN_ENERGY_WEAK)
+    assert header["stat"] == "energy" and header["floor"] == "325611"
+    assert [f["bin"] for f in frames] == [7.0, 12.0, 14.0]
+    assert frames[-1]["p/f"] == pytest.approx(38.3) and frames[-1]["thr"] == 1963152.0
+    assert fc.parse_log_summary(TRACE_CLUB_SEEN_ENERGY_WEAK)["cand"] == 0
+    assert fc.parse_log_summary(["nothing"]) == {}
+
+
+def _diagnose(evidence, **overrides):
+    kwargs = dict(snr=6.0, expected_bin=14, observed_bin=None, ball=None)
+    kwargs.update(overrides)
+    return "\n".join(fc.diagnose_missed_swing(evidence, **kwargs))
+
+
+def test_diagnosis_names_the_statistic_that_would_have_crossed():
+    text = _diagnose(TRACE_CLUB_SEEN_ENERGY_WEAK)
+    assert "statistic:  energy" in text
+    assert "max peak:            12531121  (38.30x floor)" in text
+    assert "energy statistic peaked at 3.40x floor, under snr 6" in text
+    assert "peak reached 38.30x and would have crossed" in text
+    assert "observed bin: not measured (run with --ball)" in text
+
+
+def test_diagnosis_with_no_trace_blames_the_view_of_the_club_or_the_ball():
+    quiet = ["trigtrace state=idle stat=peak floor=812 bar=2.0x frames=400 region=2+16 entries=0"]
+    assert "club not seen" in _diagnose(quiet)
+    from openflight.iwr6843.tee_scan import BallDetection
+
+    no_ball = BallDetection(14, 14, 1000.0, 1100.0, (8, 20))
+    assert "ball not seen either" in _diagnose(quiet, ball=no_ball)
+    seen_ball = BallDetection(14, 15, 1000.0, 8650.0, (8, 20))
+    text = _diagnose(quiet, ball=seen_ball, observed_bin=15)
+    assert "observed bin: 15 (stationary ratio 8.7x)" in text and "club not seen" in text
+
+
+@pytest.mark.parametrize(
+    ("summary", "expected"),
+    [
+        (
+            "cand=6 acq=2 adv=3 jump=0 miss=0 lost=0 lowcoh=0 slowdop=0 young=2 slow=0 fired=0",
+            "young/slow",
+        ),
+        (
+            "cand=6 acq=3 adv=1 jump=2 miss=1 lost=1 lowcoh=0 slowdop=0 young=0 slow=0 fired=0",
+            "jumped or was lost",
+        ),
+        (
+            "cand=0 acq=0 adv=0 jump=0 miss=0 lost=0 lowcoh=4 slowdop=0 young=0 slow=0 fired=0",
+            "coherence or Doppler gate",
+        ),
+        (
+            "cand=6 acq=2 adv=4 jump=0 miss=0 lost=0 lowcoh=0 slowdop=0 young=0 slow=0 fired=1",
+            "no Triggered notice reached the host",
+        ),
+    ],
+)
+def test_diagnosis_follows_the_log_counters_when_the_club_crossed_the_threshold(summary, expected):
+    evidence = [
+        "trigtrace state=idle stat=peak floor=1000 bar=2.0x frames=400 region=2+16 entries=1",
+        "t frame=10 gap=0 bin=14 state=tracking energy=9000 peak=20000 loop0=800 floor=1000 thr=6000 e/f=9.0 p/f=20.0 coh=90",
+        f"trig state=idle floor=1000 frames=400 {summary} records=6",
+    ]
+    assert expected in _diagnose(evidence)
 
 
 def _ball_radar(*, ball_bin: int | None = 15, ball_power: float = 8650.0, baseline: float = 1000.0):

@@ -75,6 +75,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--wait-s", type=float, default=60.0, help="deadline for prompted and polled steps"
     )
+    parser.add_argument(
+        "--swing-wait-s",
+        type=float,
+        default=10.0,
+        help="seconds 'swing now' waits for Triggered before diagnosing the miss",
+    )
     parser.add_argument("--json", default=None, help="write results to this JSON file")
     parser.add_argument("--fail-fast", action="store_true", help="stop at the first FAIL")
     return parser
@@ -133,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         snr=args.snr,
         hits=args.hits,
         wait_s=args.wait_s,
+        swing_wait_s=args.swing_wait_s,
         shots=args.shots,
         profiles=fc.default_profiles(),
         prompt=_prompt,

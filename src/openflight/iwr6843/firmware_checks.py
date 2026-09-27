@@ -38,6 +38,7 @@ from openflight.iwr6843.tee_scan import (
     DEFAULT_MIN_RATIO,
     DEFAULT_SCANS,
     DEFAULT_SEARCH_HALF_WIDTH,
+    BallDetection,
     average_scans,
     detect_ball,
     local_bin_range_m,
@@ -190,6 +191,10 @@ class Context:
     # swing checks arm on it instead of the computed tee bin, so a range
     # conversion that is a bin off does not read as a missed swing.
     observed_tee_bin: int | None = None
+    ball_detection: BallDetection | None = None
+    # How long "swing now" waits for Triggered. A swing takes a few seconds;
+    # sixty of silence after one taught nothing that ten do not.
+    swing_wait_s: float = 10.0
 
 
 @dataclass(frozen=True)
@@ -1080,6 +1085,162 @@ def report_evidence(ctx: Context, why: str) -> None:
         ctx.out(f"    {line}")
 
 
+_KEY_VALUE = re.compile(r"(\S+?)=(\S+)")
+
+
+def _fields(line: str) -> dict[str, str]:
+    return dict(_KEY_VALUE.findall(line))
+
+
+def parse_trace_lines(lines: list[str]) -> tuple[dict[str, str], list[dict[str, float]]]:
+    """(``trigtrace`` header fields, traced frames) from ``triggerLog trace`` lines.
+
+    Each frame is the region's strongest bin with energy, peak, loop0, floor,
+    thr (the threshold in force), the e/f and p/f ratios and coh.
+    """
+    header: dict[str, str] = {}
+    frames: list[dict[str, float]] = []
+    for line in lines:
+        text = line.strip()
+        if text.startswith("trigtrace "):
+            header = _fields(text[len("trigtrace ") :])
+        elif text.startswith("t frame="):
+            fields = _fields(text[2:])
+            frame: dict[str, float] = {}
+            for key, value in fields.items():
+                try:
+                    frame[key] = float(value)
+                except ValueError:
+                    continue  # state=idle and the like
+            frames.append(frame)
+    return header, frames
+
+
+def parse_log_summary(lines: list[str]) -> dict[str, int]:
+    """Counters from the ``trig state=...`` summary line of ``triggerLog``, if present."""
+    for line in lines:
+        text = line.strip()
+        if text.startswith("trig state="):
+            counters: dict[str, int] = {}
+            for key, value in _fields(text[len("trig ") :]).items():
+                try:
+                    counters[key] = int(value)
+                except ValueError:
+                    continue
+            return counters
+    return {}
+
+
+def diagnose_missed_swing(
+    evidence: list[str],
+    *,
+    snr: float,
+    expected_bin: int,
+    observed_bin: int | None,
+    ball: BallDetection | None,
+    stat: str | None = None,
+) -> list[str]:
+    """Human-readable diagnosis of a swing that did not fire, from the detector's own words.
+
+    Follows the decision table the instrumentation was built for: ball seen?
+    club seen? which statistic crossed the threshold? was a candidate
+    acquired, tracked, and if so why did the gate not fire?
+    """
+    header, frames = parse_trace_lines(evidence)
+    counters = parse_log_summary(evidence)
+    stat = stat or header.get("stat", "peak")
+    out = ["Ball:", f"  expected bin: {expected_bin}"]
+    if ball is not None:
+        out.append(f"  observed bin: {ball.detected_bin} (stationary ratio {ball.ratio:.1f}x)")
+    elif observed_bin is not None:
+        out.append(f"  observed bin: {observed_bin}")
+    else:
+        out.append("  observed bin: not measured (run with --ball)")
+    floor = float(header.get("floor", 0) or 0)
+    out += [
+        "Detector:",
+        f"  statistic:  {stat}",
+        f"  floor:      {floor:.0f}",
+        f"  snr:        {snr:g}",
+        f"  threshold:  {floor * snr:.0f}",
+        f"  candidates: {counters.get('cand', 0)}  acquired: {counters.get('acq', 0)}  "
+        f"jumped: {counters.get('jump', 0)}  lost: {counters.get('lost', 0)}  "
+        f"young: {counters.get('young', 0)}  slow: {counters.get('slow', 0)}  "
+        f"lowcoh: {counters.get('lowcoh', 0)}  slowdop: {counters.get('slowdop', 0)}  "
+        f"fired: {counters.get('fired', 0)}",
+    ]
+    if not frames:
+        out += [
+            "Swing observation:",
+            "  no moving return reached twice the floor in the approach window",
+            "Likely failure:",
+            "  club not seen: check the range window, l3_verticalResidual and the waveform",
+        ]
+        if ball is not None and ball.ratio < DEFAULT_MIN_RATIO:
+            out[-1] = "  ball not seen either: stop on the trigger, check range FFT and geometry"
+        return out
+    strongest = max(
+        frames, key=lambda f: f.get("p/f", 0.0) if stat == "peak" else f.get("e/f", 0.0)
+    )
+    max_energy = max(f.get("energy", 0.0) for f in frames)
+    max_peak = max(f.get("peak", 0.0) for f in frames)
+    max_ef = max(f.get("e/f", 0.0) for f in frames)
+    max_pf = max(f.get("p/f", 0.0) for f in frames)
+    out += [
+        "Swing observation:",
+        f"  traced frames:       {len(frames)}",
+        f"  strongest bin:       {int(strongest.get('bin', -1))}",
+        f"  max energy:          {max_energy:.0f}  ({max_ef:.2f}x floor)",
+        f"  max peak:            {max_peak:.0f}  ({max_pf:.2f}x floor)",
+    ]
+    crossed = max_pf if stat == "peak" else max_ef
+    other, other_name = (max_ef, "energy") if stat == "peak" else (max_pf, "peak")
+    out.append("Likely failure:")
+    if counters.get("fired", 0) > 0:
+        out.append(
+            "  the detector fired but no Triggered notice reached the host: freeze/notification path"
+        )
+    elif counters.get("young", 0) + counters.get("slow", 0) > 0:
+        out.append(
+            "  club tracked into the gate but rejected as young/slow: tune trackFrames / minStep"
+        )
+    elif counters.get("jump", 0) + counters.get("lost", 0) > 0 and counters.get("acq", 0) > 0:
+        out.append(
+            "  club acquired but the track jumped or was lost before the gate: continuation window"
+        )
+    elif counters.get("lowcoh", 0) + counters.get("slowdop", 0) > 0:
+        out.append(
+            "  club above threshold but rejected by the coherence or Doppler gate: relax or disable it"
+        )
+    elif crossed < snr:
+        line = (
+            f"  swing visible but the configured {stat} statistic peaked at {crossed:.2f}x floor, "
+            f"under snr {snr:g}"
+        )
+        if other >= snr:
+            line += f"; {other_name} reached {other:.2f}x and would have crossed"
+        out.append(line)
+    elif counters.get("cand", 0) == 0:
+        out.append(
+            "  a frame crossed the threshold but no candidate was counted: check the region and arming"
+        )
+    else:
+        out.append("  candidate acquired and nothing rejected it: read the frame log above")
+    return out
+
+
+def report_diagnosis(ctx: Context, evidence: list[str]) -> None:
+    ctx.out("  diagnosis:")
+    for line in diagnose_missed_swing(
+        evidence,
+        snr=ctx.snr,
+        expected_bin=expected_tee_bin(ctx),
+        observed_bin=ctx.observed_tee_bin,
+        ball=ctx.ball_detection,
+    ):
+        ctx.out(f"    {line}")
+
+
 def _trig_state(snap: StatsSnapshot) -> str:
     return f"phase={snap.phase} latched={snap.latched} enabled={snap.enabled}"
 
@@ -1362,16 +1523,24 @@ def _swing_checks(shot: int, state: _SwingState) -> tuple[Check, ...]:
         if not state.armed:
             return skipped(name, "not armed")
         before = stats_snapshot(ctx)
-        ctx.prompt(f"Shot {shot}: swing now. Waiting up to {ctx.wait_s:.0f} s.")
+        ctx.prompt(f"Shot {shot}: swing now. Waiting up to {ctx.swing_wait_s:.0f} s.")
         try:
-            waited = wait_for_notice(ctx, ctx.wait_s)
+            waited = wait_for_notice(ctx, ctx.swing_wait_s)
         except KeyboardInterrupt:
             # Cleanup disarms, which clears the log and trace: show them now.
-            report_evidence(ctx, "interrupted while waiting")
+            evidence = detector_evidence(ctx)
+            ctx.out("  detector evidence (interrupted while waiting):")
+            for line in evidence or ["(none: firmware without triggerLog)"]:
+                ctx.out(f"    {line}")
+            report_diagnosis(ctx, evidence)
             raise
         if waited is None:
-            report_evidence(ctx, f"no Triggered within {ctx.wait_s:.0f} s")
-            return failed(name, f"no Triggered within {ctx.wait_s:.0f} s")
+            evidence = detector_evidence(ctx)
+            ctx.out(f"  detector evidence (no Triggered within {ctx.swing_wait_s:.0f} s):")
+            for line in evidence or ["(none: firmware without triggerLog)"]:
+                ctx.out(f"    {line}")
+            report_diagnosis(ctx, evidence)
+            return failed(name, f"no Triggered within {ctx.swing_wait_s:.0f} s")
         notice_at = ctx.clock()
         latest: dict[str, StatsSnapshot] = {}
 
@@ -1567,6 +1736,7 @@ def ball_detect_section() -> Section:
             f"baseline={found.baseline:.0f} occupied={found.occupied:.0f} ratio={found.ratio:.2f}x "
             f"(searched bins {found.search_bins[0]}-{found.search_bins[1]})"
         )
+        ctx.ball_detection = found
         if found.ratio < DEFAULT_MIN_RATIO:
             return failed(name, f"no clear ball return: {detail}")
         ctx.observed_tee_bin = found.detected_bin
