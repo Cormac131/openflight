@@ -945,7 +945,11 @@ def recording_configs(
         entry.pop("notes", None)
         entry.pop(EXPECT_KEY, None)
         if "tee_bin" not in entry:
-            raise ValueError(f"{path.name}: no tee_bin in {MANIFEST_NAME} and no default given")
+            raise ValueError(
+                f"{path.name}: no tee bin. Give --tee-bin or --tee-range-m on the command line, "
+                f'or put {{"default": {{"tee_bin": 34}}}} in {directory / MANIFEST_NAME} '
+                "(34 is 1.59 m on the 128-point FFT)."
+            )
         configs.append((path, ReplayConfig(**entry)))
     return configs
 

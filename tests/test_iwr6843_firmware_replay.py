@@ -237,7 +237,7 @@ def test_recording_configs_merge_the_manifest_default_and_per_file_entries(tmp_p
 
 def test_recording_configs_refuse_to_guess_a_tee_bin(tmp_path):
     (tmp_path / "a.l3dump").write_bytes(b"")
-    with pytest.raises(ValueError, match="tee_bin"):
+    with pytest.raises(ValueError, match="--tee-bin or --tee-range-m"):
         recording_configs(tmp_path)
     assert recording_configs(tmp_path, default_tee_bin=34)[0][1].tee_bin == 34
     assert recording_configs(tmp_path / "missing") == []
@@ -274,6 +274,10 @@ def test_script_needs_a_tee_for_a_bare_file_and_reports_an_empty_directory(tmp_p
     script = _script()
     with pytest.raises(SystemExit):
         script.main([str(tmp_path / "x.l3dump")])
+    (tmp_path / "no_tee.l3dump").write_bytes(b"")
+    with pytest.raises(SystemExit, match="--tee-bin or --tee-range-m"):
+        script.main([str(tmp_path)])
+    (tmp_path / "no_tee.l3dump").unlink()
     assert script.main([str(tmp_path)]) == 1
     assert "no .l3dump" in capsys.readouterr().err
 

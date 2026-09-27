@@ -130,7 +130,10 @@ def main(argv: list[str] | None = None) -> int:
     for text in args.paths:
         path = Path(text).expanduser()
         if path.is_dir():
-            jobs.extend(recording_configs(path, default_tee_bin=tee_bin))
+            try:
+                jobs.extend(recording_configs(path, default_tee_bin=tee_bin))
+            except ValueError as error:
+                raise SystemExit(str(error)) from error
         else:
             if tee_bin is None:
                 raise SystemExit(f"{path}: give --tee-bin or --tee-range-m for a single file")

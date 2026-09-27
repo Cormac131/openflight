@@ -108,7 +108,11 @@ def _collect(args: argparse.Namespace) -> list[tuple[Path, ReplayConfig]]:
     for text in args.paths:
         path = Path(text).expanduser()
         if path.is_dir():
-            for file, config in recording_configs(path, default_tee_bin=tee_bin):
+            try:
+                configs = recording_configs(path, default_tee_bin=tee_bin)
+            except ValueError as error:
+                raise SystemExit(str(error)) from error
+            for file, config in configs:
                 jobs.append((file, ReplayConfig(**{**config.__dict__, **overrides})))
         else:
             if tee_bin is None:
