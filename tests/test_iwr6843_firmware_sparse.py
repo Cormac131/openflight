@@ -292,11 +292,45 @@ def test_tee_scan_reports_static_power_the_trigger_never_sees():
 
 def test_detector_source_is_built_into_the_firmware():
     makefile = (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
+    sources = re.search(r"^SOURCES\s*=(.*)$", makefile, re.MULTILINE).group(1).split()
 
-    assert "l3_trigger.c" in makefile
-    assert "live_selector.c" in makefile
-    assert "track_select.c" in makefile
+    for unit in ("l3_observation.c", "l3_trigger.c", "l3_ball.c", "l3_club_track.c"):
+        assert unit in sources, unit
+    assert "live_selector.c" in sources
+    assert "track_select.c" in sources
     assert '#include "l3_trigger.h"' in _source()
+    assert '#include "l3_club_track.h"' in _source()
+
+
+def test_club_track_rides_the_trigger_pass_and_prints_from_trigger_log():
+    """The observations the trigger scores are extracted once as ranked
+    targets and fed to the persistent club track; nothing is recomputed."""
+    source = _source()
+    consider = _function("static void l3_considerSelfTrigger(")
+
+    update = consider.index("l3_trig_update(&gTrig,")
+    extract = consider.index("l3_obs_extract(&params,")
+    track = consider.index("l3_track_update(&gClubTrack, targets, found, gPreFramesCaptured,")
+    assert update < extract < track
+    assert consider.count("l3_verticalResidual(") == 1, "one residual pass feeds both"
+    assert "gTrig.floor," in consider[extract:track], "targets use the trigger's floor"
+    assert "gClubTrackDest = teeBin;" in consider
+    assert consider.index("gTrigBusy = 0U;") > track, "the track update is inside the busy window"
+
+    assert "l3_track_reset(&gClubTrack);" in _function("static void l3_trigRearm(")
+    configure = _function("static void l3_clubTrackConfigure(")
+    assert "cfg.binWidthM = (float)gTrackRangeResM;" in configure
+    assert "cfg.velocitySpanMps = 2.0F * L3_OBS_WAVELENGTH_M / (4.0F * gTrigLoopPeriodS);" in (
+        configure
+    )
+    assert "l3_clubTrackConfigure();" in _function("static int32_t l3_cli_triggerCfg(")
+
+    log = _function("static int32_t l3_cli_triggerLog(")
+    assert 'strcmp(argv[1], "track") == 0' in log
+    assert "l3_track_format_status(&gClubTrack, gClubTrackDest, line, sizeof(line));" in log
+    assert "l3_track_format_point(&point, gClubTrackDest, line, sizeof(line));" in log
+    assert 'CLI_write("Error: triggerLog [trace|track|clear]\\n");' in log
+    assert "triggerLog [trace|track|clear]: frame log, raw-input trace or club track" in source
 
 
 def test_loop_period_for_doppler_comes_from_the_accepted_profile():

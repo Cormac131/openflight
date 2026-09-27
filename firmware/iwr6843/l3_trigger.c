@@ -88,7 +88,7 @@ static float l3_trig_velocity(const l3_trig_t *trig, const l3_trig_obs_t *obs)
 /* The configured detection statistic of one observation. */
 static float l3_trig_stat(const l3_trig_cfg_t *cfg, const l3_trig_obs_t *obs)
 {
-    return (cfg->stat == L3_TRIG_STAT_PEAK) ? obs->peak : obs->energy;
+    return l3_obs_stat(cfg->stat, obs);
 }
 
 void l3_trig_init(l3_trig_t *trig, const l3_trig_cfg_t *cfg, float loopPeriodS)
@@ -206,32 +206,6 @@ int32_t l3_trig_region(const l3_trig_cfg_t *cfg, uint32_t teeBin, uint32_t windo
     return 1;
 }
 
-/* Median of count energies (count <= L3_TRIG_MAX_BINS). Insertion sort of a
- * copy: the region is a dozen or so bins, so this is cheaper than anything
- * cleverer. */
-static float l3_trig_median(const l3_trig_cfg_t *cfg, const l3_trig_obs_t *obs,
-                            uint32_t count)
-{
-    /* Static: the caller's task stack is small and only one task scores
-     * frames. Not reentrant. */
-    static float sorted[L3_TRIG_MAX_BINS];
-    uint32_t i;
-
-    for (i = 0U; i < count; i++) {
-        float value = l3_trig_stat(cfg, &obs[i]);
-        uint32_t j = i;
-        while (j > 0U && sorted[j - 1U] > value) {
-            sorted[j] = sorted[j - 1U];
-            j--;
-        }
-        sorted[j] = value;
-    }
-    if ((count & 1U) != 0U) {
-        return sorted[count / 2U];
-    }
-    return 0.5F * (sorted[count / 2U - 1U] + sorted[count / 2U]);
-}
-
 static void l3_trig_record(l3_trig_t *trig, uint32_t frame, uint8_t why,
                            uint8_t bin, uint32_t teeBin, const l3_trig_obs_t *obs)
 {
@@ -303,7 +277,6 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t teeBin, uint32_
     uint8_t haveCandidate = 0U;
     uint8_t continuation = 0U;
     uint8_t trackWasActive = (trig->trackBin != L3_TRIG_NO_BIN) ? 1U : 0U;
-    float median;
     float threshold;
     int32_t fired = 0;
 
@@ -315,17 +288,9 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t teeBin, uint32_
     }
     trig->counters[L3_TRIG_COUNT_FRAMES]++;
 
-    /* Adaptive floor: the median of the region is noise even while the club
-     * occupies a few bins of it. The first frame seeds it outright. */
-    median = l3_trig_median(cfg, obs, count);
-    if (trig->floor <= 0.0F) {
-        trig->floor = median;
-    } else {
-        trig->floor += (median - trig->floor) / (float)(1U << L3_TRIG_FLOOR_SHIFT);
-    }
-    if (trig->floor < L3_TRIG_FLOOR_MIN) {
-        trig->floor = L3_TRIG_FLOOR_MIN;
-    }
+    /* Adaptive floor, owned by the observation layer: the median of the
+     * region is noise even while the club occupies a few bins of it. */
+    l3_obs_floor_update(&trig->floor, cfg->stat, obs, count, L3_TRIG_FLOOR_SHIFT);
     threshold = trig->floor * cfg->snr;
     l3_trig_trace(trig, frame, teeBin, firstBin, obs, count);
 

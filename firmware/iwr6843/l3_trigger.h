@@ -25,6 +25,8 @@
 
 #include <stdint.h>
 
+#include "l3_observation.h"
+
 /* Watch-region and gate limits. The region is at most one capture window. */
 #define L3_TRIG_MAX_BINS          64U
 /* Flight-recorder depth: frames with a candidate or an active track. Idle
@@ -65,14 +67,9 @@
 #define L3_TRIG_DEFAULT_MIN_SPEED_MPS 0.0F  /* Doppler gate off until measured */
 #define L3_TRIG_DEFAULT_STAT          L3_TRIG_STAT_PEAK
 
-/* Which per-bin statistic the floor and the candidate threshold use. A fast
- * clubhead can be in a bin for only part of a frame, so the strongest single
- * loop is the sensitive choice for finding out whether the club is seen at
- * all; the energy over every loop is the steadier one once it is. */
-enum {
-    L3_TRIG_STAT_ENERGY = 0,
-    L3_TRIG_STAT_PEAK = 1
-};
+/* The detection statistic is the observation layer's (l3_observation.h). */
+#define L3_TRIG_STAT_ENERGY L3_OBS_STAT_ENERGY
+#define L3_TRIG_STAT_PEAK   L3_OBS_STAT_PEAK
 
 enum {
     L3_TRIG_STATE_IDLE = 0,
@@ -130,16 +127,8 @@ typedef struct {
     float    minSpeedMps;
 } l3_trig_cfg_t;
 
-/* One range bin of one frame, summed over the vertical TX pair and all RX:
- * residual energy over every loop, the strongest single loop's residual
- * power, and the lag-1 residual autocorrelation. */
-typedef struct {
-    float energy;
-    float peak;
-    float loop0;            /* loop 0 alone: the probe the first detector used */
-    float r1Re;
-    float r1Im;
-} l3_trig_obs_t;
+/* One range bin of one frame is the observation layer's l3_bin_obs_t. */
+typedef l3_bin_obs_t l3_trig_obs_t;
 
 /* One traced frame: the region's strongest bin by the configured statistic. */
 typedef struct {

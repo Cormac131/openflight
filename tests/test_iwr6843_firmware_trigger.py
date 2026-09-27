@@ -1,7 +1,8 @@
 """Behavioural tests for the IWR6843 self-trigger detector, firmware/iwr6843/l3_trigger.c.
 
 The detector is plain C with no hardware access, so it is built here with the
-host C compiler and driven through ctypes with synthetic frames: a noise floor
+host C compiler (openflight.iwr6843.firmware_host, which also holds the
+ctypes mirrors) and driven through ctypes with synthetic frames: a noise floor
 across the watch region plus a "clubhead" whose range bin and Doppler are
 chosen per frame. Every test states what a real swing (or non-swing) looks
 like to the radar and asserts the detector's verdict and its telemetry.
@@ -11,23 +12,41 @@ from __future__ import annotations
 
 import ctypes
 import math
-import shutil
-import subprocess
-from pathlib import Path
 
 import pytest
 
-FIRMWARE_DIR = Path(__file__).parents[1] / "firmware" / "iwr6843"
-SOURCE = FIRMWARE_DIR / "l3_trigger.c"
+from openflight.iwr6843.firmware_host import (
+    STAT_ENERGY,
+    STAT_PEAK,
+    TRIG_COUNT_TOTAL,
+    TRIG_LOG_DEPTH,
+    TRIG_MAX_BINS,
+    TRIG_NO_BIN,
+    TRIG_STATE_FIRED,
+    TRIG_STATE_IDLE,
+    TRIG_STATE_TRACKING,
+    TRIG_TRACE_DEPTH,
+    BinObs as Obs,
+    Trig,
+    TrigCfg as Cfg,
+    TrigRecord as Record,
+    TrigTrace as Trace,
+    build_firmware_library,
+    host_compiler,
+)
 
 # Mirror l3_trigger.h.
-MAX_BINS = 64
-LOG_DEPTH = 128
-TRACE_DEPTH = 64
+MAX_BINS = TRIG_MAX_BINS
+LOG_DEPTH = TRIG_LOG_DEPTH
+TRACE_DEPTH = TRIG_TRACE_DEPTH
 TRACE_RATIO = 2.0
-COUNT_TOTAL = 12
-NO_BIN = 0xFF
-STATE_IDLE, STATE_TRACKING, STATE_FIRED = 0, 1, 2
+COUNT_TOTAL = TRIG_COUNT_TOTAL
+NO_BIN = TRIG_NO_BIN
+STATE_IDLE, STATE_TRACKING, STATE_FIRED = (
+    TRIG_STATE_IDLE,
+    TRIG_STATE_TRACKING,
+    TRIG_STATE_FIRED,
+)
 WHY = {
     name: index
     for index, name in enumerate(
@@ -81,190 +100,11 @@ PEAK_FRACTION = 0.25
 LOOP0_FRACTION = 1.0 / 12.0
 
 
-class Cfg(ctypes.Structure):
-    _fields_ = [
-        ("teeBin", ctypes.c_uint32),
-        ("snr", ctypes.c_float),
-        ("trackFrames", ctypes.c_uint32),
-        ("approachBins", ctypes.c_uint32),
-        ("gateBins", ctypes.c_uint32),
-        ("minCoherence", ctypes.c_float),
-        ("minStepBins", ctypes.c_float),
-        ("stat", ctypes.c_uint32),
-        ("minSpeedMps", ctypes.c_float),
-    ]
-
-
-STAT_ENERGY, STAT_PEAK = 0, 1
-
-
-class Obs(ctypes.Structure):
-    _fields_ = [
-        ("energy", ctypes.c_float),
-        ("peak", ctypes.c_float),
-        ("loop0", ctypes.c_float),
-        ("r1Re", ctypes.c_float),
-        ("r1Im", ctypes.c_float),
-    ]
-
-
-class Trace(ctypes.Structure):
-    _fields_ = [
-        ("frame", ctypes.c_uint32),
-        ("gap", ctypes.c_uint16),
-        ("bin", ctypes.c_uint8),
-        ("state", ctypes.c_uint8),
-        ("energy", ctypes.c_float),
-        ("peak", ctypes.c_float),
-        ("loop0", ctypes.c_float),
-        ("floor", ctypes.c_float),
-        ("threshold", ctypes.c_float),
-        ("coherencePct", ctypes.c_uint8),
-        ("dest", ctypes.c_uint8),
-    ]
-
-
-class Record(ctypes.Structure):
-    _fields_ = [
-        ("frame", ctypes.c_uint32),
-        ("gap", ctypes.c_uint16),
-        ("state", ctypes.c_uint8),
-        ("why", ctypes.c_uint8),
-        ("bin", ctypes.c_uint8),
-        ("age", ctypes.c_uint8),
-        ("velocityCms", ctypes.c_int16),
-        ("energy", ctypes.c_float),
-        ("peak", ctypes.c_float),
-        ("floor", ctypes.c_float),
-        ("coherencePct", ctypes.c_uint8),
-        ("dest", ctypes.c_uint8),
-    ]
-
-
-class Trig(ctypes.Structure):
-    _fields_ = [
-        ("cfg", Cfg),
-        ("state", ctypes.c_uint8),
-        ("floor", ctypes.c_float),
-        ("loopPeriodS", ctypes.c_float),
-        ("trackBin", ctypes.c_uint8),
-        ("trackStartBin", ctypes.c_uint8),
-        ("trackAge", ctypes.c_uint8),
-        ("trackMisses", ctypes.c_uint8),
-        ("trackStartFrame", ctypes.c_uint32),
-        ("counters", ctypes.c_uint32 * COUNT_TOTAL),
-        ("quietSince", ctypes.c_uint32),
-        ("logNext", ctypes.c_uint32),
-        ("logCount", ctypes.c_uint32),
-        ("log", Record * LOG_DEPTH),
-        ("traceQuiet", ctypes.c_uint32),
-        ("traceNext", ctypes.c_uint32),
-        ("traceCount", ctypes.c_uint32),
-        ("trace", Trace * TRACE_DEPTH),
-        ("maxFirstBin", ctypes.c_uint32),
-        ("maxBins", ctypes.c_uint32),
-        ("maxStat", ctypes.c_float * MAX_BINS),
-        ("maxFrame", ctypes.c_uint32 * MAX_BINS),
-    ]
-
-
 @pytest.fixture(scope="module")
 def lib(tmp_path_factory):
-    compiler = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
-    if compiler is None:
-        pytest.skip("no C compiler for the firmware detector")
-    out = tmp_path_factory.mktemp("l3_trigger") / "l3_trigger.so"
-    subprocess.run(
-        [
-            compiler,
-            "-std=c99",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-shared",
-            "-fPIC",
-            "-O1",
-            "-o",
-            str(out),
-            str(SOURCE),
-            "-lm",
-        ],
-        check=True,
-        cwd=FIRMWARE_DIR,
-    )
-    library = ctypes.CDLL(str(out))
-    library.l3_trig_cfg_defaults.argtypes = [ctypes.POINTER(Cfg)]
-    library.l3_trig_cfg_check.argtypes = [ctypes.POINTER(Cfg)]
-    library.l3_trig_cfg_check.restype = ctypes.c_int32
-    library.l3_trig_init.argtypes = [ctypes.POINTER(Trig), ctypes.POINTER(Cfg), ctypes.c_float]
-    library.l3_trig_rearm.argtypes = [ctypes.POINTER(Trig)]
-    library.l3_trig_region.argtypes = [
-        ctypes.POINTER(Cfg),
-        ctypes.c_uint32,  # tee (global)
-        ctypes.c_uint32,  # window start (global)
-        ctypes.c_uint32,  # bins in the window
-        ctypes.POINTER(ctypes.c_uint32),
-        ctypes.POINTER(ctypes.c_uint32),
-    ]
-    library.l3_trig_region.restype = ctypes.c_int32
-    library.l3_trig_update.argtypes = [
-        ctypes.POINTER(Trig),
-        ctypes.c_uint32,  # frame
-        ctypes.c_uint32,  # tee (global)
-        ctypes.c_uint32,  # global bin of obs[0]
-        ctypes.POINTER(Obs),
-        ctypes.c_uint32,
-    ]
-    library.l3_trig_update.restype = ctypes.c_int32
-    library.l3_trig_log_count.argtypes = [ctypes.POINTER(Trig)]
-    library.l3_trig_log_count.restype = ctypes.c_uint32
-    library.l3_trig_log_get.argtypes = [
-        ctypes.POINTER(Trig),
-        ctypes.c_uint32,
-        ctypes.POINTER(Record),
-    ]
-    library.l3_trig_log_get.restype = ctypes.c_int32
-    for name in ("l3_trig_format_summary", "l3_trig_format_config"):
-        getattr(library, name).argtypes = [ctypes.POINTER(Trig), ctypes.c_char_p, ctypes.c_uint32]
-        getattr(library, name).restype = ctypes.c_int32
-    library.l3_trig_format_record.argtypes = [
-        ctypes.POINTER(Record),
-        ctypes.c_char_p,
-        ctypes.c_uint32,
-    ]
-    library.l3_trig_format_record.restype = ctypes.c_int32
-    library.l3_trig_why_name.argtypes = [ctypes.c_uint8]
-    library.l3_trig_why_name.restype = ctypes.c_char_p
-    library.l3_trig_trace_clear.argtypes = [ctypes.POINTER(Trig)]
-    library.l3_trig_trace_count.argtypes = [ctypes.POINTER(Trig)]
-    library.l3_trig_trace_count.restype = ctypes.c_uint32
-    library.l3_trig_trace_get.argtypes = [
-        ctypes.POINTER(Trig),
-        ctypes.c_uint32,
-        ctypes.POINTER(Trace),
-    ]
-    library.l3_trig_trace_get.restype = ctypes.c_int32
-    library.l3_trig_format_trace_header.argtypes = [
-        ctypes.POINTER(Trig),
-        ctypes.c_char_p,
-        ctypes.c_uint32,
-    ]
-    library.l3_trig_format_trace_header.restype = ctypes.c_int32
-    library.l3_trig_format_trace.argtypes = [
-        ctypes.POINTER(Trace),
-        ctypes.c_char_p,
-        ctypes.c_uint32,
-    ]
-    library.l3_trig_format_trace.restype = ctypes.c_int32
-    library.l3_trig_format_maxhold.argtypes = [
-        ctypes.POINTER(Trig),
-        ctypes.c_uint32,
-        ctypes.c_uint32,
-        ctypes.c_char_p,
-        ctypes.c_uint32,
-    ]
-    library.l3_trig_format_maxhold.restype = ctypes.c_int32
-    return library
+    if host_compiler() is None:
+        pytest.skip("no C compiler for the firmware modules")
+    return build_firmware_library(tmp_path_factory.mktemp("l3_host"))
 
 
 def make_cfg(lib, **overrides) -> Cfg:

@@ -55,6 +55,7 @@
 #include "track_select.h"
 #include "l3_trigger.h"
 #include "l3_ball.h"
+#include "l3_club_track.h"
 
 #if defined(L3_DUMP_IQ8) || defined(L3_RING_IQ8)
 #define L3_ANY_IQ8 1
@@ -377,6 +378,13 @@ static volatile uint8_t  gBallBusy;
  * uncapturable while it is being proven. */
 static volatile uint8_t  gTrigDestBall;
 static volatile uint32_t gTrigFallbackFrames;
+/* Club track (l3_club_track.c) over the observation layer's targets, fed
+ * the same per-bin observations the trigger scores, every frame. Reset with
+ * the ring; "triggerLog track" prints it. */
+static l3_club_track_t   gClubTrack;
+static uint32_t          gClubTrackDest;
+/* trackCfg's range resolution, defined with the on-chip selector below. */
+static double            gTrackRangeResM;
 static volatile uint8_t  gTriggerPhase;
 static volatile uint32_t gTriggerTeePower;
 static volatile uint8_t  gTriggerDebug;
@@ -2795,6 +2803,24 @@ static void l3_noteTrigger(uint8_t phase, float tee)
 static void l3_trigRearm(void)
 {
     l3_trig_rearm(&gTrig);
+    l3_track_reset(&gClubTrack);
+}
+
+/* The club track's configuration follows the trigger's arm: statistic and
+ * snr for target extraction, the range resolution trackCfg supplied (else the
+ * 6 m / 128 default) for metres and m/s. */
+static void l3_clubTrackConfigure(void)
+{
+    l3_track_cfg_t cfg;
+
+    l3_track_cfg_defaults(&cfg);
+    if (gTrackRangeResM > 0.0) {
+        cfg.binWidthM = (float)gTrackRangeResM;
+    }
+    if (gTrigLoopPeriodS > 0.0F) {
+        cfg.velocitySpanMps = 2.0F * L3_OBS_WAVELENGTH_M / (4.0F * gTrigLoopPeriodS);
+    }
+    l3_track_init(&gClubTrack, &cfg);
 }
 
 /* Every other completed pre-trigger slot: the static power of the whole
@@ -2876,6 +2902,23 @@ static void l3_considerSelfTrigger(uint32_t slot)
     gTrig.loopPeriodS = gTrigLoopPeriodS;
     fired = l3_trig_update(&gTrig, gPreFramesCaptured, teeBin, gFrameBinStart[slot] + first,
                            obs, count);
+    {
+        /* The same observations, as ranked targets, into the club track. */
+        static l3_target_obs_t targets[L3_OBS_MAX_TARGETS];
+        l3_obs_params_t params;
+        uint32_t found;
+
+        params.stat = gTrigCfg.stat;
+        params.snr = gTrigCfg.snr;
+        params.loopPeriodS = gTrigLoopPeriodS;
+        found = l3_obs_extract(&params, gPreFramesCaptured,
+                               gPreFramesCaptured * (uint32_t)gFramePeriodUs,
+                               gFrameBinStart[slot] + first, obs, count, gTrig.floor,
+                               targets, L3_OBS_MAX_TARGETS);
+        gClubTrackDest = teeBin;
+        (void)l3_track_update(&gClubTrack, targets, found, gPreFramesCaptured,
+                              gPreFramesCaptured * (uint32_t)gFramePeriodUs);
+    }
     gTrigBusy = 0U;
     if (!fired) {
         l3_noteTrigger(gTrig.state == L3_TRIG_STATE_TRACKING ? 7U : 5U, gTrig.floor);
@@ -3404,6 +3447,7 @@ static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
     }
     gTrigCfg = cfg;
     l3_trig_init(&gTrig, &gTrigCfg, gTrigLoopPeriodS);
+    l3_clubTrackConfigure();
     gTriggerEnabled = (cfg.trackFrames != 0U) ? 1U : 0U;
     CLI_write("Done\n");
     return 0;
@@ -3438,7 +3482,7 @@ static void l3_writeTriggerTrace(char *line, uint32_t cap)
     }
 }
 
-/* CLI "triggerLog [trace|clear]". Bare: the detector's state and counters,
+/* CLI "triggerLog [trace|track|clear]". Bare: the detector's state and counters,
  * its configuration, then one line per logged frame, oldest first. Only
  * frames with a candidate or an active track are logged; gap= counts the
  * quiet frames before each. "trace" prints the raw-input trace instead (see
@@ -3463,8 +3507,21 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         CLI_write("Done\n");
         return 0;
     }
+    if (argc == 2 && strcmp(argv[1], "track") == 0) {
+        /* The club track: status with the fitted speed, then every held
+         * point oldest first, distances in bins short of the destination. */
+        l3_track_point_t point;
+        (void)l3_track_format_status(&gClubTrack, gClubTrackDest, line, sizeof(line));
+        CLI_write("%s\n", line);
+        for (index = 0U; l3_track_point(&gClubTrack, index, &point); index++) {
+            (void)l3_track_format_point(&point, gClubTrackDest, line, sizeof(line));
+            CLI_write("%s\n", line);
+        }
+        CLI_write("Done\n");
+        return 0;
+    }
     if (argc != 1) {
-        CLI_write("Error: triggerLog [trace|clear]\n");
+        CLI_write("Error: triggerLog [trace|track|clear]\n");
         return -1;
     }
     (void)l3_trig_format_summary(&gTrig, line, sizeof(line));
@@ -4473,7 +4530,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
         "ball [status] | ball scan <firstBin> <count> | ball cfg <enable> <follow> [...]";
     cliCfg.tableEntry[18].cmdHandlerFxn = l3_cli_ball;
     cliCfg.tableEntry[17].cmd           = "triggerLog";
-    cliCfg.tableEntry[17].helpString    = "triggerLog [trace|clear]: detector frame log or raw-input trace";
+    cliCfg.tableEntry[17].helpString    = "triggerLog [trace|track|clear]: frame log, raw-input trace or club track";
     cliCfg.tableEntry[17].cmdHandlerFxn = l3_cli_triggerLog;
     CLI_open(&cliCfg);
 }
