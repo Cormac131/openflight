@@ -131,8 +131,8 @@ def test_frame_window_and_timestamps_prefer_the_per_frame_metadata():
     }
     assert frame_window(timed, 2) == (47, 40)
     assert frame_timestamps_us(timed) == (0, 3000, 15000)
-    # A pre-version-3 header has no period: the host's 4 ms fallback applies.
-    assert frame_timestamps_us({**fixed, "frame_period_us": 0}) == (0, 4000, 8000)
+    # A pre-version-3 header has no period: the host's 12 ms fallback applies.
+    assert frame_timestamps_us({**fixed, "frame_period_us": 0}) == (0, 12000, 24000)
 
 
 # The club-only synth has no ball: its club keeps going through the tee, so

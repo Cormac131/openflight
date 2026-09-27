@@ -135,16 +135,16 @@ def frame_window(meta: dict, frame: int) -> tuple[int, int]:
     return int(start), int(count)
 
 
-# Frame period assumed for dumps whose header predates the field (version < 3),
-# the same fallback shot.py uses.
-FALLBACK_FRAME_PERIOD_US = 4000
+# Frame period assumed for dumps whose header predates the field (version < 3):
+# shot.DEFAULT_FRAME_PERIOD_S, the 12 ms frames that firmware ran.
+FALLBACK_FRAME_PERIOD_US = 12000
 
 
 def frame_timestamps_us(meta: dict) -> tuple[int, ...]:
     """Microseconds of each frame from the oldest retained one, as the firmware counts them.
 
     Timed formats carry per-frame offsets; older ones a frame period; the
-    oldest neither, and get the fallback so the fits have a time axis.
+    oldest neither, and get the 12 ms fallback so the fits have a time axis.
     """
     offsets = meta.get("frame_time_offsets_us")
     if offsets:
