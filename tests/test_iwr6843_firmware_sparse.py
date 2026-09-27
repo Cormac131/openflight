@@ -248,7 +248,7 @@ def test_trigger_log_serves_the_raw_input_trace_and_its_clear():
     assert "l3_trig_format_trace_header(&gTrig" in trace
     assert "l3_trig_format_maxhold(&gTrig, index, 8U" in trace
     assert "l3_trig_format_trace(&entry" in trace
-    assert "tableEntry[18]" not in source, "the CLI table is near the SDK's command limit"
+    assert "tableEntry[19]" not in source, "the CLI table is at the SDK's command limit"
     assert "obs->loop0 = loopPower[0];" in _function("static void l3_verticalResidual(")
 
 
@@ -264,6 +264,27 @@ def test_sensor_stop_takes_a_self_trigger_freeze_instead_of_closing_over_it():
 def test_doppler_speed_gate_is_optional_and_rides_the_same_pass():
     cfg = _function("static int32_t l3_cli_triggerCfg(")
     assert "cfg.minSpeedMps = strtof(argv[9], &end);" in cfg
+
+
+def test_tee_scan_reports_static_power_the_trigger_never_sees():
+    """A stationary ball is exactly what MTI removes; teeScan reads it back raw."""
+    source = _source()
+    static = _function("static float l3_verticalStaticPower(")
+    scan = _function("static int32_t l3_cli_teeScan(")
+
+    assert "meanIm" not in static and "meanRe" not in static, "no mean subtraction: static power"
+    assert "total += im * im + re * re;" in static
+    assert "return (samples > 0U) ? (total / (float)samples) : 0.0F;" in static
+    assert (
+        scan.index("l3_sparseFreeze()")
+        < scan.index("l3_verticalStaticPower(")
+        < scan.index("return l3_sparseRearm();")
+    )
+    assert "if (window.slots[frame] >= gCapturePlan.preFrames)" in scan, "pre frames only"
+    assert 'CLI_write("teescan frames=%u loops=%u first=%u count=%u start=%u\\n"' in scan
+    assert 'CLI_write("bin=%u power=%u\\n"' in scan
+    assert 'cliCfg.tableEntry[18].cmd           = "teeScan";' in source
+    assert "tableEntry[19]" not in source
 
 
 def test_detector_source_is_built_into_the_firmware():

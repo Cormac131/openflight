@@ -2632,6 +2632,42 @@ static void l3_verticalPowerLoops(uint32_t slot, uint32_t localBin, float *out)
     l3_verticalResidual(slot, localBin, out, NULL);
 }
 
+/* Static (non-MTI) power of one bin: mean |I + jQ|^2 per complex sample over
+ * every loop of the vertical TX pair and all RX. The residual above removes
+ * exactly this, so it is the view of a stationary ball on the tee that the
+ * trigger never sees; teeScan reports it so a ball's presence and range bin
+ * can be proved before any swing is judged. Diagnostic only. */
+static float l3_verticalStaticPower(uint32_t slot, uint32_t localBin)
+{
+    const int16_t *frame = (const int16_t *)&g_ring[gFrameOffset[slot]];
+    uint32_t binCount = gFrameBinCount[slot];
+    uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
+    uint32_t loops = gCapturePlan.loops;
+    uint32_t loopStride = ntx * N_RX * binCount * 2U;
+    float total = 0.0F;
+    uint32_t samples = 0U;
+    uint32_t tx;
+
+    for (tx = 0U; tx < ntx; tx++) {
+        uint32_t rx;
+        if (ntx == 3U && tx == 1U) {
+            continue;
+        }
+        for (rx = 0U; rx < N_RX; rx++) {
+            const int16_t *sample = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U];
+            uint32_t loop;
+            for (loop = 0U; loop < loops; loop++) {
+                float im = (float)sample[0];
+                float re = (float)sample[1];
+                total += im * im + re * re;
+                sample += loopStride;
+                samples++;
+            }
+        }
+    }
+    return (samples > 0U) ? (total / (float)samples) : 0.0F;
+}
+
 /* --- CLI notices from the detect task ----------------------------------------
  * The detect task runs below the CLI task, so it must not write the CLI UART
  * itself: a host command arriving mid-line preempts it and the CLI task's
@@ -3415,6 +3451,71 @@ static int32_t l3_cli_debugCfg(int32_t argc, char *argv[])
     }
     CLI_write("Done\n");
     return 0;
+}
+
+/* CLI "teeScan <firstBin> <count>": freeze at the next frame boundary,
+ * report the static power of <count> local bins from <firstBin>, averaged
+ * over every pre-trigger frame in the ring, then rearm. Values are the mean
+ * |I + jQ|^2 per complex sample (vertical TX pair, all RX, all loops), so
+ * scans of different depths compare directly; the host averages repeated
+ * scans for a longer baseline. Bins outside the window read 0. IQ16 only. */
+static int32_t l3_cli_teeScan(int32_t argc, char *argv[])
+{
+    static float power[L3_RING_MAX_BINS];
+    l3_sparse_window_t window;
+    unsigned long first;
+    unsigned long count;
+    char *end;
+    uint32_t bin;
+    uint32_t frame;
+    uint32_t preFrames = 0U;
+
+    if (argc != 3) {
+        CLI_write("Error: teeScan <firstBin> <count>\n");
+        return -1;
+    }
+    first = strtoul(argv[1], &end, 10);
+    if (*end != '\0' || first >= L3_RING_MAX_BINS) {
+        CLI_write("Error: teeScan first bin\n");
+        return -1;
+    }
+    count = strtoul(argv[2], &end, 10);
+    if (*end != '\0' || count == 0UL || first + count > L3_RING_MAX_BINS) {
+        CLI_write("Error: teeScan count\n");
+        return -1;
+    }
+    if (l3_sparseFreeze() != 0) {
+        return -1;
+    }
+    l3_sparseWindow(&window);
+    for (bin = 0U; bin < (uint32_t)count; bin++) {
+        power[bin] = 0.0F;
+    }
+    /* Pre-trigger slots only: post slots may hold another window. */
+    for (frame = 0U; frame < window.nFrames; frame++) {
+        if (window.slots[frame] >= gCapturePlan.preFrames) {
+            continue;
+        }
+        preFrames++;
+        for (bin = 0U; bin < (uint32_t)count; bin++) {
+            uint32_t localBin = (uint32_t)first + bin;
+            if (localBin < window.counts[frame]) {
+                power[bin] += l3_verticalStaticPower(window.slots[frame], localBin);
+            }
+        }
+    }
+    CLI_write("teescan frames=%u loops=%u first=%u count=%u start=%u\n",
+              (unsigned)preFrames, (unsigned)gCapturePlan.loops,
+              (unsigned)first, (unsigned)count,
+              (unsigned)(window.nFrames ? window.starts[0] : 0U));
+    for (bin = 0U; bin < (uint32_t)count; bin++) {
+        float mean = (preFrames > 0U) ? (power[bin] / (float)preFrames) : 0.0F;
+        if (mean > 4.0e9F) {
+            mean = 4.0e9F;
+        }
+        CLI_write("bin=%u power=%u\n", (unsigned)((uint32_t)first + bin), (unsigned)mean);
+    }
+    return l3_sparseRearm();
 }
 
 /* CLI "stats": report capture counters (diagnostic). */
@@ -4210,6 +4311,11 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[16].cmd           = "l3release";
     cliCfg.tableEntry[16].helpString    = "Rearm a self-trigger freeze without streaming";
     cliCfg.tableEntry[16].cmdHandlerFxn = l3_cli_release;
+    /* Entries 0..18 plus the mmWave extension's commands must fit the SDK's
+     * CLI_MAX_CMD; keep new diagnostics as sub-modes of existing commands. */
+    cliCfg.tableEntry[18].cmd           = "teeScan";
+    cliCfg.tableEntry[18].helpString    = "teeScan <firstBin> <count>: static power per bin, pre frames averaged";
+    cliCfg.tableEntry[18].cmdHandlerFxn = l3_cli_teeScan;
     cliCfg.tableEntry[17].cmd           = "triggerLog";
     cliCfg.tableEntry[17].helpString    = "triggerLog [trace|clear]: detector frame log or raw-input trace";
     cliCfg.tableEntry[17].cmdHandlerFxn = l3_cli_triggerLog;

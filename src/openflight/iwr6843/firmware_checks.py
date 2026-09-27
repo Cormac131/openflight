@@ -1513,6 +1513,7 @@ COMMANDS_COVERED = frozenset(
         "debugCfg",
         "l3release",
         "triggerLog",
+        "teeScan",
     }
 )
 
