@@ -20,6 +20,7 @@ void l3_track_cfg_defaults(l3_track_cfg_t *cfg)
     cfg->weightRange = 1.0F;     /* one bin of range error ... */
     cfg->weightVelocity = 1.0F;  /* ... equals a full wrap of Doppler ... */
     cfg->weightQuality = 1.0F;   /* ... equals a target of no confidence */
+    cfg->weightStrength = 0.5F;  /* prefer targets with higher MTI-residual SNR */
     cfg->velocitySpanMps = 2.0F * L3_OBS_WAVELENGTH_M / (4.0F * 135.0e-6F);
     l3_cal_identity(&cfg->cal, L3_CAL_MAX_VIRTUAL);
     cfg->minAcquireDopplerMps = 1.0F;
@@ -153,6 +154,7 @@ static void l3_track_countBin(l3_club_track_t *track, float rangeBin, int32_t fi
     }
 }
 
+
 /* Forget the track, remembering its last return so acquisition does not take
  * it straight back. */
 static void l3_track_release(l3_club_track_t *track)
@@ -259,6 +261,8 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
                 targets[i].rangeBin > reach) {
                 continue;
             }
+            /* After impact the club stalls; the same bin for too many consecutive
+             * follow-through frames is a stationary return, not the club. */
             if (cfg->maxSameBinPoints > 0U &&
                 l3_track_roundBin(targets[i].rangeBin) == track->sameBin &&
                 track->sameBinCount >= cfg->maxSameBinPoints) {
@@ -279,8 +283,15 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
         velocityErr = l3_track_wrapped_diff(targets[i].dopplerAliasMps, last->dopplerAliasMps,
                                            cfg->velocitySpanMps) /
                       ((cfg->velocitySpanMps > 0.0F) ? cfg->velocitySpanMps : 1.0F);
-        score = cfg->weightRange * rangeErr + cfg->weightVelocity * velocityErr +
-                cfg->weightQuality * (1.0F - targets[i].confidence);
+        {
+            /* Prefer targets with stronger MTI residual (higher SNR = more motion).
+             * 1/snr is 0 for a very strong mover and 1 at snr=1 (just above floor). */
+            float strengthMisfit = (targets[i].snr > 0.0F) ? (1.0F / targets[i].snr) : 1.0F;
+
+            score = cfg->weightRange * rangeErr + cfg->weightVelocity * velocityErr +
+                    cfg->weightQuality * (1.0F - targets[i].confidence) +
+                    cfg->weightStrength * strengthMisfit;
+        }
         if (best == NULL || score < bestScore) {
             best = &targets[i];
             bestScore = score;

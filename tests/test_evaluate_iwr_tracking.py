@@ -8,10 +8,12 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from iwr6843_synth import synth_shot_dump
 
 from openflight.iwr6843 import firmware_host as fw
+from openflight.iwr6843.dump import SAMPLE_INT16_IQ, pack_dump
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "analysis" / "evaluate_iwr_tracking.py"
 BIN_M = 6.0 / 128
@@ -114,6 +116,65 @@ def test_compare_names_each_regression(ev):
     assert ev.compare(other, base) == ["captures: 92 vs baseline 93"]
 
 
+def test_a_modern_session_with_a_slant_range_but_no_triggercfg_is_still_a_case(ev, tmp_path):
+    """Regression: real sessions log ``tee_slant_range_m`` (no ``self_trigger``
+    triggerCfg string), which the defaults dict surfaces as ``tee_range_m``.
+    iter_cases must accept that as knowing the gate, not only a raw tee_bin."""
+    dumps = tmp_path / "iwr6843"
+    dumps.mkdir()
+    dump = dumps / "iwr6843_20990101_000000_000_001.l3dump"
+    dump.write_bytes(synth_shot_dump(ball_speed_ms=60.0, tee_range_m=1.372))
+    rows = [
+        {
+            "type": "session_start",
+            "trigger_type": "sound",
+            "config": {"iwr6843": {"tee_slant_range_m": 1.372}},
+        },
+        {
+            "type": "iwr6843_capture",
+            "shot_number": 1,
+            "capture_path": f"/home/pi/{dump.name}",
+            "ball_speed_mph": 60.0 / 0.44704,
+        },
+        {"type": "shot_detected", "shot_number": 1, "club": "Driver"},
+    ]
+    (tmp_path / "session_x.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+    )
+    cases = list(ev.iter_cases([tmp_path]))
+    assert len(cases) == 1 and cases[0].config.tee_bin == 29
+
+
+def test_a_raw_adc_capture_is_skipped_instead_of_crashing_the_batch(ev, tmp_path):
+    """Regression: a raw ADC dump (no range-FFT snapshot) has everything
+    iter_cases wants (OPS speed, a known gate) but replay_dump refuses it.
+    One such capture used to blow up the whole batch; it must be skipped
+    the same way an unparseable header already is."""
+    dumps = tmp_path / "iwr6843"
+    dumps.mkdir()
+    dump = dumps / "iwr6843_20990101_000000_000_001.l3dump"
+    cube = np.zeros((2, 36, 4, 64), dtype=complex)
+    dump.write_bytes(pack_dump(cube, n_tx=3, version=3, sample_fmt=SAMPLE_INT16_IQ))
+    rows = [
+        {
+            "type": "session_start",
+            "trigger_type": "sound",
+            "config": {"iwr6843": {"self_trigger": "triggerCfg 29 6.0 2"}},
+        },
+        {
+            "type": "iwr6843_capture",
+            "shot_number": 1,
+            "capture_path": f"/home/pi/{dump.name}",
+            "ball_speed_mph": 60.0 / 0.44704,
+        },
+        {"type": "shot_detected", "shot_number": 1, "club": "Driver"},
+    ]
+    (tmp_path / "session_x.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+    )
+    assert list(ev.iter_cases([tmp_path])) == []
+
+
 @pytest.mark.skipif(fw.host_compiler() is None, reason="no C compiler for the firmware modules")
 def test_a_synthetic_shot_with_its_session_log_is_scored_end_to_end(ev, tmp_path):
     dumps = tmp_path / "iwr6843"
@@ -152,6 +213,45 @@ def test_a_synthetic_shot_with_its_session_log_is_scored_end_to_end(ev, tmp_path
     assert written["summary"]["captures"] == 1
 
 
+def test_joint_launch_mps_averages_the_confirmed_points_after_the_first(ev):
+    """The first ball point is the from-rest touch, excluded from the average,
+    matching l3_joint_launch's own definition in the firmware."""
+    result = SimpleNamespace(
+        joint_confirmed=True,
+        joint_ball_points=[
+            SimpleNamespace(doppler_mps=0.0),
+            SimpleNamespace(doppler_mps=44.0),
+            SimpleNamespace(doppler_mps=46.0),
+        ],
+    )
+    assert ev.joint_launch_mps(result) == pytest.approx(45.0)
+
+
+def test_joint_launch_mps_is_none_without_confirmation_or_enough_points(ev):
+    unconfirmed = SimpleNamespace(
+        joint_confirmed=False, joint_ball_points=[SimpleNamespace(doppler_mps=44.0)] * 3
+    )
+    assert ev.joint_launch_mps(unconfirmed) is None
+    too_few = SimpleNamespace(
+        joint_confirmed=True, joint_ball_points=[SimpleNamespace(doppler_mps=44.0)]
+    )
+    assert ev.joint_launch_mps(too_few) is None
+
+
+def test_the_cli_passes_the_joint_search_flag_through(ev, monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(ev, "iter_cases", lambda roots: iter([object()]))
+
+    def fake_evaluate(case, *, lib=None, joint_search=False, **_rest):
+        seen.append(joint_search)
+        return ev.Outcome("x", "club", "ok", True, 40.0, 40.0)
+
+    monkeypatch.setattr(ev, "evaluate", fake_evaluate)
+    assert ev.main([str(tmp_path), "--joint-search"]) == 0
+    assert ev.main([str(tmp_path)]) == 0
+    assert seen == [True, False]
+
+
 def test_the_cli_passes_the_ball_search_through(ev, monkeypatch, tmp_path):
     seen = []
     monkeypatch.setattr(ev, "iter_cases", lambda roots: iter([object()]))
@@ -171,7 +271,15 @@ def args_for(ev, *extra):
     """The parsed command line, as main sees it."""
     seen = {}
 
-    def fake_evaluate(case, *, lib=None, ball_hypotheses=None, tuning=None, fast_ball_from_club):
+    def fake_evaluate(
+        case,
+        *,
+        lib=None,
+        ball_hypotheses=None,
+        tuning=None,
+        fast_ball_from_club,
+        joint_search=False,
+    ):
         seen.update(tuning=tuning, from_club=fast_ball_from_club)
         return ev.Outcome("x", "club", "ok", True, 40.0, 40.0)
 

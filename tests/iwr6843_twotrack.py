@@ -71,6 +71,7 @@ class TwoTracks:
     merged: tuple = ()  # post frames where club and ball are one, club-claimed return
     club_visible: bool = True
     extras: list = field(default_factory=list)  # (range bin, stat, speed m/s) returns
+    movers: list = field(default_factory=list)  # (bin at gate, m/s, stat): pre/post moving returns
 
     def _club(self, s: float) -> tuple[float, float]:
         if s < 0.0:
@@ -107,6 +108,9 @@ class TwoTracks:
                 entries.append((ball_bin, self.ball_stat, self.ball_mps, "ball"))
             for bin_, stat, speed in self.extras:
                 entries.append((bin_, stat, speed, "extra"))
+            for bin0, mps, mstat in self.movers:
+                t_gate = (ts - self.gate_us) * 1e-6
+                entries.append((bin0 + mps * t_gate / BIN_M, mstat, mps, "extra"))
             entries.sort(key=lambda e: -e[1])  # strongest first, as l3_obs_extract lists them
             targets = [obs(k, ts, b, st, sp) for b, st, sp, _ in entries]
             kinds = [kind for *_, kind in entries]

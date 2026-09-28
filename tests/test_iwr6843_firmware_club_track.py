@@ -48,6 +48,7 @@ def target(
     confidence: float = 0.9,
     doppler: float = 3.0,  # a mover; acquisition prefers |Doppler| >= 1 m/s
     energy: float = 5000.0,
+    snr: float = 20.0,
 ) -> Target:
     t = Target()
     t.frame = frame
@@ -57,7 +58,7 @@ def target(
     t.energy = energy
     t.peak = energy / 4
     t.stat = t.peak
-    t.snr = 20.0
+    t.snr = snr
     t.coherence = 0.9
     t.dopplerAliasMps = doppler
     t.confidence = confidence
@@ -590,20 +591,19 @@ def _feed_stationary(tr, frames, bin_=43.5, doppler=5.5):
         tr.update(frame, [target(frame, bin_, confidence=0.9, doppler=doppler)])
 
 
-def test_a_third_point_in_the_same_bin_releases_the_track(lib):
+def test_a_third_point_in_the_same_bin_triggers_release(lib):
+    """A third consecutive point in the same bin exceeds the limit: the track
+    is released immediately (not coasted) so the club can be re-acquired from
+    the same frame's other targets without waiting for a drop."""
     tr = Tracker(lib)
     _feed_stationary(tr, range(1, 3))  # two points in bin 44 (43.5 rounds up): allowed
     assert tr.track.active == 1 and tr.track.count == 2
-    assert tr.update(3, [target(3, 43.6, doppler=5.5)]) is False  # a third: not the club
-    assert tr.track.active == 0 and tr.why() == "released"
-    assert tr.track.counters[WHY.index("released")] == 1
-    assert tr.track.releasedValid == 1 and tr.track.releasedBin == pytest.approx(43.6)
-    # The same return is not taken back while it stands there ...
-    assert tr.update(4, [target(4, 44.0, doppler=5.0)]) is False
-    assert tr.why() == "idle"
-    # ... but a club sweeping through its range at another Doppler is.
-    assert tr.update(5, [target(5, 42.0, doppler=-3.0)]) is True
-    assert tr.why() == "acquired" and tr.track.releasedValid == 0
+    # Third offer in same bin: appended then released; a mover well clear of the
+    # released bin (>gateBins=3 away from 44) is re-acquired on the same frame.
+    mover = target(3, 49.0, doppler=5.5)
+    assert tr.update(3, [target(3, 43.6, doppler=5.5), mover]) is True
+    assert tr.why() == "acquired" and tr.points()[0].rangeBin == pytest.approx(49.0)
+    assert tr.track.count == 1  # fresh track, one point
 
 
 def test_the_repeat_count_is_consecutive_and_per_rounded_bin(lib):
@@ -615,17 +615,19 @@ def test_the_repeat_count_is_consecutive_and_per_rounded_bin(lib):
     assert tr.track.counters[WHY.index("released")] == 0 and tr.track.count == 6
 
 
-def test_a_repeat_releases_on_the_frame_the_third_point_arrives(lib):
-    """The check is made as the point is offered, so the new frame's other
-    targets can seed the next track at once."""
+def test_release_lets_a_mover_be_acquired_when_the_decoy_is_stuck(lib):
+    """When the track is released after the same-bin limit, the real club at a
+    higher bin is re-acquired on the same frame rather than waiting for a drop."""
     tr = Tracker(lib)
     for frame, bin_ in enumerate([43.1, 43.9], start=2):  # bins 43, 44
         tr.update(frame, [target(frame, bin_, doppler=5.5)])
     tr.update(4, [target(4, 44.2, doppler=5.5)])  # 44 again: 2 in bin 44, kept
     assert tr.track.active == 1
-    tr.update(5, [target(5, 44.1, doppler=5.4), target(5, 30.4, doppler=7.9)])
-    assert tr.track.counters[WHY.index("released")] == 1
-    assert tr.why() == "acquired" and tr.points()[-1].rangeBin == pytest.approx(30.4)
+    # Frame 5: same-bin 44 is appended (3rd → exceeds limit), track released,
+    # then re-acquired from the moving target at 49 (well clear of released bin 44)
+    # on the same call.
+    assert tr.update(5, [target(5, 44.1, doppler=5.4), target(5, 49.0, doppler=5.5)]) is True
+    assert tr.why() == "acquired" and tr.points()[0].rangeBin == pytest.approx(49.0)
 
 
 @pytest.mark.parametrize("override", [{"maxSameBinPoints": 0}])
@@ -634,6 +636,47 @@ def test_the_repeat_rule_can_be_switched_off(lib, override):
     _feed_stationary(tr, range(1, 20))
     assert tr.track.active == 1 and tr.track.count == 19
     assert tr.track.counters[WHY.index("released")] == 0
+
+
+def test_same_bin_release_without_alternatives_causes_idle_then_reacquisition(lib):
+    """When the track is released and no alternative is available, the track
+    becomes idle (active=0). On the next frame with a moving target it reacquires."""
+    tr = Tracker(lib, maxMisses=3)
+    _feed_stationary(tr, range(1, 3))  # 2 in bin 44: sameBinCount = 2
+    assert tr.track.count == 2
+    # 3rd same-bin: appended, released, no alternative → reacquisition fails → released/idle
+    tr.update(3, [target(3, 43.6, doppler=5.5)])
+    assert tr.track.active == 0 and tr.why() in ("idle", "released")
+    # Next frame: a mover well clear of the released bin (>gateBins=3 away from 44)
+    assert tr.update(4, [target(4, 49.0, doppler=5.5)]) is True
+    assert tr.why() == "acquired"
+
+
+def test_strength_term_prefers_high_snr_target(lib):
+    """With weightStrength > 0 the association score penalises low-SNR targets.
+    Two candidates at the same range, velocity, and confidence: the one with
+    higher SNR (stronger MTI residual) wins.  We distinguish the winner by
+    energy, which is copied verbatim into TrackPoint."""
+    tr = Tracker(lib, weightStrength=1.0)
+    # Establish a track
+    for frame, bin_ in enumerate([30.0, 31.0], start=1):
+        tr.update(frame, [target(frame, bin_)])
+    # Frame 3: two equidistant targets differ only in SNR (and energy as tracer)
+    weak = target(3, 32.0, snr=5.0, energy=100.0)    # strengthMisfit = 1/5  = 0.20
+    strong = target(3, 32.0, snr=50.0, energy=9999.0)  # strengthMisfit = 1/50 = 0.02
+    assert tr.update(3, [weak, strong]) is True
+    # The stronger MTI return wins (lower score)
+    assert tr.points()[-1].energy == pytest.approx(9999.0)
+
+
+def test_strength_term_off_does_not_change_default_selection(lib):
+    """With weightStrength=0 the result is the same as without the term."""
+    tr = Tracker(lib, weightStrength=0.0)
+    for frame, bin_ in enumerate([30.0, 31.0], start=1):
+        tr.update(frame, [target(frame, bin_)])
+    # Frame 3: only one candidate; should associate normally
+    assert tr.update(3, [target(3, 32.0)]) is True
+    assert tr.track.count == 3
 
 
 def test_association_only_takes_the_same_bin_or_higher(lib):
@@ -668,13 +711,17 @@ def test_ascending_can_be_switched_off(lib):
     assert tr.track.count == 3
 
 
-def test_reset_forgets_a_release(lib):
+def test_same_bin_release_sets_released_valid_and_prevents_re_taking_same_bin(lib):
+    """When released due to same-bin excess, releasedValid is set so that
+    reacquisition skips the released bin (preventing an immediate re-grab)."""
     tr = Tracker(lib)
-    _feed_stationary(tr, range(1, 4))
-    assert tr.track.releasedValid == 1
-    lib.l3_track_reset(ctypes.byref(tr.track))
-    assert tr.track.releasedValid == 0
-    assert tr.update(4, [target(4, 43.5, doppler=5.5)]) is True  # may be acquired again
+    _feed_stationary(tr, range(1, 3))  # 2 points in bin 44
+    tr.update(3, [target(3, 43.6, doppler=5.5)])  # 3rd same-bin: released
+    assert tr.track.releasedValid == 1  # release state is set
+    assert tr.track.releasedBin == pytest.approx(44, abs=2)  # last tracked bin
+    # A mover well clear of the released bin (>gateBins=3 away from 44) is acquired
+    assert tr.update(4, [target(4, 49.0, doppler=5.5)]) is True
+    assert tr.why() == "acquired"
 
 
 def _follow(tr, frame, targets):

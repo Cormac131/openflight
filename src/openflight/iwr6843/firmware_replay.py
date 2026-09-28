@@ -287,6 +287,10 @@ class ReplayConfig:
     ball_hypotheses: bool | None = None
     # The Pi detector's rules as ball-track overrides; None keeps the defaults.
     ball_tuning: BallTuning | None = None
+    # Run the joint club/ball path search (l3_joint_search) in parallel with
+    # the legacy ball tracker, host-only.  Results are included in the
+    # ReplayResult as joint_ball_points and joint_club_points.
+    joint_search: bool = False
 
     @property
     def destination(self) -> int:
@@ -419,6 +423,11 @@ class ReplayResult:
     impact: fw.Impact = field(repr=False)
     shot: fw.Shot = field(repr=False)
     ball_track: fw.BallTrack = field(repr=False)
+    # Joint search results (populated only when config.joint_search is True)
+    joint_ball_points: list[PointSummary] = field(default_factory=list)
+    joint_club_points: list[PointSummary] = field(default_factory=list)
+    joint_counters: dict[str, int] = field(default_factory=dict)
+    joint_confirmed: bool = False
 
     @property
     def retain_windows(self) -> list[RetainSummary]:
@@ -748,6 +757,18 @@ def replay_dump(
     launch = fw.Launch()
     ball_points: list[PointSummary] = []
     ball_floor = ctypes.c_float(0.0)  # the post window's own floor, as gBallFloor
+    # Joint search (host-only, optional)
+    joint: fw.Joint | None = None
+    joint_targets = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
+    joint_floor = ctypes.c_float(0.0)
+    if config.joint_search:
+        joint_cfg_s = fw.JointCfg()
+        lib.l3_joint_cfg_defaults(ctypes.byref(joint_cfg_s))
+        joint_cfg_s.binWidthM = bin_width_m
+        joint_cfg_s.velocitySpanMps = track_cfg.velocitySpanMps
+        joint_cfg_s.cal = cal
+        joint = fw.Joint()
+        lib.l3_joint_init(ctypes.byref(joint), ctypes.byref(joint_cfg_s))
     # The destination's direction: the locked ball's static return, else boresight.
     ball_azimuth = 0.0
     ball_elevation = 0.0
@@ -842,6 +863,8 @@ def replay_dump(
                 ctypes.byref(ball_position),
                 timestamp_us,
             )
+            if joint is not None:
+                _joint_arm_from_track(lib, joint, track, timestamp_us)
             forced_in = fw.ShotInput()
             forced_in.ballLocked = 1 if config.dest_bin is not None else 0
             forced_in.ballPosition = ball_position
@@ -880,6 +903,20 @@ def replay_dump(
                     points,
                 )
             )
+            if joint is not None:
+                _joint_post_frame(
+                    lib,
+                    joint,
+                    cube,
+                    frame,
+                    timestamp_us,
+                    window_start,
+                    window_bins,
+                    n_tx,
+                    params,
+                    joint_floor,
+                    joint_targets,
+                )
             continue
         in_window = lib.l3_trig_region(
             ctypes.byref(trig_cfg),
@@ -992,6 +1029,8 @@ def replay_dump(
                 ctypes.byref(ball_position),
                 shot_in.impactTimestampUs,
             )
+            if joint is not None:
+                _joint_arm_from_track(lib, joint, track, shot_in.impactTimestampUs)
         frames.append(
             ReplayFrame(
                 frame,
@@ -1013,7 +1052,10 @@ def replay_dump(
 
     if retain_cfg is not None:
         frames = _attach_retention(frames, retain_windows)
+    if joint is not None:
+        lib.l3_joint_finish(ctypes.byref(joint))
     club_speed, club_slope, club_residual = club_at_impact or _club_fit(lib, track)
+    joint_ball_pts, joint_club_pts = _joint_collect_points(joint) if joint is not None else ([], [])
     return ReplayResult(
         config=config,
         frames=frames,
@@ -1030,6 +1072,14 @@ def replay_dump(
         ball_status=fw.c_text(lib.l3_ball_track_format_status, ctypes.byref(ball_track), cap=240),
         track_counters={name: int(track.counters[i]) for i, name in enumerate(fw.TRACK_WHY_NAMES)},
         trig_counters={name: int(trig.counters[i]) for i, name in enumerate(_TRIG_COUNTERS)},
+        joint_ball_points=joint_ball_pts,
+        joint_club_points=joint_club_pts,
+        joint_counters=(
+            {name: int(joint.counters[i]) for i, name in enumerate(fw.JOINT_CNT_NAMES)}
+            if joint is not None
+            else {}
+        ),
+        joint_confirmed=bool(joint.ballConfirmed) if joint is not None else False,
         speed_mps=club_speed,
         fit_slope_bins_per_s=club_slope,
         fit_residual_bins=club_residual,
@@ -1041,6 +1091,84 @@ def replay_dump(
         shot=shot,
         ball_track=ball_track,
     )
+
+
+def _joint_arm_from_track(lib, joint: fw.Joint, track: fw.ClubTrack, timestamp_us: int) -> None:
+    """Arm the joint search from the current club track at the moment of impact."""
+    if joint.seedValid or track.count == 0:
+        return
+    newest = fw.TrackPoint()
+    lib.l3_track_point(ctypes.byref(track), track.count - 1, ctypes.byref(newest))
+    speed_mps, _slope, _residual = _club_fit(lib, track)
+    kin = fw.JointKin()
+    kin.rangeBin = newest.rangeBin
+    kin.speedMps = speed_mps
+    kin.timestampUs = timestamp_us
+    lib.l3_joint_arm(ctypes.byref(joint), ctypes.byref(kin), timestamp_us)
+
+
+def _joint_post_frame(  # pylint: disable=too-many-arguments
+    lib,
+    joint: fw.Joint,
+    cube,
+    frame: int,
+    timestamp_us: int,
+    window_start: int,
+    window_bins: int,
+    n_tx: int,
+    params: fw.ObsParams,
+    joint_floor: ctypes.c_float,
+    joint_targets: ctypes.Array,
+) -> None:
+    """Feed one post-impact frame to the joint search."""
+    count = min(window_bins, fw.TRIG_MAX_BINS)
+    obs = bin_observations(cube, frame, 0, count, n_tx)
+    joint_params = fw.ObsParams(params.stat, DEFAULT_SNR, params.loopPeriodS, params.subBin)
+    lib.l3_obs_floor_update(ctypes.byref(joint_floor), params.stat, obs, count, FLOOR_SHIFT)
+    floor = joint_floor.value
+    found = lib.l3_obs_extract(
+        ctypes.byref(joint_params),
+        frame,
+        timestamp_us,
+        window_start,
+        obs,
+        count,
+        floor,
+        joint_targets,
+        fw.OBS_MAX_TARGETS,
+    )
+    lib.l3_joint_update(ctypes.byref(joint), frame, timestamp_us, joint_targets, found)
+
+
+def _joint_collect_points(joint: fw.Joint) -> tuple[list[PointSummary], list[PointSummary]]:
+    """Read all finalized club and ball points from the joint search output."""
+    ball_pts: list[PointSummary] = []
+    club_pts: list[PointSummary] = []
+    for i in range(int(joint.ballCount)):
+        pt = joint.ballPoints[i]
+        ball_pts.append(
+            PointSummary(
+                frame=0,
+                timestamp_us=int(pt.timestampUs),
+                range_bin=float(pt.rangeBin),
+                range_m=float(pt.rangeBin) * float(joint.cfg.binWidthM),
+                doppler_mps=float(pt.speedMps),
+                confidence=0.0,
+            )
+        )
+    for i in range(int(joint.clubCount)):
+        pt = joint.clubPoints[i]
+        club_pts.append(
+            PointSummary(
+                frame=0,
+                timestamp_us=int(pt.timestampUs),
+                range_bin=float(pt.rangeBin),
+                range_m=float(pt.rangeBin) * float(joint.cfg.binWidthM),
+                doppler_mps=float(pt.speedMps),
+                confidence=0.0,
+            )
+        )
+    return ball_pts, club_pts
 
 
 def _club_fit(lib, track: fw.ClubTrack) -> tuple[float, float, float]:

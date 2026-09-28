@@ -65,6 +65,7 @@ typedef struct {
     float    weightRange;         /* score = wR * rangeErrBins + ... */
     float    weightVelocity;      /*       + wV * wrapped Doppler diff / span */
     float    weightQuality;       /*       + wQ * (1 - confidence) */
+    float    weightStrength;      /*       + wS * (1 / snr): prefer MTI-strong targets */
     float    velocitySpanMps;     /* Doppler alias span (2 * wavelength / 4T) */
     l3_radar_cal_t cal;           /* attitude, offsets and range bias for positions */
     /* Acquisition prefers a target whose aliased Doppler reads at least this

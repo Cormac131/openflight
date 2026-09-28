@@ -55,6 +55,7 @@ class ViewerOptions:  # pylint: disable=too-many-instance-attributes
     py_level: float = st.DEFAULT_LEVEL
     py_hits: int = st.DEFAULT_HITS
     ball_hypotheses: bool | None = None  # the ball search; None: the firmware default
+    joint_search: bool = False  # run l3_joint_search in parallel (host-only, viz)
 
     @classmethod
     def from_mapping(cls, raw: dict) -> ViewerOptions:
@@ -213,6 +214,7 @@ def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOp
         stop_at_fire=options.stop_at_fire,
         pitch_deg=options.pitch_deg,
         ball_hypotheses=options.ball_hypotheses,
+        joint_search=options.joint_search,
     )
     result = fr.replay_dump(raw, config)
     n_tx = int(meta["n_tx"])
@@ -234,6 +236,10 @@ def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOp
         "watched_peak": watched,
         "points": _jsonable(result.points),
         "ball_points": _jsonable(result.ball_points),
+        "joint_ball_points": _jsonable(result.joint_ball_points),
+        "joint_club_points": _jsonable(result.joint_club_points),
+        "joint_confirmed": result.joint_confirmed,
+        "joint_counters": result.joint_counters,
         "fired_frame": result.fired_frame,
         "geometric_frame": result.geometric_frame,
         "impact_timestamp_us": result.impact_timestamp_us,

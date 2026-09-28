@@ -12,6 +12,7 @@
     --text: #d6dde6; --muted: #8b97a6; --accent: #4dabf7;
     --gate: #ff6b6b; --py: #4dabf7; --freeze: #ffd43b; --geo: #b197fc;
     --club: #69db7c; --ball: #ff922b; --target: #adb5bd;
+    --joint-ball: #f03e3e; --joint-club: #a9e34b;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
@@ -94,6 +95,7 @@
       <label>ball search <select id="ball_hypotheses"><option value="">firmware default</option><option value="true">hypotheses</option><option value="false">legacy</option></select></label>
       <label class="chk"><input type="checkbox" id="impact_armed"> impact armed</label>
       <label class="chk"><input type="checkbox" id="stop_at_fire"> stop at fire</label>
+      <label class="chk"><input type="checkbox" id="joint_search"> joint search</label>
     </div>
     <div class="row"><button id="useFreeze" title="Treat the recorded freeze as impact so the ball tracker runs from it">post = freeze frame</button></div>
 
@@ -173,10 +175,13 @@
 const $ = (s) => document.querySelector(s);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const C = {};
-["gate", "py", "freeze", "geo", "club", "ball", "target", "text", "muted", "line", "panel", "bg"]
+["gate", "py", "freeze", "geo", "club", "ball", "target", "text", "muted", "line", "panel", "bg",
+  "joint-ball", "joint-club"]
   .forEach((k) => (C[k] = css("--" + k)));
+C.jball = C["joint-ball"]; C.jclub = C["joint-club"];
 const OPTS = ["tee_bin", "dest_bin", "snr", "track_frames", "stat", "subbin", "post_from_frame",
-  "pitch_deg", "impact_armed", "stop_at_fire", "tee_range_m", "py_level", "py_hits", "ball_hypotheses"];
+  "pitch_deg", "impact_armed", "stop_at_fire", "tee_range_m", "py_level", "py_hits", "ball_hypotheses",
+  "joint_search"];
 const FORM_DEFAULTS = {};
 OPTS.forEach((k) => { const el = $("#" + k); FORM_DEFAULTS[k] = el.type === "checkbox" ? el.checked : el.value; });
 
@@ -343,6 +348,11 @@ function renderChips() {
     if (F.delivery) out.push(chip(C.club, "delivery", `${fmt(F.delivery.speed_mps)} m/s path ${fmt(F.delivery.path_deg)}° aoa ${fmt(F.delivery.attack_deg)}°`));
     out.push(chip(C.ball, "ball pts", F.ball_points.length));
     if (F.launch) out.push(chip(C.ball, "launch", `${fmt(F.launch.speed_mps)} m/s vla ${fmt(F.launch.vla_deg)}° hla ${fmt(F.launch.hla_deg)}°`));
+    if (F.joint_ball_points && F.joint_ball_points.length) {
+      const confirmed = F.joint_confirmed ? " ✓" : "";
+      out.push(chip(C.jball, "joint ball" + confirmed, F.joint_ball_points.length));
+      out.push(chip(C.jclub, "joint club", F.joint_club_points.length));
+    }
   }
   if (m.temperature_report) out.push(chip(null, "temp", `${m.temperature_report.pm_c}°C`));
   $("#chips").innerHTML = out.join("");
@@ -381,6 +391,10 @@ function render3d() {
     });
     if (F.points.length) traces.push(pts(F.points, "club track", C.club));
     if (F.ball_points.length) traces.push(pts(F.ball_points, "ball track", C.ball));
+    if (F.joint_ball_points && F.joint_ball_points.length)
+      traces.push(pts(F.joint_ball_points, "joint ball", C.jball));
+    if (F.joint_club_points && F.joint_club_points.length)
+      traces.push(pts(F.joint_club_points, "joint club", C.jclub));
   }
   events().forEach((e) => traces.push({
     type: "scatter3d", mode: "lines", name: e.name, x: [x[0], x[x.length - 1]], y: [T(e.f), T(e.f)], z: [zmax + 2, zmax + 2],
@@ -413,7 +427,11 @@ function renderTraj(el) {
       hovertemplate: `${name}<br>%{text}<br>x %{x:.3f} y %{y:.3f} z %{z:.3f} m<extra></extra>`,
     });
   };
-  if (F) { add(F.points, "club track", C.club); add(F.ball_points, "ball track", C.ball); }
+  if (F) {
+    add(F.points, "club track", C.club); add(F.ball_points, "ball track", C.ball);
+    add(F.joint_ball_points, "joint ball", C.jball);
+    add(F.joint_club_points, "joint club", C.jclub);
+  }
   const tee = binM(D.tee_bin);
   traces.push({ type: "scatter3d", mode: "markers+text", name: "tee (boresight)", x: [tee], y: [0], z: [0], text: ["tee"], textposition: "top center", marker: { size: 4, color: C.freeze } });
   Plotly.react(el, traces, layout({
@@ -448,6 +466,10 @@ function renderMap() {
       marker: { size: 7, color }, line: { color, width: 2 }, hovertemplate: `${name} %{x:.3f} m @ %{y:.1f} ms<extra></extra>` });
     if (F.points.length) traces.push(pl(F.points, "club track", C.club));
     if (F.ball_points.length) traces.push(pl(F.ball_points, "ball track", C.ball));
+    if (F.joint_ball_points && F.joint_ball_points.length)
+      traces.push(pl(F.joint_ball_points, "joint ball", C.jball));
+    if (F.joint_club_points && F.joint_club_points.length)
+      traces.push(pl(F.joint_club_points, "joint club", C.jclub));
     const latest = {};
     F.frames.forEach((fr) => (fr.ball_hypotheses || []).forEach((h) => (latest[h.id] = h.points)));
     const hx = [], hy = [];
