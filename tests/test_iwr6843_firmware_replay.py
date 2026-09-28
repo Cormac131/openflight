@@ -775,3 +775,32 @@ def test_an_uncertain_track_keeps_its_time_and_sigma_in_the_summary(lib):
     assert ball.why == "uncertain"
     assert ball.sigma_us is not None and ball.sigma_us > 3000.0 and ball.time_us is not None
     assert result.launch.speed_mps < 60.0, "a two-angle ball track is radial only, never 339 m/s"
+
+
+# --- where the ball tracker is armed ---------------------------------------------
+
+
+@pytest.mark.parametrize("band_bins, arm_bin", [(None, 29.0), (6.0, 35.0)])
+def test_impact_arms_the_ball_tracker_at_the_band_edge_or_the_ball(lib, band_bins, arm_bin):
+    """The IMPACT arm: band on, at the band's far edge (29 + 6); off, at the ball."""
+    raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
+    config = ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN, band_bins=band_bins)
+    result = replay_dump(raw, config, lib=lib)
+    assert result.fired_frame is not None and result.ball_track.armed == 1
+    if band_bins is not None:
+        assert result.band[1] == arm_bin
+    assert result.ball_track.originBin == arm_bin
+    assert f"origin={arm_bin:.2f}" in result.ball_status
+
+
+@pytest.mark.parametrize("band_bins, arm_bin", [(None, 29.0), (6.0, 35.0)])
+def test_a_forced_post_frame_arms_the_ball_tracker_at_the_band_edge_or_the_ball(
+    lib, band_bins, arm_bin
+):
+    """The post_from_frame arm, before the gate could fire: the same rule."""
+    raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
+    config = ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN, band_bins=band_bins, post_from_frame=2)
+    result = replay_dump(raw, config, lib=lib)
+    assert result.fired_frame is None, "only the forced arm ran"
+    assert result.ball_track.armed == 1
+    assert result.ball_track.originBin == arm_bin

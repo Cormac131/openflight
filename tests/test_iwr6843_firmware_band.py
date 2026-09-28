@@ -123,3 +123,45 @@ def test_ball_track_armed_at_band_edge_acquires_a_departing_ball(lib):
         )
     assert acquired
     assert ball.core.count >= 3
+
+
+def depart(lib, b, arm_bin: float, bins) -> fw.BallTrack:
+    """A ball departing through bins (one per 3 ms frame) with the band filter
+    applied, the tracker armed at arm_bin; the tracker after the last frame."""
+    cfg = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
+    ball = fw.BallTrack()
+    lib.l3_ball_track_init(ctypes.byref(ball), ctypes.byref(cfg))
+    origin = fw.Vec3()
+    lib.l3_ball_track_arm(ctypes.byref(ball), arm_bin, ctypes.byref(origin), 0)
+    for frame, bin_ in enumerate(bins, start=1):
+        arr = targets(bin_)
+        arr[0].frame, arr[0].timestampUs, arr[0].confidence = frame, frame * 3000, 0.9
+        arr[0].dopplerAliasMps = 5.0
+        n = lib.l3_band_filter(ctypes.byref(b), arr, 1)
+        lib.l3_ball_track_update_joint(
+            ctypes.byref(ball), arr, n, frame, frame * 3000, fw.TRACK_NO_TARGET
+        )
+    return ball
+
+
+# First seen 2.5 bins past the band's far edge (53), then 2.5 bins a frame:
+# 8.5 bins past the ball at 47, beyond the tracker's 8-bin origin gate.
+FIRST_SEEN_PAST_THE_BAND = (55.5, 58.0, 60.5, 63.0)
+
+
+def test_the_same_ball_is_acquired_when_armed_at_the_band_edge(lib):
+    b = band(lib, 47.0, 6.0)
+    ball = depart(lib, b, b.hiBin, FIRST_SEEN_PAST_THE_BAND)
+    assert ball.confirmed == 1
+    assert ball.core.count == 4
+
+
+def test_armed_at_the_ball_the_band_hides_every_point_its_origin_gate_would_take(lib):
+    """Why the edge matters: armed at the ball (47) the origin gate reaches
+    55, the band hides up to 53, and the ball first shows at 55.5 -- so the
+    departing ball is never acquired."""
+    b = band(lib, 47.0, 6.0)
+    ball = depart(lib, b, 47.0, FIRST_SEEN_PAST_THE_BAND)
+    assert ball.core.count == 0
+    assert ball.confirmed == 0
