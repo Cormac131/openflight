@@ -3,27 +3,43 @@
 ``firmware/iwr6843/l3_result.h`` defines version 1: a fixed 100-byte
 little-endian record of nine metrics (m/s and radians on the wire) each with
 a confidence, validity and quality flag words, the impact time and source,
-the point counts and the smash factor. The firmware prints it as a hex line
-after ``triggerLog result``; this module parses that into measurements the
-UI can label, keeping what was measured apart from what was inferred and
-never turning an invalid or implausible value into a number.
+the point counts and the smash factor. Version 2 appends the impact fit
+(``l3_impact_fit_t``), 64 bytes: the fused verdict and impact time, and each
+of the three tracks' (club in, club out, ball out) own estimate. The firmware
+prints the packet as a hex line after ``triggerLog result``; this module
+parses either version into measurements the UI can label, keeping what was
+measured apart from what was inferred and never turning an invalid or
+implausible value into a number.
 """
 
 from __future__ import annotations
 
 import math
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from openflight.iwr6843 import firmware_host as fw
 
-PACKET = struct.Struct("<II9fII9fIBBBBf")
-assert PACKET.size == fw.RESULT_PACKET_BYTES
+PACKET_V1 = struct.Struct("<II9fII9fIBBBBf")
+IMPACT_FIT = struct.Struct("<BBBBfff" + "BBHfff" * 3)
+PACKET_V2_SIZE = PACKET_V1.size + IMPACT_FIT.size
+assert PACKET_V1.size == fw.RESULT_V1_PACKET_BYTES
+assert PACKET_V2_SIZE == fw.RESULT_PACKET_BYTES
+_SIZES = {1: PACKET_V1.size, 2: PACKET_V2_SIZE}
 
 ANGLE_METRICS = frozenset(
     {"vertical_launch", "horizontal_launch", "club_path", "angle_of_attack", "spin_axis"}
 )
-IMPACT_SOURCES = {0: "none", 1: "gate", 2: "geometry", 3: "both"}
+IMPACT_SOURCES = {
+    0: "none",
+    1: "gate",
+    2: "geometry",
+    3: "both",
+    4: "range",
+    5: "gate+range",
+    6: "geometry+range",
+    7: "gate+geometry+range",
+}
 
 
 @dataclass(frozen=True)
@@ -62,6 +78,7 @@ class ShotResultPacket:
     club_points: int
     ball_points: int
     smash: float | None
+    impact_fit: dict | None = None
 
     def __getitem__(self, name: str) -> Measurement:
         return self.metrics[name]
@@ -100,6 +117,7 @@ class ShotResultPacket:
             "club_points": self.club_points,
             "ball_points": self.ball_points,
             "smash": self.smash,
+            "impact_fit": self.impact_fit,
             "quality": sorted(self.quality),
             "domains": self.domain_confidence,
             "metrics": {
@@ -119,13 +137,18 @@ class ShotResultPacket:
 
 
 def parse_packet(raw: bytes) -> ShotResultPacket:
-    """Decode one packet; raises ValueError on a wrong size or version."""
-    if len(raw) != PACKET.size:
-        raise ValueError(f"shot result packet is {len(raw)} bytes, expected {PACKET.size}")
-    fields = PACKET.unpack(raw)
-    version, shot_id = fields[0], fields[1]
-    if version != fw.RESULT_VERSION:
-        raise ValueError(f"shot result version {version}, this host reads {fw.RESULT_VERSION}")
+    """Decode one packet, version 1 or 2; raises ValueError on a wrong size or version."""
+    if len(raw) < 4:
+        raise ValueError(f"shot result packet is {len(raw)} bytes")
+    (version,) = struct.unpack_from("<I", raw)
+    if version not in _SIZES:
+        raise ValueError(f"shot result version {version}, this host reads {sorted(_SIZES)}")
+    if len(raw) != _SIZES[version]:
+        raise ValueError(
+            f"shot result v{version} packet is {len(raw)} bytes, expected {_SIZES[version]}"
+        )
+    fields = PACKET_V1.unpack_from(raw)
+    shot_id = fields[1]
     values = fields[2:11]
     valid_flags, quality_flags = fields[11], fields[12]
     confidences = fields[13:22]
@@ -149,7 +172,7 @@ def parse_packet(raw: bytes) -> ShotResultPacket:
             implausible=valid and not _plausible(name, quality_flags),
             fallback=valid and not (quality_flags & fw.QUALITY_FLAGS["ball_locked"]),
         )
-    return ShotResultPacket(
+    packet = ShotResultPacket(
         version=version,
         shot_id=shot_id,
         metrics=metrics,
@@ -161,6 +184,36 @@ def parse_packet(raw: bytes) -> ShotResultPacket:
         ball_points=ball_points,
         smash=smash if smash > 0.0 else None,
     )
+    impact_fit = _impact_fit(IMPACT_FIT.unpack_from(raw, PACKET_V1.size)) if version >= 2 else None
+    return replace(packet, impact_fit=impact_fit)
+
+
+def _impact_fit(fields: tuple) -> dict:
+    """Decode the version-2 tail: the fused verdict and each track's estimate."""
+    verdict, dropped, no_lock, _pad, impact_us, spread_us, dtrig_us = fields[:7]
+    tracks = {}
+    for index, name in enumerate(fw.FIT_TRACK_NAMES):
+        why, points, _pad2, time_us, sigma_us, speed = fields[7 + 6 * index : 13 + 6 * index]
+        why_name = fw.FIT_WHY_NAMES[why] if why < len(fw.FIT_WHY_NAMES) else "?"
+        timed = why_name in ("ok", "dropped", "uncertain")
+        tracks[name] = {
+            "why": why_name,
+            "points": points,
+            "time_us": time_us if timed else None,
+            "sigma_us": sigma_us if timed else None,
+            "speed_mps": speed,
+        }
+    verdict_name = fw.FIT_VERDICT_NAMES[verdict] if verdict < len(fw.FIT_VERDICT_NAMES) else "?"
+    decided = verdict_name not in ("none", "?")
+    return {
+        "verdict": verdict_name,
+        "impact_us": impact_us if decided else None,
+        "spread_us": spread_us,
+        "refined_minus_trigger_us": dtrig_us if decided else None,
+        "dropped": fw.FIT_TRACK_NAMES[dropped] if dropped < len(fw.FIT_TRACK_NAMES) else None,
+        "no_lock": bool(no_lock),
+        "tracks": tracks,
+    }
 
 
 def _angle_bits_for(name: str) -> int:
@@ -206,7 +259,9 @@ def parse_result_reply(reply: str) -> ShotResultPacket | None:
 
 __all__ = [
     "ANGLE_METRICS",
-    "PACKET",
+    "IMPACT_FIT",
+    "PACKET_V1",
+    "PACKET_V2_SIZE",
     "Measurement",
     "ShotResultPacket",
     "parse_hex",

@@ -13,7 +13,8 @@
  *
  * The packet layout is fixed and little-endian (l3_result_serialize writes
  * it byte by byte, so the host's shot_result.py can parse it without knowing
- * the compiler's struct padding). Version 1: see L3_RESULT_PACKET_BYTES.
+ * the compiler's struct padding). Version 1: see L3_RESULT_V1_PACKET_BYTES.
+ * Version 2: version 1's 100 bytes and the impact fit, 64 bytes.
  * Pure C, no hardware.
  */
 #ifndef L3_RESULT_H
@@ -23,11 +24,13 @@
 
 #include "l3_ball_track.h"
 #include "l3_club_track.h"
+#include "l3_impact_fit.h"
 #include "l3_shot.h"
 
-#define L3_RESULT_VERSION      1U
-#define L3_RESULT_METRICS      9U
-#define L3_RESULT_PACKET_BYTES 100U
+#define L3_RESULT_VERSION         2U
+#define L3_RESULT_METRICS         9U
+#define L3_RESULT_V1_PACKET_BYTES 100U
+#define L3_RESULT_PACKET_BYTES    164U
 
 /* Metric indices, also the bit positions of validFlags. */
 enum {
@@ -102,12 +105,15 @@ typedef struct {
     uint8_t  clubPoints;
     uint8_t  ballPoints;
     float    smash;            /* ball speed / club speed, 0 when either is missing */
+    l3_impact_fit_t impactFit;
 } l3_shot_result_t;
 
 /* Assemble the result from the frozen shot, the ball track's launch and the
- * shot's frozen delivery. spin is left invalid until it is measured. */
+ * shot's frozen delivery. spin is left invalid until it is measured. fit may
+ * be NULL, in which case the result carries a reset (all-missing) fit. */
 void l3_result_build(const l3_shot_t *shot, const l3_ball_track_t *ball, const l3_launch_t *launch,
-                     uint32_t shotId, uint8_t ballLocked, l3_shot_result_t *out);
+                     const l3_impact_fit_t *fit, uint32_t shotId, uint8_t ballLocked,
+                     l3_shot_result_t *out);
 /* Little-endian packet, L3_RESULT_PACKET_BYTES long. Returns the bytes written,
  * 0 when cap is too small. */
 uint32_t l3_result_serialize(const l3_shot_result_t *result, uint8_t *out, uint32_t cap);

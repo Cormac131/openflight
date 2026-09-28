@@ -656,15 +656,15 @@ def test_shot_result_parses_the_packet_only_once_the_machine_reached_result(monk
 
     radar = IWR6843Radar.__new__(IWR6843Radar)
     packet = bytearray(fw.RESULT_PACKET_BYTES)
-    packet[0] = 1  # version
+    packet[0] = 2  # version
     packet[4] = 9  # shot id
     packet[92] = 2  # verdict valid (after 2 u32, 9 floats, 2 u32, 9 floats, 1 u32)
     hex_text = packet.hex()
     replies = {
         "triggerLog result": (
-            "triggerLog result\nresult v1 shot=9 verdict=valid valid=0x0 quality=0x0 impact=0 "
+            "triggerLog result\nresult v2 shot=9 verdict=valid valid=0x0 quality=0x0 impact=0 "
             f"source=none club=0 ball=0 smash=0.00 ready=1\n  ball_speed=- conf=0.00 flags=none\n"
-            f"packet {hex_text[:100]}\npacket+ {hex_text[100:]}\nDone\nl3dump:/>"
+            f"packet {hex_text[:164]}\npacket+ {hex_text[164:]}\nDone\nl3dump:/>"
         ),
         "triggerLog shot": (
             "triggerLog shot\nshot state=ready since=1 impact=- source=none "

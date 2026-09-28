@@ -136,9 +136,10 @@ BALL_TRACK_WHY_NAMES = (
 )
 
 # l3_result.h
-RESULT_VERSION = 1
+RESULT_VERSION = 2
 RESULT_METRICS = 9
-RESULT_PACKET_BYTES = 100
+RESULT_V1_PACKET_BYTES = 100
+RESULT_PACKET_BYTES = 164
 RESULT_METRIC_NAMES = (
     "ball_speed",
     "vertical_launch",
@@ -1019,6 +1020,7 @@ class ShotResult(ctypes.Structure):
         ("clubPoints", ctypes.c_uint8),
         ("ballPoints", ctypes.c_uint8),
         ("smash", ctypes.c_float),
+        ("impactFit", ImpactFit),
     ]
 
 
@@ -1392,7 +1394,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_launch_format": ([_P(Launch), *_TEXT], ctypes.c_int32),
     # l3_result.h
     "l3_result_build": (
-        [_P(Shot), _P(BallTrack), _P(Launch), _U32, ctypes.c_uint8, _P(ShotResult)],
+        [_P(Shot), _P(BallTrack), _P(Launch), _P(ImpactFit), _U32, ctypes.c_uint8, _P(ShotResult)],
         None,
     ),
     "l3_result_serialize": ([_P(ShotResult), ctypes.c_char_p, _U32], _U32),
@@ -1632,6 +1634,7 @@ __all__ = [
     "RESULT_METRIC_NAMES",
     "RESULT_METRICS",
     "RESULT_PACKET_BYTES",
+    "RESULT_V1_PACKET_BYTES",
     "RESULT_VERDICT_NAMES",
     "RESULT_VERSION",
     "Measurement",

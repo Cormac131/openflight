@@ -3738,7 +3738,8 @@ static void l3_considerBallTrack(uint32_t slot)
     }
     if (gShot.state == L3_SHOT_RESULT && !gShotResultReady) {
         l3_impactFitRun();
-        l3_result_build(&gShot, &gBallTrack, &gLaunch, ++gShotId, gTrigDestBall, &gShotResult);
+        l3_result_build(&gShot, &gBallTrack, &gLaunch, &gImpactFit, ++gShotId, gTrigDestBall,
+                        &gShotResult);
         gShotResultReady = 1U;
     }
 }
@@ -4665,8 +4666,9 @@ static void l3_writeTriggerTrace(char *line, uint32_t cap)
  * mid-print can show twice or not at all. */
 static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
 {
-    /* Static, not on the CLI task's small stack. */
-    static char line[160];
+    /* Static, not on the CLI task's small stack. Must hold at least
+     * L3_RESULT_PACKET_BYTES + 1 for the "result" packet's first half. */
+    static char line[192];
     l3_trig_record_t record;
     uint32_t count;
     uint32_t index;

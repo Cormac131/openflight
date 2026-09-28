@@ -11,6 +11,7 @@ from __future__ import annotations
 import ctypes
 import json
 import math
+import struct
 
 import pytest
 
@@ -92,6 +93,7 @@ def build(lib, shot, ball, launch, *, shot_id=3, locked=True) -> fw.ShotResult:
         ctypes.byref(shot),
         ctypes.byref(ball),
         ctypes.byref(launch),
+        None,
         shot_id,
         1 if locked else 0,
         ctypes.byref(out),
@@ -105,7 +107,7 @@ def quality(result) -> set[str]:
 
 def test_a_complete_shot_is_valid_with_every_core_metric_measured(lib):
     result = build(lib, make_shot(lib), make_ball(lib), make_launch())
-    assert result.version == 1 and result.shotId == 3
+    assert result.version == 2 and result.shotId == 3
     assert fw.RESULT_VERDICT_NAMES[result.verdict] == "valid"
     for name in (
         "ball_speed",
@@ -233,7 +235,7 @@ def test_names_and_text_formats(lib):
         assert lib.l3_result_verdict_name(index).decode() == name
     result = build(lib, make_shot(lib), make_ball(lib), make_launch())
     text = fw.c_text(lib.l3_result_format, ctypes.byref(result), cap=240)
-    assert text.startswith("result v1 shot=3 verdict=valid valid=0x")
+    assert text.startswith("result v2 shot=3 verdict=valid valid=0x")
     assert " impact=23218 source=geometry club=7 ball=6 smash=1.50" in text
     speed = fw.c_text(lib.l3_result_format_metric, ctypes.byref(result), M["ball_speed"])
     assert speed == "  ball_speed=60.00 conf=0.90 flags=measured"
@@ -248,13 +250,13 @@ def test_names_and_text_formats(lib):
     assert rng.endswith("flags=inferred,tee")
 
 
-def test_packet_is_one_hundred_little_endian_bytes_the_host_parses_back(lib):
+def test_packet_is_164_little_endian_bytes_the_host_parses_back(lib):
     result = build(lib, make_shot(lib), make_ball(lib), make_launch(hla_deg=-1.5), shot_id=7)
     buffer = ctypes.create_string_buffer(fw.RESULT_PACKET_BYTES)
-    assert lib.l3_result_serialize(ctypes.byref(result), buffer, fw.RESULT_PACKET_BYTES) == 100
-    assert lib.l3_result_serialize(ctypes.byref(result), buffer, 99) == 0
+    assert lib.l3_result_serialize(ctypes.byref(result), buffer, fw.RESULT_PACKET_BYTES) == 164
+    assert lib.l3_result_serialize(ctypes.byref(result), buffer, 163) == 0
     packet = shot_result.parse_packet(buffer.raw)
-    assert packet.version == 1 and packet.shot_id == 7 and packet.verdict == "valid"
+    assert packet.version == 2 and packet.shot_id == 7 and packet.verdict == "valid"
     assert packet.impact_timestamp_us == 23218 and packet.impact_source == "geometry"
     assert packet.club_points == 7 and packet.ball_points == 6
     assert packet.smash == pytest.approx(1.5)
@@ -266,13 +268,14 @@ def test_packet_is_one_hundred_little_endian_bytes_the_host_parses_back(lib):
     assert packet["ball_speed"].label == "MEASURED" and packet["ball_speed"].usable
     assert packet.quality == set(fw.QUALITY_FLAGS)
     assert packet["ball_speed"].confidence == pytest.approx(0.9)
+    assert packet.impact_fit["verdict"] == "none"
     # The hex line the CLI prints round-trips through the same parser.
-    hex_text = fw.c_text(lib.l3_result_format_hex, ctypes.byref(result), cap=240)
-    assert len(hex_text) == 200
+    hex_text = fw.c_text(lib.l3_result_format_hex, ctypes.byref(result), cap=340)
+    assert len(hex_text) == 328
     assert shot_result.parse_hex(f"packet {hex_text}") == packet
     reply = (
-        f"result v1 shot=7 ...\n  ball_speed=60.00 ...\npacket {hex_text[:100]}\n"
-        f"packet+ {hex_text[100:]}\nDone\n"
+        f"result v2 shot=7 ...\n  ball_speed=60.00 ...\npacket {hex_text[:164]}\n"
+        f"packet+ {hex_text[164:]}\nDone\n"
     )
     assert shot_result.parse_result_reply(reply) == packet
     assert shot_result.parse_result_reply("Done\n") is None
@@ -304,7 +307,8 @@ def test_packet_to_dict_keeps_provenance_beside_every_metric(lib):
 
     payload = packet.to_dict()
 
-    assert payload["version"] == 1 and payload["shot_id"] == 7 and payload["verdict"] == "valid"
+    assert payload["version"] == 2 and payload["shot_id"] == 7 and payload["verdict"] == "valid"
+    assert payload["impact_fit"]["verdict"] == "none"
     assert payload["impact_source"] == "geometry" and payload["impact_timestamp_us"] == 23218
     assert payload["club_points"] == 7 and payload["ball_points"] == 6
     assert payload["smash"] == pytest.approx(1.5)
@@ -333,10 +337,84 @@ def test_packet_to_dict_keeps_provenance_beside_every_metric(lib):
 
 def test_host_parser_rejects_wrong_sizes_versions_and_bad_hex():
     with pytest.raises(ValueError, match="bytes"):
-        shot_result.parse_packet(b"\x00" * 10)
-    bad_version = bytearray(100)
-    bad_version[0] = 2
+        shot_result.parse_packet(b"\x00" * 2)
     with pytest.raises(ValueError, match="version"):
-        shot_result.parse_packet(bytes(bad_version))
+        shot_result.parse_packet(struct.pack("<I", 9) + bytes(160))
+    bad_size = bytearray(100)
+    bad_size[0] = 2
+    with pytest.raises(ValueError, match="bytes"):
+        shot_result.parse_packet(bytes(bad_size))
     with pytest.raises(ValueError, match="hex"):
         shot_result.parse_hex("packet zz")
+
+
+def test_packet_v2_carries_the_impact_fit(lib):
+    fit = fw.ImpactFit()
+    lib.l3_impact_fit_reset(ctypes.byref(fit))
+    fit.verdict = fw.FIT_VERDICT_NAMES.index("consistent")
+    fit.impactUs, fit.spreadUs, fit.refinedMinusTriggerUs = 30_000.0, 210.0, -2_500.0
+    fit.track[2].why, fit.track[2].points = 0, 4
+    fit.track[2].timeUs, fit.track[2].sigmaUs, fit.track[2].speedMps = 29_990.0, 60.0, 61.2
+    shot = fw.Shot()
+    ball = fw.BallTrack()
+    launch = fw.Launch()
+    result = fw.ShotResult()
+    lib.l3_result_build(
+        ctypes.byref(shot),
+        ctypes.byref(ball),
+        ctypes.byref(launch),
+        ctypes.byref(fit),
+        7,
+        1,
+        ctypes.byref(result),
+    )
+    buffer = ctypes.create_string_buffer(fw.RESULT_PACKET_BYTES)
+    assert lib.l3_result_serialize(ctypes.byref(result), buffer, fw.RESULT_PACKET_BYTES) == 164
+    raw = buffer.raw
+
+    parsed = shot_result.parse_packet(raw)
+
+    assert parsed.version == 2
+    assert parsed.impact_fit["verdict"] == "consistent"
+    assert parsed.impact_fit["impact_us"] == pytest.approx(30_000.0)
+    assert parsed.impact_fit["refined_minus_trigger_us"] == pytest.approx(-2_500.0)
+    assert parsed.impact_fit["dropped"] is None
+    ball_out = parsed.impact_fit["tracks"]["ball_out"]
+    assert (ball_out["why"], ball_out["points"]) == ("ok", 4)
+    assert ball_out["speed_mps"] == pytest.approx(61.2)
+    assert parsed.impact_fit["tracks"]["club_in"]["why"] == "missing"
+    assert parsed.to_dict()["impact_fit"]["verdict"] == "consistent"
+
+
+def test_null_fit_serialises_as_verdict_none(lib):
+    result = fw.ShotResult()
+    lib.l3_result_build(
+        ctypes.byref(fw.Shot()),
+        ctypes.byref(fw.BallTrack()),
+        ctypes.byref(fw.Launch()),
+        None,
+        1,
+        0,
+        ctypes.byref(result),
+    )
+    buffer = ctypes.create_string_buffer(fw.RESULT_PACKET_BYTES)
+    lib.l3_result_serialize(ctypes.byref(result), buffer, fw.RESULT_PACKET_BYTES)
+    assert shot_result.parse_packet(buffer.raw).impact_fit["verdict"] == "none"
+
+
+def test_v1_packet_still_parses_without_an_impact_fit():
+    v1 = struct.pack(
+        "<II9fII9fIBBBBf", 1, 3, *([0.0] * 9), 0, 0, *([0.0] * 9), 12345, 2, 1, 5, 4, 1.4
+    )
+    parsed = shot_result.parse_packet(v1)
+    assert parsed.version == 1
+    assert parsed.impact_fit is None
+    assert parsed.impact_timestamp_us == 12345
+    assert parsed.to_dict()["impact_fit"] is None
+
+
+def test_wrong_size_or_version_is_refused():
+    with pytest.raises(ValueError, match="bytes"):
+        shot_result.parse_packet(b"\x02\x00\x00\x00" + bytes(96))
+    with pytest.raises(ValueError, match="version"):
+        shot_result.parse_packet(struct.pack("<I", 9) + bytes(160))

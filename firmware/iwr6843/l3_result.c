@@ -44,7 +44,8 @@ static int32_t l3_result_ok(const l3_shot_result_t *out, uint32_t index)
 }
 
 void l3_result_build(const l3_shot_t *shot, const l3_ball_track_t *ball, const l3_launch_t *launch,
-                     uint32_t shotId, uint8_t ballLocked, l3_shot_result_t *out)
+                     const l3_impact_fit_t *fit, uint32_t shotId, uint8_t ballLocked,
+                     l3_shot_result_t *out)
 {
     const l3_delivery_t *delivery = &shot->delivery;
     uint32_t fallback = ballLocked ? 0U : L3_MEAS_FALLBACK;
@@ -52,6 +53,11 @@ void l3_result_build(const l3_shot_t *shot, const l3_ball_track_t *ball, const l
     float originRange;
 
     memset(out, 0, sizeof(*out));
+    if (fit != NULL) {
+        out->impactFit = *fit;
+    } else {
+        l3_impact_fit_reset(&out->impactFit);
+    }
     out->version = L3_RESULT_VERSION;
     out->shotId = shotId;
     out->impactTimestampUs = shot->impactTimestampUs;
@@ -227,6 +233,24 @@ uint32_t l3_result_serialize(const l3_shot_result_t *result, uint8_t *out, uint3
     *p++ = result->clubPoints;
     *p++ = result->ballPoints;
     p = l3_result_putF32(p, result->smash);
+    *p++ = result->impactFit.verdict;
+    *p++ = result->impactFit.droppedTrack;
+    *p++ = result->impactFit.noLock;
+    *p++ = 0U;
+    p = l3_result_putF32(p, result->impactFit.impactUs);
+    p = l3_result_putF32(p, result->impactFit.spreadUs);
+    p = l3_result_putF32(p, result->impactFit.refinedMinusTriggerUs);
+    for (i = 0U; i < L3_FIT_TRACKS; i++) {
+        const l3_fit_estimate_t *e = &result->impactFit.track[i];
+
+        *p++ = e->why;
+        *p++ = (uint8_t)((e->points > 255U) ? 255U : e->points);
+        *p++ = 0U;
+        *p++ = 0U;
+        p = l3_result_putF32(p, e->timeUs);
+        p = l3_result_putF32(p, e->sigmaUs);
+        p = l3_result_putF32(p, e->speedMps);
+    }
     return (uint32_t)(p - out);
 }
 

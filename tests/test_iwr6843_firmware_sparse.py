@@ -620,8 +620,8 @@ def test_the_result_is_built_once_the_shot_reaches_result_and_printed_with_its_p
     assert "l3_result.c" in (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
     assert "if (gShot.state == L3_SHOT_RESULT && !gShotResultReady) {" in consider
     assert (
-        "l3_result_build(&gShot, &gBallTrack, &gLaunch, ++gShotId, gTrigDestBall, &gShotResult);"
-        in consider
+        "l3_result_build(&gShot, &gBallTrack, &gLaunch, &gImpactFit, ++gShotId, gTrigDestBall,\n"
+        "                        &gShotResult);" in consider
     )
     assert "gShotResultReady = 1U;" in consider
     assert 'strcmp(argv[1], "result") == 0' in log
