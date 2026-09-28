@@ -34,6 +34,7 @@ HOST_SOURCES = (
     "l3_band.c",
     "l3_trigger.c",
     "l3_club_track.c",
+    "l3_impact_fit.c",
     "l3_launch.c",
     "l3_joint_search.c",
     "l3_ball_hyp.c",
@@ -88,6 +89,22 @@ IMPACT_WHY_NAMES = (
     "passed",
     "fired",
 )
+
+# l3_impact_fit.h
+FIT_MAX_POINTS = 8
+FIT_NO_TRACK = 0xFF
+FIT_TRACK_NAMES = ("club_in", "club_out", "ball_out")
+FIT_WHY_NAMES = (
+    "ok",
+    "missing",
+    "few_points",
+    "wrong_direction",
+    "speed_bounds",
+    "physics",
+    "nonfinite",
+    "dropped",
+)
+FIT_VERDICT_NAMES = ("none", "single_track", "consistent", "inconsistent")
 
 # l3_shot.h
 SHOT_STATE_NAMES = (
@@ -529,6 +546,66 @@ class Impact(ctypes.Structure):
         ("contact", Vec3),
         ("velocity", Vec3),
         ("counters", ctypes.c_uint32 * len(IMPACT_WHY_NAMES)),
+    ]
+
+
+class ImpactFitCfg(ctypes.Structure):
+    """``l3_impact_fit_cfg_t``."""
+
+    _fields_ = [
+        ("binWidthM", ctypes.c_float),
+        ("bandBins", ctypes.c_float),
+        ("fitPoints", ctypes.c_uint32),
+        ("minPoints", ctypes.c_uint32),
+        ("clubMinMps", ctypes.c_float),
+        ("clubMaxMps", ctypes.c_float),
+        ("clubOutMaxRatio", ctypes.c_float),
+        ("ballMinMps", ctypes.c_float),
+        ("ballMaxMps", ctypes.c_float),
+        ("gateSigmas", ctypes.c_float),
+        ("minSigmaUs", ctypes.c_float),
+    ]
+
+
+class FitEstimate(ctypes.Structure):
+    """``l3_fit_estimate_t``: one track's impact estimate."""
+
+    _fields_ = [
+        ("why", ctypes.c_uint8),
+        ("points", ctypes.c_uint32),
+        ("timeUs", ctypes.c_float),
+        ("sigmaUs", ctypes.c_float),
+        ("speedMps", ctypes.c_float),
+    ]
+
+
+class ImpactFit(ctypes.Structure):
+    """``l3_impact_fit_t``: the three estimates, fused."""
+
+    _fields_ = [
+        ("track", FitEstimate * len(FIT_TRACK_NAMES)),
+        ("verdict", ctypes.c_uint8),
+        ("droppedTrack", ctypes.c_uint8),
+        ("noLock", ctypes.c_uint8),
+        ("impactUs", ctypes.c_float),
+        ("spreadUs", ctypes.c_float),
+        ("refinedMinusTriggerUs", ctypes.c_float),
+    ]
+
+
+class FitList(ctypes.Structure):
+    """``l3_fit_list_t``: an array of points."""
+
+    _fields_ = [("points", ctypes.POINTER(TrackPoint)), ("count", ctypes.c_uint32)]
+
+
+class FitSpan(ctypes.Structure):
+    """``l3_fit_span_t``: a run of a track's held points."""
+
+    _fields_ = [
+        ("track", ctypes.POINTER(ClubTrack)),
+        ("first", ctypes.c_uint32),
+        ("count", ctypes.c_uint32),
     ]
 
 
@@ -1225,6 +1302,24 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_impact_update": ([_P(Impact), _P(Delivery), _P(Vec3), ctypes.c_uint8], ctypes.c_int32),
     "l3_impact_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_impact_format": ([_P(Impact), *_TEXT], ctypes.c_int32),
+    # l3_impact_fit.h
+    "l3_impact_fit_cfg_defaults": ([_P(ImpactFitCfg)], None),
+    "l3_impact_fit_reset": ([_P(ImpactFit)], None),
+    "l3_fit_list_point": ([ctypes.c_void_p, _U32, _P(TrackPoint)], ctypes.c_int32),
+    "l3_fit_span_point": ([ctypes.c_void_p, _U32, _P(TrackPoint)], ctypes.c_int32),
+    "l3_fit_span_after": ([_P(ClubTrack), _U32, _P(FitSpan)], None),
+    "l3_impact_fit_track": (
+        [
+            _P(ImpactFitCfg),
+            ctypes.c_uint8,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            _U32,
+            _F32,
+            _P(FitEstimate),
+        ],
+        None,
+    ),
     # l3_launch.h
     "l3_launch_from_delivery": ([_P(Delivery), _U32, _P(Launch)], None),
     "l3_track_append_point": ([_P(ClubTrack), _P(TrackPoint)], None),
@@ -1439,6 +1534,12 @@ def build_firmware_library(
     return library
 
 
+def fit_reader(lib: ctypes.CDLL, name: str = "l3_fit_list_point") -> ctypes.c_void_p:
+    """The address of a C point reader (l3_fit_list_point / l3_fit_span_point),
+    to pass where the C API takes an l3_point_at_fn."""
+    return ctypes.cast(getattr(lib, name), ctypes.c_void_p)
+
+
 def c_text(function, *args, cap: int = 200) -> str:
     """Call a firmware ``format`` function into a fresh buffer and return the text."""
     buffer = ctypes.create_string_buffer(cap)
@@ -1520,6 +1621,17 @@ __all__ = [
     "ShotInput",
     "Impact",
     "ImpactCfg",
+    "FIT_MAX_POINTS",
+    "FIT_NO_TRACK",
+    "FIT_TRACK_NAMES",
+    "FIT_WHY_NAMES",
+    "FIT_VERDICT_NAMES",
+    "ImpactFitCfg",
+    "FitEstimate",
+    "ImpactFit",
+    "FitList",
+    "FitSpan",
+    "fit_reader",
     "RadarCal",
     "Spherical",
     "Vec3",
