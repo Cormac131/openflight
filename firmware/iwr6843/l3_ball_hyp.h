@@ -48,7 +48,8 @@ typedef struct {
     float    binWidthM;           /* l3_ball_track_init copies these two from its core */
     float    velocitySpanMps;
     float    spawnBehindBins;     /* a hypothesis starts from origin - this ... */
-    float    spawnBeyondBins;     /* ... to origin + this */
+    float    spawnBeyondBins;     /* ... to origin + this, + maxSpeedMps x the time
+                                   * since the gate (a late gate finds the ball out) */
     float    gateBins;            /* association half-width at zero elapsed time ... */
     float    gateMps;             /* ... growing by this speed uncertainty over the gap */
     uint32_t maxMisses;           /* coasted frames before a hypothesis is dropped */

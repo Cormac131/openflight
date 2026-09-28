@@ -111,3 +111,8 @@ Why, on the two captures traced (with the ball present):
 Board: the whole tree compiles with the TI compiler (warnings as errors); the R4F link fails on a
 DATA_RAM overflow that predates this work (776c266 plus the compile fix: 0x2b bytes free, the
 0x800 FIQ stack cannot be placed). The hypotheses add 1432 B of DATA_RAM.
+
+After the final review's fixes (a start band that moves out with the time since the gate; adoption
+that bypasses the core's frame-counted gate; no hypothesis claims a target once the ball is
+confirmed), the hypothesis search measures 55 / 11 ok / 34 wrong / 48 none / 23 present — still
+short of R8, so `useHypotheses` stays 0.

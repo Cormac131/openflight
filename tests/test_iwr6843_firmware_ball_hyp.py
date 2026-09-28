@@ -101,9 +101,18 @@ def test_the_ball_is_one_hypothesis_and_the_club_claim_none(lib):
 def test_only_targets_near_the_origin_start_a_hypothesis(lib):
     hyps = make_hyps(lib)
     arm(lib, hyps)
-    targets = [obs(1, 2000, b, 900.0, 5.0) for b in (44.5, 45.2, 55.8, 56.4)]
-    feed(lib, hyps, 1, 2000, targets)
+    targets = [obs(1, 0, b, 900.0, 5.0) for b in (44.5, 45.2, 55.8, 56.4)]
+    feed(lib, hyps, 1, 0, targets)  # at the gate time: origin - 1 .. origin + 10
     assert sorted(h.points[0].rangeBin for h in active(hyps)) == pytest.approx([45.2, 55.8])
+
+
+def test_the_start_band_moves_out_with_the_time_since_the_gate(lib):
+    """2 ms after the gate a 100 m/s ball can be 4.27 bins further out."""
+    hyps = make_hyps(lib)
+    arm(lib, hyps)
+    targets = [obs(1, 2000, b, 900.0, 5.0) for b in (56.4, 60.1, 60.5)]
+    feed(lib, hyps, 1, 2000, targets)
+    assert sorted(h.points[0].rangeBin for h in active(hyps)) == pytest.approx([56.4, 60.1])
 
 
 def test_a_merged_first_return_is_a_missed_frame_not_a_point(lib):
@@ -120,10 +129,12 @@ def test_the_ball_coasts_over_two_missing_frames_and_is_picked_up(lib):
     assert bins(hyp) == truth(frames)
 
 
-def test_three_missing_frames_drop_it(lib):
-    hyps, _ = run(lib, TwoTracks(missing_ball=(3, 4, 5)))
+def test_three_missing_frames_drop_it_and_the_ball_starts_again(lib):
+    hyps, frames = run(lib, TwoTracks(missing_ball=(3, 4, 5)))
     assert hyps.dropped == 1
-    assert not active(hyps)  # by frame 6 the ball is past the start band
+    (hyp,) = active(hyps)  # a new hypothesis from frame 6, inside the widened band
+    assert hyp.points[0].frame == 6
+    assert bins(hyp) == truth([f for f in frames if f.frame >= 6])
 
 
 def test_a_ball_return_the_club_claims_is_never_a_ball_point(lib):
@@ -246,3 +257,17 @@ def test_the_tighter_of_two_ball_like_hypotheses_wins(lib):
 
 def test_unarmed_hypotheses_give_no_verdict(lib):
     assert verdict(lib, make_hyps(lib)).index == -1
+
+
+@pytest.mark.parametrize(("frame_us", "late_frames"), [(3000, 3), (6000, 2)])
+def test_a_late_gate_still_finds_a_fast_ball(lib, frame_us, late_frames):
+    """Review finding #2: the gate fired after impact, so by the first post
+    frame a 70 m/s ball is already past a fixed start band; the band must
+    widen with the time since the gate."""
+    scene = TwoTracks(
+        frames=10, frame_us=frame_us, ball_mps=70.0, impact_offset_us=-late_frames * frame_us
+    )
+    hyps, _ = run(lib, scene)
+    v = verdict(lib, hyps)
+    assert v.index >= 0
+    assert v.rateMps == pytest.approx(70.0, rel=0.03)

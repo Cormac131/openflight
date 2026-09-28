@@ -190,6 +190,8 @@ uint32_t l3_ball_hyps_update(l3_ball_hyps_t *hyps, const l3_target_obs_t *target
     float hi[L3_BALL_HYP_MAX];
     float centre[L3_BALL_HYP_MAX];
     float clubStat;
+    float sinceGateS;
+    float spawnHi;
     uint32_t i;
     uint32_t j;
     uint32_t active = 0U;
@@ -263,14 +265,21 @@ uint32_t l3_ball_hyps_update(l3_ball_hyps_t *hyps, const l3_target_obs_t *target
             hyps->dropped++;
         }
     }
-    /* Start hypotheses from what is left in the start band. */
+    /* Start hypotheses from what is left in the start band. Its far edge
+     * moves out with the time since the gate at the fastest ball's speed: a
+     * gate that fired late finds the ball already out, and it must still be
+     * able to start. */
+    sinceGateS = l3_ball_hyps_seconds(timestampUs, hyps->impactTimestampUs);
+    spawnHi = hyps->originBin + cfg->spawnBeyondBins +
+              ((sinceGateS > 0.0F && cfg->binWidthM > 0.0F)
+                   ? cfg->maxSpeedMps / cfg->binWidthM * sinceGateS
+                   : 0.0F);
     for (j = 0U; j < n; j++) {
         float range = targets[j].rangeBin;
         l3_ball_hyp_t *hyp;
         int32_t slot;
 
-        if (taken[j] || range < hyps->originBin - cfg->spawnBehindBins ||
-            range > hyps->originBin + cfg->spawnBeyondBins) {
+        if (taken[j] || range < hyps->originBin - cfg->spawnBehindBins || range > spawnHi) {
             continue;
         }
         slot = l3_ball_hyps_slot(hyps);

@@ -185,14 +185,29 @@ static int32_t l3_ball_track_step(l3_ball_track_t *track, const l3_target_obs_t 
     return l3_ball_track_note(track, L3_BALL_TRACK_WHY_TRACKED, 1);
 }
 
+/* Once the ball is chosen (or the search is over) the hypotheses claim no
+ * target: nothing downstream estimates angles for them. */
+static void l3_ball_track_quietHyps(l3_ball_track_t *track)
+{
+    uint32_t i;
+
+    for (i = 0U; i < L3_BALL_HYP_MAX; i++) {
+        track->hyps.hyp[i].lastTargetIndex = L3_BALL_HYP_NONE;
+    }
+}
+
 /* The classified hypothesis becomes the track: its points (angles included)
  * seed the core in order, and tracking carries on from them. */
 static int32_t l3_ball_track_adopt(l3_ball_track_t *track, uint32_t index)
 {
     const l3_ball_hyp_t *hyp = &track->hyps.hyp[index];
+    float gateBins = track->core.cfg.gateBins;
     uint32_t k;
 
     l3_track_reset(&track->core);
+    /* The points were associated on timestamps by the hypothesis already;
+     * the core's frame-counted gate must not refuse them on the way in. */
+    track->core.cfg.gateBins = 1.0e9F;
     for (k = 0U; k < hyp->count; k++) {
         const l3_ball_hyp_point_t *p = &hyp->points[k];
         l3_target_obs_t seed;
@@ -208,6 +223,7 @@ static int32_t l3_ball_track_adopt(l3_ball_track_t *track, uint32_t index)
         seed.coherence = 1.0F;
         seed.confidence = 1.0F;
         if (!l3_track_update(&track->core, &seed, 1U, p->frame, p->timestampUs)) {
+            track->core.cfg.gateBins = gateBins;
             l3_track_reset(&track->core);
             return l3_ball_track_note(track, L3_BALL_TRACK_WHY_SEARCHING, 0);
         }
@@ -216,8 +232,10 @@ static int32_t l3_ball_track_adopt(l3_ball_track_t *track, uint32_t index)
                                       p->anglesValid);
         }
     }
+    track->core.cfg.gateBins = gateBins;
     track->confirmed = 1U;
     track->lastTargetIndex = hyp->lastTargetIndex;
+    l3_ball_track_quietHyps(track);
     return l3_ball_track_note(track, L3_BALL_TRACK_WHY_CONFIRMED,
                               (hyp->lastTargetIndex != L3_BALL_HYP_NONE) ? 1 : 0);
 }
@@ -232,6 +250,9 @@ int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t
         return l3_ball_track_step(track, targets, n, frame, timestampUs, L3_TRACK_NO_TARGET);
     }
     track->lastTargetIndex = L3_TRACK_NO_TARGET;
+    if (!track->armed || track->done || track->confirmed) {
+        l3_ball_track_quietHyps(track);
+    }
     if (!track->armed) {
         return l3_ball_track_note(track, L3_BALL_TRACK_WHY_UNARMED, 0);
     }

@@ -542,3 +542,36 @@ def test_angles_on_hypothesis_points_survive_adoption(lib):
         p = fw.TrackPoint()
         lib.l3_track_point(ctypes.byref(track.core), i, ctypes.byref(p))
         assert p.anglesValid == both
+
+
+@pytest.mark.parametrize(("ball_mps", "missing"), [(95.0, ()), (60.0, (2,))])
+def test_adoption_takes_every_classified_ball(lib, ball_mps, missing):
+    """Review finding #3: the hypothesis's points were replayed through the
+    core's frame-counted 6-bin gate, which refused a fast ball or one with a
+    missed frame; a classified hypothesis is adopted on its classification frame."""
+    track = hyp_track(lib)
+    whys = run_joint(
+        lib, track, TwoTracks(frame_us=3000, frames=8, ball_mps=ball_mps, missing_ball=missing)
+    )
+    assert track.confirmed
+    assert whys.index("confirmed") == 3 + len(missing)  # the frame of the fourth point
+    used, launch = launch_of(lib, track)
+    assert used >= 3 and launch.speedMps == pytest.approx(ball_mps, rel=0.05)
+
+
+def test_a_confirmed_ball_leaves_no_hypothesis_pointing_at_a_target(lib):
+    """Review finding #4: once the ball is confirmed the hypotheses stop, so no
+    stale index sends the board computing angles for the wrong target."""
+    stale = []
+
+    def after(track, _frame):
+        if track.confirmed:
+            stale.extend(
+                track.hyps.hyp[i].lastTargetIndex
+                for i in range(fw.BALL_HYP_MAX)
+                if track.hyps.hyp[i].lastTargetIndex != fw.BALL_HYP_NONE
+            )
+
+    track = hyp_track(lib)
+    run_joint(lib, track, TwoTracks(frames=8), on_frame=after)
+    assert track.confirmed and stale == []
