@@ -25,6 +25,7 @@
 #include <stdint.h>
 
 #include "l3_club_track.h"
+#include "l3_ball_hyp.h"
 #include "l3_frames.h"
 
 typedef struct {
@@ -37,6 +38,14 @@ typedef struct {
     uint32_t launchPoints;        /* earliest points fitted for the launch */
     float    snr;                 /* extraction threshold over the floor for the post
                                    * window: a departing ball is a weak return */
+    /* Search for the ball with the hypotheses (l3_ball_hyp.h) instead of
+     * taking the most confident departing target; set from the recorded
+     * captures (docs/superpowers/specs/2026-09-28-iwr-joint-club-ball-tracking.md). */
+    uint32_t useHypotheses;
+    /* Once confirmed, skip the club's claimed target while another candidate
+     * is in the gate. */
+    uint32_t skipClubClaim;
+    l3_ball_hyps_cfg_t hyps;      /* binWidthM and velocitySpanMps come from core */
 } l3_ball_track_cfg_t;
 
 enum {
@@ -50,6 +59,7 @@ enum {
     L3_BALL_TRACK_WHY_TRACKED,
     L3_BALL_TRACK_WHY_COASTED,
     L3_BALL_TRACK_WHY_LOST,        /* the flight left the window or the track dropped */
+    L3_BALL_TRACK_WHY_SEARCHING,   /* hypotheses kept; none is the ball yet */
     L3_BALL_TRACK_WHY_COUNT
 };
 
@@ -66,6 +76,8 @@ typedef struct {
     uint32_t  lastTargetIndex;    /* index into the last update's targets that was
                                    * appended, L3_TRACK_NO_TARGET when none */
     uint32_t  counters[L3_BALL_TRACK_WHY_COUNT];
+    l3_ball_hyps_t hyps;
+    l3_ball_hyp_verdict_t verdict; /* the last classification; index -1 before one */
 } l3_ball_track_t;
 
 /* Ball launch from the earliest clean flight, extrapolated to impact. */
@@ -94,6 +106,16 @@ void l3_ball_track_arm(l3_ball_track_t *track, float originBin, const l3_vec3_t 
 /* One post-impact frame's targets. Returns 1 when a point was appended. */
 int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targets, uint32_t n,
                              uint32_t frame, uint32_t timestampUs);
+/* The same, beside the club track: clubIndex is the target l3_track_follow
+ * claimed this frame (L3_TRACK_NO_TARGET for none). With useHypotheses the
+ * ball is searched for with the hypotheses and, once one is classified, its
+ * points seed the track (angles included) and tracking continues; the plain
+ * update is this with no claim. */
+int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t *targets,
+                                   uint32_t n, uint32_t frame, uint32_t timestampUs,
+                                   uint32_t clubIndex);
+/* sizeof(l3_ball_track_t), for the ctypes mirror's layout check. */
+uint32_t l3_ball_track_struct_bytes(void);
 /* Angles for the point the last update appended; see l3_track_set_angles. */
 int32_t l3_ball_track_set_angles(l3_ball_track_t *track, float azimuthRad, float elevationRad,
                                  uint8_t anglesValid);

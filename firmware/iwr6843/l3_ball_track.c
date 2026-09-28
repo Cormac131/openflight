@@ -7,7 +7,7 @@
 
 static const char *const kWhyNames[L3_BALL_TRACK_WHY_COUNT] = {
     "none", "unarmed", "nocandidate", "acquired", "confirmed", "tooslow", "toofast", "tracked",
-    "coasted", "lost"
+    "coasted", "lost", "searching"
 };
 
 void l3_ball_track_cfg_defaults(l3_ball_track_cfg_t *cfg)
@@ -26,14 +26,22 @@ void l3_ball_track_cfg_defaults(l3_ball_track_cfg_t *cfg)
     cfg->minDepartureBins = 1.0F;     /* the impact echo sits at the origin itself */
     cfg->launchPoints = 6U;
     cfg->snr = 3.0F;                  /* half the trigger's: the ball is weak and moving */
+    cfg->useHypotheses = 0U;          /* decided by the recorded captures */
+    cfg->skipClubClaim = 1U;
+    l3_ball_hyps_cfg_defaults(&cfg->hyps);
 }
 
 void l3_ball_track_init(l3_ball_track_t *track, const l3_ball_track_cfg_t *cfg)
 {
     memset(track, 0, sizeof(*track));
     track->cfg = *cfg;
+    /* The hypotheses share the core's geometry: one source for both. */
+    track->cfg.hyps.binWidthM = cfg->core.binWidthM;
+    track->cfg.hyps.velocitySpanMps = cfg->core.velocitySpanMps;
     track->lastTargetIndex = L3_TRACK_NO_TARGET;
+    track->verdict.index = -1;
     l3_track_init(&track->core, &cfg->core);
+    l3_ball_hyps_init(&track->hyps, &track->cfg.hyps);
 }
 
 void l3_ball_track_reset(l3_ball_track_t *track)
@@ -47,6 +55,9 @@ void l3_ball_track_reset(l3_ball_track_t *track)
     track->originBin = 0.0F;
     track->lastTargetIndex = L3_TRACK_NO_TARGET;
     memset(&track->origin, 0, sizeof(track->origin));
+    l3_ball_hyps_init(&track->hyps, &track->cfg.hyps);
+    memset(&track->verdict, 0, sizeof(track->verdict));
+    track->verdict.index = -1;
 }
 
 void l3_ball_track_arm(l3_ball_track_t *track, float originBin, const l3_vec3_t *origin,
@@ -57,6 +68,7 @@ void l3_ball_track_arm(l3_ball_track_t *track, float originBin, const l3_vec3_t 
     track->originBin = originBin;
     track->origin = *origin;
     track->impactTimestampUs = impactTimestampUs;
+    l3_ball_hyps_arm(&track->hyps, originBin, impactTimestampUs);
 }
 
 static int32_t l3_ball_track_note(l3_ball_track_t *track, uint8_t why, int32_t appended)
@@ -66,8 +78,19 @@ static int32_t l3_ball_track_note(l3_ball_track_t *track, uint8_t why, int32_t a
     return appended;
 }
 
-int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targets, uint32_t n,
-                             uint32_t frame, uint32_t timestampUs)
+/* The core's gate around its prediction for this frame. */
+static int32_t l3_ball_track_inGate(const l3_club_track_t *core, const l3_target_obs_t *target,
+                                    uint32_t frame)
+{
+    float predicted = core->lastBin + core->velocityBinsPerFrame * (float)(frame - core->lastFrame);
+    float error = target->rangeBin - predicted;
+
+    return ((error < 0.0F) ? -error : error) <= core->cfg.gateBins;
+}
+
+static int32_t l3_ball_track_step(l3_ball_track_t *track, const l3_target_obs_t *targets,
+                                  uint32_t n, uint32_t frame, uint32_t timestampUs,
+                                  uint32_t skipIndex)
 {
     l3_target_obs_t candidates[L3_OBS_MAX_TARGETS];
     uint32_t indices[L3_OBS_MAX_TARGETS];  /* candidate -> targets index */
@@ -85,15 +108,25 @@ int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targ
     }
     /* A ball never comes back toward the radar: nothing behind the last point
      * (or, before acquisition, at or short of the origin) can be it. Before
-     * acquisition only the farthest candidate inside the origin gate is
-     * offered, since the ball outruns the club's follow-through at once. */
+     * acquisition every candidate in the departure band is offered and the
+     * core takes the most confident; the ball does not reliably outrun the
+     * club's follow-through at once (the hypothesis search handles that). */
     if (track->core.active && track->confirmed) {
+        uint8_t otherInGate = 0U;
+
         for (i = 0U; i < n && kept < L3_OBS_MAX_TARGETS; i++) {
-            if (targets[i].rangeBin < track->core.lastBin - 0.5F) {
+            if (targets[i].rangeBin < track->core.lastBin - 0.5F || i == skipIndex) {
                 continue;
             }
+            otherInGate |= (uint8_t)l3_ball_track_inGate(&track->core, &targets[i], frame);
             indices[kept] = i;
             candidates[kept++] = targets[i];
+        }
+        if (skipIndex < n && !otherInGate && kept < L3_OBS_MAX_TARGETS &&
+            targets[skipIndex].rangeBin >= track->core.lastBin - 0.5F) {
+            /* Only the club's return is in the gate: the two share a bin. */
+            indices[kept] = skipIndex;
+            candidates[kept++] = targets[skipIndex];
         }
     } else {
         /* Acquiring, or confirming from a single point (whose prediction is
@@ -150,6 +183,81 @@ int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targ
         return l3_ball_track_note(track, L3_BALL_TRACK_WHY_CONFIRMED, 1);
     }
     return l3_ball_track_note(track, L3_BALL_TRACK_WHY_TRACKED, 1);
+}
+
+/* The classified hypothesis becomes the track: its points (angles included)
+ * seed the core in order, and tracking carries on from them. */
+static int32_t l3_ball_track_adopt(l3_ball_track_t *track, uint32_t index)
+{
+    const l3_ball_hyp_t *hyp = &track->hyps.hyp[index];
+    uint32_t k;
+
+    l3_track_reset(&track->core);
+    for (k = 0U; k < hyp->count; k++) {
+        const l3_ball_hyp_point_t *p = &hyp->points[k];
+        l3_target_obs_t seed;
+
+        memset(&seed, 0, sizeof(seed));
+        seed.frame = p->frame;
+        seed.timestampUs = p->timestampUs;
+        seed.peakBin = (uint8_t)(p->rangeBin + 0.5F);
+        seed.rangeBin = p->rangeBin;
+        seed.stat = p->stat;
+        seed.peak = p->stat;
+        seed.dopplerAliasMps = p->dopplerAliasMps;
+        seed.coherence = 1.0F;
+        seed.confidence = 1.0F;
+        if (!l3_track_update(&track->core, &seed, 1U, p->frame, p->timestampUs)) {
+            l3_track_reset(&track->core);
+            return l3_ball_track_note(track, L3_BALL_TRACK_WHY_SEARCHING, 0);
+        }
+        if (p->anglesValid) {
+            (void)l3_track_set_angles(&track->core, p->azimuthRad, p->elevationRad,
+                                      p->anglesValid);
+        }
+    }
+    track->confirmed = 1U;
+    track->lastTargetIndex = hyp->lastTargetIndex;
+    return l3_ball_track_note(track, L3_BALL_TRACK_WHY_CONFIRMED,
+                              (hyp->lastTargetIndex != L3_BALL_HYP_NONE) ? 1 : 0);
+}
+
+int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t *targets,
+                                   uint32_t n, uint32_t frame, uint32_t timestampUs,
+                                   uint32_t clubIndex)
+{
+    uint32_t skip = track->cfg.skipClubClaim ? clubIndex : L3_TRACK_NO_TARGET;
+
+    if (!track->cfg.useHypotheses) {
+        return l3_ball_track_step(track, targets, n, frame, timestampUs, L3_TRACK_NO_TARGET);
+    }
+    track->lastTargetIndex = L3_TRACK_NO_TARGET;
+    if (!track->armed) {
+        return l3_ball_track_note(track, L3_BALL_TRACK_WHY_UNARMED, 0);
+    }
+    if (track->done) {
+        return l3_ball_track_note(track, L3_BALL_TRACK_WHY_LOST, 0);
+    }
+    if (track->confirmed) {
+        return l3_ball_track_step(track, targets, n, frame, timestampUs, skip);
+    }
+    (void)l3_ball_hyps_update(&track->hyps, targets, n, frame, timestampUs, clubIndex);
+    l3_ball_hyps_classify(&track->hyps, &track->verdict);
+    if (track->verdict.index < 0) {
+        return l3_ball_track_note(track, L3_BALL_TRACK_WHY_SEARCHING, 0);
+    }
+    return l3_ball_track_adopt(track, (uint32_t)track->verdict.index);
+}
+
+int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targets, uint32_t n,
+                             uint32_t frame, uint32_t timestampUs)
+{
+    return l3_ball_track_update_joint(track, targets, n, frame, timestampUs, L3_TRACK_NO_TARGET);
+}
+
+uint32_t l3_ball_track_struct_bytes(void)
+{
+    return (uint32_t)sizeof(l3_ball_track_t);
 }
 
 int32_t l3_ball_track_set_angles(l3_ball_track_t *track, float azimuthRad, float elevationRad,

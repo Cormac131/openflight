@@ -111,6 +111,7 @@ BALL_TRACK_WHY_NAMES = (
     "tracked",
     "coasted",
     "lost",
+    "searching",
 )
 
 # l3_result.h
@@ -634,6 +635,9 @@ class BallTrackCfg(ctypes.Structure):
         ("minDepartureBins", ctypes.c_float),
         ("launchPoints", ctypes.c_uint32),
         ("snr", ctypes.c_float),
+        ("useHypotheses", ctypes.c_uint32),
+        ("skipClubClaim", ctypes.c_uint32),
+        ("hyps", BallHypsCfg),
     ]
 
 
@@ -652,6 +656,8 @@ class BallTrack(ctypes.Structure):
         ("origin", Vec3),
         ("lastTargetIndex", ctypes.c_uint32),
         ("counters", ctypes.c_uint32 * len(BALL_TRACK_WHY_NAMES)),
+        ("hyps", BallHyps),
+        ("verdict", BallHypVerdict),
     ]
 
 
@@ -1001,6 +1007,11 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_ball_track_reset": ([_P(BallTrack)], None),
     "l3_ball_track_arm": ([_P(BallTrack), _F32, _P(Vec3), _U32], None),
     "l3_ball_track_update": ([_P(BallTrack), _P(TargetObs), _U32, _U32, _U32], ctypes.c_int32),
+    "l3_ball_track_update_joint": (
+        [_P(BallTrack), _P(TargetObs), _U32, _U32, _U32, _U32],
+        ctypes.c_int32,
+    ),
+    "l3_ball_track_struct_bytes": ([], _U32),
     "l3_ball_track_set_angles": ([_P(BallTrack), _F32, _F32, ctypes.c_uint8], ctypes.c_int32),
     "l3_ball_track_launch": ([_P(BallTrack), _P(Launch)], _U32),
     "l3_ball_track_why_name": ([ctypes.c_uint8], ctypes.c_char_p),

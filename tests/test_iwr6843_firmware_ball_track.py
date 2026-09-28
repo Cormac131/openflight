@@ -14,6 +14,7 @@ import ctypes
 import math
 
 import pytest
+from iwr6843_twotrack import TwoTracks, obs
 
 from openflight.iwr6843 import firmware_host as fw
 
@@ -394,3 +395,150 @@ def test_the_appended_target_is_reported_by_its_index_into_the_caller_list(lib):
     assert ball.track.lastTargetIndex == 2
     assert ball.update(11, []) is False
     assert ball.track.lastTargetIndex == fw.TRACK_NO_TARGET
+
+
+# --- the hypothesis search (l3_ball_hyp.c) ------------------------------------
+
+
+def hyp_track(lib, **overrides):
+    cfg = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
+    cfg.useHypotheses = 1
+    for name, value in overrides.items():
+        setattr(cfg, name, value)
+    track = fw.BallTrack()
+    lib.l3_ball_track_init(ctypes.byref(track), ctypes.byref(cfg))
+    return track
+
+
+def run_joint(lib, track, scene, on_frame=None):
+    origin = fw.Vec3(scene.origin_bin * BIN_M, 0.0, 0.0)
+    lib.l3_ball_track_arm(
+        ctypes.byref(track), scene.origin_bin, ctypes.byref(origin), scene.gate_us
+    )
+    whys = []
+    for f in scene.build():
+        arr = (fw.TargetObs * max(1, len(f.targets)))(*f.targets)
+        lib.l3_ball_track_update_joint(
+            ctypes.byref(track), arr, len(f.targets), f.frame, f.timestamp_us, f.club_index
+        )
+        whys.append(fw.BALL_TRACK_WHY_NAMES[track.why])
+        if on_frame is not None:
+            on_frame(track, f)
+    return whys
+
+
+def core_bins(lib, track):
+    out = []
+    for i in range(track.core.count):
+        p = fw.TrackPoint()
+        lib.l3_track_point(ctypes.byref(track.core), i, ctypes.byref(p))
+        out.append(round(p.rangeBin, 3))
+    return out
+
+
+def launch_of(lib, track):
+    out = fw.Launch()
+    used = lib.l3_ball_track_launch(ctypes.byref(track), ctypes.byref(out))
+    return used, out
+
+
+def test_the_hypothesis_search_is_off_by_default_until_evaluated(lib):
+    cfg = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
+    assert (cfg.useHypotheses, cfg.skipClubClaim) == (0, 1)
+    assert cfg.hyps.classifyPoints == 4
+
+
+def test_the_hypotheses_share_the_core_geometry(lib):
+    cfg = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
+    cfg.core.binWidthM = 0.05
+    cfg.core.velocitySpanMps = 12.0
+    track = fw.BallTrack()
+    lib.l3_ball_track_init(ctypes.byref(track), ctypes.byref(cfg))
+    assert (track.hyps.cfg.binWidthM, track.hyps.cfg.velocitySpanMps) == pytest.approx((0.05, 12.0))
+
+
+def test_the_ball_track_layout_matches_the_c(lib):
+    assert ctypes.sizeof(fw.BallTrack) == lib.l3_ball_track_struct_bytes()
+
+
+def test_with_the_search_off_the_joint_update_is_todays_update(lib):
+    scene = TwoTracks()
+    a = hyp_track(lib, useHypotheses=0)
+    run_joint(lib, a, scene)
+    b = fw.BallTrack()
+    cfg = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
+    lib.l3_ball_track_init(ctypes.byref(b), ctypes.byref(cfg))
+    origin = fw.Vec3(scene.origin_bin * BIN_M, 0.0, 0.0)
+    lib.l3_ball_track_arm(ctypes.byref(b), scene.origin_bin, ctypes.byref(origin), scene.gate_us)
+    for f in scene.build():
+        arr = (fw.TargetObs * max(1, len(f.targets)))(*f.targets)
+        lib.l3_ball_track_update(ctypes.byref(b), arr, len(f.targets), f.frame, f.timestamp_us)
+    assert bytes(a.core) == bytes(b.core)
+    assert list(a.counters) == list(b.counters)
+
+
+def test_beside_the_club_the_ball_track_is_the_ball(lib):
+    scene = TwoTracks()
+    track = hyp_track(lib)
+    whys = run_joint(lib, track, scene)
+    assert whys[:3] == ["searching"] * 3
+    assert whys[3] == "confirmed" and set(whys[4:]) == {"tracked"}
+    frames = scene.build()
+    assert core_bins(lib, track) == [round(f.ball_bin, 3) for f in frames]
+    used, launch = launch_of(lib, track)
+    assert used >= 3 and launch.speedMps == pytest.approx(42.0, rel=0.05)
+
+
+def test_a_lone_ball_is_found_without_a_club_track(lib):
+    track = hyp_track(lib)
+    run_joint(lib, track, TwoTracks(club_visible=False))
+    used, launch = launch_of(lib, track)
+    assert track.confirmed and launch.speedMps == pytest.approx(42.0, rel=0.05)
+
+
+def test_without_a_ball_there_is_no_launch(lib):
+    scene = TwoTracks(missing_ball=tuple(range(1, 9)), extras=[(48.0, 20000.0, 0.8)])
+    track = hyp_track(lib)
+    whys = run_joint(lib, track, scene)
+    assert set(whys) == {"searching"}
+    assert not track.confirmed
+    assert launch_of(lib, track)[0] == 0
+
+
+def test_a_confirmed_ball_skips_the_club_claim_while_another_candidate_is_in_gate(lib):
+    scene = TwoTracks(frames=5)
+    track = hyp_track(lib)
+    run_joint(lib, track, scene)
+    assert track.confirmed
+    step = 42.0 * 0.002 / BIN_M
+    expected = 46.0 + step * 6
+    club = obs(6, 12000, expected - 0.1, 9000.0, 40.0)
+    ball = obs(6, 12000, expected + 0.6, 1500.0, 42.0)
+    arr = (fw.TargetObs * 2)(club, ball)
+    assert lib.l3_ball_track_update_joint(ctypes.byref(track), arr, 2, 6, 12000, 0) == 1
+    assert track.lastTargetIndex == 1
+    # The club's claim alone in the gate: the two share a bin, and it is taken.
+    lone = obs(7, 14000, 46.0 + step * 7, 9000.0, 40.0)
+    arr = (fw.TargetObs * 1)(lone)
+    assert lib.l3_ball_track_update_joint(ctypes.byref(track), arr, 1, 7, 14000, 0) == 1
+
+
+def test_angles_on_hypothesis_points_survive_adoption(lib):
+    both = fw.ANGLE_AZIMUTH | fw.ANGLE_ELEVATION
+
+    def angle_every_new_point(track, _frame):
+        for i in range(fw.BALL_HYP_MAX):
+            if track.hyps.hyp[i].lastTargetIndex != fw.BALL_HYP_NONE:
+                lib.l3_ball_hyps_set_angles(ctypes.byref(track.hyps), i, 0.02, 0.2, both)
+
+    track = hyp_track(lib)
+    run_joint(lib, track, TwoTracks(frames=4), on_frame=angle_every_new_point)
+    assert track.confirmed
+    for i in range(3):  # the points adopted from earlier frames
+        p = fw.TrackPoint()
+        lib.l3_track_point(ctypes.byref(track.core), i, ctypes.byref(p))
+        assert p.anglesValid == both
