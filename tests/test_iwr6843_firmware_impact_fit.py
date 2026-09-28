@@ -164,6 +164,22 @@ def test_slow_club_out_is_accepted(lib):
     assert estimate(lib, CLUB_OUT, line(3.0, CLUB_OUT_T)).why == WHY["ok"]
 
 
+def test_a_count_beyond_the_list_is_missing_not_garbage(lib):
+    samples = line(30.0, CLUB_IN_T[:2])
+    lst = point_list(samples)
+    out = fw.FitEstimate()
+    lib.l3_impact_fit_track(
+        ctypes.byref(cfg(lib)),
+        CLUB_IN,
+        fw.fit_reader(lib),
+        ctypes.byref(lst),
+        4,
+        BALL_M,
+        ctypes.byref(out),
+    )
+    assert out.why == WHY["missing"]
+
+
 def test_span_after_reads_only_points_appended_after_a_frame(lib):
     track_cfg = fw.TrackCfg()
     lib.l3_track_cfg_defaults(ctypes.byref(track_cfg))

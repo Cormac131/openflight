@@ -123,10 +123,16 @@ void l3_impact_fit_track(const l3_impact_fit_cfg_t *cfg, uint8_t which, l3_point
         out->why = L3_FIT_WHY_FEW_POINTS;
         return;
     }
-    (void)pointAt(ctx, first, &point);
+    if (pointAt(ctx, first, &point) == 0) {
+        out->why = L3_FIT_WHY_MISSING;
+        return;
+    }
     t0 = (float)point.timestampUs;
     for (i = 0U; i < n; i++) {
-        (void)pointAt(ctx, first + i, &point);
+        if (pointAt(ctx, first + i, &point) == 0) {
+            out->why = L3_FIT_WHY_MISSING;
+            return;
+        }
         t[i] = ((float)point.timestampUs - t0) * 1.0e-6F;
         r[i] = point.rangeM;
         tMean += t[i];
