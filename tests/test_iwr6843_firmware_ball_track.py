@@ -575,3 +575,40 @@ def test_a_confirmed_ball_leaves_no_hypothesis_pointing_at_a_target(lib):
     track = hyp_track(lib)
     run_joint(lib, track, TwoTracks(frames=8), on_frame=after)
     assert track.confirmed and stale == []
+
+
+# --- the Pi detector's fastest-credible rule on the track -------------------------------------
+
+
+def unclaimed(scene):
+    """The scene's frames with no club claim: the club track lost the club."""
+    frames = scene.build()
+    for f in frames:
+        f.club_index = fw.TRACK_NO_TARGET
+    return frames
+
+
+@pytest.mark.parametrize("decel", [300.0, 1500.0])
+def test_fastest_credible_keeps_an_unclaimed_follow_through_off_the_ball(lib, decel):
+    """20260927_183542_142_009: the club track was inactive after impact, so no
+    claim separated the returns and the search adopted the follow-through."""
+    scene = TwoTracks(frames=10, club_decel_mps2=decel, club_stat=1400.0)
+
+    def launch_speed(**hyps):
+        track = hyp_track(lib)
+        for name, value in hyps.items():
+            setattr(track.cfg.hyps, name, value)
+            setattr(track.hyps.cfg, name, value)
+        origin = fw.Vec3(scene.origin_bin * BIN_M, 0.0, 0.0)
+        lib.l3_ball_track_arm(
+            ctypes.byref(track), scene.origin_bin, ctypes.byref(origin), scene.gate_us
+        )
+        for f in unclaimed(scene):
+            arr = (fw.TargetObs * max(1, len(f.targets)))(*f.targets)
+            lib.l3_ball_track_update_joint(
+                ctypes.byref(track), arr, len(f.targets), f.frame, f.timestamp_us, f.club_index
+            )
+        return launch_of(lib, track)[1].speedMps
+
+    assert launch_speed() < 30.0, "without the rule the follow-through is the ball"
+    assert launch_speed(fastBallMps=30.0) == pytest.approx(42.0, rel=0.1)

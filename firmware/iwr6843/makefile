@@ -26,6 +26,20 @@ include $(MMWAVE_SDK_INSTALL_PATH)/ti/common/mmwave_sdk.mak
 #   make L3_VARIANT_DEFS="--define=N_SAMPLES=64 --define=RING_FRAMES=12" # C
 R4F_CFLAGS += $(L3_VARIANT_DEFS)
 
+# What the board image leaves out to fit DATA_RAM (0x30000 B, shared by the
+# 96 KB IQ16 scratch, the 32 KB heap, .data, .bss and the stacks). The code
+# stays in the tree and the host build (firmware_host.py) keeps all of it, so
+# the replay and the tests still run it. Put one back on the make line, e.g.
+#   make L3_FEATURE_DEFS="--define=L3_BALL_HYPOTHESES=1"
+# (make clean first; this replaces the whole list).
+#   L3_BALL_HYPOTHESES=0  the ball-hypothesis search: off at run time until
+#                         the recorded captures say otherwise (~1.6 KB)
+#   L3_TRIG_LOG_DEPTH=48  trigger flight recorder, host 128 (~2.2 KB)
+#   L3_TRIG_TRACE_DEPTH=24 trigger raw-input trace, host 64 (~1.3 KB)
+L3_FEATURE_DEFS ?= --define=L3_BALL_HYPOTHESES=0 --define=L3_TRIG_LOG_DEPTH=48U \
+                   --define=L3_TRIG_TRACE_DEPTH=24U
+R4F_CFLAGS += $(L3_FEATURE_DEFS)
+
 APPNAME = l3_dump
 
 # Sources live alongside this makefile.

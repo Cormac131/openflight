@@ -116,3 +116,36 @@ After the final review's fixes (a start band that moves out with the time since 
 that bypasses the core's frame-counted gate; no hypothesis claims a target once the ball is
 confirmed), the hypothesis search measures 55 / 11 ok / 34 wrong / 48 none / 23 present — still
 short of R8, so `useHypotheses` stays 0.
+
+## The Pi detector's rules as switches (2026-09-28)
+
+The Pi's Python detector (`tracking.find_ball_from_power`, `shot.process_dump`,
+`lcmf._tx2_horizontal_proxy`) never assigned club and ball per frame: it fitted one
+range-vs-time line through a whole capture's worth of per-chirp peaks, preferred the fastest
+credible line over the one with the most points, and read the horizontal angle along that line
+late in the flight. Three of its rules are now firmware switches, all off by default until judged
+on the 93 captures:
+
+| rule | switch | replay / evaluator |
+|---|---|---|
+| Fastest credible: a hypothesis at or above the floor, with at least 0.55 of the most points any qualifying hypothesis holds, beats a slower best-scoring one; a slow winner waits while a fast hypothesis is still gathering points | `l3_ball_hyps_cfg_t.fastBallMps`, `fastSupportFraction` | `BallTuning.fast_ball_mps`, `--fast-ball <m/s>` or `--fast-ball club` (`shot.CLUB_MIN_BALL_MS` for the session's club) |
+| Hard speed floor | `minDepartureMps` (both searches; existing) | `BallTuning.min_departure_mps`, `--min-departure-mps` |
+| Far window: nothing short of origin + N bins is a hypothesis point | `l3_ball_hyps_cfg_t.farWindowBins` | `BallTuning.far_window_bins`, `--far-window-bins` |
+
+On the repo recordings (`tests/radar/recordings/`): `fastBallMps = 30` changes nothing (no slow
+competitor qualifies); `farWindowBins = 3` moves the 2026-08-24 launch from 47.1 to 44.1 m/s
+(OPS 45.1) and 20260916_185013 from 35.1 to 39.2 m/s. With the hypotheses on, five 2026-09-16
+recordings fail `ball_origin_bin` whatever the switches (already the case without them). A legacy
+floor of 20 m/s turns 20260927_144341's 13 m/s hand return into a 3-point launch the launch fit
+reads as 658.9 m/s: `l3_ball_track_launch` does not bound the 3D speed by `maxSpeedMps`.
+
+Not ported: the late-flight horizontal launch. A 3D fit over the newest points was tried and fails
+the angle-residual gate (`maxAngleResidualM`) on every recording: per-frame azimuths scatter by
+10-30 degrees, where the Pi averaged TX2 phase coherently over every chirp of the last eight frames
+(with an OPS-speed TDM correction and a 0.90 coherence gate). The board equivalent is a coherent
+cross-frame average of the azimuth phase along the ball track, which needs HLA truth to judge.
+
+To judge the switches:
+
+    uv run python scripts/analysis/evaluate_iwr_tracking.py iwr-test-sessions --ball-hypotheses on \
+        --fast-ball club --far-window-bins 3 --compare <baseline.json>

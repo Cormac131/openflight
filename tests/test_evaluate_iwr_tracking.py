@@ -134,14 +134,19 @@ def test_a_synthetic_shot_with_its_session_log_is_scored_end_to_end(ev, tmp_path
             "capture_path": f"/home/pi/{dump.name}",
             "ball_speed_mph": 60.0 / 0.44704,
         },
+        {"type": "shot_detected", "shot_number": 1, "club": "Driver"},
     ]
     (tmp_path / "session_x.jsonl").write_text(
         "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
     )
     cases = list(ev.iter_cases([tmp_path]))
     assert len(cases) == 1 and cases[0].config.tee_bin == 29
+    assert cases[0].club == "Driver"
     outcome = ev.evaluate(cases[0])
     assert (outcome.club, outcome.ball, outcome.ball_present) == ("club", "ok", True)
+    assert outcome.launch_hla_deg == pytest.approx(0.0, abs=1.0)
+    # The driver's 50 m/s floor sits below this 60 m/s ball: still found.
+    assert ev.evaluate(cases[0], ball_hypotheses=True, fast_ball_from_club=True).ball == "ok"
     assert ev.main([str(tmp_path), "--json", str(tmp_path / "out.json")]) == 0
     written = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
     assert written["summary"]["captures"] == 1
@@ -151,7 +156,7 @@ def test_the_cli_passes_the_ball_search_through(ev, monkeypatch, tmp_path):
     seen = []
     monkeypatch.setattr(ev, "iter_cases", lambda roots: iter([object()]))
 
-    def fake_evaluate(case, *, lib=None, ball_hypotheses=None):
+    def fake_evaluate(case, *, lib=None, ball_hypotheses=None, **_tuning):
         seen.append(ball_hypotheses)
         return ev.Outcome("x", "club", "ok", True, 40.0, 40.0)
 
@@ -160,3 +165,74 @@ def test_the_cli_passes_the_ball_search_through(ev, monkeypatch, tmp_path):
     assert ev.main([str(tmp_path), "--ball-hypotheses", "off"]) == 0
     assert ev.main([str(tmp_path)]) == 0
     assert seen == [True, False, None]
+
+
+def args_for(ev, *extra):
+    """The parsed command line, as main sees it."""
+    seen = {}
+
+    def fake_evaluate(case, *, lib=None, ball_hypotheses=None, tuning=None, fast_ball_from_club):
+        seen.update(tuning=tuning, from_club=fast_ball_from_club)
+        return ev.Outcome("x", "club", "ok", True, 40.0, 40.0)
+
+    return seen, fake_evaluate
+
+
+def test_no_rule_flags_means_no_tuning(ev, monkeypatch, tmp_path):
+    seen, fake = args_for(ev)
+    monkeypatch.setattr(ev, "iter_cases", lambda roots: iter([object()]))
+    monkeypatch.setattr(ev, "evaluate", fake)
+    assert ev.main([str(tmp_path)]) == 0
+    assert seen == {"tuning": None, "from_club": False}
+
+
+def test_the_cli_passes_the_pi_detector_rules_through(ev, monkeypatch, tmp_path):
+    seen, fake = args_for(ev)
+    monkeypatch.setattr(ev, "iter_cases", lambda roots: iter([object()]))
+    monkeypatch.setattr(ev, "evaluate", fake)
+    argv = [
+        str(tmp_path),
+        "--fast-ball",
+        "34",
+        "--fast-support",
+        "0.5",
+        "--min-departure-mps",
+        "15",
+        "--far-window-bins",
+        "3",
+    ]
+    assert ev.main(argv) == 0
+    assert seen["tuning"] == ev.fr.BallTuning(
+        fast_ball_mps=34.0,
+        fast_support_fraction=0.5,
+        min_departure_mps=15.0,
+        far_window_bins=3.0,
+    )
+    assert seen["from_club"] is False
+    assert ev.main([str(tmp_path), "--fast-ball", "club"]) == 0
+    assert seen == {"tuning": None, "from_club": True}
+
+
+def test_a_bad_fast_ball_value_is_refused(ev, tmp_path):
+    with pytest.raises(SystemExit, match="--fast-ball needs m/s or 'club'"):
+        ev.main([str(tmp_path), "--fast-ball", "quick"])
+
+
+@pytest.mark.parametrize(
+    ("club", "floor"),
+    [("SandWedge", 26.5), ("7i", 34.0), ("5 iron", 40.0), ("Driver", 50.0), (None, 30.0)],
+)
+def test_the_club_floor_is_the_pi_detectors_class_floor(ev, club, floor):
+    assert ev.club_fast_ball_mps(club) == floor
+
+
+def test_the_club_floor_fills_in_the_runs_tuning(ev, tmp_path):
+    case = ev.Case(tmp_path / "x.l3dump", ev.fr.ReplayConfig(tee_bin=29), 40.0, club="Driver")
+    assert ev.tuning_for(case, None) is None
+    assert ev.tuning_for(case, None, fast_ball_from_club=True) == ev.fr.BallTuning(
+        fast_ball_mps=50.0
+    )
+    kept = ev.fr.BallTuning(far_window_bins=3.0, fast_ball_mps=20.0)
+    assert ev.tuning_for(case, kept, fast_ball_from_club=True) == ev.fr.BallTuning(
+        far_window_bins=3.0, fast_ball_mps=50.0
+    )

@@ -21,6 +21,9 @@ void l3_ball_hyps_cfg_defaults(l3_ball_hyps_cfg_t *cfg)
     cfg->impactToleranceUs = 15000U;  /* the gate is not the exact impact */
     cfg->maxResidualBins = 1.0F;
     cfg->dopplerToleranceMps = 2.5F;
+    cfg->fastBallMps = 0.0F;          /* off until the recorded captures say otherwise */
+    cfg->fastSupportFraction = 0.55F; /* the Pi detector's FAST_SUPPORT_FRAC */
+    cfg->farWindowBins = 0.0F;        /* off until the recorded captures say otherwise */
 }
 
 static void l3_ball_hyps_clear(l3_ball_hyps_t *hyps)
@@ -211,6 +214,13 @@ uint32_t l3_ball_hyps_update(l3_ball_hyps_t *hyps, const l3_target_obs_t *target
     if (clubIndex < n) {
         taken[clubIndex] = 1U;  /* the club's return is never a ball point */
     }
+    if (cfg->farWindowBins > 0.0F) {
+        for (j = 0U; j < n; j++) {
+            if (targets[j].rangeBin < hyps->originBin + cfg->farWindowBins) {
+                taken[j] = 1U;  /* short of the far window: never a ball point */
+            }
+        }
+    }
     for (i = 0U; i < L3_BALL_HYP_MAX; i++) {
         if (hyps->hyp[i].active) {
             l3_ball_hyps_window(cfg, &hyps->hyp[i], timestampUs, &lo[i], &hi[i], &centre[i]);
@@ -323,9 +333,106 @@ int32_t l3_ball_hyps_set_angles(l3_ball_hyps_t *hyps, uint32_t index, float azim
     return 1;
 }
 
+/* Judge one hypothesis as the ball (see l3_ball_hyps_classify). Returns 1
+ * and fills out (index included) when it qualifies. */
+static int32_t l3_ball_hyps_judge(const l3_ball_hyps_t *hyps, uint32_t i,
+                                  l3_ball_hyp_verdict_t *out)
+{
+    const l3_ball_hyps_cfg_t *cfg = &hyps->cfg;
+    const l3_ball_hyp_t *hyp = &hyps->hyp[i];
+    float rate;
+    float atGate;
+    float residual;
+    float rateMps;
+    float originOffsetS;
+    float agree = 0.0F;
+    float weaker = 0.0F;
+    float withClub = 0.0F;
+    float weakerFraction;
+    uint32_t k;
+
+    if (!hyp->active || hyp->count < cfg->classifyPoints) {
+        return 0;
+    }
+    if (!l3_ball_hyp_fit(hyp, hyps->impactTimestampUs, &rate, &atGate, &residual) ||
+        !(rate > 0.0F)) {
+        return 0;
+    }
+    rateMps = rate * cfg->binWidthM;
+    if (rateMps < cfg->minDepartureMps || rateMps > cfg->maxSpeedMps) {
+        return 0;
+    }
+    originOffsetS = (hyps->originBin - atGate) / rate;
+    if (fabsf(originOffsetS) * 1.0e6F > (float)cfg->impactToleranceUs) {
+        return 0;
+    }
+    if (residual > cfg->maxResidualBins) {
+        return 0;
+    }
+    for (k = 0U; k < hyp->count; k++) {
+        const l3_ball_hyp_point_t *p = &hyp->points[k];
+
+        if (l3_track_wrapped_diff(rateMps, p->dopplerAliasMps, cfg->velocitySpanMps) <=
+            cfg->dopplerToleranceMps) {
+            agree += 1.0F;
+        }
+        if (p->clubStat > 0.0F) {
+            withClub += 1.0F;
+            if (p->stat < p->clubStat) {
+                weaker += 1.0F;
+            }
+        }
+    }
+    weakerFraction = (withClub > 0.0F) ? weaker / withClub : 0.5F;
+    memset(out, 0, sizeof(*out));
+    out->index = (int32_t)i;
+    out->points = hyp->count;
+    out->rateMps = rateMps;
+    out->originOffsetUs = originOffsetS * 1.0e6F;
+    out->residualBins = residual;
+    out->dopplerAgreement = agree / (float)hyp->count;
+    out->weakerFraction = weakerFraction;
+    out->score = (1.0F - residual / cfg->maxResidualBins) + out->dopplerAgreement +
+                 0.5F * weakerFraction;
+    return 1;
+}
+
+/* An active hypothesis not yet classifiable that is already leaving at
+ * fastBallMps or more (2+ points, fitted from its last point). */
+static int32_t l3_ball_hyps_fastPending(const l3_ball_hyps_t *hyps)
+{
+    const l3_ball_hyps_cfg_t *cfg = &hyps->cfg;
+    uint32_t i;
+
+    for (i = 0U; i < L3_BALL_HYP_MAX; i++) {
+        const l3_ball_hyp_t *hyp = &hyps->hyp[i];
+        float rate;
+        float atLast;
+        float residual;
+        float rateMps;
+
+        if (!hyp->active || hyp->count < 2U || hyp->count >= cfg->classifyPoints) {
+            continue;
+        }
+        if (!l3_ball_hyp_fit(hyp, hyp->points[hyp->count - 1U].timestampUs, &rate, &atLast,
+                             &residual)) {
+            continue;
+        }
+        rateMps = rate * cfg->binWidthM;
+        if (rateMps >= cfg->fastBallMps && rateMps <= cfg->maxSpeedMps) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void l3_ball_hyps_classify(const l3_ball_hyps_t *hyps, l3_ball_hyp_verdict_t *out)
 {
     const l3_ball_hyps_cfg_t *cfg = &hyps->cfg;
+    l3_ball_hyp_verdict_t best;
+    l3_ball_hyp_verdict_t fast;
+    l3_ball_hyp_verdict_t cand;
+    uint32_t mostPoints = 0U;
     uint32_t i;
 
     memset(out, 0, sizeof(*out));
@@ -333,65 +440,44 @@ void l3_ball_hyps_classify(const l3_ball_hyps_t *hyps, l3_ball_hyp_verdict_t *ou
     if (!hyps->armed || !(cfg->maxResidualBins > 0.0F)) {
         return;
     }
+    memset(&best, 0, sizeof(best));
+    memset(&fast, 0, sizeof(fast));
+    best.index = -1;
+    fast.index = -1;
     for (i = 0U; i < L3_BALL_HYP_MAX; i++) {
-        const l3_ball_hyp_t *hyp = &hyps->hyp[i];
-        float rate;
-        float atGate;
-        float residual;
-        float rateMps;
-        float originOffsetS;
-        float agree = 0.0F;
-        float weaker = 0.0F;
-        float withClub = 0.0F;
-        float weakerFraction;
-        float score;
-        uint32_t k;
-
-        if (!hyp->active || hyp->count < cfg->classifyPoints) {
+        if (!l3_ball_hyps_judge(hyps, i, &cand)) {
             continue;
         }
-        if (!l3_ball_hyp_fit(hyp, hyps->impactTimestampUs, &rate, &atGate, &residual) ||
-            !(rate > 0.0F)) {
-            continue;
+        if (cand.points > mostPoints) {
+            mostPoints = cand.points;
         }
-        rateMps = rate * cfg->binWidthM;
-        if (rateMps < cfg->minDepartureMps || rateMps > cfg->maxSpeedMps) {
-            continue;
+        if (best.index < 0 || cand.score > best.score) {
+            best = cand;
         }
-        originOffsetS = (hyps->originBin - atGate) / rate;
-        if (fabsf(originOffsetS) * 1.0e6F > (float)cfg->impactToleranceUs) {
-            continue;
+        if (cfg->fastBallMps > 0.0F && cand.rateMps >= cfg->fastBallMps &&
+            (fast.index < 0 || cand.points > fast.points ||
+             (cand.points == fast.points && cand.score > fast.score))) {
+            fast = cand;
         }
-        if (residual > cfg->maxResidualBins) {
-            continue;
+    }
+    if (cfg->fastBallMps > 0.0F && (best.index < 0 || best.rateMps < cfg->fastBallMps)) {
+        /* Fastest credible: a fast hypothesis with enough support of its own
+         * beats a slower, better-scoring one. */
+        if (fast.index >= 0 &&
+            (float)fast.points >= cfg->fastSupportFraction * (float)mostPoints) {
+            *out = fast;
+            return;
         }
-        for (k = 0U; k < hyp->count; k++) {
-            const l3_ball_hyp_point_t *p = &hyp->points[k];
-
-            if (l3_track_wrapped_diff(rateMps, p->dopplerAliasMps, cfg->velocitySpanMps) <=
-                cfg->dopplerToleranceMps) {
-                agree += 1.0F;
-            }
-            if (p->clubStat > 0.0F) {
-                withClub += 1.0F;
-                if (p->stat < p->clubStat) {
-                    weaker += 1.0F;
-                }
-            }
+        /* The slow winner is likely the club or the tee while a fast one is
+         * still gathering points: wait for it. It classifies or coasts out
+         * within classifyPoints + maxMisses frames, so this is bounded. */
+        if (best.index >= 0 && l3_ball_hyps_fastPending(hyps)) {
+            out->waitingForFast = 1U;
+            return;
         }
-        weakerFraction = (withClub > 0.0F) ? weaker / withClub : 0.5F;
-        score = (1.0F - residual / cfg->maxResidualBins) + agree / (float)hyp->count +
-                0.5F * weakerFraction;
-        if (out->index < 0 || score > out->score) {
-            out->index = (int32_t)i;
-            out->points = hyp->count;
-            out->rateMps = rateMps;
-            out->originOffsetUs = originOffsetS * 1.0e6F;
-            out->residualBins = residual;
-            out->dopplerAgreement = agree / (float)hyp->count;
-            out->weakerFraction = weakerFraction;
-            out->score = score;
-        }
+    }
+    if (best.index >= 0) {
+        *out = best;
     }
 }
 

@@ -1113,6 +1113,25 @@ scratch (`g_iq16FrameScratch`) lives in the `.dataScratch` section in
 `DATA_RAM`, not in L3 — it no longer competes with the capture ring for L3
 space.
 
+`DATA_RAM` (192 KB) holds that 96 KB scratch, the 32 KB SYS/BIOS heap, and all
+of the firmware's static state. The tracker state outgrew what was left, so the
+board image compiles some features out through `L3_FEATURE_DEFS` in
+`firmware/iwr6843/makefile`. The code stays in the tree, and the host build
+(the replay and the tests) keeps all of it:
+
+| Switch | Board | Host | What it drops |
+|---|---|---|---|
+| `L3_BALL_HYPOTHESES` | `0` | `1` | The ball-hypothesis search. It is off at run time until the recorded captures justify it (~1.6 KB). |
+| `L3_TRIG_LOG_DEPTH` | `48U` | `128U` | Older trigger flight-recorder records (~2.2 KB) |
+| `L3_TRIG_TRACE_DEPTH` | `24U` | `64U` | Older trigger raw-input trace entries (~1.3 KB) |
+
+To put a feature back, override the list on the make line and rebuild from
+clean. For example: `make clean && make bin
+L3_FEATURE_DEFS="--define=L3_BALL_HYPOTHESES=1"`. Check the map's `DATA_RAM`
+unused bytes afterwards. `tests/test_iwr6843_firmware_board_image.py` builds
+the modules with the makefile's list and checks the result against the host
+build.
+
 The firmware rejects invalid windows, frame plans, and L3 budgets at
 `sensorStart`. The dense IQ8 profile also has only about 380 microseconds
 between its 1.62 ms RF burst and the next 2 ms frame. Its EDMA packer moves the
@@ -1139,6 +1158,7 @@ uv run pytest \
   tests/test_iwr6843_firmware_impact.py \
   tests/test_iwr6843_firmware_shot.py \
   tests/test_iwr6843_firmware_ball_track.py \
+  tests/test_iwr6843_firmware_board_image.py \
   tests/test_iwr6843_firmware_result.py \
   tests/test_iwr6843_firmware_profile.py \
   tests/test_iwr6843_pipeline.py \

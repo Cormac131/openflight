@@ -10,6 +10,7 @@ through the same path when present.
 
 from __future__ import annotations
 
+import ctypes
 import importlib.util
 import json
 import math
@@ -23,6 +24,7 @@ from openflight.iwr6843 import firmware_host as fw
 from openflight.iwr6843.dump import SAMPLE_INT16_IQ, SAMPLE_RANGE_FFT_IQ16, pack_dump, parse_dump
 from openflight.iwr6843.firmware_replay import (
     RECORDINGS_DIR,
+    BallTuning,
     ReplayConfig,
     RetainReplay,
     bin_observation_table,
@@ -642,3 +644,53 @@ def test_the_search_switch_leaves_the_default_replay_alone(lib, whole_shot):
     off = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN, ball_hypotheses=False), lib=lib)
     assert [p.range_bin for p in default.ball_points] == [p.range_bin for p in off.ball_points]
     assert all(frame.ball_hypotheses == () for frame in off.frames)
+
+
+def test_ball_tuning_writes_only_what_it_sets(lib):
+    default = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(default))
+    untouched = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(untouched))
+    BallTuning().apply(untouched)
+    assert bytes(untouched) == bytes(default)
+
+    tuned = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(tuned))
+    BallTuning(
+        fast_ball_mps=34.0,
+        fast_support_fraction=0.5,
+        min_departure_mps=18.0,
+        far_window_bins=3.0,
+    ).apply(tuned)
+    assert (tuned.hyps.fastBallMps, tuned.hyps.fastSupportFraction) == (34.0, 0.5)
+    # One floor, both searches: the legacy acquisition and the hypotheses.
+    assert (tuned.minDepartureMps, tuned.hyps.minDepartureMps) == (18.0, 18.0)
+    assert tuned.hyps.farWindowBins == 3.0
+    assert tuned.useHypotheses == default.useHypotheses
+
+
+def test_empty_ball_tuning_leaves_the_replay_alone(lib, whole_shot):
+    plain = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    tuned = replay_dump(
+        whole_shot, ReplayConfig(tee_bin=TEE_BIN, ball_tuning=BallTuning()), lib=lib
+    )
+    assert [p.range_bin for p in plain.ball_points] == [p.range_bin for p in tuned.ball_points]
+    assert plain.launch == tuned.launch
+
+
+def test_ball_tuning_reaches_the_replayed_launch(lib, whole_shot):
+    """The synthetic ball flies clean: every switch on still finds it."""
+    tuning = BallTuning(fast_ball_mps=30.0, far_window_bins=2.0)
+    result = replay_dump(
+        whole_shot,
+        ReplayConfig(tee_bin=TEE_BIN, ball_hypotheses=True, ball_tuning=tuning),
+        lib=lib,
+    )
+    assert result.launch is not None
+    assert result.launch.speed_mps == pytest.approx(60.0, rel=0.1)
+    too_fast = replay_dump(
+        whole_shot,
+        ReplayConfig(tee_bin=TEE_BIN, ball_tuning=BallTuning(min_departure_mps=80.0)),
+        lib=lib,
+    )
+    assert too_fast.launch is None, "the hard floor reaches the legacy acquisition"

@@ -37,13 +37,19 @@
 #define L3_TRIG_MAX_BINS          64U
 /* Flight-recorder depth: frames with a candidate or an active track. Idle
  * frames only count toward the next record's gap, so a missed swing stays
- * readable for as long as the player takes to ask for it. */
+ * readable for as long as the player takes to ask for it. The board image
+ * keeps fewer (L3_FEATURE_DEFS in the makefile) to fit DATA_RAM; these are
+ * the host build's. */
+#ifndef L3_TRIG_LOG_DEPTH
 #define L3_TRIG_LOG_DEPTH         128U
+#endif
 /* Raw-input trace: the region's strongest bin, every frame it reaches
  * L3_TRIG_TRACE_RATIO times the floor (well under any snr worth arming
  * with), with its energy, strongest loop and loop-0 power. Answers "did the
  * radar see anything at all" when the log stays empty. */
+#ifndef L3_TRIG_TRACE_DEPTH
 #define L3_TRIG_TRACE_DEPTH       64U
+#endif
 #define L3_TRIG_TRACE_RATIO       2.0F
 /* A track survives this many frames without a candidate. */
 #define L3_TRIG_MAX_MISSES        1U

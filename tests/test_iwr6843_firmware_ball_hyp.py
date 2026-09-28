@@ -271,3 +271,99 @@ def test_a_late_gate_still_finds_a_fast_ball(lib, frame_us, late_frames):
     v = verdict(lib, hyps)
     assert v.index >= 0
     assert v.rateMps == pytest.approx(70.0, rel=0.03)
+
+
+# --- the Pi detector's rules: fastest credible and the far window -------------
+
+
+def test_the_pi_detector_rules_are_off_by_default(lib):
+    cfg = fw.BallHypsCfg()
+    lib.l3_ball_hyps_cfg_defaults(ctypes.byref(cfg))
+    assert (cfg.fastBallMps, cfg.farWindowBins) == (0.0, 0.0)
+    assert cfg.fastSupportFraction == pytest.approx(0.55)
+
+
+SLOW_MPS = 25.0  # the club's follow-through or the flying tee: clean and slow
+FAST_MPS = 42.0  # the ball: a little ragged
+FAST_JITTER = [0.0, 0.4, -0.4, 0.4, -0.4, 0.4, -0.4, 0.4]
+
+
+def slow_and_fast(lib, *, slow_frames=range(1, 7), fast_frames=range(1, 7), **overrides):
+    """A clean slow mover from the origin beside a ragged fast one 4 bins out.
+
+    Neither is the club's claim, so neither is weaker than it: on score alone
+    the slow, tighter line wins -- the Pi detector's 2026-07-14 failure."""
+    hyps = make_hyps(lib, **overrides)
+    arm(lib, hyps)
+    slow_step = SLOW_MPS * 0.002 / BIN_M
+    fast_step = FAST_MPS * 0.002 / BIN_M
+    for k in range(1, max(max(slow_frames), max(fast_frames)) + 1):
+        ts = 2000 * k
+        targets = []
+        if k in slow_frames:
+            targets.append(obs(k, ts, 46.0 + slow_step * k, 1500.0, SLOW_MPS))
+        if k in fast_frames:
+            targets.append(obs(k, ts, 50.0 + fast_step * k + FAST_JITTER[k - 1], 1500.0, FAST_MPS))
+        feed(lib, hyps, k, ts, targets)
+    return hyps
+
+
+def test_on_score_alone_the_slow_clean_line_wins(lib):
+    v = verdict(lib, slow_and_fast(lib))
+    assert v.index >= 0 and v.rateMps == pytest.approx(SLOW_MPS, rel=0.05)
+    assert v.waitingForFast == 0
+
+
+def test_fastest_credible_takes_the_fast_line_with_enough_support(lib):
+    v = verdict(lib, slow_and_fast(lib, fastBallMps=30.0))
+    assert v.index >= 0 and v.rateMps == pytest.approx(FAST_MPS, rel=0.05)
+    assert v.points == 6
+
+
+def test_a_winner_already_fast_enough_is_kept(lib):
+    """The rule only overrides a winner slower than the floor."""
+    v = verdict(lib, slow_and_fast(lib, fastBallMps=20.0))
+    assert v.rateMps == pytest.approx(SLOW_MPS, rel=0.05)
+
+
+def test_a_fast_line_without_enough_support_does_not_win(lib):
+    hyps = slow_and_fast(lib, slow_frames=range(1, 9), fast_frames=range(5, 9), fastBallMps=30.0)
+    v = verdict(lib, hyps)  # 4 fast points < 0.55 x 8 slow points
+    assert v.rateMps == pytest.approx(SLOW_MPS, rel=0.05)
+    hyps = slow_and_fast(
+        lib,
+        slow_frames=range(1, 9),
+        fast_frames=range(5, 9),
+        fastBallMps=30.0,
+        fastSupportFraction=0.5,
+    )
+    assert verdict(lib, hyps).rateMps > 35.0  # the fast line (4 ragged points: rate ~46)
+
+
+def test_a_slow_winner_waits_for_a_fast_line_still_gathering_points(lib):
+    hyps = slow_and_fast(lib, slow_frames=range(1, 5), fast_frames=range(2, 5), fastBallMps=30.0)
+    v = verdict(lib, hyps)  # slow: 4 points, classifiable; fast: 3, not yet
+    assert (v.index, v.waitingForFast) == (-1, 1)
+    off = slow_and_fast(lib, slow_frames=range(1, 5), fast_frames=range(2, 5))
+    assert verdict(lib, off).rateMps == pytest.approx(SLOW_MPS, rel=0.05)
+
+
+def test_the_wait_ends_when_the_fast_line_coasts_out(lib):
+    hyps = slow_and_fast(lib, slow_frames=range(1, 9), fast_frames=range(2, 5), fastBallMps=30.0)
+    v = verdict(lib, hyps)  # the fast line missed frames 5-7 and was dropped
+    assert v.index >= 0 and v.waitingForFast == 0
+    assert v.rateMps == pytest.approx(SLOW_MPS, rel=0.05)
+
+
+def test_the_far_window_keeps_near_returns_out_of_the_search(lib):
+    """A stall beside the ball (the hand or the resting club) starts no
+    hypothesis inside the far window; the ball is picked up once clear."""
+    scene = TwoTracks(frames=8, club_visible=False, extras=[(47.5, 20000.0, 0.8)])
+    hyps, frames = run(lib, scene)
+    assert any(h.points[0].rangeBin == pytest.approx(47.5) for h in active(hyps))
+    hyps, frames = run(lib, scene, farWindowBins=3.0)
+    for hyp in active(hyps):
+        assert min(bins(hyp)) >= 46.0 + 3.0
+    v = verdict(lib, hyps)
+    assert v.index >= 0 and v.rateMps == pytest.approx(42.0, rel=0.03)
+    assert bins(hyps.hyp[v.index]) == [b for b in truth(frames) if b >= 49.0][-8:]

@@ -217,6 +217,35 @@ class RetainSummary:
 
 
 @dataclass(frozen=True)
+class BallTuning:
+    """``l3_ball_track_cfg_t`` overrides for one replay; None keeps the firmware default.
+
+    The Pi detector's ball rules, as firmware switches to judge on captures:
+    ``fast_ball_mps`` / ``fast_support_fraction`` are its fastest-credible
+    selection among the hypotheses, ``min_departure_mps`` its hard speed floor
+    (set on both the legacy acquisition and the hypotheses) and
+    ``far_window_bins`` its separate far range window.
+    """
+
+    fast_ball_mps: float | None = None
+    fast_support_fraction: float | None = None
+    min_departure_mps: float | None = None
+    far_window_bins: float | None = None
+
+    def apply(self, cfg: fw.BallTrackCfg) -> None:
+        """Write the set overrides into a ball-track configuration."""
+        if self.fast_ball_mps is not None:
+            cfg.hyps.fastBallMps = self.fast_ball_mps
+        if self.fast_support_fraction is not None:
+            cfg.hyps.fastSupportFraction = self.fast_support_fraction
+        if self.min_departure_mps is not None:
+            cfg.minDepartureMps = self.min_departure_mps
+            cfg.hyps.minDepartureMps = self.min_departure_mps
+        if self.far_window_bins is not None:
+            cfg.hyps.farWindowBins = self.far_window_bins
+
+
+@dataclass(frozen=True)
 class ReplayConfig:
     """What ``triggerCfg`` and the capture profile would have told the board."""
 
@@ -256,6 +285,8 @@ class ReplayConfig:
     # The ball search: True/False sets l3_ball_track_cfg_t.useHypotheses for
     # this replay; None keeps the firmware default.
     ball_hypotheses: bool | None = None
+    # The Pi detector's rules as ball-track overrides; None keeps the defaults.
+    ball_tuning: BallTuning | None = None
 
     @property
     def destination(self) -> int:
@@ -710,6 +741,8 @@ def replay_dump(
     ball_cfg.core.cal = cal
     if config.ball_hypotheses is not None:
         ball_cfg.useHypotheses = 1 if config.ball_hypotheses else 0
+    if config.ball_tuning is not None:
+        config.ball_tuning.apply(ball_cfg)
     ball_track = fw.BallTrack()
     lib.l3_ball_track_init(ctypes.byref(ball_track), ctypes.byref(ball_cfg))
     launch = fw.Launch()
@@ -1468,6 +1501,7 @@ __all__ = [
     "EXPECT_KEY",
     "FALLBACK_FRAME_PERIOD_US",
     "AngleSummary",
+    "BallTuning",
     "Expectation",
     "DeliverySummary",
     "HypothesisSummary",
