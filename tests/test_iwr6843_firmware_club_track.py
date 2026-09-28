@@ -433,6 +433,31 @@ def test_measured_angles_never_mix_with_assumed_boresight(lib):
     assert out.pathRad / DEG == pytest.approx(6.0, abs=0.2)
 
 
+def test_too_few_angled_points_give_a_radial_only_delivery_never_a_mix(lib):
+    """Six points walking 2 bins a frame, only two of them angled and wildly
+    inconsistent (the 2026-09-27 ball: one boresight point and two noise
+    angles made 339 m/s). With under three angled points the fit cannot read
+    a direction, so it must not blend boresight and angled positions: the
+    speed is the range walk's and nothing angular is claimed."""
+    tr = Tracker(lib)
+    wild = {2: (35.0 * DEG, -25.0 * DEG), 4: (-40.0 * DEG, 30.0 * DEG)}
+    for frame in range(1, 7):
+        tr.update(frame, [target(frame, 20.0 + 2.0 * frame)])
+        if frame in wild:
+            az, el = wild[frame]
+            lib.l3_track_set_angles(ctypes.byref(tr.track), az, el, ANGLE_AZIMUTH | ANGLE_ELEVATION)
+    used, out = delivery(lib, tr)
+    walk_mps = 2.0 * BIN_M / (FRAME_US * 1e-6)
+    assert used == 6
+    assert out.radialSpeedMps == pytest.approx(walk_mps, rel=1e-3)
+    assert out.speedValid and out.speedMps == pytest.approx(out.radialSpeedMps, abs=1e-3)
+    assert (out.velocity.x, out.velocity.y, out.velocity.z) == pytest.approx(
+        (out.radialSpeedMps, 0.0, 0.0), abs=1e-3
+    )
+    assert not out.pathValid and not out.attackValid
+    assert out.azimuthPoints == 0 and out.elevationPoints == 0
+
+
 def test_delivery_needs_three_points_and_honours_max_points(lib):
     tr, _, _ = straight_line_track(lib, frames=2)
     used, out = delivery(lib, tr)

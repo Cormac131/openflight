@@ -532,11 +532,13 @@ uint32_t l3_delivery_fit(l3_point_at_fn pointAt, const void *ctx, uint32_t first
     out->radialSpeedMps = (radialSlope < 0.0F) ? -radialSlope : radialSlope;
     out->speedMps = l3_frames_speed(&out->velocity);
     out->speedValid = 1U;
-    if (required != 0U && maxAngleResidualM > 0.0F &&
-        out->residualM > maxAngleResidualM) {
-        /* The angled positions do not lie on a line: the angles are noise
-         * (a fast ball crossing bins within a burst does this). Keep the
-         * range walk, which is a measurement, and drop the direction. */
+    if (required == 0U ||
+        (maxAngleResidualM > 0.0F && out->residualM > maxAngleResidualM)) {
+        /* Under three angled points no direction can be read, and the
+         * positions mix assumed boresight with whatever angles there are;
+         * or the angled positions do not lie on a line: the angles are noise
+         * (a fast ball crossing bins within a burst does this). Either way
+         * keep the range walk, which is a measurement, and drop the direction. */
         required = 0U;
         out->azimuthPoints = 0U;
         out->elevationPoints = 0U;
