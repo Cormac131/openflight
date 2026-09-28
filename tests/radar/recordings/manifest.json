@@ -92,5 +92,19 @@
         40
       ]
     }
+  },
+  "iwr6843_20260824_120408_601_001.l3dump": {
+    "tee_bin": 39,
+    "dest_bin": null,
+    "post_from_frame": null,
+    "pitch_deg": 10.5,
+    "notes": "2026-08-24 trackman session, wide 24f3ms 53-bin IQ16, sound-triggered; OPS ball 100.8 mph (45.1 m/s). The session's tee (1.524 m, bin 33) fires the gate at frame 4; tee_bin 39 is what the replay needs to fire near impact (frame 7). After impact a strong stall sits at 38.2-38.4, the club carries on 40.1 -> 43.1, and the weak ball leaves 44.7 -> 84.8 at ~2.7 bins per 3 ms.",
+    "expect": {
+      "fires": true,
+      "ball_speed_mps": [
+        40,
+        50
+      ]
+    }
   }
 }
