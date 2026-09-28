@@ -19,13 +19,15 @@ int32_t l3_band_contains(const l3_band_t *band, float bin)
     return (band->valid && bin >= band->loBin && bin <= band->hiBin) ? 1 : 0;
 }
 
-uint32_t l3_band_filter(const l3_band_t *band, l3_target_obs_t *targets, uint32_t n)
+/* Compact targets in place, keeping those drop() rejects, in their order. */
+static uint32_t l3_band_compact(const l3_band_t *band, l3_target_obs_t *targets, uint32_t n,
+                                int32_t (*drop)(const l3_band_t *band, float bin))
 {
     uint32_t kept = 0U;
     uint32_t i;
 
     for (i = 0U; i < n; i++) {
-        if (l3_band_contains(band, targets[i].rangeBin)) {
+        if (drop(band, targets[i].rangeBin)) {
             continue;
         }
         if (kept != i) {
@@ -34,4 +36,20 @@ uint32_t l3_band_filter(const l3_band_t *band, l3_target_obs_t *targets, uint32_
         kept++;
     }
     return kept;
+}
+
+/* 1 when bin is inside a valid band or beyond it. */
+static int32_t l3_band_notShort(const l3_band_t *band, float bin)
+{
+    return (band->valid && bin >= band->loBin) ? 1 : 0;
+}
+
+uint32_t l3_band_filter(const l3_band_t *band, l3_target_obs_t *targets, uint32_t n)
+{
+    return l3_band_compact(band, targets, n, l3_band_contains);
+}
+
+uint32_t l3_band_keep_short(const l3_band_t *band, l3_target_obs_t *targets, uint32_t n)
+{
+    return l3_band_compact(band, targets, n, l3_band_notShort);
 }

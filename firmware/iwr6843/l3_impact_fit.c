@@ -10,7 +10,7 @@ void l3_impact_fit_cfg_defaults(l3_impact_fit_cfg_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
     cfg->binWidthM = 6.0F / 128.0F;
-    cfg->bandBins = 6.0F;         /* the ridge on the 2026-09-28 capture */
+    cfg->bandBins = 0.0F;         /* off; 6 bins is the ridge on the 2026-09-28 capture */
     cfg->fitPoints = 4U;          /* about 12 ms at 3 ms frames */
     cfg->minPoints = 3U;          /* a line and a residual */
     cfg->clubMinMps = 10.0F;
@@ -20,6 +20,7 @@ void l3_impact_fit_cfg_defaults(l3_impact_fit_cfg_t *cfg)
     cfg->ballMaxMps = 90.0F;
     cfg->gateSigmas = 3.0F;
     cfg->minSigmaUs = 500.0F;
+    cfg->maxSigmaUs = 3000.0F;    /* one 3 ms frame */
 }
 
 void l3_impact_fit_reset(l3_impact_fit_t *fit)
@@ -183,12 +184,17 @@ void l3_impact_fit_track(const l3_impact_fit_cfg_t *cfg, uint8_t which, l3_point
         out->why = L3_FIT_WHY_NONFINITE;
         return;
     }
+    if (cfg->maxSigmaUs > 0.0F && out->sigmaUs > cfg->maxSigmaUs) {
+        /* Time, sigma and speed stay filled for diagnostics. */
+        out->why = L3_FIT_WHY_UNCERTAIN;
+        return;
+    }
     out->why = L3_FIT_WHY_OK;
 }
 
 static const char *const kWhyNames[L3_FIT_WHY_COUNT] = {
     "ok", "missing", "few_points", "wrong_direction", "speed_bounds", "physics", "nonfinite",
-    "dropped"
+    "dropped", "uncertain"
 };
 static const char *const kVerdictNames[L3_FIT_VERDICT_COUNT] = {
     "none", "single_track", "consistent", "inconsistent"
@@ -377,7 +383,8 @@ int32_t l3_impact_fit_format(const l3_impact_fit_t *fit, char *out, uint32_t cap
     for (i = 0U; i < L3_FIT_TRACKS; i++) {
         const l3_fit_estimate_t *e = &fit->track[i];
 
-        if (e->why == L3_FIT_WHY_OK || e->why == L3_FIT_WHY_DROPPED) {
+        if (e->why == L3_FIT_WHY_OK || e->why == L3_FIT_WHY_DROPPED ||
+            e->why == L3_FIT_WHY_UNCERTAIN) {
             (void)snprintf(tracks[i], sizeof(tracks[i]), "%s=%s:%d+-%d", kTrackNames[i],
                            l3_impact_fit_why_name(e->why), (int)(e->timeUs + 0.5F),
                            (int)(e->sigmaUs + 0.5F));

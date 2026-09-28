@@ -14,13 +14,14 @@ import ctypes
 import importlib.util
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 from iwr6843_synth import CLUB_SPEED_MS, FRAME_PERIOD_S, synth_club_dump, synth_shot_dump
 
-from openflight.iwr6843 import firmware_host as fw
+from openflight.iwr6843 import firmware_host as fw, firmware_replay as fr
 from openflight.iwr6843.dump import SAMPLE_INT16_IQ, SAMPLE_RANGE_FFT_IQ16, pack_dump, parse_dump
 from openflight.iwr6843.firmware_replay import (
     RECORDINGS_DIR,
@@ -707,3 +708,70 @@ def test_ball_tuning_reaches_the_replayed_launch(lib, whole_shot):
         lib=lib,
     )
     assert too_fast.launch is None, "the hard floor reaches the legacy acquisition"
+
+
+def test_with_the_band_on_no_pre_impact_club_point_is_in_or_beyond_it(lib):
+    """Band on, the club track only sees targets short of the band before
+    impact: none of its pre-impact points lies in the band or beyond it."""
+    for path, config in fr.recording_configs():
+        result = fr.replay_file(path, replace(config, band_bins=6.0), lib=lib)
+        assert result.band is not None
+        lo, _hi = result.band
+        impact_frame = result.fired_frame if result.fired_frame is not None else 10**9
+        not_short = [p for p in result.points if p.frame <= impact_frame and p.range_bin >= lo]
+        assert not not_short, f"{path.name}: club points in or beyond the band {not_short}"
+
+
+def test_the_band_is_off_by_default_and_with_zero(lib):
+    path, config = next(iter(fr.recording_configs()))
+    assert config.band_bins is None
+    assert fr.replay_file(path, config, lib=lib).band is None
+    assert fr.replay_file(path, replace(config, band_bins=0.0), lib=lib).band is None
+    assert fr.replay_file(path, replace(config, band_bins=6.0), lib=lib).band is not None
+
+
+PRE_IMPACT_STATES = ("waiting_for_ball", "ready", "club_acquire", "club_track")
+
+
+def test_impact_fit_is_reported_exactly_when_impact_is_declared(lib):
+    declared_any = False
+    for path, config in fr.recording_configs():
+        result = fr.replay_file(path, config, lib=lib)
+        declared = fw.SHOT_STATE_NAMES[result.shot.state] not in PRE_IMPACT_STATES
+        declared_any |= declared
+        assert (result.impact_fit is not None) == declared, path.name
+        assert result.impact_fit_status.startswith("impactfit verdict=")
+        assert "impactfit verdict=" in fr.format_report(result)
+        if declared:
+            assert result.impact_fit.verdict in fw.FIT_VERDICT_NAMES
+            assert set(result.impact_fit.tracks) == set(fw.FIT_TRACK_NAMES)
+    assert declared_any, "no recording reached impact: the test proves nothing"
+
+
+@pytest.mark.parametrize("band_bins", [None, 6.0])
+def test_synthetic_shot_impact_lands_on_the_synthesized_time(lib, band_bins):
+    """tests/iwr6843_synth.py: club at 22 m/s to a known impact, then the ball
+    leaving at 60 m/s. Point timestamps are frame starts, so allow half a
+    4 ms frame of integration offset plus the 0.5 ms gate floor."""
+    from iwr6843_synth import IMPACT_S  # pylint: disable=import-outside-toplevel
+
+    raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=1.372)
+    config = fr.ReplayConfig(tee_bin=29, dest_bin=29, impact_armed=True, band_bins=band_bins)
+    result = fr.replay_dump(raw, config, lib=lib)
+
+    assert (result.band is not None) == (band_bins is not None)
+    assert result.impact_fit is not None
+    assert result.impact_fit.verdict in ("consistent", "single_track")
+    assert result.impact_fit.tracks["ball_out"].why == "ok"
+    assert result.impact_fit.impact_us == pytest.approx(IMPACT_S * 1e6, abs=2_500)
+
+
+def test_an_uncertain_track_keeps_its_time_and_sigma_in_the_summary(lib):
+    """20260927 with the band on: the ball track reads a +-9.5 ms crossing,
+    over the cap; the summary shows it as uncertain with its numbers."""
+    path, config = next(p for p in fr.recording_configs() if "20260927" in p[0].name)
+    result = fr.replay_file(path, replace(config, band_bins=6.0), lib=lib)
+    ball = result.impact_fit.tracks["ball_out"]
+    assert ball.why == "uncertain"
+    assert ball.sigma_us is not None and ball.sigma_us > 3000.0 and ball.time_us is not None
+    assert result.launch.speed_mps < 60.0, "a two-angle ball track is radial only, never 339 m/s"

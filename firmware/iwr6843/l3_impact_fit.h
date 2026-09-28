@@ -31,6 +31,7 @@ enum {
     L3_FIT_WHY_PHYSICS,          /* contradicts another track (smash, club slowing) */
     L3_FIT_WHY_NONFINITE,        /* times do not spread, or the fit overflowed */
     L3_FIT_WHY_DROPPED,          /* the outlier of three */
+    L3_FIT_WHY_UNCERTAIN,        /* sigma over maxSigmaUs: too loose to place impact */
     L3_FIT_WHY_COUNT
 };
 
@@ -44,7 +45,7 @@ enum {
 
 typedef struct {
     float    binWidthM;
-    float    bandBins;          /* the tee band's half width */
+    float    bandBins;          /* the tee band's half width; 0: no band */
     uint32_t fitPoints;         /* K nearest the band */
     uint32_t minPoints;
     float    clubMinMps;        /* club in */
@@ -54,6 +55,7 @@ typedef struct {
     float    ballMaxMps;
     float    gateSigmas;        /* agreement gate ... */
     float    minSigmaUs;        /* ... on at least this sigma */
+    float    maxSigmaUs;        /* a looser estimate is uncertain; 0 disables */
 } l3_impact_fit_cfg_t;
 
 typedef struct {

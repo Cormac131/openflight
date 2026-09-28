@@ -23,5 +23,10 @@ int32_t l3_band_contains(const l3_band_t *band, float bin);
 /* Drop the targets inside the band, keeping the others in their order
  * (strongest first). Returns how many are kept. */
 uint32_t l3_band_filter(const l3_band_t *band, l3_target_obs_t *targets, uint32_t n);
+/* Keep only the targets short of the band (rangeBin < loBin), in their order:
+ * before impact the club approaches the ball, so nothing in the band or
+ * beyond it can be the club. An invalid band keeps everything. Returns how
+ * many are kept. */
+uint32_t l3_band_keep_short(const l3_band_t *band, l3_target_obs_t *targets, uint32_t n);
 
 #endif /* L3_BAND_H */

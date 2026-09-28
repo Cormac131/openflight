@@ -144,6 +144,8 @@ def static_channel_snapshot(
 
 
 BALL_ANGLE_MIN_PEAK_RATIO = 3.0  # L3_BALL_ANGLE_MIN_PEAK_RATIO
+# Shot states before impact is declared: the impact fit runs only after them.
+PRE_IMPACT_SHOT_STATES = ("waiting_for_ball", "ready", "club_acquire", "club_track")
 
 _LIBRARY: ctypes.CDLL | None = None
 
@@ -291,6 +293,11 @@ class ReplayConfig:
     # the legacy ball tracker, host-only.  Results are included in the
     # ReplayResult as joint_ball_points and joint_club_points.
     joint_search: bool = False
+    # The tee band's half width in bins (l3_band.h): targets inside it are
+    # dropped before any tracker sees them (before impact the club keeps only
+    # targets short of it). None: the firmware default (l3_impact_fit_cfg_defaults,
+    # currently off); 0 disables it.
+    band_bins: float | None = None
 
     @property
     def destination(self) -> int:
@@ -345,6 +352,56 @@ class LaunchSummary:
     residual_m: float
     confidence: float
     velocity: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class TrackEstimateSummary:
+    """One track's impact estimate (l3_fit_estimate_t)."""
+
+    why: str
+    points: int
+    time_us: float | None  # None unless the estimate was kept, dropped or too uncertain
+    sigma_us: float | None
+    speed_mps: float
+
+
+@dataclass(frozen=True)
+class ImpactFitSummary:
+    """The three estimates and their fusion (l3_impact_fit_t)."""
+
+    verdict: str
+    impact_us: float | None
+    spread_us: float
+    refined_minus_trigger_us: float | None
+    dropped: str | None
+    no_lock: bool
+    tracks: dict[str, TrackEstimateSummary]
+
+
+def _impact_fit_summary(fit: fw.ImpactFit) -> ImpactFitSummary:
+    tracks = {}
+    for index, name in enumerate(fw.FIT_TRACK_NAMES):
+        e = fit.track[index]
+        why = fw.FIT_WHY_NAMES[e.why]
+        timed = why in ("ok", "dropped", "uncertain")  # the C keeps their time and sigma
+        tracks[name] = TrackEstimateSummary(
+            why,
+            int(e.points),
+            float(e.timeUs) if timed else None,
+            float(e.sigmaUs) if timed else None,
+            float(e.speedMps),
+        )
+    verdict = fw.FIT_VERDICT_NAMES[fit.verdict]
+    decided = verdict != "none"
+    return ImpactFitSummary(
+        verdict=verdict,
+        impact_us=float(fit.impactUs) if decided else None,
+        spread_us=float(fit.spreadUs),
+        refined_minus_trigger_us=float(fit.refinedMinusTriggerUs) if decided else None,
+        dropped=fw.FIT_TRACK_NAMES[fit.droppedTrack] if fit.droppedTrack < 3 else None,
+        no_lock=bool(fit.noLock),
+        tracks=tracks,
+    )
 
 
 @dataclass(frozen=True)
@@ -428,6 +485,10 @@ class ReplayResult:
     joint_club_points: list[PointSummary] = field(default_factory=list)
     joint_counters: dict[str, int] = field(default_factory=dict)
     joint_confirmed: bool = False
+    band: tuple[float, float] | None = None
+    range_frame: int | None = None  # the range-only impact's fire
+    impact_fit: ImpactFitSummary | None = None
+    impact_fit_status: str = ""
 
     @property
     def retain_windows(self) -> list[RetainSummary]:
@@ -732,6 +793,19 @@ def replay_dump(
     lib.l3_impact_cfg_defaults(ctypes.byref(impact_cfg))
     impact = fw.Impact()
     lib.l3_impact_init(ctypes.byref(impact), ctypes.byref(impact_cfg))
+    destination = config.destination
+    fit_cfg = fw.ImpactFitCfg()
+    lib.l3_impact_fit_cfg_defaults(ctypes.byref(fit_cfg))
+    fit_cfg.binWidthM = RANGE_SPAN_M / config.fft_size
+    if config.band_bins is not None:
+        fit_cfg.bandBins = config.band_bins
+    band = fw.Band()
+    lib.l3_band_around(float(destination), fit_cfg.bandBins, ctypes.byref(band))
+    range_impact = fw.Impact()
+    lib.l3_impact_init(ctypes.byref(range_impact), ctypes.byref(impact_cfg))
+    range_frame: int | None = None
+    ball_arm_bin = float(band.hiBin) if band.valid else float(destination)
+    club_reader = fw.fit_reader(lib, "l3_fit_span_point")
     delivery = fw.Delivery()
     ball_position = fw.Vec3()
     bin_width_m = RANGE_SPAN_M / config.fft_size
@@ -797,7 +871,6 @@ def replay_dump(
     targets = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
     first_local = ctypes.c_uint32()
     count = ctypes.c_uint32()
-    destination = config.destination
 
     frames: list[ReplayFrame] = []
     points: list[PointSummary] = []
@@ -808,7 +881,9 @@ def replay_dump(
     post_index = 0
     club_at_impact: tuple[float, float, float] | None = None
     for frame in range(int(meta["n_frames"])):
-        ended = fired_frame is not None or (config.impact_armed and geometric_frame is not None)
+        ended = fired_frame is not None or (
+            config.impact_armed and (geometric_frame is not None or range_frame is not None)
+        )
         forced = config.post_from_frame is not None and frame >= config.post_from_frame
         if config.stop_at_fire and ended and not forced:
             break
@@ -859,7 +934,7 @@ def replay_dump(
             )
             lib.l3_ball_track_arm(
                 ctypes.byref(ball_track),
-                float(destination),
+                ball_arm_bin,
                 ctypes.byref(ball_position),
                 timestamp_us,
             )
@@ -901,6 +976,7 @@ def replay_dump(
                     fw.TRIG_STATE_NAMES[trig.state],
                     track,
                     points,
+                    band,
                 )
             )
             if joint is not None:
@@ -916,6 +992,7 @@ def replay_dump(
                     params,
                     joint_floor,
                     joint_targets,
+                    band,
                 )
             continue
         in_window = lib.l3_trig_region(
@@ -950,16 +1027,19 @@ def replay_dump(
         fired = bool(
             lib.l3_trig_update(ctypes.byref(trig), frame, destination, first_bin, obs, count.value)
         )
-        found = lib.l3_obs_extract(
-            ctypes.byref(params),
+        found = _pre_impact_club_targets(
+            lib,
+            cube,
             frame,
             timestamp_us,
-            first_bin,
-            obs,
-            count.value,
-            trig.floor,
+            window_start,
+            window_bins,
+            n_tx,
+            params,
+            float(trig.floor),
+            band,
             targets,
-            fw.OBS_MAX_TARGETS,
+            trigger_region=(first_bin, obs, count.value),
         )
         appended = lib.l3_track_update(ctypes.byref(track), targets, found, frame, timestamp_us)
         track_bin = None
@@ -1003,6 +1083,22 @@ def replay_dump(
         )
         if geometric and geometric_frame is None:
             geometric_frame = frame
+        club_span = fw.FitSpan(ctypes.pointer(track), 0, track.count)
+        club_in = fw.FitEstimate()
+        lib.l3_impact_fit_track(
+            ctypes.byref(fit_cfg),
+            0,
+            club_reader,
+            ctypes.byref(club_span),
+            track.count,
+            destination * bin_width_m,
+            ctypes.byref(club_in),
+        )
+        ranged = lib.l3_impact_update_range(
+            ctypes.byref(range_impact), ctypes.byref(club_in), timestamp_us
+        )
+        if ranged and range_frame is None:
+            range_frame = frame
         if fired:
             fired_frame = frame
         # The shot machine, as l3_shotObserve feeds it; IMPACT arms the ball tracker.
@@ -1013,9 +1109,13 @@ def replay_dump(
         shot_in.clubPoints = track.count
         shot_in.gateFired = 1 if fired else 0
         shot_in.geometricFired = 1 if (geometric and config.impact_armed) else 0
-        shot_in.impactTimestampUs = (
-            int(impact.impactTimestampUs) if (geometric and config.impact_armed) else timestamp_us
-        )
+        shot_in.rangeFired = 1 if (ranged and config.impact_armed) else 0
+        if geometric and config.impact_armed:
+            shot_in.impactTimestampUs = int(impact.impactTimestampUs)
+        elif ranged and config.impact_armed:
+            shot_in.impactTimestampUs = int(range_impact.impactTimestampUs)
+        else:
+            shot_in.impactTimestampUs = timestamp_us
         shot_in.delivery = ctypes.pointer(delivery)
         shot_in.club = ctypes.pointer(track)
         if (
@@ -1025,7 +1125,7 @@ def replay_dump(
         ):
             lib.l3_ball_track_arm(
                 ctypes.byref(ball_track),
-                float(destination),
+                ball_arm_bin,
                 ctypes.byref(ball_position),
                 shot_in.impactTimestampUs,
             )
@@ -1056,6 +1156,27 @@ def replay_dump(
         lib.l3_joint_finish(ctypes.byref(joint))
     club_speed, club_slope, club_residual = club_at_impact or _club_fit(lib, track)
     joint_ball_pts, joint_club_pts = _joint_collect_points(joint) if joint is not None else ([], [])
+    fit = fw.ImpactFit()
+    impact_declared = fw.SHOT_STATE_NAMES[shot.state] not in PRE_IMPACT_SHOT_STATES
+    if impact_declared:
+        club_in_list = fw.FitList(
+            ctypes.cast(shot.clubTrajectory, ctypes.POINTER(fw.TrackPoint)), shot.clubPoints
+        )
+        club_out = fw.FitSpan()
+        lib.l3_fit_span_after(ctypes.byref(track), shot.impactFrame, ctypes.byref(club_out))
+        ball_out = fw.FitSpan(ctypes.pointer(ball_track.core), 0, ball_track.core.count)
+        lib.l3_impact_fit_run(
+            ctypes.byref(fit_cfg),
+            ctypes.byref(club_in_list),
+            ctypes.byref(club_out),
+            ctypes.byref(ball_out),
+            destination * bin_width_m,
+            0 if config.dest_bin is not None else 1,
+            shot.impactTimestampUs,
+            ctypes.byref(fit),
+        )
+    else:
+        lib.l3_impact_fit_reset(ctypes.byref(fit))
     return ReplayResult(
         config=config,
         frames=frames,
@@ -1080,6 +1201,10 @@ def replay_dump(
             else {}
         ),
         joint_confirmed=bool(joint.ballConfirmed) if joint is not None else False,
+        band=(float(band.loBin), float(band.hiBin)) if band.valid else None,
+        range_frame=range_frame,
+        impact_fit=_impact_fit_summary(fit) if impact_declared else None,
+        impact_fit_status=fw.c_text(lib.l3_impact_fit_format, ctypes.byref(fit), cap=240),
         speed_mps=club_speed,
         fit_slope_bins_per_s=club_slope,
         fit_residual_bins=club_residual,
@@ -1090,6 +1215,107 @@ def replay_dump(
         impact=impact,
         shot=shot,
         ball_track=ball_track,
+    )
+
+
+def _banded_window_targets(  # pylint: disable=too-many-arguments
+    lib,
+    cube,
+    frame: int,
+    timestamp_us: int,
+    window_start: int,
+    window_bins: int,
+    n_tx: int,
+    params: fw.ObsParams,
+    band: fw.Band,
+    targets: ctypes.Array,
+    *,
+    floor: float | None = None,
+    running_floor: ctypes.c_float | None = None,
+    keep_short: bool = False,
+) -> tuple[int, int, float]:
+    """The whole frame window as targets with the tee band removed:
+    ``l3_obs_extract`` over local bins ``0..count`` (global first bin
+    ``window_start``, so a target's ``peakBin - window_start`` is its local
+    bin), then ``l3_band_filter`` -- or, with ``keep_short``,
+    ``l3_band_keep_short``, which also drops everything beyond the band. A
+    disabled band removes nothing. The floor is either given (the trigger's,
+    before impact) or a running one updated from this window first (the post
+    window's own, as gBallFloor). Returns (targets kept, bins scored, floor)."""
+    if (floor is None) == (running_floor is None):
+        raise ValueError("give exactly one of floor and running_floor")
+    count = min(window_bins, fw.TRIG_MAX_BINS)
+    obs = bin_observations(cube, frame, 0, count, n_tx)
+    if running_floor is not None:
+        lib.l3_obs_floor_update(ctypes.byref(running_floor), params.stat, obs, count, FLOOR_SHIFT)
+        floor = running_floor.value
+    found = lib.l3_obs_extract(
+        ctypes.byref(params),
+        frame,
+        timestamp_us,
+        window_start,
+        obs,
+        count,
+        floor,
+        targets,
+        fw.OBS_MAX_TARGETS,
+    )
+    keep = lib.l3_band_keep_short if keep_short else lib.l3_band_filter
+    found = keep(ctypes.byref(band), targets, found)
+    return found, count, float(floor)
+
+
+def _pre_impact_club_targets(  # pylint: disable=too-many-arguments
+    lib,
+    cube,
+    frame: int,
+    timestamp_us: int,
+    window_start: int,
+    window_bins: int,
+    n_tx: int,
+    params: fw.ObsParams,
+    floor: float,
+    band: fw.Band,
+    targets: ctypes.Array,
+    *,
+    trigger_region: tuple[int, ctypes.Array, int],
+) -> int:
+    """The club track's targets on a pre-impact frame; returns how many.
+
+    Band off: the trigger region's own observations (``trigger_region`` is
+    its (global first bin, observations, count)), extracted against the
+    trigger's floor -- the view the club track always had. Band on: the
+    trigger region would be mostly band, so the club reads the whole window
+    against the same floor and keeps only targets short of the band
+    (``l3_band_keep_short``): the club approaches the ball, so nothing in the
+    band or beyond it is the club before impact."""
+    if band.valid:
+        found, _, _ = _banded_window_targets(
+            lib,
+            cube,
+            frame,
+            timestamp_us,
+            window_start,
+            window_bins,
+            n_tx,
+            params,
+            band,
+            targets,
+            floor=floor,
+            keep_short=True,
+        )
+        return found
+    first_bin, obs, count = trigger_region
+    return lib.l3_obs_extract(
+        ctypes.byref(params),
+        frame,
+        timestamp_us,
+        first_bin,
+        obs,
+        count,
+        floor,
+        targets,
+        fw.OBS_MAX_TARGETS,
     )
 
 
@@ -1119,23 +1345,22 @@ def _joint_post_frame(  # pylint: disable=too-many-arguments
     params: fw.ObsParams,
     joint_floor: ctypes.c_float,
     joint_targets: ctypes.Array,
+    band: fw.Band,
 ) -> None:
     """Feed one post-impact frame to the joint search."""
-    count = min(window_bins, fw.TRIG_MAX_BINS)
-    obs = bin_observations(cube, frame, 0, count, n_tx)
     joint_params = fw.ObsParams(params.stat, DEFAULT_SNR, params.loopPeriodS, params.subBin)
-    lib.l3_obs_floor_update(ctypes.byref(joint_floor), params.stat, obs, count, FLOOR_SHIFT)
-    floor = joint_floor.value
-    found = lib.l3_obs_extract(
-        ctypes.byref(joint_params),
+    found, _, _ = _banded_window_targets(
+        lib,
+        cube,
         frame,
         timestamp_us,
         window_start,
-        obs,
-        count,
-        floor,
+        window_bins,
+        n_tx,
+        joint_params,
+        band,
         joint_targets,
-        fw.OBS_MAX_TARGETS,
+        running_floor=joint_floor,
     )
     lib.l3_joint_update(ctypes.byref(joint), frame, timestamp_us, joint_targets, found)
 
@@ -1206,27 +1431,26 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
     trig_state,
     track,
     points,
+    band,
 ) -> ReplayFrame:
     """``l3_considerBallTrack``: the whole window as targets against the post
     window's own floor; the club track followed through them (the stronger of
     the two tracks after impact) and the ball tracker beside it, angles for
     the ball point, the launch fit and the shot machine's post-impact
     transitions."""
-    count = min(window_bins, fw.TRIG_MAX_BINS)
-    obs = bin_observations(cube, frame, 0, count, n_tx)
     ball_params = fw.ObsParams(params.stat, ball_track.cfg.snr, params.loopPeriodS, params.subBin)
-    lib.l3_obs_floor_update(ctypes.byref(ball_floor), params.stat, obs, count, FLOOR_SHIFT)
-    floor = ball_floor.value
-    found = lib.l3_obs_extract(
-        ctypes.byref(ball_params),
+    found, count, floor = _banded_window_targets(
+        lib,
+        cube,
         frame,
         timestamp_us,
         window_start,
-        obs,
-        count,
-        floor,
+        window_bins,
+        n_tx,
+        ball_params,
+        band,
         targets,
-        fw.OBS_MAX_TARGETS,
+        running_floor=ball_floor,
     )
     track_bin = None
     if lib.l3_track_follow(ctypes.byref(track), targets, found, frame, timestamp_us):
@@ -1595,6 +1819,7 @@ def format_report(result: ReplayResult, *, name: str = "", points: bool = False)
         f"  {result.trigger_summary}",
         "  " + _delivery_line(result),
         f"  {result.impact_status}",
+        f"  {result.impact_fit_status}",
         "  " + _launch_line(result),
         "  " + _ball_angle_line(result),
         f"  {result.shot_status}",

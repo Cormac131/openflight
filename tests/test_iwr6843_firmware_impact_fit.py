@@ -80,10 +80,12 @@ BALL_OUT_T = (36_000, 39_000, 42_000, 45_000)
 
 def test_defaults_are_the_specs(lib):
     c = cfg(lib)
-    assert c.bandBins == 6.0 and c.fitPoints == 4 and c.minPoints == 3
+    assert c.bandBins == 0.0  # off by default; 6 is the 2026-09-28 capture's ridge
+    assert c.fitPoints == 4 and c.minPoints == 3
     assert (c.clubMinMps, c.clubMaxMps, c.clubOutMaxRatio) == (10.0, 70.0, pytest.approx(1.10))
     assert (c.ballMinMps, c.ballMaxMps) == (15.0, 90.0)
     assert (c.gateSigmas, c.minSigmaUs) == (3.0, 500.0)
+    assert c.maxSigmaUs == 3000.0  # one 3 ms frame
     assert c.binWidthM == pytest.approx(BIN_M)
 
 
@@ -164,9 +166,17 @@ def test_speeds_outside_the_bounds_are_rejected(lib, which, speed, times):
     assert estimate(lib, which, line(speed, times)).why == WHY["speed_bounds"]
 
 
+def test_crawling_club_out_is_too_uncertain_to_time(lib):
+    # After impact the club only slows and there is no speed floor but "moving
+    # away"; at 3 m/s, though, a bin of quantisation is 4.5 ms, over the cap.
+    e = estimate(lib, CLUB_OUT, line(3.0, CLUB_OUT_T))
+    assert e.why == WHY["uncertain"]
+    assert e.sigmaUs > 3000.0
+
+
 def test_slow_club_out_is_accepted(lib):
-    # After impact the club only slows; there is no lower bound but "moving away".
-    assert estimate(lib, CLUB_OUT, line(3.0, CLUB_OUT_T)).why == WHY["ok"]
+    # 10 m/s: a bin of quantisation is 1.35 ms, inside the cap.
+    assert estimate(lib, CLUB_OUT, line(10.0, CLUB_OUT_T)).why == WHY["ok"]
 
 
 def test_a_count_beyond_the_list_is_missing_not_garbage(lib):
@@ -421,3 +431,64 @@ def test_range_impact_without_a_club_in_estimate_does_not_fire(lib):
         assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 29_000) == 0
         assert impact.why == IMPACT_WHY["nodelivery"]
     assert lib.l3_impact_update_range(ctypes.byref(impact), None, 29_000) == 0
+
+
+# --- the sigma cap: an estimate too uncertain to place impact -----------------
+
+NOISY_M = (0.05, -0.05, 0.06, -0.04)
+FAR_BALL_T = tuple(t + 60_000 for t in BALL_OUT_T)
+
+
+def test_a_noisy_far_extrapolated_line_over_the_cap_is_uncertain(lib):
+    e = estimate(lib, BALL_OUT, line(60.0, FAR_BALL_T, noise_m=NOISY_M))
+    assert e.why == WHY["uncertain"]
+    assert e.sigmaUs > 3000.0
+    # Kept for diagnostics: the time, its sigma and the speed are still filled.
+    assert e.points == 4 and e.speedMps > 0.0
+    assert abs(e.timeUs - IMPACT_US) < 10 * e.sigmaUs
+
+
+def test_the_same_line_is_ok_with_the_cap_off_or_above_its_sigma(lib):
+    samples = line(60.0, FAR_BALL_T, noise_m=NOISY_M)
+    assert estimate(lib, BALL_OUT, samples, maxSigmaUs=0.0).why == WHY["ok"]
+    assert estimate(lib, BALL_OUT, samples, maxSigmaUs=1e9).why == WHY["ok"]
+
+
+def test_uncertain_code_follows_dropped_so_earlier_codes_keep_their_numbers():
+    assert fw.FIT_WHY_NAMES.index("uncertain") == fw.FIT_WHY_NAMES.index("dropped") + 1
+    assert fw.FIT_WHY_NAMES[:8] == (
+        "ok",
+        "missing",
+        "few_points",
+        "wrong_direction",
+        "speed_bounds",
+        "physics",
+        "nonfinite",
+        "dropped",
+    )
+
+
+def test_c_names_the_uncertain_code(lib):
+    assert lib.l3_impact_fit_why_name(WHY["uncertain"]) == b"uncertain"
+
+
+def test_the_fusion_never_uses_an_uncertain_track(lib):
+    fit = run(
+        lib,
+        club_in=line(30.0, CLUB_IN_T),
+        ball_out=line(60.0, FAR_BALL_T, noise_m=NOISY_M),
+    )
+    assert fit.track[BALL_OUT].why == WHY["uncertain"]
+    assert fit.verdict == VERDICT["single_track"]
+    assert fit.impactUs == pytest.approx(fit.track[CLUB_IN].timeUs)
+    assert fit.droppedTrack == fw.FIT_NO_TRACK
+
+
+def test_format_prints_an_uncertain_track_with_its_time_and_sigma(lib):
+    fit = run(
+        lib,
+        club_in=line(30.0, CLUB_IN_T),
+        ball_out=line(60.0, FAR_BALL_T, noise_m=NOISY_M),
+    )
+    text = fw.c_text(lib.l3_impact_fit_format, ctypes.byref(fit), cap=240)
+    assert re.search(r"ball_out=uncertain:-?\d+\+-\d+", text), text

@@ -103,6 +103,7 @@ FIT_WHY_NAMES = (
     "physics",
     "nonfinite",
     "dropped",
+    "uncertain",
 )
 FIT_VERDICT_NAMES = ("none", "single_track", "consistent", "inconsistent")
 
@@ -564,6 +565,7 @@ class ImpactFitCfg(ctypes.Structure):
         ("ballMaxMps", ctypes.c_float),
         ("gateSigmas", ctypes.c_float),
         ("minSigmaUs", ctypes.c_float),
+        ("maxSigmaUs", ctypes.c_float),
     ]
 
 
@@ -1224,6 +1226,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_band_around": ([_F32, _F32, _P(Band)], None),
     "l3_band_contains": ([_P(Band), _F32], ctypes.c_int32),
     "l3_band_filter": ([_P(Band), _P(TargetObs), _U32], _U32),
+    "l3_band_keep_short": ([_P(Band), _P(TargetObs), _U32], _U32),
     # l3_iq16_stats.h
     "l3_iq16_channel_stats": (
         [_P(ctypes.c_int16), _U32, _U32, _P(Iq16ChannelStats)],
