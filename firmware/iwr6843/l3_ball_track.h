@@ -27,6 +27,7 @@
 #include "l3_club_track.h"
 #include "l3_ball_hyp.h"
 #include "l3_frames.h"
+#include "l3_launch.h"
 
 typedef struct {
     l3_track_cfg_t core;          /* association gate, misses, weights, calibration */
@@ -80,22 +81,6 @@ typedef struct {
     l3_ball_hyp_verdict_t verdict; /* the last classification; index -1 before one */
 } l3_ball_track_t;
 
-/* Ball launch from the earliest clean flight, extrapolated to impact. */
-typedef struct {
-    uint32_t  points;
-    l3_vec3_t velocity;           /* m/s, golf frame */
-    l3_vec3_t launchPosition;     /* the fitted line at the impact time */
-    float     speedMps;
-    float     radialSpeedMps;     /* range-only fit, for cross-checking */
-    float     hlaRad;             /* horizontal launch, positive right */
-    float     vlaRad;             /* vertical launch, positive up */
-    float     residualM;
-    float     confidence;
-    uint8_t   speedValid;
-    uint8_t   hlaValid;
-    uint8_t   vlaValid;
-} l3_launch_t;
-
 void l3_ball_track_cfg_defaults(l3_ball_track_cfg_t *cfg);
 void l3_ball_track_init(l3_ball_track_t *track, const l3_ball_track_cfg_t *cfg);
 /* Forget the flight and the arming; configuration and counters survive. */
@@ -125,7 +110,5 @@ uint32_t l3_ball_track_launch(const l3_ball_track_t *track, l3_launch_t *out);
 const char *l3_ball_track_why_name(uint8_t why);
 /* "balltrack armed=1 confirmed=1 done=0 why=tracked count=5 origin=47.0 ..." */
 int32_t l3_ball_track_format_status(const l3_ball_track_t *track, char *out, uint32_t cap);
-/* "launch points=5 speed=61.20 radial=58.90 hla=1.20 vla=12.40 residualmm=... conf=... valid=shv" */
-int32_t l3_launch_format(const l3_launch_t *launch, char *out, uint32_t cap);
 
 #endif /* L3_BALL_TRACK_H */

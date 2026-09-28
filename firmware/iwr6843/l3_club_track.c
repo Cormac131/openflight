@@ -76,6 +76,15 @@ static void l3_track_note(l3_club_track_t *track, uint8_t why)
     track->counters[why]++;
 }
 
+static void l3_track_push(l3_club_track_t *track)
+{
+    track->next = (track->next + 1U) % L3_TRACK_POINTS;
+    if (track->count < L3_TRACK_POINTS) {
+        track->count++;
+    }
+    track->total++;
+}
+
 static void l3_track_append(l3_club_track_t *track, const l3_target_obs_t *target,
                             float velocityBinsPerFrame, float dtS)
 {
@@ -96,11 +105,18 @@ static void l3_track_append(l3_club_track_t *track, const l3_target_obs_t *targe
     point->coherence = target->coherence;
     point->confidence = target->confidence;
     l3_track_locate(track, point);
-    track->next = (track->next + 1U) % L3_TRACK_POINTS;
-    if (track->count < L3_TRACK_POINTS) {
-        track->count++;
-    }
-    track->total++;
+    l3_track_push(track);
+}
+
+void l3_track_append_point(l3_club_track_t *track, const l3_track_point_t *point)
+{
+    l3_track_point_t *slot = &track->points[track->next];
+
+    *slot = *point;
+    l3_track_locate(track, slot);
+    track->lastBin = point->rangeBin;
+    track->lastFrame = point->frame;
+    l3_track_push(track);
 }
 
 float l3_track_wrapped_diff(float a, float b, float span)
@@ -428,15 +444,15 @@ uint32_t l3_track_delivery(const l3_club_track_t *track, uint32_t maxPoints, l3_
     return l3_track_delivery_range(track, track->count - used, used, L3_TRACK_FULL_POINTS, out);
 }
 
-uint32_t l3_track_delivery_range(const l3_club_track_t *track, uint32_t first, uint32_t count,
-                                 uint32_t fullPoints, l3_delivery_t *out)
+uint32_t l3_delivery_fit(l3_point_at_fn pointAt, const void *ctx, uint32_t first, uint32_t last,
+                         uint32_t fullPoints, float binWidthM, float maxAngleResidualM,
+                         l3_delivery_t *out)
 {
     float t[L3_TRACK_POINTS];
     float x[L3_TRACK_POINTS];
     float y[L3_TRACK_POINTS];
     float z[L3_TRACK_POINTS];
     float r[L3_TRACK_POINTS];
-    uint32_t last;
     uint32_t n = 0U;
     uint32_t withAzimuth = 0U;
     uint32_t withElevation = 0U;
@@ -451,18 +467,11 @@ uint32_t l3_track_delivery_range(const l3_club_track_t *track, uint32_t first, u
     l3_track_point_t point;
 
     memset(out, 0, sizeof(*out));
-    if (first >= track->count) {
-        return 0U;
-    }
-    last = first + count;
-    if (last > track->count) {
-        last = track->count;
-    }
-    if (last - first < 3U) {
+    if (last < first || last - first < 3U) {
         return 0U;
     }
     for (i = first; i < last; i++) {
-        (void)l3_track_point(track, i, &point);
+        (void)pointAt(ctx, i, &point);
         if (point.anglesValid & L3_OBS_ANGLE_AZIMUTH) {
             withAzimuth++;
         }
@@ -477,11 +486,11 @@ uint32_t l3_track_delivery_range(const l3_club_track_t *track, uint32_t first, u
     } else if (withElevation >= 3U) {
         required = L3_OBS_ANGLE_ELEVATION;
     }
-    (void)l3_track_point(track, last - 1U, &point);
+    (void)pointAt(ctx, last - 1U, &point);
     newestUs = (float)point.timestampUs;
     out->timestampUs = point.timestampUs;
     for (i = first; i < last; i++) {
-        (void)l3_track_point(track, i, &point);
+        (void)pointAt(ctx, i, &point);
         if ((point.anglesValid & required) != required) {
             continue;
         }
@@ -512,8 +521,8 @@ uint32_t l3_track_delivery_range(const l3_club_track_t *track, uint32_t first, u
     out->radialSpeedMps = (radialSlope < 0.0F) ? -radialSlope : radialSlope;
     out->speedMps = l3_frames_speed(&out->velocity);
     out->speedValid = 1U;
-    if (required != 0U && track->cfg.maxAngleResidualM > 0.0F &&
-        out->residualM > track->cfg.maxAngleResidualM) {
+    if (required != 0U && maxAngleResidualM > 0.0F &&
+        out->residualM > maxAngleResidualM) {
         /* The angled positions do not lie on a line: the angles are noise
          * (a fast ball crossing bins within a burst does this). Keep the
          * range walk, which is a measurement, and drop the direction. */
@@ -536,7 +545,7 @@ uint32_t l3_track_delivery_range(const l3_club_track_t *track, uint32_t first, u
     {
         /* Residual against two range bins of scatter, points against the
          * count a clean approach yields, and the points' own confidence. */
-        float residualScore = 1.0F - out->residualM / (2.0F * track->cfg.binWidthM);
+        float residualScore = 1.0F - out->residualM / (2.0F * binWidthM);
         float countScore = (float)n / (float)((fullPoints > 0U) ? fullPoints : 1U);
 
         if (residualScore < 0.0F) {
@@ -548,6 +557,27 @@ uint32_t l3_track_delivery_range(const l3_club_track_t *track, uint32_t first, u
         out->confidence = residualScore * countScore * (quality / (float)n);
     }
     return n;
+}
+
+static int32_t l3_track_point_at(const void *ctx, uint32_t index, l3_track_point_t *out)
+{
+    return l3_track_point((const l3_club_track_t *)ctx, index, out);
+}
+
+uint32_t l3_track_delivery_range(const l3_club_track_t *track, uint32_t first, uint32_t count,
+                                 uint32_t fullPoints, l3_delivery_t *out)
+{
+    uint32_t last = first + count;
+
+    memset(out, 0, sizeof(*out));
+    if (first >= track->count) {
+        return 0U;
+    }
+    if (last > track->count) {
+        last = track->count;
+    }
+    return l3_delivery_fit(l3_track_point_at, track, first, last, fullPoints,
+                           track->cfg.binWidthM, track->cfg.maxAngleResidualM, out);
 }
 
 uint32_t l3_track_fit(const l3_club_track_t *track, uint32_t maxPoints, float *slopeBinsPerS,

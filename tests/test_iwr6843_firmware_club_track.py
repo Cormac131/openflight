@@ -835,3 +835,19 @@ def test_follow_with_two_points_at_impact_caps_by_their_rate(lib):
     assert tr.track.count == 2
     assert _follow_at(tr, 3, 6000, [32.9]) is True  # 31.5 + 1.5 (+0.5)
     assert tr.track.followBinsPerS == pytest.approx(500.0, rel=1e-3)
+
+
+def test_append_point_locates_and_counts(lib):
+    tracker = Tracker(lib)
+    track = tracker.track
+    point = Point()
+    point.frame = 7
+    point.timestampUs = 21_000
+    point.rangeBin = 40.0
+    point.rangeM = 40.0 * track.cfg.binWidthM
+    point.confidence = 0.9
+    lib.l3_track_append_point(ctypes.byref(track), ctypes.byref(point))
+    assert track.count == 1
+    assert track.lastBin == pytest.approx(40.0)
+    stored = tracker.points()[0]
+    assert (stored.position.x, stored.position.y, stored.position.z) != (0.0, 0.0, 0.0)

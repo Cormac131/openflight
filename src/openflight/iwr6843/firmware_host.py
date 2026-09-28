@@ -33,6 +33,7 @@ HOST_SOURCES = (
     "l3_observation.c",
     "l3_trigger.c",
     "l3_club_track.c",
+    "l3_launch.c",
     "l3_ball_hyp.c",
     "l3_impact.c",
     "l3_shot.c",
@@ -987,6 +988,9 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_impact_update": ([_P(Impact), _P(Delivery), _P(Vec3), ctypes.c_uint8], ctypes.c_int32),
     "l3_impact_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_impact_format": ([_P(Impact), *_TEXT], ctypes.c_int32),
+    # l3_launch.h
+    "l3_launch_from_delivery": ([_P(Delivery), _U32, _P(Launch)], None),
+    "l3_track_append_point": ([_P(ClubTrack), _P(TrackPoint)], None),
     # l3_ball_track.h
     "l3_ball_hyps_cfg_defaults": ([_P(BallHypsCfg)], None),
     "l3_ball_hyps_init": ([_P(BallHyps), _P(BallHypsCfg)], None),

@@ -291,7 +291,6 @@ uint32_t l3_ball_track_launch(const l3_ball_track_t *track, l3_launch_t *out)
 {
     l3_delivery_t fit;
     uint32_t used;
-    float dtS;
 
     memset(out, 0, sizeof(*out));
     if (!track->confirmed) {
@@ -302,26 +301,7 @@ uint32_t l3_ball_track_launch(const l3_ball_track_t *track, l3_launch_t *out)
     if (used == 0U) {
         return 0U;
     }
-    out->points = used;
-    out->velocity = fit.velocity;
-    /* The fitted line is anchored at its last point; walk it back to impact. */
-    dtS = ((float)track->impactTimestampUs - (float)fit.timestampUs) * 1.0e-6F;
-    out->launchPosition.x = fit.position.x + fit.velocity.x * dtS;
-    out->launchPosition.y = fit.position.y + fit.velocity.y * dtS;
-    out->launchPosition.z = fit.position.z + fit.velocity.z * dtS;
-    out->speedMps = fit.speedMps;
-    out->radialSpeedMps = fit.radialSpeedMps;
-    out->residualM = fit.residualM;
-    out->confidence = fit.confidence;
-    out->speedValid = fit.speedValid;
-    if (fit.pathValid) {
-        out->hlaRad = fit.pathRad;
-        out->hlaValid = 1U;
-    }
-    if (fit.attackValid) {
-        out->vlaRad = fit.attackRad;
-        out->vlaValid = 1U;
-    }
+    l3_launch_from_delivery(&fit, track->impactTimestampUs, out);
     return used;
 }
 
@@ -349,36 +329,3 @@ int32_t l3_ball_track_format_status(const l3_ball_track_t *track, char *out, uin
                     (unsigned)track->counters[L3_BALL_TRACK_WHY_LOST]);
 }
 
-int32_t l3_launch_format(const l3_launch_t *launch, char *out, uint32_t cap)
-{
-    char speedText[16];
-    char radialText[16];
-    char hlaText[16];
-    char vlaText[16];
-    char residualText[16];
-    char confidenceText[16];
-    char valid[4];
-    uint32_t v = 0U;
-
-    l3_text_fixed2(launch->speedMps, speedText, sizeof(speedText));
-    l3_text_fixed2(launch->radialSpeedMps, radialText, sizeof(radialText));
-    l3_text_degrees2(launch->hlaRad, hlaText, sizeof(hlaText));
-    l3_text_degrees2(launch->vlaRad, vlaText, sizeof(vlaText));
-    l3_text_fixed2(launch->residualM * 1000.0F, residualText, sizeof(residualText));
-    l3_text_fixed2(launch->confidence, confidenceText, sizeof(confidenceText));
-    if (launch->speedValid) {
-        valid[v++] = 's';
-    }
-    if (launch->hlaValid) {
-        valid[v++] = 'h';
-    }
-    if (launch->vlaValid) {
-        valid[v++] = 'v';
-    }
-    valid[v] = '\0';
-    return snprintf(out, cap,
-                    "launch points=%u speed=%s radial=%s hla=%s vla=%s residualmm=%s conf=%s "
-                    "valid=%s",
-                    (unsigned)launch->points, speedText, radialText, hlaText, vlaText,
-                    residualText, confidenceText, (v > 0U) ? valid : "none");
-}
