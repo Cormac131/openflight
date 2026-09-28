@@ -3553,7 +3553,7 @@ static void l3_considerBallTrack(uint32_t slot)
     uint32_t count = frame.binCount;
     uint32_t found;
     uint32_t bin;
-    uint32_t frame;
+    uint32_t frameIndex;
     uint32_t ticks;
 
     if (!gBallTrack.armed || gCapturePlan.loops == 0U) {
@@ -3564,7 +3564,7 @@ static void l3_considerBallTrack(uint32_t slot)
     }
     gPostTimestampUs += gFrameDeltaUs[slot];
     gPostFramesScored++;
-    frame = gPreFramesCaptured + gPostFramesScored;
+    frameIndex = gPreFramesCaptured + gPostFramesScored;
     gTrigBusy = 1U;
     ticks = Cycleprofiler_getTimeStamp();
     for (bin = 0U; bin < count; bin++) {
@@ -3580,15 +3580,15 @@ static void l3_considerBallTrack(uint32_t slot)
     params.loopPeriodS = gTrigLoopPeriodS;
     params.subBin = gObsSubBin;
     l3_obs_floor_update(&gBallFloor, gTrigCfg.stat, obs, count, L3_TRIG_FLOOR_SHIFT);
-    found = l3_obs_extract(&params, frame, gPostTimestampUs, frame.binStart, obs, count,
+    found = l3_obs_extract(&params, frameIndex, gPostTimestampUs, frame.binStart, obs, count,
                            gBallFloor, targets, L3_OBS_MAX_TARGETS);
     /* After impact two tracks are visible: the club carries on (followed by
      * association only, the stronger return) beside the departing ball.
      * gDelivery was read at impact and stays the approach's. The ball tracker
      * does not use the club's claim yet: on the 2026-09-27 captures that lost
      * more balls than it saved. */
-    (void)l3_track_follow(&gClubTrack, targets, found, frame, gPostTimestampUs);
-    if (l3_ball_track_update(&gBallTrack, targets, found, frame, gPostTimestampUs) &&
+    (void)l3_track_follow(&gClubTrack, targets, found, frameIndex, gPostTimestampUs);
+    if (l3_ball_track_update(&gBallTrack, targets, found, frameIndex, gPostTimestampUs) &&
         gBallTrack.lastTargetIndex < found && gBallTrack.core.count > 1U &&
         l3_track_point(&gBallTrack.core, gBallTrack.core.count - 1U, &newest)) {
         const l3_target_obs_t *hit = &targets[gBallTrack.lastTargetIndex];
@@ -3625,9 +3625,9 @@ static void l3_considerBallTrack(uint32_t slot)
     in.ballTrackDone = gBallTrack.done;
     in.delivery = &gDelivery;
     in.club = &gClubTrack;
-    if (l3_shot_update(&gShot, &in, frame) == L3_SHOT_SOLVE) {
+    if (l3_shot_update(&gShot, &in, frameIndex) == L3_SHOT_SOLVE) {
         in.solved = 1U;
-        (void)l3_shot_update(&gShot, &in, frame);
+        (void)l3_shot_update(&gShot, &in, frameIndex);
     }
     if (gShot.state == L3_SHOT_RESULT && !gShotResultReady) {
         l3_result_build(&gShot, &gBallTrack, &gLaunch, ++gShotId, gTrigDestBall, &gShotResult);
