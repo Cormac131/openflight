@@ -61,7 +61,9 @@
 #include "l3_ball_track.h"
 #include "l3_club_track.h"
 #include "l3_adaptive.h"
+#include "l3_band.h"
 #include "l3_impact.h"
+#include "l3_impact_fit.h"
 #include "l3_iq8.h"
 #include "l3_iq16_stats.h"
 #include "l3_retain.h"
@@ -427,7 +429,21 @@ static uint8_t           gImpactCfgSet;
 static uint8_t           gImpactArmed;
 static l3_delivery_t     gDelivery;        /* the newest frame's delivery fit */
 static l3_vec3_t         gBallPosition;    /* destination in the golf frame */
-static uint8_t           gTrigFireSource;  /* bit 0 range gate, bit 1 geometry */
+static uint8_t           gTrigFireSource;  /* bit 0 range gate, bit 1 geometry, bit 2 range */
+/* The tee band (l3_band.h) and the impact from the tracks either side of it
+ * (l3_impact_fit.h), as firmware_replay runs them. bandBins 0 (the default)
+ * is no band: the club track, the ball tracker and the post-impact targets
+ * behave exactly as before the band existed. gRangeImpact is the range-only
+ * fire from the club-in estimate (l3_impact_update_range), kept apart from
+ * gImpact's verdicts. "trackCfg impactFit <bandBins>" sets the band; the
+ * defaults are set once (gImpactFitCfgSet), so a configured band survives
+ * triggerCfg and sensorStart in either order. */
+static l3_impact_fit_cfg_t gImpactFitCfg;
+static l3_band_t           gBand;
+static l3_impact_t         gRangeImpact;   /* range-only fire (l3_impact_update_range) */
+static l3_impact_fit_t     gImpactFit;
+static uint8_t             gImpactFitCfgSet;
+#define L3_IMPACT_FIT_MAX_BAND_BINS 64.0F
 /* The shot state machine and the post-impact ball tracker. Post frames the
  * ring keeps are published to the detect task with L3_DETECT_POST_EPOCH;
  * they are never overwritten before the rearm, so no liveness check. */
@@ -3395,6 +3411,8 @@ static void l3_trigRearm(void)
     l3_trig_rearm(&gTrig);
     l3_track_reset(&gClubTrack);
     l3_impact_rearm(&gImpact);
+    l3_impact_rearm(&gRangeImpact);
+    l3_impact_fit_reset(&gImpactFit);
     l3_shot_rearm(&gShot);
     l3_ball_track_reset(&gBallTrack);
     memset(&gLaunch, 0, sizeof(gLaunch));
@@ -3425,6 +3443,10 @@ static void l3_ensureRadarCal(void)
         l3_impact_cfg_defaults(&gImpactCfg);
         gImpactCfgSet = 1U;
     }
+    if (!gImpactFitCfgSet) {
+        l3_impact_fit_cfg_defaults(&gImpactFitCfg);
+        gImpactFitCfgSet = 1U;
+    }
 }
 
 /* The club track's configuration follows the trigger's arm: statistic and
@@ -3445,6 +3467,10 @@ static void l3_clubTrackConfigure(void)
     cfg.cal = gRadarCal;
     l3_track_init(&gClubTrack, &cfg);
     l3_impact_init(&gImpact, &gImpactCfg);
+    /* The fit's geometry follows the club track's; its band is left as set. */
+    gImpactFitCfg.binWidthM = cfg.binWidthM;
+    l3_impact_init(&gRangeImpact, &gImpactCfg);
+    l3_impact_fit_reset(&gImpactFit);
     /* The ball track shares the club track's geometry; the shot machine
      * gives the ball tracker the whole post movie. */
     l3_ball_track_cfg_defaults(&gBallTrackCfg);
@@ -3461,10 +3487,19 @@ static void l3_clubTrackConfigure(void)
     memset(&gLaunch, 0, sizeof(gLaunch));
 }
 
+/* The ball tracker acquires 1..originGateBins beyond its origin; with the
+ * tee band dropping every target inside it, the origin is the band's far
+ * edge, else the ball's bin. */
+static float l3_ballArmBin(uint32_t teeBin)
+{
+    return gBand.valid ? gBand.hiBin : (float)teeBin;
+}
+
 /* The shot machine's view of one pre-impact frame. Entering IMPACT arms the
- * ball tracker at the destination with the impact time: the geometric
- * detector's interpolated one when it fired, else this frame's. */
-static void l3_shotObserve(uint32_t teeBin, int32_t gateFired, int32_t geometric)
+ * ball tracker at the destination (the band's far edge with a band) with the
+ * impact time: the geometric detector's interpolated one when it fired, else
+ * the range-only one when it fired, else this frame's. */
+static void l3_shotObserve(uint32_t teeBin, int32_t gateFired, int32_t geometric, int32_t ranged)
 {
     l3_shot_input_t in;
     uint32_t frameUs = gPreFramesCaptured * (uint32_t)gFramePeriodUs;
@@ -3476,12 +3511,20 @@ static void l3_shotObserve(uint32_t teeBin, int32_t gateFired, int32_t geometric
     in.clubPoints = gClubTrack.count;
     in.gateFired = (uint8_t)(gateFired ? 1U : 0U);
     in.geometricFired = (uint8_t)(geometric ? 1U : 0U);
-    in.impactTimestampUs = (geometric && gImpact.fired) ? gImpact.impactTimestampUs : frameUs;
+    in.rangeFired = (uint8_t)(ranged ? 1U : 0U);
+    if (geometric && gImpact.fired) {
+        in.impactTimestampUs = gImpact.impactTimestampUs;
+    } else if (ranged && gRangeImpact.fired) {
+        in.impactTimestampUs = gRangeImpact.impactTimestampUs;
+    } else {
+        in.impactTimestampUs = frameUs;
+    }
     in.delivery = &gDelivery;
     in.club = &gClubTrack;
     if (l3_shot_update(&gShot, &in, gPreFramesCaptured) == L3_SHOT_IMPACT &&
         gShot.impactFrame == gPreFramesCaptured) {
-        l3_ball_track_arm(&gBallTrack, (float)teeBin, &gBallPosition, in.impactTimestampUs);
+        l3_ball_track_arm(&gBallTrack, l3_ballArmBin(teeBin), &gBallPosition,
+                          in.impactTimestampUs);
         gPostTimestampUs = frameUs;
     }
 }
@@ -3536,6 +3579,25 @@ static void l3_considerBall(uint32_t slot)
     gBallBusy = 0U;
 }
 
+/* SOLVE: impact from the tracks either side of the band (club in as the shot
+ * froze it, club out after the impact frame, ball out); a verdict other than
+ * none replaces the frozen impact time. firmware_replay runs the same call
+ * once impact is declared. */
+static void l3_impactFitRun(void)
+{
+    l3_fit_list_t clubIn = { gShot.clubTrajectory, gShot.clubPoints };
+    l3_fit_span_t clubOut;
+    l3_fit_span_t ballOut = { &gBallTrack.core, 0U, gBallTrack.core.count };
+
+    l3_fit_span_after(&gClubTrack, gShot.impactFrame, &clubOut);
+    l3_impact_fit_run(&gImpactFitCfg, &clubIn, &clubOut, &ballOut,
+                      (float)gClubTrackDest * gClubTrack.cfg.binWidthM,
+                      (uint8_t)(gTrigDestBall ? 0U : 1U), gShot.impactTimestampUs, &gImpactFit);
+    if (gImpactFit.verdict != L3_FIT_VERDICT_NONE && gImpactFit.impactUs > 0.0F) {
+        gShot.impactTimestampUs = (uint32_t)(gImpactFit.impactUs + 0.5F);
+    }
+}
+
 /* Per kept post-impact slot: the whole window as observations, ranked
  * targets against the trigger's floor, into the ball tracker (which only
  * looks at or beyond the origin), angles for the appended point, the launch
@@ -3582,6 +3644,9 @@ static void l3_considerBallTrack(uint32_t slot)
     l3_obs_floor_update(&gBallFloor, gTrigCfg.stat, obs, count, L3_TRIG_FLOOR_SHIFT);
     found = l3_obs_extract(&params, frameIndex, gPostTimestampUs, frame.binStart, obs, count,
                            gBallFloor, targets, L3_OBS_MAX_TARGETS);
+    /* The tee band's ridge is neither club nor ball; without a band nothing
+     * is dropped. gBand is the last pre-impact frame's. */
+    found = l3_band_filter(&gBand, targets, found);
     /* After impact two tracks are visible: the club carries on (followed by
      * association only, the stronger return) beside the departing ball.
      * gDelivery was read at impact and stays the approach's. The ball tracker
@@ -3672,9 +3737,51 @@ static void l3_considerBallTrack(uint32_t slot)
         (void)l3_shot_update(&gShot, &in, frameIndex);
     }
     if (gShot.state == L3_SHOT_RESULT && !gShotResultReady) {
+        l3_impactFitRun();
         l3_result_build(&gShot, &gBallTrack, &gLaunch, ++gShotId, gTrigDestBall, &gShotResult);
         gShotResultReady = 1U;
     }
+}
+
+/* The club track's targets on a pre-impact frame; returns how many
+ * (firmware_replay._pre_impact_club_targets).
+ *
+ * Band off: the trigger region's own observations (obs[0..regionCount), first
+ * global bin regionFirstBin), extracted against the trigger's floor -- the
+ * view the club track always had. Band on: the trigger region would be mostly
+ * band, so the whole window is read into obs (the trigger has scored its
+ * region by now) against the same floor, and only targets short of the band
+ * are kept: the club approaches the ball, so nothing in the band or beyond it
+ * is the club before impact. Either way a target's peakBin is global, and
+ * peakBin - frame->binStart is its local bin in the frame. A scratch reused
+ * mid-read offers no targets this frame. */
+static uint32_t l3_preImpactClubTargets(const l3_detect_frame_t *frame, l3_trig_obs_t *obs,
+                                        uint32_t regionFirstBin, uint32_t regionCount,
+                                        const l3_obs_params_t *params, float floor,
+                                        uint32_t frameIndex, uint32_t frameUs,
+                                        l3_target_obs_t *targets)
+{
+    if (gBand.valid) {
+        uint32_t count = frame->binCount;
+        uint32_t found;
+        uint32_t bin;
+
+        if (count > L3_TRIG_MAX_BINS) {
+            count = L3_TRIG_MAX_BINS;
+        }
+        for (bin = 0U; bin < count; bin++) {
+            l3_verticalResidual(frame, bin, NULL, &obs[bin]);
+        }
+        if (l3_detectFrameStale(frame)) {
+            gDetectScratchStale++;
+            return 0U;
+        }
+        found = l3_obs_extract(params, frameIndex, frameUs, frame->binStart, obs, count,
+                               floor, targets, L3_OBS_MAX_TARGETS);
+        return l3_band_keep_short(&gBand, targets, found);
+    }
+    return l3_obs_extract(params, frameIndex, frameUs, regionFirstBin, obs, regionCount,
+                          floor, targets, L3_OBS_MAX_TARGETS);
 }
 
 /* Per completed pre-trigger slot: reduce the watch region to one observation
@@ -3690,6 +3797,7 @@ static void l3_considerSelfTrigger(uint32_t slot)
     uint32_t bin;
     int32_t fired;
     int32_t geometric = 0;
+    int32_t ranged = 0;
     l3_track_point_t newest;
     uint32_t ticks;
     uintptr_t key;
@@ -3748,7 +3856,8 @@ static void l3_considerSelfTrigger(uint32_t slot)
                            obs, count);
     l3_profileStage(L3_PROF_TRIGGER, ticks);
     {
-        /* The same observations, as ranked targets, into the club track. */
+        /* Ranked targets into the club track: the trigger's observations,
+         * or with a tee band the whole window short of it. */
         static l3_target_obs_t targets[L3_OBS_MAX_TARGETS];
         l3_obs_params_t params;
         uint32_t found;
@@ -3758,11 +3867,11 @@ static void l3_considerSelfTrigger(uint32_t slot)
         params.snr = gTrigCfg.snr;
         params.loopPeriodS = gTrigLoopPeriodS;
         params.subBin = gObsSubBin;
+        l3_band_around((float)teeBin, gImpactFitCfg.bandBins, &gBand);
         ticks = Cycleprofiler_getTimeStamp();
-        found = l3_obs_extract(&params, gPreFramesCaptured,
-                               gPreFramesCaptured * (uint32_t)gFramePeriodUs,
-                               frame.binStart + first, obs, count, gTrig.floor,
-                               targets, L3_OBS_MAX_TARGETS);
+        found = l3_preImpactClubTargets(&frame, obs, frame.binStart + first, count, &params,
+                                        gTrig.floor, gPreFramesCaptured,
+                                        gPreFramesCaptured * (uint32_t)gFramePeriodUs, targets);
         l3_profileStage(L3_PROF_EXTRACT, ticks);
         gClubTrackDest = teeBin;
         ticks = Cycleprofiler_getTimeStamp();
@@ -3809,15 +3918,27 @@ static void l3_considerSelfTrigger(uint32_t slot)
                               &gBallPosition);
         }
         geometric = l3_impact_update(&gImpact, &gDelivery, &gBallPosition, 1U);
+        {
+            /* Range only: the club-in line's crossing of the ball's range,
+             * against this frame's clock (the club coasts across the band). */
+            l3_fit_span_t clubSpan = { &gClubTrack, 0U, gClubTrack.count };
+            l3_fit_estimate_t clubIn;
+
+            l3_impact_fit_track(&gImpactFitCfg, L3_FIT_CLUB_IN, l3_fit_span_point, &clubSpan,
+                                gClubTrack.count, (float)teeBin * gClubTrack.cfg.binWidthM,
+                                &clubIn);
+            ranged = l3_impact_update_range(&gRangeImpact, &clubIn,
+                                            gPreFramesCaptured * (uint32_t)gFramePeriodUs);
+        }
         l3_profileStage(L3_PROF_IMPACT, ticks);
     }
     if (gProfileReady) {
         l3_profile_frame(&gProfile);
     }
     gTrigBusy = 0U;
-    gTrigFireSource = (uint8_t)((fired ? 1U : 0U) | (geometric ? 2U : 0U));
-    l3_shotObserve(teeBin, fired, geometric && gImpactArmed);
-    if (geometric && gImpactArmed) {
+    gTrigFireSource = (uint8_t)((fired ? 1U : 0U) | (geometric ? 2U : 0U) | (ranged ? 4U : 0U));
+    l3_shotObserve(teeBin, fired, geometric && gImpactArmed, ranged && gImpactArmed);
+    if ((geometric || ranged) && gImpactArmed) {
         fired = 1;
     }
     if (!fired) {
@@ -4296,6 +4417,27 @@ static int32_t l3_cli_trackCfgImpact(int32_t argc, char *argv[])
     gImpactCfg.minConfidence = values[3];
     gImpactArmed = (values[4] != 0.0F) ? 1U : 0U;
     l3_impact_init(&gImpact, &gImpactCfg);
+    l3_impact_init(&gRangeImpact, &gImpactCfg);
+    CLI_write("Done\n");
+    return 0;
+}
+
+/* "trackCfg impactFit <bandBins>": the tee band's half width in range bins
+ * (l3_band.h), 0 for no band. A sub-mode, not a command of its own: the CLI
+ * table is at the SDK's CLI_MAX_CMD. Kept across triggerCfg and sensorStart;
+ * the next pre-impact frame places the band. */
+static int32_t l3_cli_trackCfgImpactFit(int32_t argc, char *argv[])
+{
+    float values[1];
+
+    /* !(>= 0) also refuses a NaN strtof accepted. */
+    if (l3_parseFloats(argc, argv, 2, 1U, values) != 0 || !(values[0] >= 0.0F) ||
+        values[0] > L3_IMPACT_FIT_MAX_BAND_BINS) {
+        CLI_write("Error: trackCfg impactFit <bandBins 0..64>\n");
+        return -1;
+    }
+    l3_ensureRadarCal();
+    gImpactFitCfg.bandBins = values[0];
     CLI_write("Done\n");
     return 0;
 }
@@ -4303,7 +4445,7 @@ static int32_t l3_cli_trackCfgImpact(int32_t argc, char *argv[])
 /* CLI "trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM>":
  * the rig limits from IWR6843Runtime.track_config_command. maxRangeM of 0
  * disables the net clamp; clubHiM <= clubLoM disables the club cells.
- * Sub-modes cal, elem and impact configure the geometry stack above. */
+ * Sub-modes cal, elem, impact and impactFit configure the geometry stack above. */
 static int32_t l3_cli_trackCfg(int32_t argc, char *argv[])
 {
     double values[5];
@@ -4318,6 +4460,9 @@ static int32_t l3_cli_trackCfg(int32_t argc, char *argv[])
     }
     if (argc >= 2 && strcmp(argv[1], "impact") == 0) {
         return l3_cli_trackCfgImpact(argc, argv);
+    }
+    if (argc >= 2 && strcmp(argv[1], "impactFit") == 0) {
+        return l3_cli_trackCfgImpactFit(argc, argv);
     }
     if (argc == 3 && strcmp(argv[1], "subbin") == 0) {
         /* "trackCfg subbin centroid|parabolic": how targets read their
@@ -4335,7 +4480,7 @@ static int32_t l3_cli_trackCfg(int32_t argc, char *argv[])
     }
     if (argc != 6) {
         CLI_write("Error: trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM> "
-                  "| cal ... | elem ... | impact ... | subbin ...\n");
+                  "| cal ... | elem ... | impact ... | impactFit ... | subbin ...\n");
         return -1;
     }
     for (i = 0; i < 5; i++) {
@@ -4650,6 +4795,10 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         (void)l3_impact_format(&gImpact, line, sizeof(line));
         CLI_write("%s armed=%u source=%u\n", line, (unsigned)gImpactArmed,
                   (unsigned)gTrigFireSource);
+        (void)l3_impact_format(&gRangeImpact, line, sizeof(line));
+        CLI_write("range %s\n", line);
+        (void)l3_impact_fit_format(&gImpactFit, line, sizeof(line));
+        CLI_write("%s\n", line);
         for (index = 0U; l3_track_point(&gClubTrack, index, &point); index++) {
             (void)l3_track_format_point(&point, gClubTrackDest, line, sizeof(line));
             CLI_write("%s\n", line);
@@ -5680,7 +5829,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[13].helpString    = "Freeze, pick ball and club cells on-chip, send them";
     cliCfg.tableEntry[13].cmdHandlerFxn = l3_cli_track;
     cliCfg.tableEntry[14].cmd           = "trackCfg";
-    cliCfg.tableEntry[14].helpString    = "trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM> or cal/elem/impact ...";
+    cliCfg.tableEntry[14].helpString    = "trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM> or cal/elem/impact/impactFit ...";
     cliCfg.tableEntry[14].cmdHandlerFxn = l3_cli_trackCfg;
     cliCfg.tableEntry[15].cmd           = "debugCfg";
     cliCfg.tableEntry[15].helpString    = "debugCfg <0|1> stream trigger decisions";

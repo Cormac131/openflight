@@ -305,12 +305,14 @@ def test_detector_source_is_built_into_the_firmware():
 
 def test_club_track_rides_the_trigger_pass_and_prints_from_trigger_log():
     """The observations the trigger scores are extracted once as ranked
-    targets and fed to the persistent club track; nothing is recomputed."""
+    targets and fed to the persistent club track; nothing is recomputed while
+    the tee band is off (with it, l3_preImpactClubTargets reads the window:
+    test_iwr6843_firmware_board_wiring)."""
     source = _source()
     consider = _function("static void l3_considerSelfTrigger(")
 
     update = consider.index("l3_trig_update(&gTrig,")
-    extract = consider.index("l3_obs_extract(&params,")
+    extract = consider.index("l3_preImpactClubTargets(&frame, obs,")
     track = consider.index("l3_track_update(&gClubTrack, targets, found, gPreFramesCaptured,")
     assert update < extract < track
     assert consider.count("l3_verticalResidual(") == 1, "one residual pass feeds both"
@@ -464,8 +466,11 @@ def test_geometric_impact_records_every_frame_and_fires_only_when_armed():
         "                              &gBallPosition);"
     ) in consider, "boresight when the ball has no measured direction"
     assert "geometric = l3_impact_update(&gImpact, &gDelivery, &gBallPosition, 1U);" in consider
-    assert "gTrigFireSource = (uint8_t)((fired ? 1U : 0U) | (geometric ? 2U : 0U));" in consider
-    assert "if (geometric && gImpactArmed) {\n        fired = 1;\n    }" in consider
+    assert (
+        "gTrigFireSource = (uint8_t)((fired ? 1U : 0U) | (geometric ? 2U : 0U) | "
+        "(ranged ? 4U : 0U));"
+    ) in consider
+    assert "if ((geometric || ranged) && gImpactArmed) {\n        fired = 1;\n    }" in consider
     assert consider.index("geometric = l3_impact_update(") < consider.index("if (!fired) {")
     assert "l3_impact_rearm(&gImpact);" in _function("static void l3_trigRearm(")
     configure = _function("static void l3_clubTrackConfigure(")
@@ -490,7 +495,7 @@ def test_calibration_and_impact_are_configured_through_track_cfg_sub_modes():
     assert "gImpactArmed = (values[4] != 0.0F) ? 1U : 0U;" in impact
     assert "l3_impact_init(&gImpact, &gImpactCfg);" in impact
     assert "tableEntry[19]" not in source, "sub-modes, not new commands"
-    assert "or cal/elem/impact ..." in source
+    assert "or cal/elem/impact/impactFit ..." in source
 
 
 def test_trigger_log_track_prints_delivery_angle_and_impact_lines():
@@ -568,18 +573,17 @@ def test_shot_machine_sees_every_pre_frame_and_arms_the_ball_tracker_at_impact()
     consider = _function("static void l3_considerSelfTrigger(")
     observe = _function("static void l3_shotObserve(")
 
-    assert "l3_shotObserve(teeBin, fired, geometric && gImpactArmed);" in consider
+    assert (
+        "l3_shotObserve(teeBin, fired, geometric && gImpactArmed, ranged && gImpactArmed);"
+        in consider
+    )
     assert consider.index("l3_shotObserve(") < consider.index("if (!fired) {")
     assert "in.ballLocked = gTrigDestBall;" in observe
     assert "in.clubActive = gClubTrack.active;" in observe
-    assert (
-        "in.impactTimestampUs = (geometric && gImpact.fired) ? gImpact.impactTimestampUs : frameUs;"
-    ) in observe
+    assert "if (geometric && gImpact.fired) {" in observe
+    assert "in.impactTimestampUs = frameUs;" in observe
     assert "gShot.impactFrame == gPreFramesCaptured" in observe
-    assert (
-        "l3_ball_track_arm(&gBallTrack, (float)teeBin, &gBallPosition, in.impactTimestampUs);"
-        in observe
-    )
+    assert "l3_ball_track_arm(&gBallTrack, l3_ballArmBin(teeBin), &gBallPosition," in observe
     rearm = _function("static void l3_trigRearm(")
     assert "l3_shot_rearm(&gShot);" in rearm and "l3_ball_track_reset(&gBallTrack);" in rearm
     assert "gPostTimestampUs = 0U;" in rearm and "gPostFramesScored = 0U;" in rearm
