@@ -20,6 +20,7 @@
 
 #include "l3_club_track.h"
 #include "l3_frames.h"
+#include "l3_impact_fit.h"
 
 typedef struct {
     float toleranceM;     /* closest approach that counts as contact */
@@ -68,6 +69,13 @@ void l3_impact_closest(const l3_vec3_t *position, const l3_vec3_t *velocity,
 int32_t l3_impact_update(l3_impact_t *impact, const l3_delivery_t *delivery,
                          const l3_vec3_t *ball, uint8_t ballValid);
 const char *l3_impact_why_name(uint8_t why);
+/* Range only: fire on the club-in estimate (l3_impact_fit_track) when its
+ * crossing of the ball's range is within the horizon of nowUs, the current
+ * frame's time -- the club coasts across the tee band, so the newest point
+ * stops advancing and the frame clock must. A missing or rejected estimate
+ * is nodelivery. Run on its own l3_impact_t so its verdicts stay apart. */
+int32_t l3_impact_update_range(l3_impact_t *impact, const l3_fit_estimate_t *clubIn,
+                               uint32_t nowUs);
 /* "impact fired=1 why=fired closest=0.031 offset=-0.0011 t=123456 ..." */
 int32_t l3_impact_format(const l3_impact_t *impact, char *out, uint32_t cap);
 

@@ -114,6 +114,31 @@ int32_t l3_impact_update(l3_impact_t *impact, const l3_delivery_t *delivery,
     return l3_impact_note(impact, L3_IMPACT_WHY_FIRED);
 }
 
+int32_t l3_impact_update_range(l3_impact_t *impact, const l3_fit_estimate_t *clubIn,
+                               uint32_t nowUs)
+{
+    float offset;
+
+    if (impact->fired) {
+        return 0;
+    }
+    if (clubIn == NULL || clubIn->why != L3_FIT_WHY_OK) {
+        return l3_impact_note(impact, L3_IMPACT_WHY_NO_DELIVERY);
+    }
+    offset = (clubIn->timeUs - (float)nowUs) * 1.0e-6F;
+    impact->offsetS = offset;
+    impact->closestM = 0.0F;
+    if (offset > impact->cfg.horizonS) {
+        return l3_impact_note(impact, L3_IMPACT_WHY_PENDING);
+    }
+    if (offset < -impact->cfg.horizonS) {
+        return l3_impact_note(impact, L3_IMPACT_WHY_PASSED);
+    }
+    impact->fired = 1U;
+    impact->impactTimestampUs = (clubIn->timeUs > 0.0F) ? (uint32_t)(clubIn->timeUs + 0.5F) : 0U;
+    return l3_impact_note(impact, L3_IMPACT_WHY_FIRED);
+}
+
 const char *l3_impact_why_name(uint8_t why)
 {
     return (why < L3_IMPACT_WHY_COUNT) ? kWhyNames[why] : "?";

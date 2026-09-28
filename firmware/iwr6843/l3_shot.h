@@ -41,6 +41,7 @@ enum {
 /* impactSource bits */
 #define L3_SHOT_IMPACT_GATE      1U
 #define L3_SHOT_IMPACT_GEOMETRY  2U
+#define L3_SHOT_IMPACT_RANGE     4U
 
 typedef struct {
     uint8_t  requireBall;      /* 1: READY needs a locked ball; 0: the tee stands in */
@@ -61,6 +62,7 @@ typedef struct {
     uint8_t   postFrame;           /* this frame is a post-impact frame */
     uint8_t   ballTrackDone;       /* the ball tracker has all it will get */
     uint8_t   solved;              /* the solver has produced a result */
+    uint8_t   rangeFired;          /* range-only impact fired this frame */
 } l3_shot_input_t;
 
 typedef struct {
@@ -91,6 +93,9 @@ uint8_t l3_shot_update(l3_shot_t *shot, const l3_shot_input_t *in, uint32_t fram
 /* 1 once impact has been declared: the ball, not the club, is the target. */
 int32_t l3_shot_wants_departing(const l3_shot_t *shot);
 const char *l3_shot_state_name(uint8_t state);
+/* "none", "gate", "geometry", "both" (gate+geometry), else the '+'-joined
+ * names of the bits set, in the order gate, geometry, range. */
+const char *l3_shot_source_name(uint8_t source, char *buf, uint32_t cap);
 /* "shot state=club_track since=17 impact=- source=none origin=1.36,0.00,0.00 club=7" */
 int32_t l3_shot_format(const l3_shot_t *shot, char *out, uint32_t cap);
 

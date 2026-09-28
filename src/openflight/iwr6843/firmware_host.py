@@ -117,7 +117,7 @@ SHOT_STATE_NAMES = (
     "solve",
     "result",
 )
-SHOT_IMPACT_GATE, SHOT_IMPACT_GEOMETRY = 1, 2
+SHOT_IMPACT_GATE, SHOT_IMPACT_GEOMETRY, SHOT_IMPACT_RANGE = 1, 2, 4
 
 # l3_ball_track.h
 BALL_TRACK_WHY_NAMES = (
@@ -631,6 +631,7 @@ class ShotInput(ctypes.Structure):
         ("postFrame", ctypes.c_uint8),
         ("ballTrackDone", ctypes.c_uint8),
         ("solved", ctypes.c_uint8),
+        ("rangeFired", ctypes.c_uint8),
     ]
 
 
@@ -1300,6 +1301,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_impact_rearm": ([_P(Impact)], None),
     "l3_impact_closest": ([_P(Vec3), _P(Vec3), _P(Vec3), _P(_F32), _P(_F32), _P(Vec3)], None),
     "l3_impact_update": ([_P(Impact), _P(Delivery), _P(Vec3), ctypes.c_uint8], ctypes.c_int32),
+    "l3_impact_update_range": ([_P(Impact), _P(FitEstimate), _U32], ctypes.c_int32),
     "l3_impact_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_impact_format": ([_P(Impact), *_TEXT], ctypes.c_int32),
     # l3_impact_fit.h
@@ -1450,6 +1452,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_shot_update": ([_P(Shot), _P(ShotInput), _U32], ctypes.c_uint8),
     "l3_shot_wants_departing": ([_P(Shot)], ctypes.c_int32),
     "l3_shot_state_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_shot_source_name": ([ctypes.c_uint8, ctypes.c_char_p, _U32], ctypes.c_char_p),
     "l3_shot_format": ([_P(Shot), *_TEXT], ctypes.c_int32),
     "l3_track_format_point": ([_P(TrackPoint), _U32, *_TEXT], ctypes.c_int32),
 }

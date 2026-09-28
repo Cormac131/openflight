@@ -207,3 +207,34 @@ def test_state_names_and_format(lib):
     text = fw.c_text(lib.l3_shot_format, ctypes.byref(m.shot))
     assert "state=impact since=2 impact=23218 source=gate origin=1.36,0.00,0.00" in text
     assert text.endswith("post=0 transitions=2")
+
+
+def ready_club_tracking_shot(lib) -> fw.Shot:
+    cfg = fw.ShotCfg()
+    lib.l3_shot_cfg_defaults(ctypes.byref(cfg))
+    shot = fw.Shot()
+    lib.l3_shot_init(ctypes.byref(shot), ctypes.byref(cfg))
+    for frame, points in enumerate((0, 1, 3)):
+        shot_in = fw.ShotInput()
+        shot_in.ballLocked = 1
+        shot_in.clubActive = 1 if points else 0
+        shot_in.clubPoints = points
+        lib.l3_shot_update(ctypes.byref(shot), ctypes.byref(shot_in), frame)
+    assert fw.SHOT_STATE_NAMES[shot.state] == "club_track"
+    return shot
+
+
+def test_range_fire_enters_impact_with_the_range_source(lib):
+    shot = ready_club_tracking_shot(lib)  # the file's existing helper that reaches club_track
+    shot_in = fw.ShotInput()
+    shot_in.ballLocked = 1
+    shot_in.clubActive = 1
+    shot_in.clubPoints = 5
+    shot_in.rangeFired = 1
+    shot_in.impactTimestampUs = 30_000
+    state = lib.l3_shot_update(ctypes.byref(shot), ctypes.byref(shot_in), 10)
+    assert fw.SHOT_STATE_NAMES[state] == "impact"
+    assert shot.impactSource == fw.SHOT_IMPACT_RANGE
+    assert shot.impactTimestampUs == 30_000
+    text = fw.c_text(lib.l3_shot_format, ctypes.byref(shot), cap=240)
+    assert "source=range" in text

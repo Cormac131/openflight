@@ -370,3 +370,54 @@ def test_format_names_the_verdict_and_every_track(lib):
     assert abs(int(match.group(1)) - 30_000) <= 5
     assert "club_in=ok:" in text and "club_out=missing" in text and "ball_out=ok:" in text
     assert "dropped=- nolock=0" in text
+
+
+IMPACT_WHY = {name: i for i, name in enumerate(fw.IMPACT_WHY_NAMES)}
+
+
+def range_impact(lib) -> fw.Impact:
+    c = fw.ImpactCfg()
+    lib.l3_impact_cfg_defaults(ctypes.byref(c))
+    impact = fw.Impact()
+    lib.l3_impact_init(ctypes.byref(impact), ctypes.byref(c))
+    return impact
+
+
+def club_in_estimate(time_us: float, why: str = "ok") -> fw.FitEstimate:
+    e = fw.FitEstimate()
+    e.why, e.timeUs, e.sigmaUs, e.speedMps, e.points = WHY[why], time_us, 300.0, 30.0, 4
+    return e
+
+
+def test_range_impact_waits_until_the_crossing_is_within_the_horizon(lib):
+    impact = range_impact(lib)
+    e = club_in_estimate(30_000)
+    assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 20_000) == 0
+    assert impact.why == IMPACT_WHY["pending"]
+    assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 27_000) == 1
+    assert impact.why == IMPACT_WHY["fired"]
+    assert impact.impactTimestampUs == 30_000
+    assert impact.offsetS == pytest.approx(0.003, abs=1e-6)
+
+
+def test_range_impact_fires_once(lib):
+    impact = range_impact(lib)
+    e = club_in_estimate(30_000)
+    assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 29_000) == 1
+    assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 30_000) == 0
+
+
+def test_range_impact_long_past_is_passed_not_fired(lib):
+    impact = range_impact(lib)
+    e = club_in_estimate(30_000)
+    assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 40_000) == 0
+    assert impact.why == IMPACT_WHY["passed"]
+
+
+def test_range_impact_without_a_club_in_estimate_does_not_fire(lib):
+    impact = range_impact(lib)
+    for why in ("missing", "few_points", "speed_bounds"):
+        e = club_in_estimate(30_000, why)
+        assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 29_000) == 0
+        assert impact.why == IMPACT_WHY["nodelivery"]
+    assert lib.l3_impact_update_range(ctypes.byref(impact), None, 29_000) == 0

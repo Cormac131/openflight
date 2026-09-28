@@ -243,29 +243,16 @@ const char *l3_result_verdict_name(uint8_t verdict)
 int32_t l3_result_format(const l3_shot_result_t *result, char *out, uint32_t cap)
 {
     char smashText[16];
-    const char *source;
+    char sourceText[24];
 
     l3_text_fixed2(result->smash, smashText, sizeof(smashText));
-    switch (result->impactSource) {
-    case L3_SHOT_IMPACT_GATE:
-        source = "gate";
-        break;
-    case L3_SHOT_IMPACT_GEOMETRY:
-        source = "geometry";
-        break;
-    case L3_SHOT_IMPACT_GATE | L3_SHOT_IMPACT_GEOMETRY:
-        source = "both";
-        break;
-    default:
-        source = "none";
-        break;
-    }
     return snprintf(out, cap,
                     "result v%u shot=%u verdict=%s valid=0x%x quality=0x%x impact=%u source=%s "
                     "club=%u ball=%u smash=%s",
                     (unsigned)result->version, (unsigned)result->shotId,
                     l3_result_verdict_name(result->verdict), (unsigned)result->validFlags,
-                    (unsigned)result->qualityFlags, (unsigned)result->impactTimestampUs, source,
+                    (unsigned)result->qualityFlags, (unsigned)result->impactTimestampUs,
+                    l3_shot_source_name(result->impactSource, sourceText, sizeof(sourceText)),
                     (unsigned)result->clubPoints, (unsigned)result->ballPoints, smashText);
 }
 
