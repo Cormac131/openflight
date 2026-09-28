@@ -378,6 +378,13 @@ class ImpactFitSummary:
     tracks: dict[str, TrackEstimateSummary]
 
 
+def apply_impact_fit(shot: fw.Shot, fit: fw.ImpactFit) -> None:
+    """``l3_impactFitRun``'s last step: a verdict other than none, with a
+    time, replaces the shot's frozen impact time (rounded to the microsecond)."""
+    if fit.verdict != fw.FIT_VERDICT_NAMES.index("none") and fit.impactUs > 0.0:
+        shot.impactTimestampUs = int(fit.impactUs + 0.5)
+
+
 def _impact_fit_summary(fit: fw.ImpactFit) -> ImpactFitSummary:
     tracks = {}
     for index, name in enumerate(fw.FIT_TRACK_NAMES):
@@ -489,6 +496,9 @@ class ReplayResult:
     range_frame: int | None = None  # the range-only impact's fire
     impact_fit: ImpactFitSummary | None = None
     impact_fit_status: str = ""
+    # The shot's impact time as IMPACT froze it, before the fit refined
+    # shot.impactTimestampUs (apply_impact_fit); None without an impact.
+    frozen_impact_timestamp_us: int | None = None
 
     @property
     def retain_windows(self) -> list[RetainSummary]:
@@ -1158,6 +1168,7 @@ def replay_dump(
     joint_ball_pts, joint_club_pts = _joint_collect_points(joint) if joint is not None else ([], [])
     fit = fw.ImpactFit()
     impact_declared = fw.SHOT_STATE_NAMES[shot.state] not in PRE_IMPACT_SHOT_STATES
+    frozen_impact_us = int(shot.impactTimestampUs) if impact_declared else None
     if impact_declared:
         club_in_list = fw.FitList(
             ctypes.cast(shot.clubTrajectory, ctypes.POINTER(fw.TrackPoint)), shot.clubPoints
@@ -1172,9 +1183,12 @@ def replay_dump(
             ctypes.byref(ball_out),
             destination * bin_width_m,
             0 if config.dest_bin is not None else 1,
-            shot.impactTimestampUs,
+            frozen_impact_us,
             ctypes.byref(fit),
         )
+        # Run once, here: the fit measured against the frozen time, then the
+        # board's overwrite (l3_impactFitRun) so the shot carries the refined one.
+        apply_impact_fit(shot, fit)
     else:
         lib.l3_impact_fit_reset(ctypes.byref(fit))
     return ReplayResult(
@@ -1205,6 +1219,7 @@ def replay_dump(
         range_frame=range_frame,
         impact_fit=_impact_fit_summary(fit) if impact_declared else None,
         impact_fit_status=fw.c_text(lib.l3_impact_fit_format, ctypes.byref(fit), cap=240),
+        frozen_impact_timestamp_us=frozen_impact_us,
         speed_mps=club_speed,
         fit_slope_bins_per_s=club_slope,
         fit_residual_bins=club_residual,

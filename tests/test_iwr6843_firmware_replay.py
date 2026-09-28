@@ -455,9 +455,7 @@ def test_joint_search_arms_from_the_club_tracks_own_last_point(lib, whole_shot):
     does not have, raising AttributeError as soon as a real (non-empty) club
     track reached impact with joint_search enabled. The seed must come from
     the club track's own last point and its range-rate fitted speed."""
-    result = replay_dump(
-        whole_shot, ReplayConfig(tee_bin=TEE_BIN, joint_search=True), lib=lib
-    )
+    result = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN, joint_search=True), lib=lib)
     assert result.fired_frame is not None
     assert len(result.joint_ball_points) > 0
     assert len(result.joint_club_points) > 0
@@ -764,6 +762,49 @@ def test_synthetic_shot_impact_lands_on_the_synthesized_time(lib, band_bins):
     assert result.impact_fit.verdict in ("consistent", "single_track")
     assert result.impact_fit.tracks["ball_out"].why == "ok"
     assert result.impact_fit.impact_us == pytest.approx(IMPACT_S * 1e6, abs=2_500)
+
+
+@pytest.mark.parametrize("band_bins", [None, 6.0])
+def test_a_fit_verdict_replaces_the_shot_impact_time_as_the_board_does(lib, band_bins):
+    """l3_impactFitRun: a verdict other than none puts the refined time on the
+    shot; the refinement is measured against the ORIGINAL frozen time."""
+    raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=1.372)
+    config = fr.ReplayConfig(tee_bin=29, dest_bin=29, impact_armed=True, band_bins=band_bins)
+    result = fr.replay_dump(raw, config, lib=lib)
+
+    fit = result.impact_fit
+    assert fit is not None and fit.verdict != "none"
+    frozen = result.frozen_impact_timestamp_us
+    assert frozen is not None and frozen > 0
+    assert result.shot.impactTimestampUs == int(fit.impact_us + 0.5)
+    assert result.shot.impactTimestampUs != frozen, "the synthetic refinement moves the time"
+    assert fit.refined_minus_trigger_us == pytest.approx(fit.impact_us - frozen, abs=1.0)
+    assert f"impact={result.shot.impactTimestampUs} " in result.shot_status
+
+
+@pytest.mark.parametrize(
+    ("verdict", "impact_us", "expected"),
+    [
+        ("none", 0.0, 21_000),
+        ("none", 30_000.0, 21_000),
+        ("single_track", 0.0, 21_000),
+        ("single_track", 30_000.4, 30_000),
+        ("consistent", 30_000.5, 30_001),
+        ("inconsistent", 19_999.6, 20_000),
+    ],
+)
+def test_the_fit_replaces_the_frozen_time_only_with_a_verdict(verdict, impact_us, expected):
+    """The rule of l3_impactFitRun: verdict none (or no time) keeps the frozen
+    time; any other verdict rounds the fit's time onto the shot."""
+    shot = fw.Shot()
+    shot.impactTimestampUs = 21_000
+    fit = fw.ImpactFit()
+    fit.verdict = fw.FIT_VERDICT_NAMES.index(verdict)
+    fit.impactUs = impact_us
+
+    fr.apply_impact_fit(shot, fit)
+
+    assert shot.impactTimestampUs == expected
 
 
 def test_an_uncertain_track_keeps_its_time_and_sigma_in_the_summary(lib):
