@@ -199,8 +199,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--json", type=Path, help="Write the summary and every outcome here")
     parser.add_argument("--compare", type=Path, help="A baseline written by --json")
     parser.add_argument("--allow-more-none", type=int, default=0)
+    parser.add_argument(
+        "--ball-hypotheses",
+        choices=("firmware", "on", "off"),
+        default="firmware",
+        help="Ball search: the firmware default, the hypotheses, or the legacy acquisition",
+    )
     args = parser.parse_args(argv)
-    outcomes = [evaluate(case) for case in iter_cases(args.roots)]
+    search = {"firmware": None, "on": True, "off": False}[args.ball_hypotheses]
+    outcomes = [evaluate(case, ball_hypotheses=search) for case in iter_cases(args.roots)]
     summary = summarize(outcomes)
     print(json.dumps(summary, indent=2))
     if args.json is not None:

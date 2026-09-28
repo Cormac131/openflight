@@ -77,3 +77,37 @@ the farthest candidate is offered; the code offers all of them.
 `scripts/analysis/evaluate_iwr_tracking.py` over `iwr-test-sessions/` reports the R8 numbers,
 and `--compare` against the recorded baseline fails on any regression; the 2026-08-24 12:04:08
 capture, added to `tests/radar/recordings/`, launches at 40–50 m/s (OPS 45.1 m/s).
+
+## Results (2026-09-28)
+
+Measured with `scripts/analysis/evaluate_iwr_tracking.py iwr-test-sessions` (93 captures with an
+OPS ball speed and a `triggerCfg` tee), after the plan's Tasks 0–7:
+
+| search | club at impact | ball within 15 % | wrong | no launch | ball present |
+|---|---|---|---|---|---|
+| legacy (`--ball-hypotheses off`) | 55 | 15 | 70 | 8 | 23 |
+| hypotheses (`--ball-hypotheses on`) | 55 | 10 | 36 | 47 | 23 |
+
+Default: `useHypotheses = 0`, because R8 is not met (ball within 15 % fell from 15 to 10 and
+"no launch" rose from 8 to 47).
+
+What changed, capture by capture (legacy -> hypotheses): 36 wrong -> none (the search no longer
+calls the club's follow-through the ball), 7 wrong -> ok (fast shots, OPS 34–52 m/s, e.g.
+`190148_765_007` 28.4 -> 51.7 m/s against 51.4), 12 ok -> not ok. Of those 12, 9 have no ball in the
+saved data (the legacy "ok" was the club moving at about the OPS speed; several are chips at
+14–21 m/s where the search found a 44–60 m/s return instead). 10 captures hold a ball-like chain but
+classify nothing.
+
+Why, on the two captures traced (with the ball present):
+
+- `20260927_144220_262_005` (OPS 20.6 m/s): two near-stationary returns (bins 46.2 and 50.9) are
+  extended every frame, never coast out, and hold two of the four slots for eight frames; the
+  departing hypothesis (48.0 -> 52.6) is evicted. A hypothesis whose fitted rate is already below
+  `minDepartureMps` after three points could be dropped to free its slot.
+- `20260927_183542_142_009` (OPS 36.5 m/s): the club track is inactive after impact (no claim to
+  separate the returns), the recorded freeze is ~12 ms after impact, and the winning hypothesis
+  (19.9 m/s, residual 0.51 bins) mixes two objects; a 28.9 m/s hypothesis also qualified.
+
+Board: the whole tree compiles with the TI compiler (warnings as errors); the R4F link fails on a
+DATA_RAM overflow that predates this work (776c266 plus the compile fix: 0x2b bytes free, the
+0x800 FIQ stack cannot be placed). The hypotheses add 1432 B of DATA_RAM.

@@ -145,3 +145,18 @@ def test_a_synthetic_shot_with_its_session_log_is_scored_end_to_end(ev, tmp_path
     assert ev.main([str(tmp_path), "--json", str(tmp_path / "out.json")]) == 0
     written = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
     assert written["summary"]["captures"] == 1
+
+
+def test_the_cli_passes_the_ball_search_through(ev, monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(ev, "iter_cases", lambda roots: iter([object()]))
+
+    def fake_evaluate(case, *, lib=None, ball_hypotheses=None):
+        seen.append(ball_hypotheses)
+        return ev.Outcome("x", "club", "ok", True, 40.0, 40.0)
+
+    monkeypatch.setattr(ev, "evaluate", fake_evaluate)
+    assert ev.main([str(tmp_path), "--ball-hypotheses", "on"]) == 0
+    assert ev.main([str(tmp_path), "--ball-hypotheses", "off"]) == 0
+    assert ev.main([str(tmp_path)]) == 0
+    assert seen == [True, False, None]
