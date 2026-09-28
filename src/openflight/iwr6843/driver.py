@@ -564,6 +564,17 @@ class IWR6843Radar:
             "ball cfg", self.cmd(f"ball cfg {int(enable)} {int(follow and enable)}", 2.0)
         )
 
+    def set_tee_band(self, bins: float) -> None:
+        """Set the tee band's half width in range bins (0: no band).
+
+        The club and ball trackers ignore targets inside the band around the
+        ball, and the impact is fitted from the tracks either side of it. A
+        ``trackCfg`` sub-mode because the firmware's CLI table is full; the
+        firmware keeps it across ``triggerCfg`` and ``sensorStart``.
+        """
+        command = f"trackCfg impactFit {bins:g}"
+        self._require_done(command, self.cmd(command, 2.0))
+
     def trigger_trace(self) -> str:
         """The detector's raw-input trace: what it was offered, not what it took.
 

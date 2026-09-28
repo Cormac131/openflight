@@ -1196,3 +1196,75 @@ def test_tracker_configuration_precedes_trigger_and_listener(tmp_path):
     ]
     assert all(thread == threading.current_thread().name for _, thread in radar.commands)
     assert monitor.onboard_tracking
+
+
+class TeeBandRadar(FakeRadar):
+    """Records the config and the tee band in the order the monitor sends them."""
+
+    def __init__(self, raw: bytes, band_error: Exception | None = None):
+        super().__init__(raw)
+        self.events: list[tuple[str, object]] = []
+        self.band_error = band_error
+
+    def send_config(self, path: str, lines=None):
+        super().send_config(path, lines)
+        self.events.append(("config", path))
+
+    def set_tee_band(self, bins: float) -> None:
+        self.events.append(("band", bins))
+        if self.band_error is not None:
+            raise self.band_error
+
+
+def _tee_band_monitor(tmp_path, radar, **kwargs):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    return IWR6843CaptureMonitor(
+        config_path=config,
+        output_dir=tmp_path / "dumps",
+        radar=radar,
+        button_factory=FakeButton,
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize("bins", [6.0, 0.5, 64.0])
+def test_tee_band_is_sent_after_the_config(tmp_path, bins):
+    radar = TeeBandRadar(_raw_dump())
+    monitor = _tee_band_monitor(tmp_path, radar, tee_band_bins=bins)
+
+    monitor.start(armed=False)
+    try:
+        assert radar.events == [("config", str(tmp_path / "radar.cfg")), ("band", bins)]
+    finally:
+        monitor.stop()
+
+
+def test_tee_band_off_sends_nothing(tmp_path):
+    """0 is the firmware default: older firmware without the sub-mode still starts."""
+    radar = TeeBandRadar(_raw_dump())
+    monitor = _tee_band_monitor(tmp_path, radar)
+
+    monitor.start(armed=False)
+    try:
+        assert monitor.tee_band_bins == 0.0
+        assert [kind for kind, _ in radar.events] == ["config"]
+    finally:
+        monitor.stop()
+
+
+@pytest.mark.parametrize("bins", [-0.5, -6.0, float("nan"), 64.5, float("inf")])
+def test_tee_band_must_be_within_the_firmware_limits(tmp_path, bins):
+    with pytest.raises(ValueError, match="tee band"):
+        _tee_band_monitor(tmp_path, TeeBandRadar(_raw_dump()), tee_band_bins=bins)
+
+
+def test_rejected_tee_band_stops_the_configured_sensor(tmp_path):
+    radar = TeeBandRadar(_raw_dump(), band_error=RuntimeError("config rejected"))
+    monitor = _tee_band_monitor(tmp_path, radar, tee_band_bins=6.0)
+
+    with pytest.raises(RuntimeError, match="config rejected"):
+        monitor.start(armed=False)
+
+    assert radar.shutdown_events[0] == "sensorStop"
+    assert radar.closed

@@ -31,6 +31,8 @@ _GRACEFUL_DUMP_SHUTDOWN_S = 12.0
 # Pause after a serial error in the self-trigger listener so a dead port
 # logs a warning twice a second instead of spinning.
 _LISTENER_ERROR_BACKOFF_S = 0.5
+# The firmware's limit for "trackCfg impactFit" (L3_IMPACT_FIT_MAX_BAND_BINS).
+TEE_BAND_MAX_BINS = 64.0
 
 
 @dataclass(frozen=True)
@@ -350,7 +352,17 @@ class IWR6843CaptureMonitor:
         self_trigger: SelfTriggerConfig | None = None,
         onboard_tracking: bool = False,
         tee_range_m: float | None = None,
+        tee_band_bins: float = 0.0,
     ):
+        # "not <=" also refuses NaN.
+        if not 0.0 <= tee_band_bins <= TEE_BAND_MAX_BINS:
+            raise ValueError(
+                f"tee band must be 0..{TEE_BAND_MAX_BINS:g} bins (0 = off), got {tee_band_bins}"
+            )
+        # Half width in range bins of the band around the ball that the
+        # firmware's club and ball trackers ignore; 0 leaves the firmware's
+        # default (off) and sends nothing, so older firmware still starts.
+        self.tee_band_bins = float(tee_band_bins)
         self.config_path = Path(config_path)
         # With the tee known, the impact and ball windows are placed on it
         # (tee_relative_config) instead of the cfg's fixed ones.
@@ -441,6 +453,8 @@ class IWR6843CaptureMonitor:
             configured = True
             # Before the worker starts: after that only the worker may talk
             # to the radar.
+            if self.tee_band_bins > 0.0:
+                self.radar.set_tee_band(self.tee_band_bins)
             if onboard_track_config is not None:
                 self._configure_onboard_tracking(onboard_track_config)
             self._apply_self_trigger()

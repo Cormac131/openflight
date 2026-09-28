@@ -516,8 +516,8 @@ def test_power_status_is_forwarded_to_ui_and_session_log(monkeypatch):
 class TestIWR6843ShotIntegration:
     """TI angle processing must enrich, never suppress, an OPS shot."""
 
-    def test_init_iwr6843_has_no_host_freeze_delay(self, monkeypatch, tmp_path):
-        """Production capture must always request the firmware-frozen boundary ring immediately."""
+    def _init_capturing_monitor_kwargs(self, monkeypatch, tmp_path, **init_kwargs):
+        """init_iwr6843 over a monitor double; returns the kwargs it was built with."""
         captured = {}
         calibration = Calibration.identity()
 
@@ -555,7 +555,13 @@ class TestIWR6843ShotIntegration:
             net_range_m=4.6,
             tx_order="auto",
             capture_timeout_s=12.0,
+            **init_kwargs,
         )
+        return captured
+
+    def test_init_iwr6843_has_no_host_freeze_delay(self, monkeypatch, tmp_path):
+        """Production capture must always request the firmware-frozen boundary ring immediately."""
+        captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path)
 
         assert "freeze_delay_s" not in captured
         # The monitor places the impact and ball windows on the tee.
@@ -563,6 +569,20 @@ class TestIWR6843ShotIntegration:
         assert captured["armed"] is False
         assert server_module.iwr6843_runtime.tdm_sign_policy == "positive"
         assert server_module.iwr6843_runtime_config["tdm_sign_policy"] == "positive"
+        server_module.iwr6843_runtime = None
+
+    def test_init_iwr6843_leaves_the_tee_band_off_by_default(self, monkeypatch, tmp_path):
+        captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path)
+
+        assert captured["tee_band_bins"] == 0.0
+        assert server_module.iwr6843_runtime_config["tee_band_bins"] == 0.0
+        server_module.iwr6843_runtime = None
+
+    def test_init_iwr6843_passes_the_tee_band_to_the_monitor(self, monkeypatch, tmp_path):
+        captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path, tee_band_bins=6.0)
+
+        assert captured["tee_band_bins"] == 6.0
+        assert server_module.iwr6843_runtime_config["tee_band_bins"] == 6.0
         server_module.iwr6843_runtime = None
 
     def _init_with_ball_detector(self, monkeypatch, tmp_path, mode, emitted):
@@ -4488,6 +4508,35 @@ class TestBallisticsConfiguration:
 
     def test_runtime_default_enables_ballistics(self):
         assert server_module.ballistics_enabled is True
+
+
+class TestIWR6843TeeBandArgument:
+    """--iwr6843-tee-band-bins turns the firmware's tee band on; off by default."""
+
+    def test_cli_default_is_off(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_iwr6843_tee_band_argument(parser)
+
+        assert parser.parse_args([]).iwr6843_tee_band_bins == 0.0
+
+    def test_cli_accepts_a_fractional_half_width(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_iwr6843_tee_band_argument(parser)
+
+        assert parser.parse_args(["--iwr6843-tee-band-bins", "6.5"]).iwr6843_tee_band_bins == 6.5
+
+    @pytest.mark.parametrize("value", ["-1", "64.5", "nan"])
+    def test_out_of_range_band_is_a_usage_error(self, monkeypatch, capsys, value):
+        monkeypatch.setattr(
+            sys, "argv", ["openflight-server", "--iwr6843", "--iwr6843-tee-band-bins", value]
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            server_module.main()
+
+        # code 2: argparse's parser.error(), not the later hardware-init exit.
+        assert exc_info.value.code == 2
+        assert "--iwr6843-tee-band-bins must be 0..64" in capsys.readouterr().err
 
 
 class TestBatteryConfiguration:

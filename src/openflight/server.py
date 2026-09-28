@@ -1174,6 +1174,7 @@ def init_iwr6843(
     full_capture: bool = False,
     ball_detector: str = "off",
     setup_poll_s: float = 1.0,
+    tee_band_bins: float = 0.0,
 ) -> bool:
     """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator.
 
@@ -1182,7 +1183,9 @@ def init_iwr6843(
     ``ball_detector`` is off, on or follow: on starts the firmware's placement
     detector (the shot machine locks the ball and the kiosk gets a setup
     banner from a ``ball status`` poll every ``setup_poll_s``); follow also
-    aims the self-trigger at the locked ball.
+    aims the self-trigger at the locked ball. ``tee_band_bins`` is the half
+    width in range bins of the band around the ball that the firmware's club
+    and ball trackers ignore; 0 leaves it off.
     """
     global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
     from .iwr6843.setup_poll import BALL_DETECTOR_MODES  # pylint: disable=import-outside-toplevel
@@ -1231,6 +1234,7 @@ def init_iwr6843(
             ),
             self_trigger=self_trigger,
             tee_range_m=tee_range_m,
+            tee_band_bins=tee_band_bins,
         )
         if self_trigger is not None:
             logger.warning(
@@ -1275,6 +1279,7 @@ def init_iwr6843(
             "calibration": str(calibration_path),
             "trigger_pin_bcm": trigger_pin,
             "tee_slant_range_m": tee_range_m,
+            "tee_band_bins": tee_band_bins,
             "net_range_m": net_range_m,
             "flight": flight,
             "self_trigger": (
@@ -4630,6 +4635,17 @@ def environment_from_args(args) -> Environment:
     )
 
 
+def _add_iwr6843_tee_band_argument(parser):
+    """Add the firmware tee band's half width (0: off, the firmware default)."""
+    parser.add_argument(
+        "--iwr6843-tee-band-bins",
+        type=float,
+        default=0.0,
+        help="Half width in range bins of the tee band the IWR6843 club/ball trackers "
+        "ignore; impact is then fitted from the tracks either side (0 = off, default)",
+    )
+
+
 def _add_battery_arguments(parser):
     """Add explicit battery-provider selection."""
     parser.add_argument(
@@ -4977,6 +4993,7 @@ def main():
         default=DEFAULT_TEE_RANGE_M,
         help=f"Antenna-center to tee slant range in metres (default: {DEFAULT_TEE_RANGE_M})",
     )
+    _add_iwr6843_tee_band_argument(parser)
     parser.add_argument(
         "--iwr6843-net-m",
         type=float,
@@ -5167,6 +5184,12 @@ def main():
         parser.error("--camera-capture cannot be used with --mock")
     if args.iwr6843 and (args.iwr6843_tee_m <= 0 or args.iwr6843_net_m <= 0):
         parser.error("--iwr6843-tee-m and --iwr6843-net-m must be positive")
+    if args.iwr6843:
+        from .iwr6843.monitor import TEE_BAND_MAX_BINS  # pylint: disable=import-outside-toplevel
+
+        # "not <=" also refuses NaN.
+        if not 0.0 <= args.iwr6843_tee_band_bins <= TEE_BAND_MAX_BINS:
+            parser.error(f"--iwr6843-tee-band-bins must be 0..{TEE_BAND_MAX_BINS:g}")
     try:
         self_trigger_config = _self_trigger_config(args) if args.iwr6843 else None
     except (OSError, ValueError) as error:
@@ -5365,6 +5388,7 @@ def main():
             full_capture=args.iwr6843_full_capture,
             ball_detector=args.iwr6843_ball_detector,
             setup_poll_s=args.iwr6843_setup_poll_s,
+            tee_band_bins=args.iwr6843_tee_band_bins,
         ):
             calibration = iwr6843_runtime.calibration
             ball_speed_correction_distance_ft = args.iwr6843_tee_m * 3.28084

@@ -693,3 +693,38 @@ def test_shot_result_parses_the_packet_only_once_the_machine_reached_result(monk
     ]
     replies["triggerLog result"] = replies["triggerLog result"].replace("ready=1", "ready=0")
     assert radar.shot_result() is None
+
+
+def test_set_tee_band_sends_the_track_cfg_sub_mode(monkeypatch):
+    """The tee band rides trackCfg: the firmware CLI table is at CLI_MAX_CMD."""
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    calls = []
+    monkeypatch.setattr(
+        radar, "cmd", lambda command, window: calls.append((command, window)) or "Done\n"
+    )
+
+    radar.set_tee_band(6.0)
+    radar.set_tee_band(2.5)
+    radar.set_tee_band(0.0)
+
+    assert [command for command, _ in calls] == [
+        "trackCfg impactFit 6",
+        "trackCfg impactFit 2.5",
+        "trackCfg impactFit 0",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("reply", "match"),
+    [
+        ("Error: trackCfg impactFit <bandBins 0..64>\n", "config rejected"),
+        ("", "did not acknowledge"),
+    ],
+)
+def test_set_tee_band_requires_done(monkeypatch, reply, match):
+    """Older firmware without the sub-mode, or a wedged board, must not pass silently."""
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    monkeypatch.setattr(radar, "cmd", lambda *_args, **_kwargs: reply)
+
+    with pytest.raises(RuntimeError, match=match):
+        radar.set_tee_band(6.0)
