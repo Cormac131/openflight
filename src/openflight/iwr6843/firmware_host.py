@@ -995,6 +995,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
         ctypes.c_int32,
     ),
     "l3_ball_hyps_struct_bytes": ([], _U32),
+    "l3_ball_hyps_classify": ([_P(BallHyps), _P(BallHypVerdict)], None),
     "l3_ball_track_cfg_defaults": ([_P(BallTrackCfg)], None),
     "l3_ball_track_init": ([_P(BallTrack), _P(BallTrackCfg)], None),
     "l3_ball_track_reset": ([_P(BallTrack)], None),

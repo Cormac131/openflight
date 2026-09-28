@@ -183,3 +183,66 @@ def test_the_fit_reads_the_rate_and_the_range_at_a_reference_time(lib):
     assert rate.value * BIN_M == pytest.approx(42.0, rel=1e-3)
     assert at.value == pytest.approx(46.0, abs=0.01)  # the origin at the gate time
     assert residual.value == pytest.approx(0.0, abs=1e-3)
+
+
+def verdict(lib, hyps):
+    out = fw.BallHypVerdict()
+    lib.l3_ball_hyps_classify(ctypes.byref(hyps), ctypes.byref(out))
+    return out
+
+
+def test_no_verdict_before_four_points(lib):
+    hyps, _ = run(lib, TwoTracks(frames=3))
+    assert verdict(lib, hyps).index == -1
+
+
+def test_the_ball_hypothesis_is_classified_with_its_speed(lib):
+    hyps, _ = run(lib, TwoTracks(frames=6))
+    v = verdict(lib, hyps)
+    assert v.index >= 0
+    assert bins(hyps.hyp[v.index])[0] == pytest.approx(46.0 + 42.0 * 0.002 / BIN_M, abs=0.01)
+    assert v.points == 6
+    assert v.rateMps == pytest.approx(42.0, rel=0.02)
+    assert (v.weakerFraction, v.dopplerAgreement) == (1.0, 1.0)
+    assert abs(v.originOffsetUs) < 200.0
+
+
+def test_a_stationary_return_near_the_origin_is_never_the_ball(lib):
+    """The strong stall beside the ball (2026-08-24: bins 38.2-38.4, SNR up to 970)."""
+    scene = TwoTracks(missing_ball=tuple(range(1, 9)), extras=[(48.0, 20000.0, 0.8)])
+    hyps, _ = run(lib, scene)
+    assert active(hyps)  # it is followed as a hypothesis ...
+    assert verdict(lib, hyps).index == -1  # ... but it never leaves: not the ball
+
+
+@pytest.mark.parametrize("offset_us", [-6000, 6000])
+def test_the_gate_need_not_be_the_exact_impact(lib, offset_us):
+    hyps, _ = run(lib, TwoTracks(frames=10, impact_offset_us=offset_us))
+    v = verdict(lib, hyps)
+    assert v.index >= 0
+    assert v.originOffsetUs == pytest.approx(offset_us, abs=300.0)
+
+
+def test_a_ball_leaving_far_from_the_gate_time_is_not_the_ball(lib):
+    hyps, _ = run(lib, TwoTracks(frames=24, impact_offset_us=30000))
+    assert active(hyps)
+    assert verdict(lib, hyps).index == -1
+
+
+def test_the_tighter_of_two_ball_like_hypotheses_wins(lib):
+    hyps = make_hyps(lib)
+    arm(lib, hyps)
+    step = 42.0 * 0.002 / BIN_M
+    jitter = [0.0, 0.6, -0.6, 0.6, -0.6, 0.6]
+    for k in range(1, 7):
+        ts = 2000 * k
+        clean = obs(k, ts, 46.0 + step * k, 1500.0, 42.0)
+        noisy = obs(k, ts, 50.0 + step * k + jitter[k - 1], 1500.0, 42.0)
+        feed(lib, hyps, k, ts, [clean, noisy])
+    v = verdict(lib, hyps)
+    assert v.index >= 0
+    assert bins(hyps.hyp[v.index])[0] == pytest.approx(46.0 + step, abs=0.01)
+
+
+def test_unarmed_hypotheses_give_no_verdict(lib):
+    assert verdict(lib, make_hyps(lib)).index == -1

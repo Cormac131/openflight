@@ -101,6 +101,14 @@ int32_t l3_ball_hyp_fit(const l3_ball_hyp_t *hyp, uint32_t referenceUs, float *r
  * it appended nothing this frame or the index is out of range. */
 int32_t l3_ball_hyps_set_angles(l3_ball_hyps_t *hyps, uint32_t index, float azimuthRad,
                                 float elevationRad, uint8_t anglesValid);
+/* The ball among the hypotheses holding at least classifyPoints points:
+ * fitted over them from the gate time, it must move outward at
+ * minDepartureMps..maxSpeedMps, cross the origin within impactToleranceUs of
+ * the gate time and fit within maxResidualBins. The best score wins:
+ * (1 - residual / maxResidualBins) + the fraction of points whose Doppler
+ * agrees with the rate + half the fraction of club frames where it was the
+ * weaker return. out->index is -1 when none qualifies. */
+void l3_ball_hyps_classify(const l3_ball_hyps_t *hyps, l3_ball_hyp_verdict_t *out);
 /* sizeof(l3_ball_hyps_t), for the ctypes mirror's layout check. */
 uint32_t l3_ball_hyps_struct_bytes(void);
 
