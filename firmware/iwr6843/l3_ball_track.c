@@ -302,6 +302,21 @@ uint32_t l3_ball_track_launch(const l3_ball_track_t *track, l3_launch_t *out)
     if (used == 0U) {
         return 0U;
     }
+    if (fit.speedValid && fit.speedMps > track->cfg.maxSpeedMps) {
+        /* Faster than any ball: the direction is noise, not the flight (a
+         * few angled points jumping sideways, 20260927_144341). Keep the
+         * range walk, which is a measurement, and drop the direction; with
+         * the walk too fast as well there is no ball speed at all. */
+        fit.velocity.x = fit.radialSpeedMps;
+        fit.velocity.y = 0.0F;
+        fit.velocity.z = 0.0F;
+        fit.speedMps = fit.radialSpeedMps;
+        fit.pathValid = 0U;
+        fit.attackValid = 0U;
+        if (fit.radialSpeedMps > track->cfg.maxSpeedMps) {
+            fit.speedValid = 0U;
+        }
+    }
     out->points = used;
     out->velocity = fit.velocity;
     /* The fitted line is anchored at its last point; walk it back to impact. */

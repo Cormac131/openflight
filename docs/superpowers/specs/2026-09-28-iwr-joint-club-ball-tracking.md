@@ -137,7 +137,10 @@ competitor qualifies); `farWindowBins = 3` moves the 2026-08-24 launch from 47.1
 (OPS 45.1) and 20260916_185013 from 35.1 to 39.2 m/s. With the hypotheses on, five 2026-09-16
 recordings fail `ball_origin_bin` whatever the switches (already the case without them). A legacy
 floor of 20 m/s turns 20260927_144341's 13 m/s hand return into a 3-point launch the launch fit
-reads as 658.9 m/s: `l3_ball_track_launch` does not bound the 3D speed by `maxSpeedMps`.
+read as 658.9 m/s. Fixed: `l3_ball_track_launch` now falls back to the range walk (46.4 m/s, no
+direction) when the 3D speed exceeds `maxSpeedMps`, and reports no speed when the walk does too.
+The cause upstream: with fewer than 3 angled points `l3_track_delivery_range` fits no angles but
+still mixes the angled points' positions into the velocity, and skips the angle-residual gate.
 
 Not ported: the late-flight horizontal launch. A 3D fit over the newest points was tried and fails
 the angle-residual gate (`maxAngleResidualM`) on every recording: per-frame azimuths scatter by

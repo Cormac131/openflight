@@ -14,6 +14,7 @@ import ctypes
 import importlib.util
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -694,3 +695,16 @@ def test_ball_tuning_reaches_the_replayed_launch(lib, whole_shot):
         lib=lib,
     )
     assert too_fast.launch is None, "the hard floor reaches the legacy acquisition"
+
+
+_HAND_RETURN = RECORDINGS_DIR / "iwr6843_20260927_144341_257_013.l3dump"
+
+
+@pytest.mark.skipif(not _HAND_RETURN.exists(), reason="recording not present")
+def test_a_recorded_hand_return_never_launches_faster_than_a_ball(lib):
+    """With a 20 m/s floor the legacy search took a 3-point track whose last two
+    angled points jump metres sideways; the launch read it as 658.9 m/s."""
+    config = dict(recording_configs(RECORDINGS_DIR))[_HAND_RETURN]
+    tuned = replace(config, ball_tuning=BallTuning(min_departure_mps=20.0))
+    result = replay_dump(_HAND_RETURN.read_bytes(), tuned, lib=lib)
+    assert result.launch is None or result.launch.speed_mps <= 100.0

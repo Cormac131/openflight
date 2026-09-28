@@ -120,7 +120,9 @@ uint32_t l3_ball_track_struct_bytes(void);
 int32_t l3_ball_track_set_angles(l3_ball_track_t *track, float azimuthRad, float elevationRad,
                                  uint8_t anglesValid);
 /* The launch from the earliest cfg.launchPoints confirmed points (at least
- * 3). Returns the points used, 0 when too few. */
+ * 3). A 3D speed above cfg.maxSpeedMps falls back to the range walk with no
+ * direction, and a range walk above it leaves speedValid 0. Returns the
+ * points used, 0 when too few. */
 uint32_t l3_ball_track_launch(const l3_ball_track_t *track, l3_launch_t *out);
 const char *l3_ball_track_why_name(uint8_t why);
 /* "balltrack armed=1 confirmed=1 done=0 why=tracked count=5 origin=47.0 ..." */

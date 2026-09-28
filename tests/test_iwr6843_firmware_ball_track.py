@@ -612,3 +612,51 @@ def test_fastest_credible_keeps_an_unclaimed_follow_through_off_the_ball(lib, de
 
     assert launch_speed() < 30.0, "without the rule the follow-through is the ball"
     assert launch_speed(fastBallMps=30.0) == pytest.approx(42.0, rel=0.1)
+
+
+# --- the launch speed ceiling --------------------------------------------------
+
+
+def jumpy_flight(lib, *, radial_mps=46.0, **overrides):
+    """Four points departing at radial_mps; only the last two carry angles, and
+    they jump metres sideways (20260927_144341 with a 20 m/s floor: a hand
+    return read as a 658.9 m/s ball)."""
+    ball = Ball(lib, **overrides)
+    ball.arm()
+    step = radial_mps * FRAME_US * 1e-6 / BIN_M
+    for k, azimuth in enumerate([None, None, -0.6, 1.1]):
+        frame = 8 + k
+        range_bin = ORIGIN_BIN + step * (frame * FRAME_US - IMPACT_US) / FRAME_US
+        assert ball.update(frame, [target(frame, range_bin)]), ball.why
+        if azimuth is not None:
+            ball.set_angles(azimuth, 0.2 if k == 2 else -0.4)
+    return ball
+
+
+def test_the_launch_speed_never_exceeds_the_ball_ceiling(lib):
+    ball = jumpy_flight(lib)
+    used, launch = ball.launch()
+    assert used >= 3
+    assert launch.speedMps <= ball.track.cfg.maxSpeedMps
+    # The range walk is a measurement: the launch falls back to it.
+    assert launch.speedValid and launch.speedMps == pytest.approx(launch.radialSpeedMps)
+    assert launch.radialSpeedMps == pytest.approx(46.0, rel=0.05)
+    assert not launch.hlaValid and not launch.vlaValid
+
+
+def test_no_launch_speed_when_even_the_range_walk_is_too_fast(lib):
+    """Confirmation checks one point's rate; the fitted walk can still exceed
+    the ceiling. Lowered here after confirmation to reach that case."""
+    ball = jumpy_flight(lib)
+    ball.track.cfg.maxSpeedMps = 40.0
+    used, launch = ball.launch()
+    assert used >= 3 and launch.radialSpeedMps > 40.0
+    assert not launch.speedValid
+    assert not launch.hlaValid and not launch.vlaValid
+
+
+def test_a_clean_launch_is_untouched_by_the_ceiling(lib):
+    ball, velocity = fly(lib, speed=60.0, hla_deg=3.0)
+    _, launch = ball.launch()
+    assert launch.speedValid and launch.speedMps == pytest.approx(60.0, rel=0.02)
+    assert launch.hlaValid and launch.vlaValid
