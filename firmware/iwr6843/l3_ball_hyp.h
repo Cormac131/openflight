@@ -19,6 +19,15 @@
 
 #include "l3_observation.h"
 
+/* Build switch. The search is off at run time (l3_ball_track_cfg_defaults)
+ * until the recorded captures say otherwise, so the board image compiles it
+ * out of l3_ball_track_t to save DATA_RAM (L3_FEATURE_DEFS in the makefile);
+ * the host build keeps it for the replay and the tests. With it at 0 the
+ * functions below still build but nothing calls them. */
+#ifndef L3_BALL_HYPOTHESES
+#define L3_BALL_HYPOTHESES 1
+#endif
+
 #define L3_BALL_HYP_MAX    4U
 #define L3_BALL_HYP_POINTS 8U
 #define L3_BALL_HYP_NONE   0xFFFFFFFFU

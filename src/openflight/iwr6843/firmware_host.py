@@ -1118,8 +1118,10 @@ def host_compiler() -> str | None:
     return None if command is None else " ".join(command)
 
 
-def _source_digest(sources: tuple[Path, ...]) -> str:
+def _source_digest(sources: tuple[Path, ...], defines: tuple[str, ...] = ()) -> str:
     digest = hashlib.sha256()
+    for define in defines:
+        digest.update(define.encode("ascii") + b"\0")
     for source in sources:
         digest.update(source.read_bytes())
         for header in sorted(source.parent.glob("l3_*.h")):
@@ -1128,13 +1130,20 @@ def _source_digest(sources: tuple[Path, ...]) -> str:
 
 
 def build_firmware_library(
-    out_dir: str | Path | None = None, *, firmware_dir: Path = FIRMWARE_DIR
+    out_dir: str | Path | None = None,
+    *,
+    firmware_dir: Path = FIRMWARE_DIR,
+    defines: tuple[str, ...] = (),
 ) -> ctypes.CDLL:
     """Compile the host-testable firmware modules into one shared library and bind it.
 
     Without ``out_dir`` the build lands in a temp directory named after the
-    sources' digest, so repeated replays skip the compile. Raises RuntimeError
-    without a compiler; the C compile's own errors propagate.
+    sources' (and defines') digest, so repeated replays skip the compile.
+    ``defines`` are ``NAME=VALUE`` preprocessor switches, e.g. the board
+    image's ``L3_FEATURE_DEFS``; the ctypes mirrors below describe the default
+    (empty) build, so a build that changes a layout is only safe through
+    functions that treat that struct as opaque. Raises RuntimeError without a
+    compiler; the C compile's own errors propagate.
     """
     compiler = host_compiler_command()
     if compiler is None:
@@ -1143,7 +1152,8 @@ def build_firmware_library(
         )
     sources = tuple(firmware_dir / name for name in HOST_SOURCES)
     if out_dir is None:
-        out_dir = Path(tempfile.gettempdir()) / f"openflight-l3-host-{_source_digest(sources)}"
+        digest = _source_digest(sources, defines)
+        out_dir = Path(tempfile.gettempdir()) / f"openflight-l3-host-{digest}"
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     library_path = out_dir / "l3_host.so"
@@ -1159,6 +1169,7 @@ def build_firmware_library(
                 "-shared",
                 "-fPIC",
                 "-O1",
+                *(f"-D{define}" for define in defines),
                 "-o",
                 str(build),
                 *(str(source) for source in sources),

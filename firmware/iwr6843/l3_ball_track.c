@@ -28,20 +28,24 @@ void l3_ball_track_cfg_defaults(l3_ball_track_cfg_t *cfg)
     cfg->snr = 3.0F;                  /* half the trigger's: the ball is weak and moving */
     cfg->useHypotheses = 0U;          /* decided by the recorded captures */
     cfg->skipClubClaim = 1U;
+#if L3_BALL_HYPOTHESES
     l3_ball_hyps_cfg_defaults(&cfg->hyps);
+#endif
 }
 
 void l3_ball_track_init(l3_ball_track_t *track, const l3_ball_track_cfg_t *cfg)
 {
     memset(track, 0, sizeof(*track));
     track->cfg = *cfg;
+    track->lastTargetIndex = L3_TRACK_NO_TARGET;
+    l3_track_init(&track->core, &cfg->core);
+#if L3_BALL_HYPOTHESES
     /* The hypotheses share the core's geometry: one source for both. */
     track->cfg.hyps.binWidthM = cfg->core.binWidthM;
     track->cfg.hyps.velocitySpanMps = cfg->core.velocitySpanMps;
-    track->lastTargetIndex = L3_TRACK_NO_TARGET;
     track->verdict.index = -1;
-    l3_track_init(&track->core, &cfg->core);
     l3_ball_hyps_init(&track->hyps, &track->cfg.hyps);
+#endif
 }
 
 void l3_ball_track_reset(l3_ball_track_t *track)
@@ -55,9 +59,11 @@ void l3_ball_track_reset(l3_ball_track_t *track)
     track->originBin = 0.0F;
     track->lastTargetIndex = L3_TRACK_NO_TARGET;
     memset(&track->origin, 0, sizeof(track->origin));
+#if L3_BALL_HYPOTHESES
     l3_ball_hyps_init(&track->hyps, &track->cfg.hyps);
     memset(&track->verdict, 0, sizeof(track->verdict));
     track->verdict.index = -1;
+#endif
 }
 
 void l3_ball_track_arm(l3_ball_track_t *track, float originBin, const l3_vec3_t *origin,
@@ -68,7 +74,9 @@ void l3_ball_track_arm(l3_ball_track_t *track, float originBin, const l3_vec3_t 
     track->originBin = originBin;
     track->origin = *origin;
     track->impactTimestampUs = impactTimestampUs;
+#if L3_BALL_HYPOTHESES
     l3_ball_hyps_arm(&track->hyps, originBin, impactTimestampUs);
+#endif
 }
 
 static int32_t l3_ball_track_note(l3_ball_track_t *track, uint8_t why, int32_t appended)
@@ -185,6 +193,7 @@ static int32_t l3_ball_track_step(l3_ball_track_t *track, const l3_target_obs_t 
     return l3_ball_track_note(track, L3_BALL_TRACK_WHY_TRACKED, 1);
 }
 
+#if L3_BALL_HYPOTHESES
 /* Once the ball is chosen (or the search is over) the hypotheses claim no
  * target: nothing downstream estimates angles for them. */
 static void l3_ball_track_quietHyps(l3_ball_track_t *track)
@@ -239,11 +248,13 @@ static int32_t l3_ball_track_adopt(l3_ball_track_t *track, uint32_t index)
     return l3_ball_track_note(track, L3_BALL_TRACK_WHY_CONFIRMED,
                               (hyp->lastTargetIndex != L3_BALL_HYP_NONE) ? 1 : 0);
 }
+#endif /* L3_BALL_HYPOTHESES */
 
 int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t *targets,
                                    uint32_t n, uint32_t frame, uint32_t timestampUs,
                                    uint32_t clubIndex)
 {
+#if L3_BALL_HYPOTHESES
     uint32_t skip = track->cfg.skipClubClaim ? clubIndex : L3_TRACK_NO_TARGET;
 
     if (!track->cfg.useHypotheses) {
@@ -268,6 +279,10 @@ int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t
         return l3_ball_track_note(track, L3_BALL_TRACK_WHY_SEARCHING, 0);
     }
     return l3_ball_track_adopt(track, (uint32_t)track->verdict.index);
+#else
+    (void)clubIndex;
+    return l3_ball_track_step(track, targets, n, frame, timestampUs, L3_TRACK_NO_TARGET);
+#endif
 }
 
 int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targets, uint32_t n,

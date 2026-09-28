@@ -45,7 +45,9 @@ typedef struct {
     /* Once confirmed, skip the club's claimed target while another candidate
      * is in the gate. */
     uint32_t skipClubClaim;
+#if L3_BALL_HYPOTHESES
     l3_ball_hyps_cfg_t hyps;      /* binWidthM and velocitySpanMps come from core */
+#endif
 } l3_ball_track_cfg_t;
 
 enum {
@@ -76,8 +78,10 @@ typedef struct {
     uint32_t  lastTargetIndex;    /* index into the last update's targets that was
                                    * appended, L3_TRACK_NO_TARGET when none */
     uint32_t  counters[L3_BALL_TRACK_WHY_COUNT];
+#if L3_BALL_HYPOTHESES
     l3_ball_hyps_t hyps;
     l3_ball_hyp_verdict_t verdict; /* the last classification; index -1 before one */
+#endif
 } l3_ball_track_t;
 
 /* Ball launch from the earliest clean flight, extrapolated to impact. */
@@ -110,7 +114,8 @@ int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targ
  * claimed this frame (L3_TRACK_NO_TARGET for none). With useHypotheses the
  * ball is searched for with the hypotheses and, once one is classified, its
  * points seed the track (angles included) and tracking continues; the plain
- * update is this with no claim. */
+ * update is this with no claim. Built with L3_BALL_HYPOTHESES at 0,
+ * useHypotheses is ignored and this is the plain update. */
 int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t *targets,
                                    uint32_t n, uint32_t frame, uint32_t timestampUs,
                                    uint32_t clubIndex);

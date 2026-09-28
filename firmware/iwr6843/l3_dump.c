@@ -3614,6 +3614,7 @@ static void l3_considerBallTrack(uint32_t slot)
             }
         }
     }
+#if L3_BALL_HYPOTHESES
     {
         /* Angles for every ball-hypothesis point this frame appended: once one
          * is chosen, its early points must still carry them. */
@@ -3653,6 +3654,7 @@ static void l3_considerBallTrack(uint32_t slot)
             }
         }
     }
+#endif /* L3_BALL_HYPOTHESES */
     (void)l3_ball_track_launch(&gBallTrack, &gLaunch);
     l3_profileStage(L3_PROF_BALL_TRACK, ticks);
     gTrigBusy = 0U;
