@@ -783,3 +783,45 @@ def test_follow_caps_speed_at_the_impact_speed_not_the_decaying_estimate(lib):
     assert _follow(tr, 7, [target(7, 40.1)]) is True
     # ... and 42.2 (2.1 bins in one frame) is faster than the club arrived.
     assert _follow(tr, 8, [target(8, 42.2)]) is False
+
+
+def test_wrapped_diff_goes_the_short_way_round(lib):
+    f = lib.l3_track_wrapped_diff
+    assert f(1.0, -1.0, 18.0) == pytest.approx(2.0)
+    assert f(8.5, -8.5, 18.0) == pytest.approx(1.0)
+    assert f(33.6, -2.4, 18.0) == pytest.approx(0.0, abs=1e-4)  # 33.6 m/s reads as -2.4
+    assert f(3.0, 1.0, 0.0) == 0.0
+
+
+def _approach_at(lib, samples):
+    """A club track from (timestamp_us, bin) samples, one per frame."""
+    tr = Tracker(lib)
+    for frame, (ts, bin_) in enumerate(samples, start=1):
+        t = target(frame, bin_)
+        t.timestampUs = ts
+        arr = (Target * 1)(t)
+        lib.l3_track_update(ctypes.byref(tr.track), arr, 1, frame, ts)
+    return tr
+
+
+def _follow_at(tr, frame, timestamp_us, bins):
+    targets = []
+    for b in bins:
+        t = target(frame, b)
+        t.timestampUs = timestamp_us
+        targets.append(t)
+    arr = (Target * max(1, len(targets)))(*targets)
+    return bool(
+        tr.lib.l3_track_follow(ctypes.byref(tr.track), arr, len(targets), frame, timestamp_us)
+    )
+
+
+def test_follow_caps_the_club_by_elapsed_time_not_frames(lib):
+    """750 bins/s at impact: a frame retained 4 ms after the last lets the club be
+    3 bins on (+0.5 of jitter), whatever the frame count says."""
+    history = [(0, 30.0), (2000, 31.5), (4000, 33.0), (6000, 34.5)]
+    tr = _approach_at(lib, history)
+    assert _follow_at(tr, 5, 10000, [37.3]) is True
+    tr = _approach_at(lib, history)
+    assert _follow_at(tr, 5, 10000, [38.2]) is False
+    assert tr.track.followBinsPerS == pytest.approx(750.0, rel=1e-3)

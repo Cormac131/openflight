@@ -64,7 +64,7 @@ void l3_track_reset(l3_club_track_t *track)
     track->sameBin = 0;
     track->sameBinCount = 0U;
     track->following = 0U;
-    track->followBinsPerFrame = 0.0F;
+    track->followBinsPerS = 0.0F;
     track->releasedValid = 0U;
     track->releasedBin = 0.0F;
     track->releasedDopplerMps = 0.0F;
@@ -103,8 +103,7 @@ static void l3_track_append(l3_club_track_t *track, const l3_target_obs_t *targe
     track->total++;
 }
 
-/* Doppler continuity: the smaller way round the alias circle. */
-static float l3_track_wrappedDiff(float a, float b, float span)
+float l3_track_wrapped_diff(float a, float b, float span)
 {
     float diff = a - b;
 
@@ -174,7 +173,7 @@ static int32_t l3_track_acquire(l3_club_track_t *track, const l3_target_obs_t *t
         }
         if (track->releasedValid &&
             l3_track_absf(targets[i].rangeBin - track->releasedBin) <= cfg->gateBins &&
-            l3_track_wrappedDiff(targets[i].dopplerAliasMps, track->releasedDopplerMps,
+            l3_track_wrapped_diff(targets[i].dopplerAliasMps, track->releasedDopplerMps,
                                  cfg->velocitySpanMps) <= L3_TRACK_RELEASE_DOPPLER_TOL_MPS) {
             continue;
         }
@@ -209,7 +208,8 @@ static int32_t l3_track_acquire(l3_club_track_t *track, const l3_target_obs_t *t
  * the prediction, never below the last point's rounded bin when
  * ascendingOnly. Following after impact: the strongest target from
  * L3_TRACK_FOLLOW_RETREAT_BINS behind the last point to where the club would
- * be at its impact speed, plus L3_TRACK_FOLLOW_LEAD_BINS -- the club is the
+ * be at its impact speed (fitted in bins per second on the first follow),
+ * plus L3_TRACK_FOLLOW_LEAD_BINS -- the club is the
  * stronger of the two returns after impact and only slows from its impact
  * speed, so it is anywhere between; beyond, it would be moving faster than
  * it arrived, which only the ball does -- and never a third consecutive point
@@ -235,7 +235,8 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
         float score;
 
         if (following) {
-            float reach = track->lastBin + track->followBinsPerFrame * (float)elapsed +
+            float dtS = (float)(int32_t)(timestampUs - last->timestampUs) * 1.0e-6F;
+            float reach = track->lastBin + track->followBinsPerS * ((dtS > 0.0F) ? dtS : 0.0F) +
                           L3_TRACK_FOLLOW_LEAD_BINS;
 
             if (targets[i].rangeBin < track->lastBin - L3_TRACK_FOLLOW_RETREAT_BINS ||
@@ -259,7 +260,7 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
         if (cfg->ascendingOnly && l3_track_roundBin(targets[i].rangeBin) < floorBin) {
             continue;
         }
-        velocityErr = l3_track_wrappedDiff(targets[i].dopplerAliasMps, last->dopplerAliasMps,
+        velocityErr = l3_track_wrapped_diff(targets[i].dopplerAliasMps, last->dopplerAliasMps,
                                            cfg->velocitySpanMps) /
                       ((cfg->velocitySpanMps > 0.0F) ? cfg->velocitySpanMps : 1.0F);
         score = cfg->weightRange * rangeErr + cfg->weightVelocity * velocityErr +
@@ -332,9 +333,15 @@ int32_t l3_track_follow(l3_club_track_t *track, const l3_target_obs_t *targets, 
     }
     if (!track->following) {
         /* The first frame after impact: the club can only slow from here. */
+        float slope = 0.0F;
+        float residual = 0.0F;
+
         track->following = 1U;
-        track->followBinsPerFrame =
-            (track->velocityBinsPerFrame > 0.0F) ? track->velocityBinsPerFrame : 0.0F;
+        track->followBinsPerS =
+            (l3_track_fit(track, L3_TRACK_FOLLOW_FIT_POINTS, &slope, &residual) > 0U &&
+             slope > 0.0F)
+                ? slope
+                : 0.0F;
     }
     return l3_track_associate(track, targets, n, frame, timestampUs, 1);
 }

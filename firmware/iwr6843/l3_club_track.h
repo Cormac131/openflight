@@ -36,6 +36,9 @@
  * (smash factor > 1), so a return beyond is the ball's. Half a bin covers the
  * sub-bin jitter of a club still at its impact speed. */
 #define L3_TRACK_FOLLOW_LEAD_BINS 0.5F
+/* The club's speed at impact, for l3_track_follow's cap, is fitted over this
+ * many of its newest points. */
+#define L3_TRACK_FOLLOW_FIT_POINTS 4U
 
 typedef struct {
     uint32_t frame;
@@ -138,7 +141,7 @@ typedef struct {
     int32_t  sameBin;             /* rounded bin of the newest point ... */
     uint32_t sameBinCount;        /* ... and how many consecutive points share it */
     uint8_t  following;           /* l3_track_follow has taken over (after impact) */
-    float    followBinsPerFrame;  /* the approach speed at impact: the follow's cap */
+    float    followBinsPerS;      /* the club's fitted speed at impact: the follow's cap */
     /* The last released track's final bin and Doppler, which acquisition
      * avoids (see L3_TRACK_RELEASE_DOPPLER_TOL_MPS) until something else is
      * acquired; releasedValid is 0 when nothing was released. */
@@ -159,8 +162,8 @@ int32_t l3_track_update(l3_club_track_t *track, const l3_target_obs_t *targets, 
 /* After impact: continue an active track by association alone -- never
  * acquire, never release (a club slowing after impact repeats its bin) --
  * taking the STRONGEST target between L3_TRACK_FOLLOW_RETREAT_BINS behind the
- * last point and where the club would be at its impact speed (frozen on the
- * first call) plus L3_TRACK_FOLLOW_LEAD_BINS, never a third consecutive point
+ * last point and where the club would be at its impact speed (fitted in bins
+ * per second on the first call) plus L3_TRACK_FOLLOW_LEAD_BINS, never a third consecutive point
  * in one bin: of the two tracks visible after impact the club is the
  * stronger, the ball the weaker, and the club only slows while the ball
  * leaves faster. lastTargetIndex
@@ -195,6 +198,10 @@ uint32_t l3_track_fit(const l3_club_track_t *track, uint32_t maxPoints, float *s
                       float *residualBins);
 /* |fitted slope| in m/s over the newest maxPoints, 0 without a fit. */
 float l3_track_speed_mps(const l3_club_track_t *track, uint32_t maxPoints);
+/* |a - b| the smaller way round a circle of the given span: the difference of
+ * two aliased Doppler readings, or of a speed and an aliased reading (they
+ * agree when the speed wraps onto the reading). 0 for a span <= 0. */
+float l3_track_wrapped_diff(float a, float b, float span);
 const char *l3_track_why_name(uint8_t why);
 /* "clubtrack active=1 count=14 bin=44.20 dist=3.8 vel=1.92 speed=22.4 ..." */
 int32_t l3_track_format_status(const l3_club_track_t *track, uint32_t destBin, char *out,
