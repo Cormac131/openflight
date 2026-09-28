@@ -591,6 +591,9 @@ class BallHypsCfg(ctypes.Structure):
         ("impactToleranceUs", ctypes.c_uint32),
         ("maxResidualBins", ctypes.c_float),
         ("dopplerToleranceMps", ctypes.c_float),
+        ("fastBallMps", ctypes.c_float),
+        ("fastSupportFraction", ctypes.c_float),
+        ("farWindowBins", ctypes.c_float),
     ]
 
 
@@ -606,6 +609,7 @@ class BallHypVerdict(ctypes.Structure):
         ("dopplerAgreement", ctypes.c_float),
         ("weakerFraction", ctypes.c_float),
         ("score", ctypes.c_float),
+        ("waitingForFast", ctypes.c_uint32),
     ]
 
 

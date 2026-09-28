@@ -59,6 +59,19 @@ typedef struct {
     uint32_t impactToleranceUs;   /* the fit must reach the origin this close to the gate time */
     float    maxResidualBins;     /* RMS about the fitted line */
     float    dopplerToleranceMps; /* a point agrees when its Doppler is this close to the rate */
+    /* Fastest credible, the Pi detector's rule (tracking.find_ball_from_power):
+     * the club's follow-through and the flying tee outlast the ball and win on
+     * score, so when the best-scoring hypothesis is slower than fastBallMps, a
+     * qualifying hypothesis at or above it with at least fastSupportFraction of
+     * the most points any qualifying hypothesis holds is the ball instead; and
+     * a slow winner waits while an unclassified hypothesis is already moving
+     * that fast. 0 turns the rule off. */
+    float    fastBallMps;
+    float    fastSupportFraction;
+    /* Far window: targets short of origin + farWindowBins are the club's, the
+     * impact echo's or the golfer's and never become hypothesis points, so the
+     * ball is taken only once it is clear of the merged bins. 0 turns it off. */
+    float    farWindowBins;
 } l3_ball_hyps_cfg_t;
 
 typedef struct {
@@ -70,6 +83,8 @@ typedef struct {
     float    dopplerAgreement;    /* 0..1 */
     float    weakerFraction;      /* 0..1 of the frames with a club return; 0.5 without */
     float    score;
+    uint32_t waitingForFast;      /* 1 when a slow winner is held back for a fast
+                                   * hypothesis still gathering points (index -1) */
 } l3_ball_hyp_verdict_t;
 
 typedef struct {
@@ -108,7 +123,8 @@ int32_t l3_ball_hyps_set_angles(l3_ball_hyps_t *hyps, uint32_t index, float azim
  * the gate time and fit within maxResidualBins. The best score wins:
  * (1 - residual / maxResidualBins) + the fraction of points whose Doppler
  * agrees with the rate + half the fraction of club frames where it was the
- * weaker return. out->index is -1 when none qualifies. */
+ * weaker return, unless fastBallMps prefers a faster one (see the cfg).
+ * out->index is -1 when none qualifies or the winner waits for a fast one. */
 void l3_ball_hyps_classify(const l3_ball_hyps_t *hyps, l3_ball_hyp_verdict_t *out);
 /* sizeof(l3_ball_hyps_t), for the ctypes mirror's layout check. */
 uint32_t l3_ball_hyps_struct_bytes(void);

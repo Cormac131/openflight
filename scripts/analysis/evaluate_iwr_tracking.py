@@ -17,6 +17,12 @@ report. Over those captures it counts:
 * ball present: the saved post-impact targets hold a chain of >= 3 points in
   consecutive frames moving at 0.7-1.1 x the OPS speed -- whether the data
   contains the ball at all.
+
+The Pi detector's ball rules can be switched on for a run (all off by default,
+as the firmware ships): ``--fast-ball`` (m/s, or ``club`` for the session's
+club-class floor, ``shot.CLUB_MIN_BALL_MS``) with ``--fast-support``,
+``--min-departure-mps`` and ``--far-window-bins``. The launch's horizontal
+angle is recorded per capture so runs can be compared.
 """
 
 from __future__ import annotations
@@ -37,6 +43,7 @@ from openflight.iwr6843.dump_viewer import (
     session_context,
     tee_bin_for,
 )
+from openflight.iwr6843.shot import CLUB_MIN_BALL_MS, club_class
 
 MPH_TO_MPS = 0.44704
 BALL_TOLERANCE = 0.15
@@ -53,6 +60,7 @@ class Case:
     path: Path
     config: fr.ReplayConfig
     ops_mps: float
+    club: str | None = None  # the session's club for the shot, when logged
 
 
 @dataclass(frozen=True)
@@ -65,6 +73,7 @@ class Outcome:
     ball_present: bool
     launch_mps: float | None
     ops_mps: float
+    launch_hla_deg: float | None = None
 
 
 def club_verdict(points: Sequence, split_frame: int | None) -> str:
@@ -137,14 +146,44 @@ def iter_cases(roots: Iterable[Path]) -> Iterator[Case]:
                 pitch_deg=options.pitch_deg,
                 post_from_frame=(meta.get("retention") or {}).get("pre_frames"),
             )
-            yield Case(path, config, float(context["ball_speed_mph"]) * MPH_TO_MPS)
+            shot = context.get("shot") or {}
+            yield Case(
+                path,
+                config,
+                float(context["ball_speed_mph"]) * MPH_TO_MPS,
+                club=shot.get("club"),
+            )
 
 
-def evaluate(case: Case, *, lib=None, ball_hypotheses: bool | None = None) -> Outcome:
+def club_fast_ball_mps(club: str | None) -> float:
+    """The Pi detector's fastest-credible floor for the club's class."""
+    return CLUB_MIN_BALL_MS[club_class(club)]
+
+
+def tuning_for(
+    case: Case, tuning: fr.BallTuning | None, *, fast_ball_from_club: bool = False
+) -> fr.BallTuning | None:
+    """The run's tuning for one capture: the club-class floor filled in when asked."""
+    if not fast_ball_from_club:
+        return tuning
+    return replace(tuning or fr.BallTuning(), fast_ball_mps=club_fast_ball_mps(case.club))
+
+
+def evaluate(
+    case: Case,
+    *,
+    lib=None,
+    ball_hypotheses: bool | None = None,
+    tuning: fr.BallTuning | None = None,
+    fast_ball_from_club: bool = False,
+) -> Outcome:
     """Replay one capture and judge its club and ball tracks."""
     config = case.config
     if ball_hypotheses is not None:
         config = replace(config, ball_hypotheses=ball_hypotheses)
+    tuning = tuning_for(case, tuning, fast_ball_from_club=fast_ball_from_club)
+    if tuning is not None:
+        config = replace(config, ball_tuning=tuning)
     result = fr.replay_dump(case.path.read_bytes(), config, lib=lib)
     split = split_frame(result)
     post = [f for f in result.frames if split is not None and f.frame >= split]
@@ -156,6 +195,7 @@ def evaluate(case: Case, *, lib=None, ball_hypotheses: bool | None = None) -> Ou
         ball_present=ball_present(post, case.ops_mps, bin_width_m()),
         launch_mps=launch,
         ops_mps=case.ops_mps,
+        launch_hla_deg=None if result.launch is None else result.launch.hla_deg,
     )
 
 
@@ -193,6 +233,25 @@ def compare(summary: dict, baseline: dict, *, allow_more_none: int = 0) -> list[
     return problems
 
 
+def parse_tuning(args: argparse.Namespace) -> fr.BallTuning | None:
+    """The command line's ball-rule overrides; None when none is given."""
+    fast = args.fast_ball
+    if fast is not None and fast != "club":
+        try:
+            fast_mps = float(fast)
+        except ValueError as error:
+            raise SystemExit(f"--fast-ball needs m/s or 'club', got {fast!r}") from error
+    else:
+        fast_mps = None
+    tuning = fr.BallTuning(
+        fast_ball_mps=fast_mps,
+        fast_support_fraction=args.fast_support,
+        min_departure_mps=args.min_departure_mps,
+        far_window_bins=args.far_window_bins,
+    )
+    return None if tuning == fr.BallTuning() else tuning
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     parser.add_argument("roots", nargs="+", type=Path, help="Folders searched for .l3dump files")
@@ -205,9 +264,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="firmware",
         help="Ball search: the firmware default, the hypotheses, or the legacy acquisition",
     )
+    parser.add_argument(
+        "--fast-ball",
+        help="Fastest-credible floor for the hypotheses: m/s, or 'club' for the club class",
+    )
+    parser.add_argument(
+        "--fast-support", type=float, help="Share of the most points a fast ball needs"
+    )
+    parser.add_argument(
+        "--min-departure-mps", type=float, help="Hard speed floor for the ball (both searches)"
+    )
+    parser.add_argument(
+        "--far-window-bins", type=float, help="Hypothesis points only this far beyond the tee"
+    )
     args = parser.parse_args(argv)
     search = {"firmware": None, "on": True, "off": False}[args.ball_hypotheses]
-    outcomes = [evaluate(case, ball_hypotheses=search) for case in iter_cases(args.roots)]
+    from_club = args.fast_ball == "club"
+    tuning = parse_tuning(args)
+    outcomes = [
+        evaluate(case, ball_hypotheses=search, tuning=tuning, fast_ball_from_club=from_club)
+        for case in iter_cases(args.roots)
+    ]
     summary = summarize(outcomes)
     print(json.dumps(summary, indent=2))
     if args.json is not None:
