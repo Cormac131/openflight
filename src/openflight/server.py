@@ -1230,6 +1230,7 @@ def init_iwr6843(
                 else None
             ),
             self_trigger=self_trigger,
+            tee_range_m=tee_range_m,
         )
         if self_trigger is not None:
             logger.warning(

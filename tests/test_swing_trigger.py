@@ -121,7 +121,7 @@ class _ArmRadar:
     def __init__(self):
         self.commands: list[str] = []
 
-    def send_config(self, path: str) -> None:
+    def send_config(self, path: str, lines=None) -> None:
         self.commands.append(path)
 
     def cmd(self, line: str, window: float = 1.5) -> str:

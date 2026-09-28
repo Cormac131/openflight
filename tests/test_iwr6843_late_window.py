@@ -217,7 +217,7 @@ def test_capture_stamps_samples_from_the_freeze_even_with_a_slow_dump():
         def __init__(self):
             self.configs = []
 
-        def send_config(self, path):
+        def send_config(self, path, lines=None):
             self.configs.append(path)
             clock["t"] += 0.5
 
@@ -273,7 +273,7 @@ def test_capture_restores_the_impact_profile_when_the_dump_fails():
     configs = []
 
     class Radar:
-        def send_config(self, path):
+        def send_config(self, path, lines=None):
             configs.append(path)
 
         def read_dump(self):

@@ -558,6 +558,8 @@ class TestIWR6843ShotIntegration:
         )
 
         assert "freeze_delay_s" not in captured
+        # The monitor places the impact and ball windows on the tee.
+        assert captured["tee_range_m"] == 1.575
         assert captured["armed"] is False
         assert server_module.iwr6843_runtime.tdm_sign_policy == "positive"
         assert server_module.iwr6843_runtime_config["tdm_sign_policy"] == "positive"

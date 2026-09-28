@@ -130,6 +130,63 @@ def tee_global_bin(tee_range_m: float, config_path: str | Path, fft_size: int = 
     return absolute
 
 
+# Impact and ball windows start this many bins short of the tee, so the club's
+# last approach and the ball leaving are both kept. l3_adaptive_cfg_defaults'
+# marginBins: the firmware's lock-follow uses the same margin.
+CAPTURE_MARGIN_BINS = 4
+_PHASE_CAPTURE = "phaseCaptureCfg"
+_ADAPTIVE_CAPTURE = "captureCfg adaptive"
+
+
+def _window_start(start: int, width: int, fft_size: int) -> int:
+    """A window start kept inside the FFT, as l3_adaptive_clip does."""
+    return max(0, min(start, fft_size - width))
+
+
+def tee_relative_config(lines: list[str], tee_bin: int, fft_size: int = 128) -> list[str]:
+    """The cfg lines with the impact and ball windows placed on the tee.
+
+    The shipped profiles hard-code those windows for one tee (bins 32/47 for
+    1.57 m); a nearer tee falls short of the impact window and the capture
+    keeps neither the club at impact nor the ball leaving. This mirrors
+    l3_adaptive_windows for a ball on the tee: impact and post start
+    CAPTURE_MARGIN_BINS short of it, late half a window further out. The pre
+    window, widths, frame counts and stride stay as configured. Unless the
+    cfg already sets it, ``captureCfg adaptive`` is added so a ball lock
+    elsewhere moves the windows to the ball; its approach is the configured
+    pre window's, so a lock on the tee changes nothing.
+
+    Raises ValueError without exactly one well-formed phaseCaptureCfg, or
+    when the tee is outside its pre window.
+    """
+    indices = [i for i, line in enumerate(lines) if line.strip().startswith(_PHASE_CAPTURE)]
+    if len(indices) != 1:
+        raise ValueError(f"expected one {_PHASE_CAPTURE} line, found {len(indices)}")
+    index = indices[0]
+    fields = lines[index].split()[1:]
+    if len(fields) != 11:
+        raise ValueError(f"{_PHASE_CAPTURE} needs 11 values, got {len(fields)}")
+    values = [int(field) for field in fields]
+    pre_start, pre_bins, impact_bins, post_bins = values[0], values[1], values[4], values[7]
+    if not pre_start <= tee_bin < pre_start + pre_bins:
+        raise ValueError(
+            f"tee bin {tee_bin} is outside the pre-impact window, bins "
+            f"{pre_start}-{pre_start + pre_bins - 1}"
+        )
+    near = tee_bin - CAPTURE_MARGIN_BINS
+    post_start = _window_start(near, post_bins, fft_size)
+    values[3] = _window_start(near, impact_bins, fft_size)
+    values[6] = post_start
+    values[8] = _window_start(post_start + post_bins // 2, post_bins, fft_size)
+    rewritten = list(lines)
+    rewritten[index] = " ".join([_PHASE_CAPTURE, *(str(value) for value in values)])
+    if not any(line.strip().startswith(_ADAPTIVE_CAPTURE) for line in lines):
+        rewritten.insert(
+            index, f"{_ADAPTIVE_CAPTURE} 1 {tee_bin - pre_start} {CAPTURE_MARGIN_BINS}"
+        )
+    return rewritten
+
+
 def _monotonic() -> float:
     """Clock for the startup sample. Tests replace this so startup does not sleep."""
     return time.monotonic()
@@ -292,8 +349,12 @@ class IWR6843CaptureMonitor:
         slice_planner: SlicePlanner | None = None,
         self_trigger: SelfTriggerConfig | None = None,
         onboard_tracking: bool = False,
+        tee_range_m: float | None = None,
     ):
         self.config_path = Path(config_path)
+        # With the tee known, the impact and ball windows are placed on it
+        # (tee_relative_config) instead of the cfg's fixed ones.
+        self.tee_range_m = tee_range_m
         self.output_dir = Path(output_dir).expanduser()
         self.gpio_pin = gpio_pin
         self.match_tolerance_s = match_tolerance_s
@@ -321,6 +382,21 @@ class IWR6843CaptureMonitor:
         # A frozen ring nobody will read. Retried until the release succeeds.
         self._release_pending = False
 
+    def _tee_relative_config_lines(self) -> list[str] | None:
+        """The cfg with its windows on the tee, or None to send the file as it is."""
+        if self.tee_range_m is None:
+            return None
+        tee_bin = tee_global_bin(self.tee_range_m, self.config_path)
+        lines = tee_relative_config(
+            self.config_path.read_text(encoding="utf-8").splitlines(), tee_bin
+        )
+        logger.info(
+            "[IWR6843] Capture windows on the tee (bin %d): %s",
+            tee_bin,
+            next(line for line in lines if line.startswith(_PHASE_CAPTURE)),
+        )
+        return lines
+
     @property
     def watch_self_trigger(self) -> bool:
         """True when the firmware trigger replaces the GPIO edge."""
@@ -343,6 +419,7 @@ class IWR6843CaptureMonitor:
             return
         if not self.config_path.is_file():
             raise FileNotFoundError(f"IWR6843 config not found: {self.config_path}")
+        config_lines = self._tee_relative_config_lines()
         if self.watch_self_trigger:
             # The detect path reads IQ8 rings too (int8 times the frame scale)
             # since the ring readers took a component width; older firmware
@@ -360,7 +437,7 @@ class IWR6843CaptureMonitor:
             self.output_dir.mkdir(parents=True, exist_ok=True)
         configured = False
         try:
-            self.radar.send_config(str(self.config_path))
+            self.radar.send_config(str(self.config_path), lines=config_lines)
             configured = True
             # Before the worker starts: after that only the worker may talk
             # to the radar.

@@ -136,7 +136,7 @@ class TestMonitorInstallsFactory:
         class FakeRadar:
             port = "/dev/fake"
 
-            def send_config(self, path):
+            def send_config(self, path, lines=None):
                 pass
 
             def close(self):

@@ -38,7 +38,7 @@ class FakeRadar:
         self.read_started_at = None
         self.shutdown_events = []
 
-    def send_config(self, path: str):
+    def send_config(self, path: str, lines=None):
         self.configs.append(path)
 
     def read_dump(self):

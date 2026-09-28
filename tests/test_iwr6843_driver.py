@@ -83,6 +83,41 @@ def test_stop_sensor_rejects_firmware_that_remains_active(monkeypatch):
         radar.stop_sensor()
 
 
+def test_send_config_streams_given_lines_instead_of_the_file(tmp_path, monkeypatch):
+    """The monitor's tee-relative rewrite reaches the board, not the file's windows."""
+    config = tmp_path / "radar.cfg"
+    config.write_text("phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1\nsensorStart\n", "utf-8")
+    commands = []
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    monkeypatch.setattr(radar, "drain_stale_output", lambda: 0)
+    monkeypatch.setattr(
+        radar,
+        "cmd",
+        lambda line, *_a, **_k: commands.append(line) or ("active=1\nDone\n"),
+    )
+
+    radar.send_config(
+        str(config),
+        lines=[
+            "% comment",
+            "",
+            "captureCfg adaptive 1 9 4",
+            "phaseCaptureCfg 20 53 9 25 53 7 25 53 51 8 1",
+            "sensorStart",
+        ],
+    )
+
+    assert commands == [
+        "debugCfg 0",
+        "sensorStop",
+        "flushCfg",
+        "captureCfg adaptive 1 9 4",
+        "phaseCaptureCfg 20 53 9 25 53 7 25 53 51 8 1",
+        "sensorStart",
+        "stats",
+    ]
+
+
 def test_send_config_flushes_previous_mmwave_profile_when_config_omits_flush(tmp_path, monkeypatch):
     """Repeated startup must not exhaust the firmware's mmWave profile slots."""
     config = tmp_path / "radar.cfg"

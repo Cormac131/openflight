@@ -248,11 +248,13 @@ class IWR6843Radar:
                 "the firmware may be wedged (press RESET and retry)"
             )
 
-    def send_config(self, cfg_path: str) -> None:
+    def send_config(self, cfg_path: str, lines: list[str] | None = None) -> None:
         """Stop and flush old state, then stream the cfg; raise on Error.
 
-        The firmware's geometry guard rejects a cfg whose loops/samples don't
-        match the flashed build — that surfaces here as RuntimeError.
+        ``lines`` replaces the file's contents (the monitor's tee-relative
+        windows); ``cfg_path`` is then only named in errors. The firmware's
+        geometry guard rejects a cfg whose loops/samples don't match the
+        flashed build — that surfaces here as RuntimeError.
         """
         self.drain_stale_output()
         # A crashed watch session can leave debug lines streaming, or the CLI
@@ -263,19 +265,21 @@ class IWR6843Radar:
         self._require_done("sensorStop", self.cmd("sensorStop", 3.0))
         self._require_done("flushCfg", self.cmd("flushCfg", 1.5))
         self._trigger_pending = b""
-        with open(cfg_path, encoding="utf-8") as cfg:
-            for rawline in cfg:
-                line = rawline.strip()
-                if not line or line.startswith("%"):
-                    continue
-                # The driver owns the lifecycle commands so every config gets
-                # the required stop/flush ordering without sending duplicates.
-                if line in {"sensorStop", "flushCfg", "debugCfg 0"}:
-                    continue
-                # sensorStart blocks on RF calibration; 6s loses a cold BSS.
-                window = 12.0 if line.startswith("sensorStart") else 1.5
-                resp = self.cmd(line, window)
-                self._require_done(line, resp)
+        if lines is None:
+            with open(cfg_path, encoding="utf-8") as cfg:
+                lines = cfg.read().splitlines()
+        for rawline in lines:
+            line = rawline.strip()
+            if not line or line.startswith("%"):
+                continue
+            # The driver owns the lifecycle commands so every config gets
+            # the required stop/flush ordering without sending duplicates.
+            if line in {"sensorStop", "flushCfg", "debugCfg 0"}:
+                continue
+            # sensorStart blocks on RF calibration; 6s loses a cold BSS.
+            window = 12.0 if line.startswith("sensorStart") else 1.5
+            resp = self.cmd(line, window)
+            self._require_done(line, resp)
         deadline = time.monotonic() + 6.0
         health = ""
         while time.monotonic() < deadline:
