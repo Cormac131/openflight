@@ -253,6 +253,9 @@ class ReplayConfig:
     # kept in an adaptive16 capture, judged against the points the trackers
     # appended. None replays without it.
     retain: RetainReplay | None = None
+    # The ball search: True/False sets l3_ball_track_cfg_t.useHypotheses for
+    # this replay; None keeps the firmware default.
+    ball_hypotheses: bool | None = None
 
     @property
     def destination(self) -> int:
@@ -330,6 +333,15 @@ class ReplayFrame:
     ball_why: str = "none"  # the ball tracker's verdict on a post-impact frame
     ball_bin: float | None = None  # the ball point appended this frame
     retain: RetainSummary | None = None  # the retention mirror's window for this frame
+    ball_hypotheses: tuple[HypothesisSummary, ...] = ()  # active after this frame
+
+
+@dataclass(frozen=True)
+class HypothesisSummary:
+    """One ball hypothesis after a frame: its id and (frame, global bin) points."""
+
+    id: int
+    points: tuple[tuple[int, float], ...]
 
 
 @dataclass(frozen=True)
@@ -696,6 +708,8 @@ def replay_dump(
     ball_cfg.core.binWidthM = bin_width_m
     ball_cfg.core.velocitySpanMps = track_cfg.velocitySpanMps
     ball_cfg.core.cal = cal
+    if config.ball_hypotheses is not None:
+        ball_cfg.useHypotheses = 1 if config.ball_hypotheses else 0
     ball_track = fw.BallTrack()
     lib.l3_ball_track_init(ctypes.byref(ball_track), ctypes.byref(ball_cfg))
     launch = fw.Launch()
@@ -1059,8 +1073,8 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
         lib.l3_track_point(ctypes.byref(track), track.count - 1, ctypes.byref(newest))
         points.append(_point_summary(newest))
         track_bin = float(newest.rangeBin)
-    appended = lib.l3_ball_track_update(
-        ctypes.byref(ball_track), targets, found, frame, timestamp_us
+    appended = lib.l3_ball_track_update_joint(
+        ctypes.byref(ball_track), targets, found, frame, timestamp_us, track.lastTargetIndex
     )
     ball_bin = None
     angle = None
@@ -1093,6 +1107,9 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
         lib.l3_track_point(ctypes.byref(core), core.count - 1, ctypes.byref(newest))
         ball_points.append(_point_summary(newest))
         ball_bin = float(newest.rangeBin)
+    _hypothesis_angles(
+        lib, cal, cube, frame, window_start, n_tx, targets, found, ball_track, chirp_period_s
+    )
     lib.l3_ball_track_launch(ctypes.byref(ball_track), ctypes.byref(launch))
     shot_in = fw.ShotInput()
     shot_in.ballPosition = ball_position
@@ -1120,7 +1137,67 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
         fw.SHOT_STATE_NAMES[shot.state],
         fw.BALL_TRACK_WHY_NAMES[ball_track.why],
         ball_bin,
+        retain=None,
+        ball_hypotheses=_hypothesis_summaries(ball_track),
     )
+
+
+def _hypothesis_angles(  # pylint: disable=too-many-arguments
+    lib, cal, cube, frame, window_start, n_tx, targets, found, ball_track, chirp_period_s
+) -> None:
+    """Angles for every ball-hypothesis point appended this frame, as the board
+    estimates them, so the chosen ball keeps angles on its early points."""
+    hyps = ball_track.hyps
+    rate, at, residual = ctypes.c_float(), ctypes.c_float(), ctypes.c_float()
+    for index in range(fw.BALL_HYP_MAX):
+        hyp = hyps.hyp[index]
+        if not hyp.active or hyp.lastTargetIndex >= found:
+            continue
+        newest = hyp.points[hyp.count - 1]
+        radial = (
+            rate.value * hyps.cfg.binWidthM
+            if lib.l3_ball_hyp_fit(
+                ctypes.byref(hyp),
+                newest.timestampUs,
+                ctypes.byref(rate),
+                ctypes.byref(at),
+                ctypes.byref(residual),
+            )
+            else 0.0
+        )
+        obs_angle, flags = _estimate_angles(
+            lib,
+            cal,
+            cube,
+            frame,
+            window_start,
+            n_tx,
+            targets[hyp.lastTargetIndex],
+            radial,
+            chirp_period_s,
+        )
+        if obs_angle is not None:
+            lib.l3_ball_hyps_set_angles(
+                ctypes.byref(hyps), index, obs_angle.azimuthRad, obs_angle.elevationRad, flags
+            )
+
+
+def _hypothesis_summaries(ball_track) -> tuple[HypothesisSummary, ...]:
+    """The active ball hypotheses after a frame, for the viewer."""
+    out = []
+    for index in range(fw.BALL_HYP_MAX):
+        hyp = ball_track.hyps.hyp[index]
+        if hyp.active:
+            out.append(
+                HypothesisSummary(
+                    int(hyp.id),
+                    tuple(
+                        (int(hyp.points[k].frame), float(hyp.points[k].rangeBin))
+                        for k in range(hyp.count)
+                    ),
+                )
+            )
+    return tuple(out)
 
 
 def replay_file(
@@ -1393,6 +1470,7 @@ __all__ = [
     "AngleSummary",
     "Expectation",
     "DeliverySummary",
+    "HypothesisSummary",
     "LaunchSummary",
     "PointSummary",
     "ReplayConfig",

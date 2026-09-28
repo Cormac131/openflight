@@ -825,3 +825,13 @@ def test_follow_caps_the_club_by_elapsed_time_not_frames(lib):
     tr = _approach_at(lib, history)
     assert _follow_at(tr, 5, 10000, [38.2]) is False
     assert tr.track.followBinsPerS == pytest.approx(750.0, rel=1e-3)
+
+
+def test_follow_with_two_points_at_impact_caps_by_their_rate(lib):
+    """Recorded 2026-08-24 12:04:08 at tee bin 39: the club track was
+    reacquired two frames before impact, too few points for a fit; the cap
+    must still let the club move at the rate those two points show."""
+    tr = _approach_at(lib, [(0, 30.0), (3000, 31.5)])  # 500 bins/s
+    assert tr.track.count == 2
+    assert _follow_at(tr, 3, 6000, [32.9]) is True  # 31.5 + 1.5 (+0.5)
+    assert tr.track.followBinsPerS == pytest.approx(500.0, rel=1e-3)

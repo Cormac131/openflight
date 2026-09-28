@@ -627,3 +627,18 @@ def test_retention_config_is_checked_by_the_firmware(lib, swing):
     plain = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
     assert plain.retain_windows == [] and plain.retain_coverage == (0, 0)
     assert "retention:" not in format_report(plain)
+
+
+def test_the_hypothesis_search_recovers_the_synthetic_launch(lib, whole_shot):
+    result = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN, ball_hypotheses=True), lib=lib)
+    assert result.launch is not None
+    assert result.launch.speed_mps == pytest.approx(60.0, rel=0.1)
+    seen = [frame.ball_hypotheses for frame in result.frames if frame.ball_hypotheses]
+    assert seen and all(len(snapshot) <= fw.BALL_HYP_MAX for snapshot in seen)
+
+
+def test_the_search_switch_leaves_the_default_replay_alone(lib, whole_shot):
+    default = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    off = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN, ball_hypotheses=False), lib=lib)
+    assert [p.range_bin for p in default.ball_points] == [p.range_bin for p in off.ball_points]
+    assert all(frame.ball_hypotheses == () for frame in off.frames)

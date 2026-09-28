@@ -433,3 +433,18 @@ def test_session_context_finds_a_log_in_a_sibling_session_logs_folder(tmp_path):
     _write_session(logs / "session_c_trackman.jsonl", dump.name)
     context = dv.session_context(dump)
     assert context is not None and context["session_file"] == "session_c_trackman.jsonl"
+
+
+@needs_compiler
+def test_the_viewer_can_switch_the_ball_search_and_shows_the_hypotheses():
+    raw = synth_shot_dump(
+        path_deg=3.0, hla_deg=2.0, vla_deg=12.0, ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M
+    )
+    options = dv.ViewerOptions.from_mapping({"tee_bin": TEE_BIN, "ball_hypotheses": "true"})
+    assert options.ball_hypotheses is True
+    data = dv.analyze_dump(raw, options)
+    json.dumps(data, allow_nan=False)
+    frames = data["firmware"]["frames"]
+    assert any(frame["ball_hypotheses"] for frame in frames)
+    first = next(frame["ball_hypotheses"] for frame in frames if frame["ball_hypotheses"])
+    assert {"id", "points"} <= set(first[0])

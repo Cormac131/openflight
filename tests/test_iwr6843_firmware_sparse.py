@@ -551,7 +551,7 @@ def test_ball_tracker_runs_the_whole_post_window_against_the_trigger_floor():
     assert "params.snr = gBallTrackCfg.snr;" in consider, "the ball is a weaker return"
     assert "gBallFloor = 0.0F;" in _function("static void l3_trigRearm(")
     assert (
-        "l3_ball_track_update(&gBallTrack, targets, found, frameIndex, gPostTimestampUs)"
+        "l3_ball_track_update_joint(&gBallTrack, targets, found, frameIndex, gPostTimestampUs,"
         in consider
     )
     assert "gBallTrack.core.count > 1U" in consider, "angles once the flight has a range rate"

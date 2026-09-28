@@ -91,6 +91,7 @@
       <label>sub-bin <select id="subbin"><option>parabolic</option><option>centroid</option></select></label>
       <label>post from frame <input type="number" id="post_from_frame" placeholder="gate"></label>
       <label>pitch (deg) <input type="number" id="pitch_deg" step="0.1" value="0"></label>
+      <label>ball search <select id="ball_hypotheses"><option value="">firmware default</option><option value="true">hypotheses</option><option value="false">legacy</option></select></label>
       <label class="chk"><input type="checkbox" id="impact_armed"> impact armed</label>
       <label class="chk"><input type="checkbox" id="stop_at_fire"> stop at fire</label>
     </div>
@@ -175,7 +176,7 @@ const C = {};
 ["gate", "py", "freeze", "geo", "club", "ball", "target", "text", "muted", "line", "panel", "bg"]
   .forEach((k) => (C[k] = css("--" + k)));
 const OPTS = ["tee_bin", "dest_bin", "snr", "track_frames", "stat", "subbin", "post_from_frame",
-  "pitch_deg", "impact_armed", "stop_at_fire", "tee_range_m", "py_level", "py_hits"];
+  "pitch_deg", "impact_armed", "stop_at_fire", "tee_range_m", "py_level", "py_hits", "ball_hypotheses"];
 const FORM_DEFAULTS = {};
 OPTS.forEach((k) => { const el = $("#" + k); FORM_DEFAULTS[k] = el.type === "checkbox" ? el.checked : el.value; });
 
@@ -447,6 +448,15 @@ function renderMap() {
       marker: { size: 7, color }, line: { color, width: 2 }, hovertemplate: `${name} %{x:.3f} m @ %{y:.1f} ms<extra></extra>` });
     if (F.points.length) traces.push(pl(F.points, "club track", C.club));
     if (F.ball_points.length) traces.push(pl(F.ball_points, "ball track", C.ball));
+    const latest = {};
+    F.frames.forEach((fr) => (fr.ball_hypotheses || []).forEach((h) => (latest[h.id] = h.points)));
+    const hx = [], hy = [];
+    Object.values(latest).forEach((pts) => {
+      pts.forEach(([f, b]) => { hx.push(binM(b)); hy.push(T(f)); });
+      hx.push(null); hy.push(null);
+    });
+    if (hx.length) traces.push({ type: "scatter", mode: "lines+markers", name: "ball hypotheses", x: hx, y: hy,
+      line: { color: "rgba(255,146,43,.45)", width: 1, dash: "dot" }, marker: { size: 4, color: "rgba(255,146,43,.45)" }, hoverinfo: "skip" });
   }
   if (P) {
     const px = [], pyy = [];

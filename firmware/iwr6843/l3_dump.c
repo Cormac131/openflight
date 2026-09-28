@@ -3588,7 +3588,8 @@ static void l3_considerBallTrack(uint32_t slot)
      * does not use the club's claim yet: on the 2026-09-27 captures that lost
      * more balls than it saved. */
     (void)l3_track_follow(&gClubTrack, targets, found, frameIndex, gPostTimestampUs);
-    if (l3_ball_track_update(&gBallTrack, targets, found, frameIndex, gPostTimestampUs) &&
+    if (l3_ball_track_update_joint(&gBallTrack, targets, found, frameIndex, gPostTimestampUs,
+                                   gClubTrack.lastTargetIndex) &&
         gBallTrack.lastTargetIndex < found && gBallTrack.core.count > 1U &&
         l3_track_point(&gBallTrack.core, gBallTrack.core.count - 1U, &newest)) {
         const l3_target_obs_t *hit = &targets[gBallTrack.lastTargetIndex];
@@ -3609,6 +3610,45 @@ static void l3_considerBallTrack(uint32_t slot)
                 }
                 (void)l3_ball_track_set_angles(&gBallTrack, angle.azimuthRad,
                                                angle.elevationRad, flags);
+                gAngleEstimates++;
+            }
+        }
+    }
+    {
+        /* Angles for every ball-hypothesis point this frame appended: once one
+         * is chosen, its early points must still carry them. */
+        uint32_t index;
+
+        for (index = 0U; index < L3_BALL_HYP_MAX; index++) {
+            const l3_ball_hyp_t *hyp = &gBallTrack.hyps.hyp[index];
+            const l3_target_obs_t *hit;
+            l3_angle_obs_t angle;
+            float rate;
+            float at;
+            float residual;
+            float radial = 0.0F;
+
+            if (!hyp->active || hyp->lastTargetIndex >= found) {
+                continue;
+            }
+            hit = &targets[hyp->lastTargetIndex];
+            if (l3_ball_hyp_fit(hyp, hyp->points[hyp->count - 1U].timestampUs, &rate, &at,
+                                &residual)) {
+                radial = rate * gBallTrack.hyps.cfg.binWidthM;
+            }
+            l3_channelSnapshot(&frame, (uint32_t)hit->peakBin - frame.binStart,
+                               hit->dopplerPhaseRad, radial, &snapshot);
+            if (l3_angle_estimate(&gRadarCal, &snapshot, &angle)) {
+                uint8_t flags = 0U;
+
+                if (angle.azimuthValid) {
+                    flags |= L3_OBS_ANGLE_AZIMUTH;
+                }
+                if (angle.elevationValid) {
+                    flags |= L3_OBS_ANGLE_ELEVATION;
+                }
+                (void)l3_ball_hyps_set_angles(&gBallTrack.hyps, index, angle.azimuthRad,
+                                              angle.elevationRad, flags);
                 gAngleEstimates++;
             }
         }

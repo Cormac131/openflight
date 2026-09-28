@@ -54,6 +54,7 @@ class ViewerOptions:  # pylint: disable=too-many-instance-attributes
     tee_range_m: float = st.DEFAULT_TEE_RANGE_M
     py_level: float = st.DEFAULT_LEVEL
     py_hits: int = st.DEFAULT_HITS
+    ball_hypotheses: bool | None = None  # the ball search; None: the firmware default
 
     @classmethod
     def from_mapping(cls, raw: dict) -> ViewerOptions:
@@ -211,6 +212,7 @@ def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOp
         impact_armed=options.impact_armed,
         stop_at_fire=options.stop_at_fire,
         pitch_deg=options.pitch_deg,
+        ball_hypotheses=options.ball_hypotheses,
     )
     result = fr.replay_dump(raw, config)
     n_tx = int(meta["n_tx"])

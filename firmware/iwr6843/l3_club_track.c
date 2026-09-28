@@ -337,11 +337,19 @@ int32_t l3_track_follow(l3_club_track_t *track, const l3_target_obs_t *targets, 
         float residual = 0.0F;
 
         track->following = 1U;
-        track->followBinsPerS =
-            (l3_track_fit(track, L3_TRACK_FOLLOW_FIT_POINTS, &slope, &residual) > 0U &&
-             slope > 0.0F)
-                ? slope
-                : 0.0F;
+        if (l3_track_fit(track, L3_TRACK_FOLLOW_FIT_POINTS, &slope, &residual) == 0U &&
+            track->count >= 2U) {
+            /* Too few points for a fit (a track reacquired just before
+             * impact): the rate between its last two points. */
+            const l3_track_point_t *last =
+                &track->points[(track->next + L3_TRACK_POINTS - 1U) % L3_TRACK_POINTS];
+            const l3_track_point_t *prev =
+                &track->points[(track->next + L3_TRACK_POINTS - 2U) % L3_TRACK_POINTS];
+            float dtS = (float)(int32_t)(last->timestampUs - prev->timestampUs) * 1.0e-6F;
+
+            slope = (dtS > 0.0F) ? (last->rangeBin - prev->rangeBin) / dtS : 0.0F;
+        }
+        track->followBinsPerS = (slope > 0.0F) ? slope : 0.0F;
     }
     return l3_track_associate(track, targets, n, frame, timestampUs, 1);
 }
