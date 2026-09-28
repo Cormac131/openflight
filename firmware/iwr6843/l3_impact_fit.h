@@ -100,4 +100,20 @@ void l3_impact_fit_track(const l3_impact_fit_cfg_t *cfg, uint8_t which, l3_point
                          const void *ctx, uint32_t count, float ballRangeM,
                          l3_fit_estimate_t *out);
 
+/* Physics across the tracks, then fusion: inverse-variance mean; each kept
+ * estimate must lie within gateSigmas * max(sigma, minSigmaUs) of it. Three
+ * with one outlier: drop it and fuse the two. Two that disagree, or three
+ * that still disagree: inconsistent, impact from the smallest sigma. */
+void l3_impact_fit_solve(const l3_impact_fit_cfg_t *cfg, l3_impact_fit_t *fit, uint32_t triggerUs);
+/* All three tracks and the solve. A NULL list or span is a missing track. */
+void l3_impact_fit_run(const l3_impact_fit_cfg_t *cfg, const l3_fit_list_t *clubIn,
+                       const l3_fit_span_t *clubOut, const l3_fit_span_t *ballOut,
+                       float ballRangeM, uint8_t noLock, uint32_t triggerUs,
+                       l3_impact_fit_t *fit);
+const char *l3_impact_fit_why_name(uint8_t why);
+const char *l3_impact_fit_verdict_name(uint8_t verdict);
+/* "impactfit verdict=consistent t=30000 spreadus=12 dtrigus=-2500 dropped=- nolock=0
+ *  club_in=ok:30000+-120 club_out=ok:30001+-140 ball_out=ok:29999+-60" */
+int32_t l3_impact_fit_format(const l3_impact_fit_t *fit, char *out, uint32_t cap);
+
 #endif /* L3_IMPACT_FIT_H */

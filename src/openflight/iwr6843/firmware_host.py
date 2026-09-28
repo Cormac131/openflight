@@ -1320,6 +1320,23 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
         ],
         None,
     ),
+    "l3_impact_fit_solve": ([_P(ImpactFitCfg), _P(ImpactFit), _U32], None),
+    "l3_impact_fit_run": (
+        [
+            _P(ImpactFitCfg),
+            _P(FitList),
+            _P(FitSpan),
+            _P(FitSpan),
+            _F32,
+            ctypes.c_uint8,
+            _U32,
+            _P(ImpactFit),
+        ],
+        None,
+    ),
+    "l3_impact_fit_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_impact_fit_verdict_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_impact_fit_format": ([_P(ImpactFit), *_TEXT], ctypes.c_int32),
     # l3_launch.h
     "l3_launch_from_delivery": ([_P(Delivery), _U32, _P(Launch)], None),
     "l3_track_append_point": ([_P(ClubTrack), _P(TrackPoint)], None),

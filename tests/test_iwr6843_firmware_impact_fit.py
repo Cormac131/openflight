@@ -9,6 +9,7 @@ out at 60 m/s; every point lies outside the band.
 from __future__ import annotations
 
 import ctypes
+import re
 
 import pytest
 
@@ -40,7 +41,9 @@ def cfg(lib, **overrides) -> fw.ImpactFitCfg:
 def line(speed_mps: float, times_us, *, noise_m=()) -> list[tuple[float, float]]:
     """(t_us, r_m) on the line through (IMPACT_US, BALL_M) at speed_mps."""
     noise = list(noise_m) + [0.0] * len(times_us)
-    return [(t, BALL_M + speed_mps * (t - IMPACT_US) * 1e-6 + noise[i]) for i, t in enumerate(times_us)]
+    return [
+        (t, BALL_M + speed_mps * (t - IMPACT_US) * 1e-6 + noise[i]) for i, t in enumerate(times_us)
+    ]
 
 
 def point_list(samples) -> fw.FitList:
@@ -140,7 +143,9 @@ def test_points_that_do_not_spread_in_time_are_nonfinite(lib):
     assert estimate(lib, CLUB_IN, same).why == WHY["nonfinite"]
 
 
-@pytest.mark.parametrize("which, times", [(CLUB_IN, CLUB_IN_T), (CLUB_OUT, CLUB_OUT_T), (BALL_OUT, BALL_OUT_T)])
+@pytest.mark.parametrize(
+    "which, times", [(CLUB_IN, CLUB_IN_T), (CLUB_OUT, CLUB_OUT_T), (BALL_OUT, BALL_OUT_T)]
+)
 def test_moving_toward_the_radar_is_the_wrong_direction(lib, which, times):
     assert estimate(lib, which, line(-20.0, times)).why == WHY["wrong_direction"]
 
@@ -198,3 +203,170 @@ def test_span_after_reads_only_points_appended_after_a_frame(lib):
     assert lib.l3_fit_span_point(ctypes.byref(span), 0, ctypes.byref(out)) == 1
     assert out.frame == 3
     assert lib.l3_fit_span_point(ctypes.byref(span), 2, ctypes.byref(out)) == 0
+
+
+def solved(
+    lib, estimates: dict[int, tuple[str, float, float, float]], trigger_us=27_500, **overrides
+):
+    """estimates: track -> (why, timeUs, sigmaUs, speedMps). others missing."""
+    fit = fw.ImpactFit()
+    lib.l3_impact_fit_reset(ctypes.byref(fit))
+    for which, (why, t, sigma, speed) in estimates.items():
+        e = fit.track[which]
+        e.why, e.timeUs, e.sigmaUs, e.speedMps, e.points = WHY[why], t, sigma, speed, 4
+    lib.l3_impact_fit_solve(ctypes.byref(cfg(lib, **overrides)), ctypes.byref(fit), trigger_us)
+    return fit
+
+
+def test_three_agreeing_tracks_are_consistent_and_weighted_by_inverse_variance(lib):
+    fit = solved(
+        lib,
+        {
+            CLUB_IN: ("ok", 30_000, 400, 30),
+            CLUB_OUT: ("ok", 30_300, 400, 25),
+            BALL_OUT: ("ok", 30_100, 200, 60),
+        },
+    )
+    assert fit.verdict == VERDICT["consistent"]
+    w = [1 / 400**2, 1 / 400**2, 1 / 200**2]
+    expected = (30_000 * w[0] + 30_300 * w[1] + 30_100 * w[2]) / sum(w)
+    assert fit.impactUs == pytest.approx(expected, abs=0.5)
+    assert fit.spreadUs == pytest.approx(300)
+    assert fit.droppedTrack == fw.FIT_NO_TRACK
+    assert fit.refinedMinusTriggerUs == pytest.approx(expected - 27_500, abs=0.5)
+
+
+def test_gate_uses_the_half_millisecond_floor(lib):
+    # sigmas of 50 us would gate at 150 us; the 500 us floor gates at 1.5 ms.
+    fit = solved(lib, {CLUB_IN: ("ok", 30_000, 50, 30), BALL_OUT: ("ok", 31_000, 50, 60)})
+    assert fit.verdict == VERDICT["consistent"]
+
+
+def test_one_outlier_of_three_is_dropped_and_the_rest_fused(lib):
+    fit = solved(
+        lib,
+        {
+            CLUB_IN: ("ok", 30_000, 300, 30),
+            CLUB_OUT: ("ok", 38_000, 300, 25),
+            BALL_OUT: ("ok", 30_200, 300, 60),
+        },
+    )
+    assert fit.verdict == VERDICT["consistent"]
+    assert fit.droppedTrack == CLUB_OUT
+    assert fit.track[CLUB_OUT].why == WHY["dropped"]
+    assert fit.impactUs == pytest.approx(30_100, abs=0.5)
+    assert fit.spreadUs == pytest.approx(200)
+
+
+def test_two_disagreeing_tracks_are_inconsistent_and_take_the_smaller_sigma(lib):
+    fit = solved(lib, {CLUB_IN: ("ok", 30_000, 600, 30), BALL_OUT: ("ok", 36_000, 200, 60)})
+    assert fit.verdict == VERDICT["inconsistent"]
+    assert fit.impactUs == pytest.approx(36_000)
+
+
+def test_three_all_disagreeing_are_inconsistent(lib):
+    fit = solved(
+        lib,
+        {
+            CLUB_IN: ("ok", 20_000, 300, 30),
+            CLUB_OUT: ("ok", 30_000, 200, 25),
+            BALL_OUT: ("ok", 40_000, 300, 60),
+        },
+    )
+    assert fit.verdict == VERDICT["inconsistent"]
+    assert fit.impactUs == pytest.approx(30_000)
+
+
+def test_one_track_is_single(lib):
+    fit = solved(lib, {BALL_OUT: ("ok", 30_000, 200, 60)})
+    assert fit.verdict == VERDICT["single_track"]
+    assert fit.impactUs == pytest.approx(30_000)
+    assert fit.spreadUs == 0.0
+
+
+def test_no_track_is_none_and_reports_nothing(lib):
+    fit = solved(lib, {})
+    assert fit.verdict == VERDICT["none"]
+    assert (fit.impactUs, fit.refinedMinusTriggerUs) == (0.0, 0.0)
+
+
+def test_club_out_faster_than_club_in_breaks_physics(lib):
+    fit = solved(lib, {CLUB_IN: ("ok", 30_000, 300, 30), CLUB_OUT: ("ok", 30_000, 300, 34)})
+    assert fit.track[CLUB_OUT].why == WHY["physics"]
+    assert fit.verdict == VERDICT["single_track"]
+
+
+def test_ball_not_faster_than_club_out_breaks_physics(lib):
+    fit = solved(lib, {CLUB_OUT: ("ok", 30_000, 300, 25), BALL_OUT: ("ok", 30_000, 300, 25)})
+    assert fit.track[BALL_OUT].why == WHY["physics"]
+    assert fit.verdict == VERDICT["single_track"]
+
+
+def run(lib, club_in=(), club_out=(), ball_out=(), no_lock=0, trigger_us=27_500) -> fw.ImpactFit:
+    """l3_impact_fit_run with club out and ball out as tracks (spans), club in as a list."""
+
+    def span_of(samples):
+        track_cfg = fw.TrackCfg()
+        lib.l3_track_cfg_defaults(ctypes.byref(track_cfg))
+        track = fw.ClubTrack()
+        lib.l3_track_init(ctypes.byref(track), ctypes.byref(track_cfg))
+        for frame, (t, r) in enumerate(samples):
+            p = fw.TrackPoint()
+            p.frame, p.timestampUs, p.rangeM, p.rangeBin = frame, int(t), r, r / BIN_M
+            lib.l3_track_append_point(ctypes.byref(track), ctypes.byref(p))
+        span = fw.FitSpan(ctypes.pointer(track), 0, len(samples))
+        span.keep = track
+        return span
+
+    fit = fw.ImpactFit()
+    lst = point_list(club_in)
+    lib.l3_impact_fit_run(
+        ctypes.byref(cfg(lib)),
+        ctypes.byref(lst) if club_in else None,
+        ctypes.byref(span_of(club_out)) if club_out else None,
+        ctypes.byref(span_of(ball_out)) if ball_out else None,
+        BALL_M,
+        no_lock,
+        trigger_us,
+        ctypes.byref(fit),
+    )
+    return fit
+
+
+def test_run_on_the_clean_scene_recovers_impact(lib):
+    fit = run(
+        lib,
+        club_in=line(30.0, CLUB_IN_T),
+        club_out=line(25.0, CLUB_OUT_T),
+        ball_out=line(60.0, BALL_OUT_T),
+    )
+    assert fit.verdict == VERDICT["consistent"]
+    assert fit.impactUs == pytest.approx(IMPACT_US, abs=5.0)
+    assert fit.refinedMinusTriggerUs == pytest.approx(IMPACT_US - 27_500, abs=5.0)
+
+
+def test_club_in_missing_uses_the_outgoing_tracks(lib):
+    fit = run(lib, club_out=line(25.0, CLUB_OUT_T), ball_out=line(60.0, BALL_OUT_T))
+    assert fit.track[CLUB_IN].why == WHY["missing"]
+    assert fit.verdict == VERDICT["consistent"]
+    assert fit.impactUs == pytest.approx(IMPACT_US, abs=5.0)
+
+
+def test_ball_missing_fuses_the_club_either_side(lib):
+    fit = run(lib, club_in=line(30.0, CLUB_IN_T), club_out=line(25.0, CLUB_OUT_T))
+    assert fit.track[BALL_OUT].why == WHY["missing"]
+    assert fit.verdict == VERDICT["consistent"]
+
+
+def test_no_lock_is_carried(lib):
+    assert run(lib, ball_out=line(60.0, BALL_OUT_T), no_lock=1).noLock == 1
+
+
+def test_format_names_the_verdict_and_every_track(lib):
+    fit = run(lib, club_in=line(30.0, CLUB_IN_T), ball_out=line(60.0, BALL_OUT_T))
+    text = fw.c_text(lib.l3_impact_fit_format, ctypes.byref(fit), cap=240)
+    match = re.match(r"impactfit verdict=consistent t=(-?\d+) ", text)
+    assert match is not None
+    assert abs(int(match.group(1)) - 30_000) <= 5
+    assert "club_in=ok:" in text and "club_out=missing" in text and "ball_out=ok:" in text
+    assert "dropped=- nolock=0" in text

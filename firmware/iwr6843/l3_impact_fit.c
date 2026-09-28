@@ -185,3 +185,214 @@ void l3_impact_fit_track(const l3_impact_fit_cfg_t *cfg, uint8_t which, l3_point
     }
     out->why = L3_FIT_WHY_OK;
 }
+
+static const char *const kWhyNames[L3_FIT_WHY_COUNT] = {
+    "ok", "missing", "few_points", "wrong_direction", "speed_bounds", "physics", "nonfinite",
+    "dropped"
+};
+static const char *const kVerdictNames[L3_FIT_VERDICT_COUNT] = {
+    "none", "single_track", "consistent", "inconsistent"
+};
+static const char *const kTrackNames[L3_FIT_TRACKS] = { "club_in", "club_out", "ball_out" };
+
+static int32_t l3_fit_ok(const l3_fit_estimate_t *e)
+{
+    return (e->why == L3_FIT_WHY_OK) ? 1 : 0;
+}
+
+/* Inverse-variance mean of the kept estimates; returns how many. */
+static uint32_t l3_fit_mean(const l3_impact_fit_t *fit, float *mean)
+{
+    float weights = 0.0F;
+    float sum = 0.0F;
+    uint32_t used = 0U;
+    uint32_t i;
+
+    for (i = 0U; i < L3_FIT_TRACKS; i++) {
+        const l3_fit_estimate_t *e = &fit->track[i];
+        float w;
+
+        if (!l3_fit_ok(e)) {
+            continue;
+        }
+        w = 1.0F / (e->sigmaUs * e->sigmaUs);
+        weights += w;
+        sum += w * e->timeUs;
+        used++;
+    }
+    *mean = (used > 0U) ? sum / weights : 0.0F;
+    return used;
+}
+
+/* The kept estimate furthest outside its gate around mean, L3_FIT_NO_TRACK
+ * when every one agrees. */
+static uint8_t l3_fit_worst(const l3_impact_fit_cfg_t *cfg, const l3_impact_fit_t *fit,
+                            float mean)
+{
+    uint8_t worst = L3_FIT_NO_TRACK;
+    float worstRatio = 1.0F;
+    uint32_t i;
+
+    for (i = 0U; i < L3_FIT_TRACKS; i++) {
+        const l3_fit_estimate_t *e = &fit->track[i];
+        float sigma;
+        float ratio;
+
+        if (!l3_fit_ok(e)) {
+            continue;
+        }
+        sigma = (e->sigmaUs > cfg->minSigmaUs) ? e->sigmaUs : cfg->minSigmaUs;
+        ratio = fabsf(e->timeUs - mean) / (cfg->gateSigmas * sigma);
+        if (ratio > worstRatio) {
+            worstRatio = ratio;
+            worst = (uint8_t)i;
+        }
+    }
+    return worst;
+}
+
+static float l3_fit_sharpest(const l3_impact_fit_t *fit)
+{
+    const l3_fit_estimate_t *best = NULL;
+    uint32_t i;
+
+    for (i = 0U; i < L3_FIT_TRACKS; i++) {
+        const l3_fit_estimate_t *e = &fit->track[i];
+
+        if (l3_fit_ok(e) && (best == NULL || e->sigmaUs < best->sigmaUs)) {
+            best = e;
+        }
+    }
+    return (best != NULL) ? best->timeUs : 0.0F;
+}
+
+static float l3_fit_spread(const l3_impact_fit_t *fit)
+{
+    float lo = 0.0F;
+    float hi = 0.0F;
+    uint32_t seen = 0U;
+    uint32_t i;
+
+    for (i = 0U; i < L3_FIT_TRACKS; i++) {
+        const l3_fit_estimate_t *e = &fit->track[i];
+
+        if (!l3_fit_ok(e)) {
+            continue;
+        }
+        if (seen == 0U || e->timeUs < lo) {
+            lo = e->timeUs;
+        }
+        if (seen == 0U || e->timeUs > hi) {
+            hi = e->timeUs;
+        }
+        seen++;
+    }
+    return hi - lo;
+}
+
+void l3_impact_fit_solve(const l3_impact_fit_cfg_t *cfg, l3_impact_fit_t *fit, uint32_t triggerUs)
+{
+    l3_fit_estimate_t *in = &fit->track[L3_FIT_CLUB_IN];
+    l3_fit_estimate_t *co = &fit->track[L3_FIT_CLUB_OUT];
+    l3_fit_estimate_t *bo = &fit->track[L3_FIT_BALL_OUT];
+    uint32_t used;
+    uint8_t worst;
+    float mean;
+
+    fit->verdict = L3_FIT_VERDICT_NONE;
+    fit->droppedTrack = L3_FIT_NO_TRACK;
+    fit->impactUs = 0.0F;
+    fit->spreadUs = 0.0F;
+    fit->refinedMinusTriggerUs = 0.0F;
+    if (l3_fit_ok(in) && l3_fit_ok(co) && co->speedMps > in->speedMps * cfg->clubOutMaxRatio) {
+        co->why = L3_FIT_WHY_PHYSICS;
+    }
+    if (l3_fit_ok(co) && l3_fit_ok(bo) && bo->speedMps <= co->speedMps) {
+        bo->why = L3_FIT_WHY_PHYSICS;
+    }
+    used = l3_fit_mean(fit, &mean);
+    if (used == 0U) {
+        return;
+    }
+    if (used == 1U) {
+        fit->verdict = L3_FIT_VERDICT_SINGLE;
+        fit->impactUs = mean;
+    } else {
+        worst = l3_fit_worst(cfg, fit, mean);
+        if (worst != L3_FIT_NO_TRACK && used == 3U) {
+            fit->track[worst].why = L3_FIT_WHY_DROPPED;
+            fit->droppedTrack = worst;
+            (void)l3_fit_mean(fit, &mean);
+            worst = l3_fit_worst(cfg, fit, mean);
+        }
+        if (worst == L3_FIT_NO_TRACK) {
+            fit->verdict = L3_FIT_VERDICT_CONSISTENT;
+            fit->impactUs = mean;
+        } else {
+            fit->verdict = L3_FIT_VERDICT_INCONSISTENT;
+            fit->impactUs = l3_fit_sharpest(fit);
+        }
+    }
+    fit->spreadUs = l3_fit_spread(fit);
+    fit->refinedMinusTriggerUs = fit->impactUs - (float)triggerUs;
+}
+
+void l3_impact_fit_run(const l3_impact_fit_cfg_t *cfg, const l3_fit_list_t *clubIn,
+                       const l3_fit_span_t *clubOut, const l3_fit_span_t *ballOut,
+                       float ballRangeM, uint8_t noLock, uint32_t triggerUs,
+                       l3_impact_fit_t *fit)
+{
+    l3_impact_fit_reset(fit);
+    fit->noLock = noLock;
+    if (clubIn != NULL) {
+        l3_impact_fit_track(cfg, L3_FIT_CLUB_IN, l3_fit_list_point, clubIn, clubIn->count,
+                            ballRangeM, &fit->track[L3_FIT_CLUB_IN]);
+    }
+    if (clubOut != NULL) {
+        l3_impact_fit_track(cfg, L3_FIT_CLUB_OUT, l3_fit_span_point, clubOut, clubOut->count,
+                            ballRangeM, &fit->track[L3_FIT_CLUB_OUT]);
+    }
+    if (ballOut != NULL) {
+        l3_impact_fit_track(cfg, L3_FIT_BALL_OUT, l3_fit_span_point, ballOut, ballOut->count,
+                            ballRangeM, &fit->track[L3_FIT_BALL_OUT]);
+    }
+    l3_impact_fit_solve(cfg, fit, triggerUs);
+}
+
+const char *l3_impact_fit_why_name(uint8_t why)
+{
+    return (why < L3_FIT_WHY_COUNT) ? kWhyNames[why] : "?";
+}
+
+const char *l3_impact_fit_verdict_name(uint8_t verdict)
+{
+    return (verdict < L3_FIT_VERDICT_COUNT) ? kVerdictNames[verdict] : "?";
+}
+
+int32_t l3_impact_fit_format(const l3_impact_fit_t *fit, char *out, uint32_t cap)
+{
+    char tracks[L3_FIT_TRACKS][40];
+    uint32_t i;
+
+    for (i = 0U; i < L3_FIT_TRACKS; i++) {
+        const l3_fit_estimate_t *e = &fit->track[i];
+
+        if (e->why == L3_FIT_WHY_OK || e->why == L3_FIT_WHY_DROPPED) {
+            (void)snprintf(tracks[i], sizeof(tracks[i]), "%s=%s:%d+-%d", kTrackNames[i],
+                           l3_impact_fit_why_name(e->why), (int)(e->timeUs + 0.5F),
+                           (int)(e->sigmaUs + 0.5F));
+        } else {
+            (void)snprintf(tracks[i], sizeof(tracks[i]), "%s=%s", kTrackNames[i],
+                           l3_impact_fit_why_name(e->why));
+        }
+    }
+    return snprintf(out, cap,
+                    "impactfit verdict=%s t=%d spreadus=%d dtrigus=%d dropped=%s nolock=%u "
+                    "%s %s %s",
+                    l3_impact_fit_verdict_name(fit->verdict), (int)(fit->impactUs + 0.5F),
+                    (int)(fit->spreadUs + 0.5F),
+                    (int)((fit->refinedMinusTriggerUs >= 0.0F) ? fit->refinedMinusTriggerUs + 0.5F
+                                                               : fit->refinedMinusTriggerUs - 0.5F),
+                    (fit->droppedTrack < L3_FIT_TRACKS) ? kTrackNames[fit->droppedTrack] : "-",
+                    (unsigned)fit->noLock, tracks[0], tracks[1], tracks[2]);
+}
