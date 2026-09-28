@@ -31,6 +31,7 @@ HOST_SOURCES = (
     "l3_frames.c",
     "l3_angle.c",
     "l3_observation.c",
+    "l3_band.c",
     "l3_trigger.c",
     "l3_club_track.c",
     "l3_launch.c",
@@ -251,6 +252,16 @@ class TargetObs(ctypes.Structure):
         ("elevationRad", ctypes.c_float),
         ("anglesValid", ctypes.c_uint8),
         ("confidence", ctypes.c_float),
+    ]
+
+
+class Band(ctypes.Structure):
+    """``l3_band_t``: the tee band, both edges inside."""
+
+    _fields_ = [
+        ("valid", ctypes.c_uint8),
+        ("loBin", ctypes.c_float),
+        ("hiBin", ctypes.c_float),
     ]
 
 
@@ -1131,6 +1142,10 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     ),
     "l3_obs_format_target": ([_P(TargetObs), *_TEXT], ctypes.c_int32),
     "l3_obs_parabolic_offset": ([_F32, _F32, _F32], _F32),
+    # l3_band.h
+    "l3_band_around": ([_F32, _F32, _P(Band)], None),
+    "l3_band_contains": ([_P(Band), _F32], ctypes.c_int32),
+    "l3_band_filter": ([_P(Band), _P(TargetObs), _U32], _U32),
     # l3_iq16_stats.h
     "l3_iq16_channel_stats": (
         [_P(ctypes.c_int16), _U32, _U32, _P(Iq16ChannelStats)],
