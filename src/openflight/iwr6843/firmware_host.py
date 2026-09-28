@@ -33,6 +33,7 @@ HOST_SOURCES = (
     "l3_observation.c",
     "l3_trigger.c",
     "l3_club_track.c",
+    "l3_ball_hyp.c",
     "l3_impact.c",
     "l3_shot.c",
     "l3_ball_track.c",
@@ -176,6 +177,11 @@ PROFILE_STAGE_NAMES = (
 TRACK_POINTS = 32
 TRACK_NO_TARGET = 0xFFFFFFFF
 TRACK_WHY_NAMES = ("none", "acquired", "associated", "coasted", "dropped", "idle", "released")
+
+# l3_ball_hyp.h
+BALL_HYP_MAX = 4
+BALL_HYP_POINTS = 8
+BALL_HYP_NONE = 0xFFFFFFFF
 
 
 class BinObs(ctypes.Structure):
@@ -538,6 +544,85 @@ class Shot(ctypes.Structure):
     ]
 
 
+class BallHypPoint(ctypes.Structure):
+    """``l3_ball_hyp_point_t``."""
+
+    _fields_ = [
+        ("frame", ctypes.c_uint32),
+        ("timestampUs", ctypes.c_uint32),
+        ("rangeBin", ctypes.c_float),
+        ("dopplerAliasMps", ctypes.c_float),
+        ("stat", ctypes.c_float),
+        ("clubStat", ctypes.c_float),
+        ("azimuthRad", ctypes.c_float),
+        ("elevationRad", ctypes.c_float),
+        ("anglesValid", ctypes.c_uint8),
+    ]
+
+
+class BallHyp(ctypes.Structure):
+    """``l3_ball_hyp_t``: one candidate ball trajectory."""
+
+    _fields_ = [
+        ("active", ctypes.c_uint8),
+        ("count", ctypes.c_uint8),
+        ("misses", ctypes.c_uint8),
+        ("id", ctypes.c_uint32),
+        ("lastTargetIndex", ctypes.c_uint32),
+        ("points", BallHypPoint * BALL_HYP_POINTS),
+    ]
+
+
+class BallHypsCfg(ctypes.Structure):
+    """``l3_ball_hyps_cfg_t``."""
+
+    _fields_ = [
+        ("binWidthM", ctypes.c_float),
+        ("velocitySpanMps", ctypes.c_float),
+        ("spawnBehindBins", ctypes.c_float),
+        ("spawnBeyondBins", ctypes.c_float),
+        ("gateBins", ctypes.c_float),
+        ("gateMps", ctypes.c_float),
+        ("maxMisses", ctypes.c_uint32),
+        ("classifyPoints", ctypes.c_uint32),
+        ("minDepartureMps", ctypes.c_float),
+        ("maxSpeedMps", ctypes.c_float),
+        ("impactToleranceUs", ctypes.c_uint32),
+        ("maxResidualBins", ctypes.c_float),
+        ("dopplerToleranceMps", ctypes.c_float),
+    ]
+
+
+class BallHypVerdict(ctypes.Structure):
+    """``l3_ball_hyp_verdict_t``."""
+
+    _fields_ = [
+        ("index", ctypes.c_int32),
+        ("points", ctypes.c_uint32),
+        ("rateMps", ctypes.c_float),
+        ("originOffsetUs", ctypes.c_float),
+        ("residualBins", ctypes.c_float),
+        ("dopplerAgreement", ctypes.c_float),
+        ("weakerFraction", ctypes.c_float),
+        ("score", ctypes.c_float),
+    ]
+
+
+class BallHyps(ctypes.Structure):
+    """``l3_ball_hyps_t``: the bounded set of candidate ball trajectories."""
+
+    _fields_ = [
+        ("cfg", BallHypsCfg),
+        ("armed", ctypes.c_uint8),
+        ("originBin", ctypes.c_float),
+        ("impactTimestampUs", ctypes.c_uint32),
+        ("nextId", ctypes.c_uint32),
+        ("spawned", ctypes.c_uint32),
+        ("dropped", ctypes.c_uint32),
+        ("hyp", BallHyp * BALL_HYP_MAX),
+    ]
+
+
 class BallTrackCfg(ctypes.Structure):
     """``l3_ball_track_cfg_t``."""
 
@@ -897,6 +982,19 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_impact_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_impact_format": ([_P(Impact), *_TEXT], ctypes.c_int32),
     # l3_ball_track.h
+    "l3_ball_hyps_cfg_defaults": ([_P(BallHypsCfg)], None),
+    "l3_ball_hyps_init": ([_P(BallHyps), _P(BallHypsCfg)], None),
+    "l3_ball_hyps_arm": ([_P(BallHyps), ctypes.c_float, _U32], None),
+    "l3_ball_hyps_update": ([_P(BallHyps), _P(TargetObs), _U32, _U32, _U32, _U32], _U32),
+    "l3_ball_hyp_fit": (
+        [_P(BallHyp), _U32, _P(ctypes.c_float), _P(ctypes.c_float), _P(ctypes.c_float)],
+        ctypes.c_int32,
+    ),
+    "l3_ball_hyps_set_angles": (
+        [_P(BallHyps), _U32, ctypes.c_float, ctypes.c_float, ctypes.c_uint8],
+        ctypes.c_int32,
+    ),
+    "l3_ball_hyps_struct_bytes": ([], _U32),
     "l3_ball_track_cfg_defaults": ([_P(BallTrackCfg)], None),
     "l3_ball_track_init": ([_P(BallTrack), _P(BallTrackCfg)], None),
     "l3_ball_track_reset": ([_P(BallTrack)], None),
@@ -1081,6 +1179,14 @@ __all__ = [
     "STAT_PEAK",
     "TRACK_POINTS",
     "TRACK_WHY_NAMES",
+    "BALL_HYP_MAX",
+    "BALL_HYP_NONE",
+    "BALL_HYP_POINTS",
+    "BallHyp",
+    "BallHypPoint",
+    "BallHypVerdict",
+    "BallHyps",
+    "BallHypsCfg",
     "TRIG_COUNT_TOTAL",
     "TRIG_LOG_DEPTH",
     "TRIG_MAX_BINS",
