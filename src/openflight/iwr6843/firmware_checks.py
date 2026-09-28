@@ -1051,14 +1051,38 @@ TRIG_DEBUG_FIELDS = (
 )
 
 
+# Firmware l3_trig_cfg_check requires the approach to be deeper than the gate,
+# and rejects an approach of 0. The default gate is 3 bins (~0.14 m).
+_TRIGGER_GATE_BINS = 3
+
+
+def trigger_watch(tee_bin: int, near_bin: int) -> tuple[int, int]:
+    """``(approach, gate)`` so the watch starts at ``near_bin``.
+
+    Bins closer than the configured tee are the golfer and the mat, not the
+    club. ``approach`` is how many bins short of ``tee_bin`` are included.
+    When the ball is only a few bins past ``near_bin``, the gate shrinks so
+    the window can still start on that bin: the firmware will not arm a gate
+    as wide as the approach.
+    """
+    short = tee_bin - near_bin
+    if short < 1:
+        return 1, 0
+    return short, min(_TRIGGER_GATE_BINS, short - 1)
+
+
 def arm_command(ctx: Context) -> str:
     """``triggerCfg`` for this rig's tee bin at ``ctx.snr`` over the firmware's floor.
 
     The second number is an SNR multiple, not a power: the earlier suite sent
     a measured absolute level (~3e7) there, which armed a threshold no swing
-    could reach and read as "the radar does not see the club".
+    could reach and read as "the radar does not see the club". The approach
+    and gate that follow keep the watch from starting closer than ``--tee-m``.
     """
-    return SelfTriggerConfig(tee_bin=_tee_bin(ctx), snr=ctx.snr, track_frames=ctx.hits).command
+    tee = _tee_bin(ctx)
+    approach, gate = trigger_watch(tee, expected_tee_bin(ctx))
+    config = SelfTriggerConfig(tee_bin=tee, snr=ctx.snr, track_frames=ctx.hits)
+    return f"{config.command} {approach} {gate}"
 
 
 def detector_evidence(ctx: Context) -> list[str]:
@@ -1732,12 +1756,16 @@ class _BallState:
 
 
 def _scan_region(ctx: Context) -> tuple[int, int, int]:
-    """(first global bin, count, window start) around the expected tee inside the pre window."""
+    """(first global bin, count, window start) from the expected tee out to the far search edge.
+
+    Bins closer than ``--tee-m`` are not searched. On a raised mat those bins
+    are the player, and a ball sits at the tee or farther.
+    """
     summary = read_capture_config(ctx.config)
     if summary.first_window_start is None or summary.first_window_bins is None:
         raise ValueError(f"{ctx.config} has no phaseCaptureCfg")
     expected = expected_tee_bin(ctx)
-    first = max(summary.first_window_start, expected - DEFAULT_SEARCH_HALF_WIDTH)
+    first = max(summary.first_window_start, expected)
     last = min(
         summary.first_window_start + summary.first_window_bins - 1,
         expected + DEFAULT_SEARCH_HALF_WIDTH,

@@ -1,0 +1,20 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dump-viewer",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "python", "scripts/iwr6843/dump_viewer.py", "--no-browser", "--port", "5057"],
+      "port": 5057
+    },
+    {
+      "name": "dump-viewer-trackman",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run", "python", "scripts/iwr6843/dump_viewer.py", "--no-browser", "--port", "5058",
+        "--dir", "E:/Users/corma/Downloads/openflight_trackman_sessions_2026-07-14_to_2026-08-24/openflight_trackman_sessions/sessions"
+      ],
+      "port": 5058
+    }
+  ]
+}

@@ -146,6 +146,32 @@ def test_ops_guided_estimator_warns_when_a_speed_mismatch_has_no_replacement():
     assert result.measurement.status == "accepted_track_speed_warning"
 
 
+def test_ops_guided_estimator_withholds_a_track_that_is_not_the_ball():
+    """A ~55 mph tee track must not publish a launch for a ~150 mph ball.
+
+    On the 2026-08-24 Trackman drivers those walks read 14 to 19 deg high,
+    and no OPS-speed candidate was available to replace them.
+    """
+    baseline = LCMFResult(status="accepted", angle_deg=27.7, track_speed_mph=55.0)
+
+    with (
+        patch("openflight.iwr6843.runtime.estimate_lcmf_v1", return_value=baseline),
+        patch(
+            "openflight.iwr6843.runtime.find_recovery_candidates",
+            return_value=[],
+        ),
+    ):
+        result = _runtime().process_shot(
+            impact_timestamp=1.0,
+            ball_speed_mph=150.0,
+            club="driver",
+        )
+
+    assert result.measurement.status == "rejected_track_speed"
+    assert result.measurement.accepted is False
+    assert result.measurement.angle_deg == pytest.approx(27.7)
+
+
 def test_ops_guided_estimator_preserves_baseline_when_candidate_search_fails():
     baseline = LCMFResult(status="accepted", angle_deg=10.7, track_speed_mph=130.0)
 

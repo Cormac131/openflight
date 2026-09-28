@@ -986,11 +986,13 @@ def _trigger_radar(
 
     def trigger_cfg(line):
         fields = line.split()
+        optional = fields[4:]
         if (
-            len(fields) != 4
+            len(fields) not in (4, 6)
             or not fields[1].isdigit()
             or not fields[3].isdigit()
             or fields[2].startswith("-")
+            or any(not item.isdigit() for item in optional)
         ):
             return b"Error: triggerCfg <localBin> <power> <hits>\n"
         hits = int(fields[3])
@@ -1297,7 +1299,16 @@ def test_debug_lines_ignore_a_line_still_arriving():
 
 def test_arm_command_sends_the_snr_not_a_power_level():
     ctx = _ctx(_trigger_radar())
-    assert fc.arm_command(ctx) == f"triggerCfg {fc._tee_bin(ctx)} 6.0 2"  # pylint: disable=protected-access
+    # The ball is on the configured tee, so the firmware minimum is one bin
+    # short of it (approach must be deeper than the gate, and 0 is rejected).
+    assert fc.arm_command(ctx) == f"triggerCfg {fc._tee_bin(ctx)} 6.0 2 1 0"  # pylint: disable=protected-access
+
+
+def test_trigger_watch_starts_at_the_configured_tee_not_short_of_the_ball():
+    """A ball at bin 37 (1.73 m) must not arm a watch that reaches back to bin 25."""
+    assert fc.trigger_watch(37, 34) == (3, 2)
+    ctx = _ctx(_trigger_radar(), observed_tee_bin=37)
+    assert fc.arm_command(ctx) == "triggerCfg 37 6.0 2 3 2"
 
 
 def test_detector_evidence_collects_trace_and_log_lines_and_skips_missing_commands():
@@ -1486,7 +1497,7 @@ def test_ball_detect_finds_the_ball_and_hands_the_swing_checks_its_bin():
     assert fc.arm_command(ctx).startswith("triggerCfg 35 ")
     scans = [line for line in radar.ser.written if line.startswith("ball scan")]
     assert len(scans) == 2 * fc.DEFAULT_SCANS
-    assert scans[0] == "ball scan 28 13", "global bin 34 +/- 6 inside the 20..72 window"
+    assert scans[0] == "ball scan 34 7", "from the configured tee (bin 34) out 6 bins"
     assert "firmware bin=35" in results[2].detail and "offset +0" in results[2].detail
     assert radar.ser.written[-1] == "ball cfg 0 0", "the detector is left off"
     assert "ball cfg 1 0" in radar.ser.written

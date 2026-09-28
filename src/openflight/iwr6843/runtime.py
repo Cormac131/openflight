@@ -58,6 +58,18 @@ _TDM_SIGN_BY_POLICY = {"positive": 1, "negative": -1, "auto": 1}
 OPS_TRACK_SPEED_TOLERANCE_FRAC = 0.15
 OPS_GUIDED_MAX_CANDIDATES = 8
 OPS_GUIDED_MIN_LAUNCH_DEG = 2.0
+# Recovery already failed. Past this disagreement the range walk is a
+# different object: on the 2026-08-24 drivers a ~55 mph tee track against a
+# ~150 mph ball published launch angles 14 to 19 deg high. A milder miss,
+# such as 30%, still publishes as accepted_track_speed_warning.
+OPS_TRACK_SPEED_REJECT_FRAC = 0.40
+
+
+def _unrepaired_speed_mismatch(baseline: LCMFResult, speed_error: float) -> LCMFResult:
+    """Keep a mild speed miss, and withhold a range walk that is not the ball."""
+    if speed_error > OPS_TRACK_SPEED_REJECT_FRAC:
+        return replace(baseline, status="rejected_track_speed")
+    return replace(baseline, status="accepted_track_speed_warning")
 
 
 def _ops_candidate_rank(candidate: RecoveryCandidate) -> tuple[float, int, float]:
@@ -303,7 +315,7 @@ class IWR6843Runtime:
         except Exception as error:  # pylint: disable=broad-exception-caught
             logger.warning("[IWR6843] OPS-guided track search failed: %s", error)
             if baseline.accepted:
-                return replace(baseline, status="accepted_track_speed_warning")
+                return _unrepaired_speed_mismatch(baseline, speed_error)
             return baseline
         recoveries: list[tuple[RecoveryCandidate, LCMFResult]] = []
         for candidate in candidates:
@@ -340,7 +352,7 @@ class IWR6843Runtime:
             )
             return replace(selected, status=status)
         if baseline.accepted:
-            return replace(baseline, status="accepted_track_speed_warning")
+            return _unrepaired_speed_mismatch(baseline, speed_error)
         return baseline
 
     def _ball_max_range_m(self) -> float | None:
