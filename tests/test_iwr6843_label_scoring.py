@@ -129,6 +129,51 @@ def test_baseline_round_trip_and_missing_file(tmp_path):
     assert list(json.loads(text)) == ["a.l3dump", "b.l3dump"]
 
 
+def test_a_freshly_written_baseline_passes_even_for_a_score_that_rounds_up(tmp_path):
+    two_thirds = 2 / 3
+    ls.write_baseline(tmp_path, {"d.l3dump": two_thirds})
+    assert ls.load_baseline(tmp_path)["d.l3dump"] == two_thirds
+    labels = _labels(club=(_lab(1, 30.0), _lab(2, 30.0), _lab(3, 30.0)), tol=TOL)
+    scores = {
+        "club": ls.ObjectScore(3, 3, 3, 0, 0.0, 1.0, two_thirds),
+        "ball": ls.ObjectScore(0, 0, 0, 0, None, 1.0, two_thirds),
+    }
+    assert ls.dump_score(scores) == two_thirds
+    assert ls.check_against_baseline("d.l3dump", labels, scores, ls.load_baseline(tmp_path)) == []
+
+
+def test_check_against_baseline_passes_exactly_at_min_coverage(tmp_path):
+    tol = lb.Tolerances(range_bins=1.0, min_coverage=0.5)
+    labels = _labels(club=(_lab(1, 30.0), _lab(2, 30.0)), tol=tol)
+    scores = ls.score_labels(labels, SimpleNamespace(points=[_fw(1, 30.0)], ball_points=[]))
+    assert scores["club"].coverage == 0.5
+    ls.write_baseline(tmp_path, {"d.l3dump": ls.dump_score(scores)})
+    assert ls.check_against_baseline("d.l3dump", labels, scores, ls.load_baseline(tmp_path)) == []
+
+
+def test_check_against_baseline_reports_a_missing_entry():
+    labels = _labels(club=(_lab(1, 30.0),))
+    scores = ls.score_labels(labels, SimpleNamespace(points=[_fw(1, 30.0)], ball_points=[]))
+    failures = ls.check_against_baseline("d.l3dump", labels, scores, {})
+    assert len(failures) == 1 and "no baseline score" in failures[0]
+    assert "--update-baseline" in failures[0]
+
+
+def test_check_against_baseline_reports_a_score_below_the_baseline():
+    labels = _labels(club=(_lab(1, 30.0),))
+    scores = ls.score_labels(labels, SimpleNamespace(points=[_fw(1, 30.0)], ball_points=[]))
+    assert ls.dump_score(scores) == 1.0
+    failures = ls.check_against_baseline("d.l3dump", labels, scores, {"d.l3dump": 1.01})
+    assert len(failures) == 1 and "below the baseline" in failures[0]
+
+
+def test_check_against_baseline_includes_the_coverage_failures():
+    labels = _labels(club=(_lab(1, 30.0),))
+    scores = ls.score_labels(labels, SimpleNamespace(points=[], ball_points=[]))
+    failures = ls.check_against_baseline("d.l3dump", labels, scores, {"d.l3dump": -9.0})
+    assert failures == ["club: coverage 0.00 below 0.80"]
+
+
 # --- end to end on a synthetic recording ---------------------------------------
 
 

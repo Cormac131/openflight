@@ -18,6 +18,7 @@ BASELINE_NAME = "label_baseline.json"
 # score = coverage - ERROR_WEIGHT * (mean error / tolerance) - FALSE_POINT_WEIGHT * false / labelled
 ERROR_WEIGHT = 0.25
 FALSE_POINT_WEIGHT = 0.5
+_BASELINE_SLACK = 1e-9
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,23 @@ def check_labels(labels: Labels, scores: Mapping[str, ObjectScore]) -> list[str]
     return failures
 
 
+def check_against_baseline(
+    name: str, labels: Labels, scores: Mapping[str, ObjectScore], baseline: Mapping[str, float]
+) -> list[str]:
+    """Every reason one dump fails the labelled-replay test; an empty list is a pass."""
+    failures = check_labels(labels, scores)
+    if name not in baseline:
+        failures.append(
+            f"{name} has no baseline score; run "
+            "`uv run python scripts/analysis/fit_constants.py --update-baseline`"
+        )
+        return failures
+    score = dump_score(scores)
+    if score < baseline[name] - _BASELINE_SLACK:
+        failures.append(f"{name}: score {score:.4f} fell below the baseline {baseline[name]:.4f}")
+    return failures
+
+
 def reviewed_recordings(
     directory: Path = fr.RECORDINGS_DIR,
 ) -> list[tuple[Path, fr.ReplayConfig, Labels]]:
@@ -126,5 +144,6 @@ def load_baseline(directory: Path = fr.RECORDINGS_DIR) -> dict[str, float]:
 def write_baseline(directory: Path, scores: Mapping[str, float]) -> None:
     """Replace the baseline; dump names sorted so the diff is stable."""
     path = Path(directory) / BASELINE_NAME
-    body = {name: round(scores[name], 6) for name in sorted(scores)}
+    # unrounded: json round-trips floats exactly, so a fresh baseline always passes
+    body = {name: float(scores[name]) for name in sorted(scores)}
     path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")

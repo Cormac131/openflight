@@ -29,13 +29,5 @@ _BASELINE = ls.load_baseline(fr.RECORDINGS_DIR) if fr.RECORDINGS_DIR.exists() el
 def test_firmware_tracks_match_the_labels(path, config, labels):
     result = fr.replay_dump(path.read_bytes(), config)
     scores = ls.score_labels(labels, result)
-    assert ls.check_labels(labels, scores) == [], f"{path.name}: {scores}"
-    assert path.name in _BASELINE, (
-        f"{path.name} has no baseline score; run "
-        "`uv run python scripts/analysis/fit_constants.py --update-baseline`"
-    )
-    score = ls.dump_score(scores)
-    assert score >= _BASELINE[path.name] - 1e-9, (
-        f"{path.name}: score {score:.4f} fell below the baseline {_BASELINE[path.name]:.4f}; "
-        f"{scores}"
-    )
+    failures = ls.check_against_baseline(path.name, labels, scores, _BASELINE)
+    assert failures == [], f"{path.name}: {failures}; {scores}"
