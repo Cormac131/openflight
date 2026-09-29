@@ -56,10 +56,15 @@ void l3_angle_snapshot_init(l3_angle_snapshot_t *snapshot, uint32_t ntx, uint32_
     snapshot->chirpPeriodS = 45.0e-6F;
 }
 
+float l3_angle_motion_phase(float radialVelocityMps, float periodS)
+{
+    return 4.0F * L3_ANGLE_PI * radialVelocityMps * periodS / L3_ANGLE_WAVELENGTH_M;
+}
+
 float l3_angle_chirp_phase(float lag1PhaseRad, uint32_t ntx, float radialVelocityMps,
                            float chirpPeriodS)
 {
-    float expected = 4.0F * L3_ANGLE_PI * radialVelocityMps * chirpPeriodS / L3_ANGLE_WAVELENGTH_M;
+    float expected = l3_angle_motion_phase(radialVelocityMps, chirpPeriodS);
     float best = 0.0F;
     float bestError = -1.0F;
     int k;
@@ -181,9 +186,12 @@ int32_t l3_angle_estimate(const l3_radar_cal_t *cal, const l3_angle_snapshot_t *
     if (ntx < 2U || ntx > L3_ANGLE_MAX_TX || nrx < 2U || nrx > L3_ANGLE_MAX_RX) {
         return 0;
     }
-    out->chirpPhaseRad = l3_angle_chirp_phase(snapshot->lag1PhaseRad, ntx,
-                                              snapshot->radialVelocityMps,
-                                              snapshot->chirpPeriodS);
+    out->chirpPhaseRad = snapshot->continuousTdm
+                             ? l3_angle_motion_phase(snapshot->radialVelocityMps,
+                                                     snapshot->chirpPeriodS)
+                             : l3_angle_chirp_phase(snapshot->lag1PhaseRad, ntx,
+                                                    snapshot->radialVelocityMps,
+                                                    snapshot->chirpPeriodS);
     /* Every TX block back to the loop's first chirp. */
     for (tx = 0U; tx < ntx; tx++) {
         l3_cpx_t undo = l3_angle_phasor(-out->chirpPhaseRad * (float)tx);
