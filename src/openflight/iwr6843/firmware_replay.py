@@ -21,12 +21,13 @@ from __future__ import annotations
 import ctypes
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
 
-from openflight.iwr6843 import firmware_host as fw
+from openflight.iwr6843 import firmware_host as fw, tunables
 from openflight.iwr6843.dump import is_range_snapshot, parse_dump
 from openflight.iwr6843.tracking import RANGE_SPAN_M, same_tx_loop_period_s
 
@@ -318,6 +319,8 @@ class ReplayConfig:
     # them (before impact the club keeps only targets short of it). None: the
     # firmware default (l3_impact_fit_cfg_defaults, currently off); 0 disables it.
     band_bins: float | None = None
+    # Firmware config constants (tunables.py) set over the defaults; applied last, so they win.
+    overrides: Mapping[str, float] = field(default_factory=dict)
 
     @property
     def destination(self) -> int:
@@ -846,6 +849,7 @@ def replay_dump(
         raise ValueError(f"stat must be one of {sorted(fw.STAT_NAMES)}, got {config.stat!r}")
     if config.subbin not in fw.SUBBIN_NAMES:
         raise ValueError(f"subbin must be one of {sorted(fw.SUBBIN_NAMES)}, got {config.subbin!r}")
+    tunables.check_overrides(config.overrides)
     n_tx = int(meta["n_tx"])
     loop_period_s = config.loop_period_s or same_tx_loop_period_s(n_tx)
     timestamps = frame_timestamps_us(meta)
@@ -856,6 +860,7 @@ def replay_dump(
     trig_cfg.snr = config.snr
     trig_cfg.trackFrames = config.track_frames
     trig_cfg.stat = fw.STAT_NAMES[config.stat]
+    tunables.apply_overrides(config.overrides, "trig", trig_cfg)
     if lib.l3_trig_cfg_check(ctypes.byref(trig_cfg)) != 0:
         raise ValueError(f"the firmware rejects this trigger configuration: {config}")
     trig = fw.Trig()
@@ -867,6 +872,7 @@ def replay_dump(
     track_cfg.velocitySpanMps = 2.0 * fw.OBS_WAVELENGTH_M / (4.0 * loop_period_s)
     cal = _radar_cal(lib, config)
     track_cfg.cal = cal
+    tunables.apply_overrides(config.overrides, "club", track_cfg)
     track = fw.ClubTrack()
     lib.l3_track_init(ctypes.byref(track), ctypes.byref(track_cfg))
 
@@ -880,6 +886,7 @@ def replay_dump(
     fit_cfg.binWidthM = RANGE_SPAN_M / config.fft_size
     if config.band_bins is not None:
         fit_cfg.bandBins = config.band_bins
+    tunables.apply_overrides(config.overrides, "fit", fit_cfg)
     # The tee band: re-placed on every idle pre-impact frame from the noise
     # map (l3_band_place), frozen while the club track is active, kept through
     # impact and the post frames -- as l3_considerSelfTrigger.
@@ -920,6 +927,7 @@ def replay_dump(
         ball_cfg.useHypotheses = 1 if config.ball_hypotheses else 0
     if config.ball_tuning is not None:
         config.ball_tuning.apply(ball_cfg)
+    tunables.apply_overrides(config.overrides, "ball", ball_cfg)
     ball_track = fw.BallTrack()
     lib.l3_ball_track_init(ctypes.byref(ball_track), ctypes.byref(ball_cfg))
     launch = fw.Launch()
