@@ -115,3 +115,22 @@ def test_empty_overrides_reproduce_the_default_replay_exactly():
     a = fr.replay_dump(raw, base)
     b = fr.replay_dump(raw, replace(base, overrides={}))
     assert _ball_track(a) == _ball_track(b)
+
+
+@needs_compiler
+def test_overriding_every_constant_with_its_default_replays_the_committed_recordings_unchanged():
+    """The sweep's baseline (defaults as overrides) must equal the tests' plain replay."""
+    if not fr.RECORDINGS_DIR.exists():
+        pytest.skip("no committed recordings")
+    configs = fr.recording_configs(fr.RECORDINGS_DIR)
+    if not configs:
+        pytest.skip("no committed recordings")
+    defaults = tn.read_defaults(fr._default_library())  # pylint: disable=protected-access
+    for path, config in configs:
+        raw = path.read_bytes()
+        plain = fr.replay_dump(raw, config)
+        explicit = fr.replay_dump(raw, replace(config, overrides=defaults))
+        for attr in ("points", "ball_points"):
+            got = [(p.frame, p.range_bin) for p in getattr(explicit, attr)]
+            want = [(p.frame, p.range_bin) for p in getattr(plain, attr)]
+            assert got == want, f"{path.name}: {attr} differ under the explicit defaults"
