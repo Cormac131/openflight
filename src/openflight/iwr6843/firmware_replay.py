@@ -158,6 +158,25 @@ def _default_library() -> ctypes.CDLL:
     return _LIBRARY
 
 
+def post_frame_count(meta: dict) -> int | None:
+    """Post-impact frames the board's capture plan held (impact + ball frames).
+
+    From the adaptive retention report when present; else from the first
+    frame whose window start differs from the pre-impact window's; None when
+    the dump cannot tell (one window throughout, no report).
+    """
+    n_frames = int(meta["n_frames"])
+    retention = meta.get("retention")
+    if retention:
+        return n_frames - int(retention["pre_frames"])
+    starts = meta.get("range_bin_starts")
+    if starts:
+        for index, start in enumerate(starts):
+            if start != starts[0]:
+                return n_frames - index
+    return None
+
+
 def frame_window(meta: dict, frame: int) -> tuple[int, int]:
     """(global bin of local bin 0, valid bins) of one frame of a parsed dump."""
     starts = meta.get("range_bin_starts")
@@ -542,6 +561,10 @@ class ReplayResult:
     # The shot's impact time as IMPACT froze it, before the fit refined
     # shot.impactTimestampUs (apply_impact_fit); None without an impact.
     frozen_impact_timestamp_us: int | None = None
+    # Frames the shot machine tracked the ball for before SOLVE, and whether
+    # the dump said (retention report / window change) or it fell back to all.
+    ball_track_frames: int = 0
+    ball_track_frames_known: bool = False
 
     @property
     def retain_windows(self) -> list[RetainSummary]:
@@ -872,7 +895,8 @@ def replay_dump(
     shot_cfg = fw.ShotCfg()
     lib.l3_shot_cfg_defaults(ctypes.byref(shot_cfg))
     shot_cfg.requireBall = 1 if config.dest_bin is not None else 0
-    shot_cfg.ballTrackFrames = int(meta["n_frames"])
+    known_post = post_frame_count(meta)
+    shot_cfg.ballTrackFrames = known_post if known_post is not None else int(meta["n_frames"])
     shot = fw.Shot()
     lib.l3_shot_init(ctypes.byref(shot), ctypes.byref(shot_cfg))
     ball_cfg = fw.BallTrackCfg()
@@ -1261,6 +1285,8 @@ def replay_dump(
         impact_fit=_impact_fit_summary(fit) if fitted_frozen_us is not None else None,
         impact_fit_status=fw.c_text(lib.l3_impact_fit_format, ctypes.byref(fit), cap=240),
         frozen_impact_timestamp_us=frozen_impact_us,
+        ball_track_frames=int(shot_cfg.ballTrackFrames),
+        ball_track_frames_known=known_post is not None,
         speed_mps=club_speed,
         fit_slope_bins_per_s=club_slope,
         fit_residual_bins=club_residual,
@@ -1912,6 +1938,7 @@ __all__ = [
     "AngleSummary",
     "BallTuning",
     "Expectation",
+    "post_frame_count",
     "DeliverySummary",
     "HypothesisSummary",
     "LaunchSummary",

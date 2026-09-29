@@ -883,3 +883,57 @@ def test_a_forced_post_frame_arms_the_ball_tracker_at_the_band_edge_or_the_ball(
     assert result.fired_frame is None, "only the forced arm ran"
     assert result.ball_track.armed == 1
     assert result.ball_track.originBin == arm_bin
+
+
+def test_post_frames_come_from_the_retention_report():
+    meta = {
+        "n_frames": 47,
+        "retention": {"reason": "complete", "pre_frames": 24, "planned_frames": 47},
+    }
+    assert fr.post_frame_count(meta) == 23
+
+
+def test_post_frames_come_from_the_first_window_change():
+    meta = {"n_frames": 24, "range_bin_starts": (20,) * 9 + (32,) * 7 + (47,) * 8}
+    assert fr.post_frame_count(meta) == 15
+
+
+def test_post_frames_are_unknown_without_windows_or_a_report():
+    assert fr.post_frame_count({"n_frames": 18}) is None
+    assert fr.post_frame_count({"n_frames": 24, "range_bin_starts": (20,) * 24}) is None
+
+
+def test_replay_uses_the_post_frame_count_and_says_when_it_could_not(lib):
+    result = fr.replay_dump(
+        synth_shot_dump(ball_speed_ms=60.0, tee_range_m=1.372),
+        fr.ReplayConfig(tee_bin=29, dest_bin=29, impact_armed=True),
+        lib=lib,
+    )
+    assert result.ball_track_frames_known is False
+    assert result.ball_track_frames == result.shot.cfg.ballTrackFrames == 18
+
+
+def phased_dump(pre: int, post: int) -> bytes:
+    """A timed variable-width IQ16 dump: `pre` frames at window 20, `post` at 32."""
+    from openflight.iwr6843.dump import SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED, pack_dump as pack
+
+    n_tx, loops, n_rx, width = 2, 4, 4, 16
+    frames = pre + post
+    cube = np.zeros((frames, loops * n_tx, n_rx, width), dtype=complex)
+    cube[..., 9] += 3000.0
+    return pack(
+        cube,
+        n_tx=n_tx,
+        version=6,
+        sample_fmt=SAMPLE_RANGE_FFT_IQ16_VARIABLE_TIMED,
+        range_bin_starts=(20,) * pre + (32,) * post,
+        range_bin_counts=(width,) * frames,
+        frame_time_offsets_us=[3000 * f for f in range(frames)],
+    )
+
+
+def test_replay_of_a_phased_dump_counts_only_its_post_frames(lib):
+    raw = phased_dump(pre=3, post=2)
+    result = fr.replay_dump(raw, fr.ReplayConfig(tee_bin=29), lib=lib)
+    assert result.ball_track_frames_known is True
+    assert result.ball_track_frames == 2
