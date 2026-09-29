@@ -198,6 +198,9 @@ class ConfigRadar:
     def send_config(self, path, lines=None):
         self.sent.append((path, lines))
 
+    def set_tee_band(self, bins):
+        return True
+
     def stop_sensor(self):
         pass
 

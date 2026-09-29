@@ -41,6 +41,10 @@ class FakeRadar:
     def send_config(self, path: str, lines=None):
         self.configs.append(path)
 
+    def set_tee_band(self, bins: float) -> bool:
+        """The monitor sends the band (0 included) at every start."""
+        return True
+
     def read_dump(self):
         self.read_started_at = time.monotonic()
         if self.error is not None:
@@ -1201,19 +1205,23 @@ def test_tracker_configuration_precedes_trigger_and_listener(tmp_path):
 class TeeBandRadar(FakeRadar):
     """Records the config and the tee band in the order the monitor sends them."""
 
-    def __init__(self, raw: bytes, band_error: Exception | None = None):
+    def __init__(
+        self, raw: bytes, band_error: Exception | None = None, band_supported: bool = True
+    ):
         super().__init__(raw)
         self.events: list[tuple[str, object]] = []
         self.band_error = band_error
+        self.band_supported = band_supported
 
     def send_config(self, path: str, lines=None):
         super().send_config(path, lines)
         self.events.append(("config", path))
 
-    def set_tee_band(self, bins: float) -> None:
+    def set_tee_band(self, bins: float) -> bool:
         self.events.append(("band", bins))
         if self.band_error is not None:
             raise self.band_error
+        return self.band_supported
 
 
 def _tee_band_monitor(tmp_path, radar, **kwargs):
@@ -1240,15 +1248,31 @@ def test_tee_band_is_sent_after_the_config(tmp_path, bins):
         monitor.stop()
 
 
-def test_tee_band_off_sends_nothing(tmp_path):
-    """0 is the firmware default: older firmware without the sub-mode still starts."""
+def test_tee_band_off_is_still_sent_so_a_restart_clears_a_stale_band(tmp_path):
+    """The firmware keeps the band across sensorStart: a Pi restarted without
+    the flag must send 0, or the band a previous run set stays live."""
     radar = TeeBandRadar(_raw_dump())
     monitor = _tee_band_monitor(tmp_path, radar)
 
     monitor.start(armed=False)
     try:
         assert monitor.tee_band_bins == 0.0
-        assert [kind for kind, _ in radar.events] == ["config"]
+        assert radar.events == [("config", str(tmp_path / "radar.cfg")), ("band", 0.0)]
+    finally:
+        monitor.stop()
+
+
+def test_tee_band_off_on_older_firmware_is_logged_and_start_continues(tmp_path, caplog):
+    radar = TeeBandRadar(_raw_dump(), band_supported=False)
+    monitor = _tee_band_monitor(tmp_path, radar)
+
+    with caplog.at_level(logging.INFO, logger="openflight.iwr6843.monitor"):
+        monitor.start(armed=False)
+    try:
+        assert monitor._running  # pylint: disable=protected-access
+        assert any(
+            r.levelno == logging.INFO and "tee band" in r.getMessage() for r in caplog.records
+        )
     finally:
         monitor.stop()
 

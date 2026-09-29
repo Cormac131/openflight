@@ -139,6 +139,9 @@ class TestMonitorInstallsFactory:
             def send_config(self, path, lines=None):
                 pass
 
+            def set_tee_band(self, bins):
+                return True
+
             def close(self):
                 pass
 

@@ -728,3 +728,37 @@ def test_set_tee_band_requires_done(monkeypatch, reply, match):
 
     with pytest.raises(RuntimeError, match=match):
         radar.set_tee_band(6.0)
+
+
+def test_set_tee_band_reports_an_acknowledged_band(monkeypatch):
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    monkeypatch.setattr(radar, "cmd", lambda *_args, **_kwargs: "Done\n")
+
+    assert radar.set_tee_band(6.0) is True
+    assert radar.set_tee_band(0.0) is True
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Error: trackCfg <minBin> <maxBin> ...\n",
+        "'trackCfg' is not recognized as a CLI command\n",
+    ],
+)
+def test_clearing_the_band_on_firmware_without_it_is_not_an_error(monkeypatch, reply):
+    """Older firmware has no band to clear: 0 there is a no-op, reported as False."""
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    monkeypatch.setattr(radar, "cmd", lambda *_args, **_kwargs: reply)
+
+    assert radar.set_tee_band(0.0) is False
+    with pytest.raises(RuntimeError):
+        radar.set_tee_band(6.0)
+
+
+def test_clearing_the_band_on_a_silent_board_still_fails(monkeypatch):
+    """No reply at all is a wedged board, not old firmware."""
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    monkeypatch.setattr(radar, "cmd", lambda *_args, **_kwargs: "")
+
+    with pytest.raises(RuntimeError, match="did not acknowledge"):
+        radar.set_tee_band(0.0)

@@ -453,8 +453,13 @@ class IWR6843CaptureMonitor:
             configured = True
             # Before the worker starts: after that only the worker may talk
             # to the radar.
-            if self.tee_band_bins > 0.0:
-                self.radar.set_tee_band(self.tee_band_bins)
+            # Always sent, 0 included: the firmware keeps the band across
+            # sensorStart, so a restart without the flag must clear it.
+            if not self.radar.set_tee_band(self.tee_band_bins):
+                logger.info(
+                    "[IWR6843] Firmware has no tee band (trackCfg impactFit); "
+                    "nothing to clear with the band off"
+                )
             if onboard_track_config is not None:
                 self._configure_onboard_tracking(onboard_track_config)
             self._apply_self_trigger()
