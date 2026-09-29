@@ -22,14 +22,16 @@ from openflight.iwr6843 import (
 )
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Run the sweep or refresh the baseline; return the exit status."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     parser.add_argument("--dir", type=Path, default=fr.RECORDINGS_DIR, help="recordings folder")
     parser.add_argument("--passes", type=int, default=2)
     parser.add_argument("--only", default="", help="only constants whose name starts with this")
     parser.add_argument("--update-baseline", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.passes < 1:
+        parser.error("--passes must be at least 1")
 
     reviewed = ls.reviewed_recordings(args.dir)
     if not reviewed:
@@ -47,6 +49,10 @@ def main() -> int:
         return 0
 
     recordings = [(path.read_bytes(), config, labels) for path, config, labels in reviewed]
+    try:
+        baseline_score = cf.evaluate_recordings(recordings, {}, strict=True)
+    except ValueError as exc:
+        raise SystemExit(f"the firmware defaults do not replay these recordings: {exc}") from exc
     defaults = tn.read_defaults(fr._default_library())  # pylint: disable=protected-access
     tunables = [t for t in tn.TUNABLES if t.name.startswith(args.only)]
     if not tunables:
@@ -60,7 +66,7 @@ def main() -> int:
     print(
         cf.format_report(
             rows,
-            baseline_score=evaluate({}),
+            baseline_score=baseline_score,
             final_score=evaluate(final),
             n_dumps=len(recordings),
             n_points=cf.count_points(recordings),

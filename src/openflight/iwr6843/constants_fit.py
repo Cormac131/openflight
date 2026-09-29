@@ -60,6 +60,8 @@ def coordinate_descent(
     passes: int = 2,
 ) -> list[SweepRow]:
     """Sweep each constant in turn, ``passes`` times, and return one row per constant."""
+    if passes < 1:
+        raise ValueError(f"passes must be at least 1, got {passes}")
     cache: dict[tuple, float] = {}
 
     def score(settings: Mapping[str, float]) -> float:
@@ -99,13 +101,23 @@ def coordinate_descent(
 def evaluate_recordings(
     recordings: Sequence[tuple[bytes, fr.ReplayConfig, Labels]],
     overrides: Mapping[str, float],
+    *,
+    strict: bool = False,
 ) -> float:
-    """Mean dump score over the labelled dumps; -inf when the firmware rejects the settings."""
+    """Mean dump score over the labelled dumps.
+
+    ``overrides`` merge over each config's own (a manifest entry's). A replay
+    the firmware rejects scores -inf, so the descent skips that candidate;
+    ``strict`` lets the error through instead, for checking the baseline.
+    """
     total = 0.0
     for raw, config, labels in recordings:
+        merged = replace(config, overrides={**config.overrides, **overrides})
         try:
-            result = fr.replay_dump(raw, replace(config, overrides=dict(overrides)))
+            result = fr.replay_dump(raw, merged)
         except ValueError:
+            if strict:
+                raise
             return -math.inf
         total += ls.dump_score(ls.score_labels(labels, result))
     return total / len(recordings)

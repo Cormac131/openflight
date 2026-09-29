@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import math
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from iwr6843_synth import synth_shot_dump
@@ -149,3 +152,73 @@ def test_evaluate_recordings_returns_minus_inf_when_the_replay_rejects_the_setti
 def test_report_shows_float32_defaults_readably():
     rows = cf.coordinate_descent(lambda _o: 1.0, [T_FLOAT], {"club.gateBins": 0.20000000298023224})
     assert "0.2 " in cf.format_report(rows, 1.0, 1.0, 1, 1)
+
+
+def _fake_recording(overrides=None):
+    config = fr.ReplayConfig(tee_bin=TEE_BIN, overrides=overrides or {})
+    return [(b"", config, lb.Labels("d.l3dump", "x", True))]
+
+
+def test_sweep_overrides_merge_over_the_manifest_entrys_own(monkeypatch):
+    seen = []
+
+    def record(_raw, config):
+        seen.append(dict(config.overrides))
+        return SimpleNamespace(points=[], ball_points=[])
+
+    monkeypatch.setattr(fr, "replay_dump", record)
+    recordings = _fake_recording({"club.gateBins": 2.5, "ball.originGateBins": 1.0})
+    cf.evaluate_recordings(recordings, {"ball.originGateBins": 3.0})
+    assert seen == [{"club.gateBins": 2.5, "ball.originGateBins": 3.0}]
+
+
+def test_strict_evaluation_surfaces_the_error_the_descent_would_swallow(monkeypatch):
+    def reject(_raw, _config):
+        raise ValueError("not a range-FFT snapshot")
+
+    monkeypatch.setattr(fr, "replay_dump", reject)
+    recordings = _fake_recording()
+    assert cf.evaluate_recordings(recordings, {}) == -math.inf
+    with pytest.raises(ValueError, match="not a range-FFT snapshot"):
+        cf.evaluate_recordings(recordings, {}, strict=True)
+
+
+@pytest.mark.parametrize("passes", [0, -1])
+def test_descent_needs_at_least_one_pass(passes):
+    with pytest.raises(ValueError, match="passes"):
+        cf.coordinate_descent(lambda _o: 0.0, [T_INT], {"club.maxMisses": 2}, passes=passes)
+
+
+@pytest.fixture(scope="module")
+def fit_script():
+    path = Path(__file__).parents[1] / "scripts" / "analysis" / "fit_constants.py"
+    spec = importlib.util.spec_from_file_location("fit_constants_script", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_script_exits_with_the_baseline_error_instead_of_printing_minus_inf(
+    fit_script, monkeypatch, tmp_path, capsys
+):
+    dump = tmp_path / "d.l3dump"
+    dump.write_bytes(b"")
+    (_, config, labels) = _fake_recording()[0]
+    monkeypatch.setattr(fit_script.ls, "reviewed_recordings", lambda _d: [(dump, config, labels)])
+
+    def reject(_raw, _config):
+        raise ValueError("not a range-FFT snapshot")
+
+    monkeypatch.setattr(fr, "replay_dump", reject)
+    with pytest.raises(SystemExit) as exit_info:
+        fit_script.main(["--dir", str(tmp_path)])
+    assert "not a range-FFT snapshot" in str(exit_info.value)
+    assert "inf" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("passes", ["0", "-2"])
+def test_the_script_refuses_fewer_than_one_pass(fit_script, passes, capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        fit_script.main(["--passes", passes])
+    assert exit_info.value.code == 2
+    assert "--passes" in capsys.readouterr().err
