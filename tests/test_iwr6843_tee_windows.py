@@ -204,10 +204,10 @@ class ConfigRadar:
     def set_ball_snr(self, snr):
         return True
 
-    def set_radar_cal(self, args, *, identity):
+    def set_radar_cal(self, args):
         return True
 
-    def set_elements(self, phases, gains, *, identity):
+    def set_elements(self, phases, gains):
         return True
 
     def stop_sensor(self):

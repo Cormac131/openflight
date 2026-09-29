@@ -22,15 +22,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ball angles with the ball track's fitted range rate (the lag-1 phase
   stays the loop rotor), and fits launch angles only from ball points at
   least 0.6 m past the ball (`lateRangeM`); the launch speed keeps the early
-  points. On the recorded captures the onboard launch angles are still
-  rejected by the fit's residual check (azimuth noise), so the host's
-  LCMF-v1 stays the launch-angle source.
+  points. The late fit is not reliable: on most recordings the residual
+  check rejects it, but on some it passes with angles that disagree with
+  LCMF-v1 (recording 20260916_190937: onboard HLA +22 to +24 deg against
+  -0.9 deg from the early fit). The Pi therefore never uses onboard launch
+  angles, with or without `--iwr6843-onboard-metrics`; the host's LCMF-v1
+  is the only launch-angle source.
 - **The Pi sends the board its calibration.** At every start the monitor
   sends `trackCfg cal` (tilt, range bias, horizontal phase reference) and
   `trackCfg elem` (8 element phases and gains) from the same calibration
   file the host uses, identity included so a restart clears stale values.
-  Firmware without these commands logs a warning and its onboard launch
-  angles are not used. Update the Pi and the firmware together; rebuild
+  A calibrated board now shifts its onboard geometry: club positions, club
+  path and attack include the tilt, and the range bias is applied. Replays
+  (`firmware_replay`, `evaluate_iwr_tracking`) default to identity, as older
+  recordings were made, so a replay of a new capture differs from what the
+  board reported unless the session's recorded `board_calibration` is
+  applied. The inclinometer's live tilt is not sent to the board. The
+  azimuth phase offset is sent as 0. Firmware without these commands logs a
+  warning, and its onboard angles (launch, club path, attack) are not used
+  that session. Update the Pi and the firmware together; rebuild
   `l3_dump.bin` before flashing.
 
 ### Fixed

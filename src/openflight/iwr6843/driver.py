@@ -577,9 +577,7 @@ class IWR6843Radar:
         returns False: there is no band to clear. Any other refusal, and a
         board that does not answer at all, raises RuntimeError.
         """
-        return self._set_track_cfg_sub_mode(
-            f"trackCfg impactFit {bins:g}", refusal_ok=bins == 0.0
-        )
+        return self._set_track_cfg_sub_mode(f"trackCfg impactFit {bins:g}", refusal_ok=bins == 0.0)
 
     def set_ball_snr(self, snr: float) -> bool:
         """Set the ball tracker's extraction snr apart from the trigger's (0: firmware default).

@@ -192,3 +192,26 @@ with the calibration file, against host LCMF-v1:
   default, the `lateRangeM` sweep, the acceptance JSONs, the DATA_RAM check
   for this plan's firmware changes. TrackMan: no labelled reference shots in
   `tests/radar/datasets/`; not measured.
+
+Final review corrections:
+
+- The late fit can pass with wrong angles: on recording 20260916_190937 it
+  gave onboard HLA +22 to +24 deg against -0.9 deg from the early fit. The
+  Pi never uses onboard launch angles (`--iwr6843-onboard-metrics` now
+  prefers only the firmware's club path and attack); LCMF-v1 is the only
+  launch-angle source.
+- A calibrated board shifts its onboard geometry (club positions, club
+  path and attack include the tilt; the range bias is applied), while
+  replays default to identity, so a replay of a new capture differs from the
+  board unless the session's recorded `board_calibration` is applied. The
+  inclinometer's live tilt is not sent to the board.
+- The azimuth phase offset is sent as 0: the firmware subtracts
+  `azimuthOffsetRad` in both `l3_angle.c` and `l3_frames.c`, so a non-zero
+  value would be applied twice (tracked separately).
+- Firmware that refuses `trackCfg cal`/`elem` logs a warning and its onboard
+  launch angles, club path and attack are doubted; refusing an identity
+  calibration is silent, since an uncalibrated board already runs identity.
+- The `lateFrom` no-late sentinel is now set on every launch reset in
+  `l3_dump.c` and in `l3_joint_launch`.
+- DATA_RAM after these changes (TI SDK image, `make build-native`): 563 B
+  free of 0x30000 (651 B before the late-flight plan).
