@@ -53,7 +53,7 @@ def load_config(path: Path = CONFIG_PATH) -> Optional[CloudConfig]:
         device_token=data.get("device_token", ""),
         device_id=data.get("device_id", ""),
         enabled=data.get("enabled", True),
-        upload_raw=data.get("upload_raw", False),
+        upload_raw=data.get("upload_raw") is True,
     )
 
 
