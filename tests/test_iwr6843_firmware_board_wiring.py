@@ -108,7 +108,7 @@ def test_impact_fit_runs_before_the_result_is_built():
     run = body("l3_impactFitRun")
     assert "l3_fit_span_after(&gClubTrack, gShot.impactFrame, &clubOut);" in run
     assert "l3_impact_fit_run(&gImpactFitCfg, &clubIn, &clubOut, &ballOut," in run
-    assert "gShot.impactTimestampUs = (uint32_t)(gImpactFit.impactUs + 0.5F);" in run
+    assert "gShot.impactTimestampUs = l3_round_us(gImpactFit.impactUs);" in run
 
 
 def test_rearm_forgets_the_range_impact_and_the_fit():

@@ -106,17 +106,14 @@ int32_t l3_impact_update(l3_impact_t *impact, const l3_delivery_t *delivery,
     }
     impact->fired = 1U;
     impact->velocity = delivery->velocity;
-    {
-        float stamp = (float)delivery->timestampUs + offset * 1.0e6F;
-
-        impact->impactTimestampUs = (stamp > 0.0F) ? (uint32_t)(stamp + 0.5F) : 0U;
-    }
+    impact->impactTimestampUs = l3_round_us((float)delivery->timestampUs + offset * 1.0e6F);
     return l3_impact_note(impact, L3_IMPACT_WHY_FIRED);
 }
 
 int32_t l3_impact_update_range(l3_impact_t *impact, const l3_fit_estimate_t *clubIn,
                                uint32_t nowUs)
 {
+    uint32_t stamp;
     float offset;
 
     if (impact->fired) {
@@ -125,7 +122,9 @@ int32_t l3_impact_update_range(l3_impact_t *impact, const l3_fit_estimate_t *clu
     if (clubIn == NULL || clubIn->why != L3_FIT_WHY_OK) {
         return l3_impact_note(impact, L3_IMPACT_WHY_NO_DELIVERY);
     }
-    offset = (clubIn->timeUs - (float)nowUs) * 1.0e-6F;
+    /* Rounded to a timestamp first so the difference is wrap-safe. */
+    stamp = l3_round_us(clubIn->timeUs);
+    offset = (float)(int32_t)(stamp - nowUs) * 1.0e-6F;
     impact->offsetS = offset;
     impact->closestM = 0.0F;
     if (offset > impact->cfg.horizonS) {
@@ -135,7 +134,7 @@ int32_t l3_impact_update_range(l3_impact_t *impact, const l3_fit_estimate_t *clu
         return l3_impact_note(impact, L3_IMPACT_WHY_PASSED);
     }
     impact->fired = 1U;
-    impact->impactTimestampUs = (clubIn->timeUs > 0.0F) ? (uint32_t)(clubIn->timeUs + 0.5F) : 0U;
+    impact->impactTimestampUs = stamp;
     return l3_impact_note(impact, L3_IMPACT_WHY_FIRED);
 }
 

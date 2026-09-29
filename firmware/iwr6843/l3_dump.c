@@ -3594,7 +3594,7 @@ static void l3_impactFitRun(void)
                       (float)gClubTrackDest * gClubTrack.cfg.binWidthM,
                       (uint8_t)(gTrigDestBall ? 0U : 1U), gShot.impactTimestampUs, &gImpactFit);
     if (gImpactFit.verdict != L3_FIT_VERDICT_NONE && gImpactFit.impactUs > 0.0F) {
-        gShot.impactTimestampUs = (uint32_t)(gImpactFit.impactUs + 0.5F);
+        gShot.impactTimestampUs = l3_round_us(gImpactFit.impactUs);
     }
 }
 

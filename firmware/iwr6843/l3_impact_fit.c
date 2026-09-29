@@ -408,6 +408,36 @@ void l3_impact_fit_run(const l3_impact_fit_cfg_t *cfg, const l3_fit_list_t *club
     l3_impact_fit_solve(cfg, fit, triggerUs);
 }
 
+uint32_t l3_round_us(float us)
+{
+    uint32_t whole;
+
+    if (!isfinite(us) || !(us > 0.0F) || us >= 8589934592.0F) {
+        return 0U;
+    }
+    if (us >= 4294967296.0F) {
+        us -= 4294967296.0F;
+    }
+    whole = (uint32_t)us;
+    return (us - (float)whole >= 0.5F) ? whole + 1U : whole;
+}
+
+/* A float rounded half away from zero to an int, clamped to +-INT32_MAX
+ * (a huge finite float converted to int is undefined). */
+static int l3_fit_int(float v)
+{
+    if (!isfinite(v)) {
+        return (v > 0.0F) ? INT32_MAX : ((v < 0.0F) ? -INT32_MAX : 0);
+    }
+    if (v >= 2147483648.0F) {
+        return INT32_MAX;
+    }
+    if (v <= -2147483648.0F) {
+        return -INT32_MAX;
+    }
+    return (int)((v >= 0.0F) ? v + 0.5F : v - 0.5F);
+}
+
 const char *l3_impact_fit_why_name(uint8_t why)
 {
     return (why < L3_FIT_WHY_COUNT) ? kWhyNames[why] : "?";
@@ -420,7 +450,7 @@ const char *l3_impact_fit_verdict_name(uint8_t verdict)
 
 int32_t l3_impact_fit_format(const l3_impact_fit_t *fit, char *out, uint32_t cap)
 {
-    char tracks[L3_FIT_TRACKS][40];
+    char tracks[L3_FIT_TRACKS][48];
     uint32_t i;
 
     for (i = 0U; i < L3_FIT_TRACKS; i++) {
@@ -428,21 +458,19 @@ int32_t l3_impact_fit_format(const l3_impact_fit_t *fit, char *out, uint32_t cap
 
         if (e->why == L3_FIT_WHY_OK || e->why == L3_FIT_WHY_DROPPED ||
             e->why == L3_FIT_WHY_UNCERTAIN) {
-            (void)snprintf(tracks[i], sizeof(tracks[i]), "%s=%s:%d+-%d", kTrackNames[i],
-                           l3_impact_fit_why_name(e->why), (int)(e->timeUs + 0.5F),
-                           (int)(e->sigmaUs + 0.5F));
+            (void)snprintf(tracks[i], sizeof(tracks[i]), "%s=%s:%u+-%d", kTrackNames[i],
+                           l3_impact_fit_why_name(e->why), (unsigned)l3_round_us(e->timeUs),
+                           l3_fit_int(e->sigmaUs));
         } else {
             (void)snprintf(tracks[i], sizeof(tracks[i]), "%s=%s", kTrackNames[i],
                            l3_impact_fit_why_name(e->why));
         }
     }
     return snprintf(out, cap,
-                    "impactfit verdict=%s t=%d spreadus=%d dtrigus=%d dropped=%s nolock=%u "
+                    "impactfit verdict=%s t=%u spreadus=%d dtrigus=%d dropped=%s nolock=%u "
                     "%s %s %s",
-                    l3_impact_fit_verdict_name(fit->verdict), (int)(fit->impactUs + 0.5F),
-                    (int)(fit->spreadUs + 0.5F),
-                    (int)((fit->refinedMinusTriggerUs >= 0.0F) ? fit->refinedMinusTriggerUs + 0.5F
-                                                               : fit->refinedMinusTriggerUs - 0.5F),
+                    l3_impact_fit_verdict_name(fit->verdict), (unsigned)l3_round_us(fit->impactUs),
+                    l3_fit_int(fit->spreadUs), l3_fit_int(fit->refinedMinusTriggerUs),
                     (fit->droppedTrack < L3_FIT_TRACKS) ? kTrackNames[fit->droppedTrack] : "-",
                     (unsigned)fit->noLock, tracks[0], tracks[1], tracks[2]);
 }

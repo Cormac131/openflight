@@ -606,3 +606,54 @@ def test_format_prints_an_uncertain_track_with_its_time_and_sigma(lib):
     )
     text = fw.c_text(lib.l3_impact_fit_format, ctypes.byref(fit), cap=240)
     assert re.search(r"ball_out=uncertain:-?\d+\+-\d+", text), text
+
+
+# --- rounding a float time to whole microseconds -------------------------------
+
+ROUND_CASES = [
+    (0.0, 0),
+    (-5.0, 0),
+    (float("nan"), 0),
+    (float("inf"), 0),
+    (1.4, 1),
+    (1.5, 2),
+    (29_999.5, 30_000),
+    # An odd whole number past 2**23: "+ 0.5F" in float rounds it to even.
+    (8_388_609.0, 8_388_609),
+    (1_800_000_128.0, 1_800_000_128),
+    # Past the uint32 wrap a fitted time folds back like the timestamps did.
+    (2.0**32 + 1024.0, 1024),
+]
+
+
+@pytest.mark.parametrize("us, expected", ROUND_CASES)
+def test_c_rounds_microseconds_half_up_and_folds_the_wrap(lib, us, expected):
+    assert lib.l3_round_us(ctypes.c_float(us).value) == expected
+
+
+@pytest.mark.parametrize("us, expected", ROUND_CASES)
+def test_python_rounds_microseconds_like_the_c(us, expected):
+    assert fw.round_us(ctypes.c_float(us).value) == expected
+
+
+def test_range_impact_fires_across_the_uint32_wrap(lib):
+    # The fitted crossing lies just past 2**32 (a float), now has wrapped to 0.
+    impact = range_impact(lib)
+    e = club_in_estimate(2.0**32 + 1024.0)
+    assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 0) == 1
+    assert impact.impactTimestampUs == 1024
+    assert impact.offsetS == pytest.approx(0.001024, abs=1e-6)
+
+
+def test_format_clamps_huge_values_instead_of_overflowing_int(lib):
+    fit = fw.ImpactFit()
+    lib.l3_impact_fit_reset(ctypes.byref(fit))
+    fit.verdict = VERDICT["inconsistent"]
+    fit.impactUs, fit.spreadUs, fit.refinedMinusTriggerUs = 1.0e12, 1.0e12, -1.0e12
+    e = fit.track[BALL_OUT]
+    e.why, e.timeUs, e.sigmaUs = WHY["uncertain"], 1.0e12, 1.0e12
+    text = fw.c_text(lib.l3_impact_fit_format, ctypes.byref(fit), cap=400)
+    assert " t=0 " in text  # not a time the uint32 clock can hold
+    assert "spreadus=2147483647 " in text
+    assert "dtrigus=-2147483647 " in text
+    assert "ball_out=uncertain:0+-2147483647" in text

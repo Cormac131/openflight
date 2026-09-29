@@ -380,9 +380,10 @@ class ImpactFitSummary:
 
 def apply_impact_fit(shot: fw.Shot, fit: fw.ImpactFit) -> None:
     """``l3_impactFitRun``'s last step: a verdict other than none, with a
-    time, replaces the shot's frozen impact time (rounded to the microsecond)."""
+    time, replaces the shot's frozen impact time (``fw.round_us``, the C's
+    ``l3_round_us``)."""
     if fit.verdict != fw.FIT_VERDICT_NAMES.index("none") and fit.impactUs > 0.0:
-        shot.impactTimestampUs = int(fit.impactUs + 0.5)
+        shot.impactTimestampUs = fw.round_us(fit.impactUs)
 
 
 def _impact_fit_summary(fit: fw.ImpactFit) -> ImpactFitSummary:

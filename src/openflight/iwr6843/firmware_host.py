@@ -19,6 +19,7 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import importlib.util
+import math
 import shutil
 import subprocess
 import sys
@@ -106,6 +107,22 @@ FIT_WHY_NAMES = (
     "uncertain",
 )
 FIT_VERDICT_NAMES = ("none", "single_track", "consistent", "inconsistent")
+
+_UINT32_WRAP = 2**32
+
+
+def round_us(us: float) -> int:
+    """``l3_round_us``: a float time in microseconds rounded half up to a
+    uint32 timestamp. 0 when not finite, not positive or past a second wrap;
+    a time in [2**32, 2**33) folds back by 2**32. The fraction is taken after
+    truncation, as the C does, so every float32 input rounds identically."""
+    if not math.isfinite(us) or not us > 0.0 or us >= 2 * _UINT32_WRAP:
+        return 0
+    if us >= _UINT32_WRAP:
+        us -= _UINT32_WRAP
+    whole = int(us)
+    return whole + 1 if us - whole >= 0.5 else whole
+
 
 # l3_shot.h
 SHOT_STATE_NAMES = (
@@ -1341,6 +1358,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
         ],
         None,
     ),
+    "l3_round_us": ([_F32], _U32),
     "l3_impact_fit_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_impact_fit_verdict_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_impact_fit_format": ([_P(ImpactFit), *_TEXT], ctypes.c_int32),
@@ -1658,6 +1676,7 @@ __all__ = [
     "FitList",
     "FitSpan",
     "fit_reader",
+    "round_us",
     "RadarCal",
     "Spherical",
     "Vec3",

@@ -115,6 +115,11 @@ void l3_impact_fit_run(const l3_impact_fit_cfg_t *cfg, const l3_fit_list_t *club
                        const l3_fit_span_t *clubOut, const l3_fit_span_t *ballOut,
                        float ballRangeM, uint8_t noLock, uint32_t triggerUs,
                        l3_impact_fit_t *fit);
+/* A float time in us rounded half up to a uint32 timestamp. 0 for a time that
+ * is not finite, not positive or past a second uint32 wrap; a time in
+ * [2^32, 2^33) (a fit across the wrap) folds back by 2^32. Exact for every
+ * float: the fraction is taken after truncation, not by adding 0.5F. */
+uint32_t l3_round_us(float us);
 const char *l3_impact_fit_why_name(uint8_t why);
 const char *l3_impact_fit_verdict_name(uint8_t verdict);
 /* "impactfit verdict=consistent t=30000 spreadus=12 dtrigus=-2500 dropped=- nolock=0
