@@ -158,7 +158,8 @@ def test_failed_save_keeps_the_old_file_and_leaves_no_temp(dump, monkeypatch):
     ]
 
 
-def test_payload_from_the_page_gets_the_servers_name_and_hash(dump):
+def test_payload_from_the_page_gets_the_servers_name_and_hash(dump, monkeypatch):
+    monkeypatch.setattr(lb, "parse_dump", lambda raw: ({"n_frames": 10}, None))
     payload = {
         "version": 1,
         "dump": "whatever.l3dump",
@@ -181,3 +182,16 @@ def test_saved_file_is_readable_json_with_a_trailing_newline(dump):
         "range_bin": 52.5,
         "doppler_mps": 33.0,
     }
+
+
+@pytest.mark.parametrize("points", [5, None, "x", {"frame": 1}])
+def test_a_points_value_that_is_not_a_list_is_a_label_error(points):
+    raw = {"version": 1, "dump": "a.l3dump", "dump_sha256": "h", "ball": {"points": points}}
+    with pytest.raises(lb.LabelError, match="points"):
+        lb.Labels.from_json(raw)
+
+
+def test_ball_and_club_must_be_objects():
+    raw = {"version": 1, "dump": "a.l3dump", "dump_sha256": "h", "club": [1]}
+    with pytest.raises(lb.LabelError):
+        lb.Labels.from_json(raw)

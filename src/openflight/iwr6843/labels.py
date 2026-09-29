@@ -17,6 +17,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from openflight.iwr6843.dump import parse_dump
+
 LABELS_VERSION = 1
 OBJECTS = ("ball", "club")
 SUFFIX = ".labels.json"
@@ -133,8 +135,11 @@ def _parse_points(raw, obj: str) -> tuple[LabelPoint, ...]:
         return ()
     if not isinstance(raw, dict) or set(raw) - {"points"}:
         raise LabelError(f"{obj} must be an object with a points list")
+    rows = raw.get("points", [])
+    if not isinstance(rows, list):
+        raise LabelError(f"{obj}: points must be a list, got {rows!r}")
     points: dict[int, LabelPoint] = {}
-    for row in raw.get("points", []):
+    for row in rows:
         if not isinstance(row, dict) or set(row) - _POINT_KEYS:
             raise LabelError(f"{obj}: a point is {{frame, range_bin, doppler_mps?}}, got {row!r}")
         frame = row.get("frame")
@@ -229,12 +234,20 @@ def save_labels(dump_path: Path, labels: Labels) -> None:
 
 
 def labels_from_payload(payload: dict, dump_path: Path) -> Labels:
-    """Labels from the page: the dump name and hash are the server's, not the client's."""
+    """Labels from the page: the dump name and hash are the server's, not the client's.
+
+    A point on a frame the dump does not have is refused here, so a bad click
+    can never reach a file the tests trust.
+    """
     if not isinstance(payload, dict):
         raise LabelError("labels must be a JSON object")
-    trusted = {
-        **payload,
-        "dump": dump_path.name,
-        "dump_sha256": dump_sha256(dump_path.read_bytes()),
-    }
-    return Labels.from_json(trusted)
+    raw = dump_path.read_bytes()
+    labels = Labels.from_json({**payload, "dump": dump_path.name, "dump_sha256": dump_sha256(raw)})
+    n_frames = int(parse_dump(raw)[0]["n_frames"])
+    for obj in OBJECTS:
+        for point in labels.points(obj):
+            if point.frame >= n_frames:
+                raise LabelError(
+                    f"{obj}: frame {point.frame} is beyond the dump's {n_frames} frames"
+                )
+    return labels

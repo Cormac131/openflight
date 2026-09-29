@@ -525,3 +525,90 @@ def test_the_ball_is_blue_and_nothing_else_uses_that_blue():
 
 def test_host_approach_peaks_are_grey_not_blue():
     assert _css_tokens()["py"].lower() == "#868e96"
+
+
+# --- labels ------------------------------------------------------------------
+
+
+def _label_payload(**over):
+    body = {
+        "version": 1,
+        "reviewed": True,
+        "ball": {"points": [{"frame": 2, "range_bin": 41.5, "doppler_mps": 30.0}]},
+        "club": {"points": []},
+        "tolerances": {"range_bins": 1.0, "min_coverage": 0.8},
+        "notes": "n",
+    }
+    body.update(over)
+    return body
+
+
+def test_get_labels_without_a_file_is_an_empty_unreviewed_template(client):
+    body = client.get("/api/labels", query_string={"path": "sub/a.l3dump"}).get_json()
+    assert body["dump"] == "a.l3dump"
+    assert body["reviewed"] is False
+    assert body["ball"] == {"points": []} and body["club"] == {"points": []}
+    assert len(body["dump_sha256"]) == 64
+
+
+def test_put_labels_saves_a_sidecar_next_to_the_dump_and_get_returns_it(client, tmp_path):
+    response = client.put(
+        "/api/labels", query_string={"path": "sub/a.l3dump"}, json=_label_payload()
+    )
+    assert response.status_code == 200, response.get_json()
+    assert (tmp_path / "sub" / "a.l3dump.labels.json").is_file()
+    body = client.get("/api/labels", query_string={"path": "sub/a.l3dump"}).get_json()
+    assert body["ball"]["points"] == [{"frame": 2, "range_bin": 41.5, "doppler_mps": 30.0}]
+    assert body["reviewed"] is True
+    # The sidecar is not itself listed as a capture.
+    assert [f["path"] for f in client.get("/api/files").get_json()["files"]] == ["sub/a.l3dump"]
+
+
+def test_put_labels_ignores_a_stale_client_hash(client):
+    body = _label_payload(dump="x.l3dump", dump_sha256="stale")
+    response = client.put("/api/labels", query_string={"path": "sub/a.l3dump"}, json=body)
+    assert response.status_code == 200
+    assert response.get_json()["dump"] == "a.l3dump"
+
+
+def test_put_labels_refuses_a_frame_beyond_the_dump(client, tmp_path):
+    body = _label_payload(ball={"points": [{"frame": 4, "range_bin": 41.0}]})  # 4 frames: 0..3
+    response = client.put("/api/labels", query_string={"path": "sub/a.l3dump"}, json=body)
+    assert response.status_code == 400
+    assert "frame 4" in response.get_json()["error"]
+    assert not (tmp_path / "sub" / "a.l3dump.labels.json").exists()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        _label_payload(version=9),
+        _label_payload(ball={"points": [{"frame": 1, "range_bin": float("nan")}]}),
+        _label_payload(bogus=1),
+        _label_payload(ball={"points": 5}),
+        _label_payload(club={"points": None}),
+        [],
+    ],
+)
+def test_put_labels_reports_invalid_labels_as_400(client, body):
+    response = client.put("/api/labels", query_string={"path": "sub/a.l3dump"}, json=body)
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize("method", ["get", "put"])
+@pytest.mark.parametrize(
+    "path", ["notes.txt", "sub/missing.l3dump", "", "/etc/passwd", "../x.l3dump"]
+)
+def test_labels_endpoints_refuse_paths_outside_the_folder_or_not_captures(client, method, path):
+    kwargs = {"json": _label_payload()} if method == "put" else {}
+    response = getattr(client, method)("/api/labels", query_string={"path": path}, **kwargs)
+    assert response.status_code == 400
+
+
+def test_get_labels_reports_a_changed_dump_as_400(client, tmp_path):
+    client.put("/api/labels", query_string={"path": "sub/a.l3dump"}, json=_label_payload())
+    dump = tmp_path / "sub" / "a.l3dump"
+    dump.write_bytes(dump.read_bytes() + b"\0")
+    response = client.get("/api/labels", query_string={"path": "sub/a.l3dump"})
+    assert response.status_code == 400
+    assert "changed since it was labelled" in response.get_json()["error"]

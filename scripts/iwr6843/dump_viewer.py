@@ -22,6 +22,13 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_file
 
 from openflight.iwr6843.dump_viewer import ViewerOptions, analyze_dump, session_context
+from openflight.iwr6843.labels import (
+    LabelError,
+    empty_labels,
+    labels_from_payload,
+    load_labels,
+    save_labels,
+)
 
 PAGE = Path(__file__).with_name("dump_viewer.html")
 REPO = Path(__file__).resolve().parents[2]
@@ -62,6 +69,21 @@ def create_app(root: Path) -> Flask:
     @app.get("/api/context")
     def context():
         return jsonify(session_context(resolve(request.args.get("path", ""))))
+
+    @app.get("/api/labels")
+    def get_labels():
+        path = resolve(request.args.get("path", ""))
+        return jsonify((load_labels(path) or empty_labels(path)).to_json())
+
+    @app.put("/api/labels")
+    def put_labels():
+        path = resolve(request.args.get("path", ""))
+        body = request.get_json(force=True, silent=False)
+        if not isinstance(body, dict):
+            raise LabelError("labels must be a JSON object")
+        labels = labels_from_payload(body, path)
+        save_labels(path, labels)
+        return jsonify(labels.to_json())
 
     @app.post("/api/analyze")
     def analyze():
