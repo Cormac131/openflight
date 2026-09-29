@@ -112,6 +112,26 @@
       <button id="reset" title="Back to the session log's values">Reset</button>
     </div>
     <div class="row"><label class="chk" style="display:flex;gap:6px;align-items:center;color:var(--muted)"><input type="checkbox" id="auto" checked> re-run on change</label></div>
+    <div class="opts" id="annPanel">
+      <label class="chk"><input type="checkbox" id="annotate"> Annotate tracks</label>
+      <div id="annBody" hidden>
+        <div class="row">
+          <label class="chk"><input type="radio" name="ann-obj" id="ann-ball" checked> ball</label>
+          <label class="chk"><input type="radio" name="ann-obj" id="ann-club"> club</label>
+        </div>
+        <div class="row">
+          <button id="ann-seed" title="Replace this object's points with the firmware's">Seed from firmware</button>
+          <button id="ann-clear">Clear object</button>
+        </div>
+        <div class="row hint">click the map: place or move a point on that frame &middot; shift-click: remove it</div>
+        <label class="chk"><input type="checkbox" id="ann-reviewed"> reviewed (empty object = must not be tracked)</label>
+        <label>range tol (bins) <input type="number" id="ann-range-tol" step="0.25" min="0.25" value="1"></label>
+        <label>min coverage <input type="number" id="ann-min-cov" step="0.05" min="0" max="1" value="0.8"></label>
+        <label>notes <input type="text" id="ann-notes"></label>
+        <div class="row"><button class="primary" id="ann-save">Save labels</button></div>
+        <div id="ann-status" class="mono"></div>
+      </div>
+    </div>
   </aside>
 
   <main>
@@ -228,12 +248,14 @@ function renderFiles() {
     box.appendChild(d);
   });
 }
-function selectFile(path) {
+async function selectFile(path) {
+  if (ann.on && !annOff()) return;
   current = path; upload = null;
   history.replaceState(null, "", "#" + encodeURIComponent(path));
   renderFiles();
   resetForm();
-  run(true);
+  await run(true);
+  if ($("#annotate").checked) annLoad();
 }
 function resetForm() {
   OPTS.forEach((k) => { const el = $("#" + k); if (el.type === "checkbox") el.checked = FORM_DEFAULTS[k]; else el.value = FORM_DEFAULTS[k]; });
@@ -442,6 +464,82 @@ function renderTraj(el) {
   }), PLOT_CFG);
 }
 
+// ---------- annotate ----------
+const ann = { on: false, obj: "ball", labels: null, dirty: false };
+const annPoints = () => ann.labels[ann.obj].points;
+
+function annStatus(msg, bad) { const s = $("#ann-status"); s.textContent = msg; s.style.color = bad ? "#ff6b6b" : ""; }
+// Flask answers a malformed body with an HTML 400, so a failed JSON parse is not an error here.
+async function annBody(r) { try { return await r.json(); } catch (e) { return { error: "HTTP " + r.status }; } }
+const annCounts = () => `${ann.labels.ball.points.length} ball, ${ann.labels.club.points.length} club points`;
+
+async function annLoad() {
+  if (!current) { $("#annotate").checked = false; annStatus("Annotate needs a capture from the list, not an upload", true); return; }
+  let r, body;
+  try { r = await fetch("/api/labels?path=" + encodeURIComponent(current)); body = await annBody(r); }
+  catch (e) { $("#annotate").checked = false; annStatus(String(e), true); return; }
+  if (!r.ok) { $("#annotate").checked = false; annStatus(body.error, true); return; }
+  ann.labels = body; ann.dirty = false; ann.on = true;
+  $("#annBody").hidden = false;
+  $("#ann-reviewed").checked = body.reviewed;
+  $("#ann-range-tol").value = body.tolerances.range_bins;
+  $("#ann-min-cov").value = body.tolerances.min_coverage;
+  $("#ann-notes").value = body.notes || "";
+  annStatus(annCounts());
+  renderMap();
+}
+
+function annOff() {
+  if (ann.dirty && !confirm("Discard unsaved label changes?")) { $("#annotate").checked = true; return false; }
+  ann.on = false; ann.labels = null; ann.dirty = false; $("#annBody").hidden = true; annStatus("");
+  if (D) renderMap();
+  return true;
+}
+
+function annSet(frame, bin, remove) {
+  const pts = annPoints().filter((p) => p.frame !== frame);
+  if (!remove) pts.push({ frame, range_bin: bin });
+  pts.sort((a, b) => a.frame - b.frame);
+  ann.labels[ann.obj].points = pts; ann.dirty = true;
+  annStatus(annCounts() + " (unsaved)");
+  renderMap();
+}
+
+function annClick(ev, el) {
+  const rect = el.getBoundingClientRect(), L = el._fullLayout;
+  const metres = L.xaxis.p2d(ev.event.clientX - rect.left - L.margin.l);
+  const ms = L.yaxis.p2d(ev.event.clientY - rect.top - L.margin.t);
+  const bin = Math.max(0, Math.round((metres / D.bin_width_m) * 10) / 10);
+  annSet(frameAt(ms), bin, ev.event.shiftKey);
+}
+
+async function annSave() {
+  if (!ann.labels) return;
+  const L = ann.labels;
+  L.reviewed = $("#ann-reviewed").checked;
+  L.tolerances = { range_bins: +$("#ann-range-tol").value, min_coverage: +$("#ann-min-cov").value, doppler_mps: null };
+  L.notes = $("#ann-notes").value;
+  let r, body;
+  try {
+    r = await fetch("/api/labels?path=" + encodeURIComponent(current), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(L) });
+    body = await annBody(r);
+  } catch (e) { annStatus(String(e), true); return; }
+  if (!r.ok) { annStatus(body.error, true); return; }
+  ann.labels = body; ann.dirty = false; annStatus("saved"); renderMap();
+}
+
+$("#annotate").addEventListener("change", (e) => (e.target.checked ? annLoad() : annOff()));
+document.querySelectorAll('input[name="ann-obj"]').forEach((r) => r.addEventListener("change", () => (ann.obj = $("#ann-ball").checked ? "ball" : "club")));
+$("#ann-seed").addEventListener("click", () => {
+  const F = fw(); if (!F || !ann.labels) return;
+  const src = ann.obj === "ball" ? F.ball_points : F.points;
+  ann.labels[ann.obj].points = src.map((p) => ({ frame: p.frame, range_bin: p.range_bin, doppler_mps: p.doppler_mps }));
+  ann.dirty = true; annStatus("seeded from firmware (unsaved)"); renderMap();
+});
+$("#ann-clear").addEventListener("click", () => { if (!ann.labels) return; ann.labels[ann.obj].points = []; ann.dirty = true; annStatus("cleared (unsaved)"); renderMap(); });
+$("#ann-save").addEventListener("click", annSave);
+window.addEventListener("beforeunload", (e) => { if (ann.dirty) { e.preventDefault(); e.returnValue = ""; } });
+
 // ---------- range x time ----------
 function renderMap() {
   const el = $("#pmap");
@@ -504,9 +602,19 @@ function renderMap() {
   if (F && F.config.dest_bin != null) vline(F.config.dest_bin, C.ball, "dash");
   if (P && P.tee_bin !== D.tee_bin) vline(P.tee_bin, C.py, "dot");
   events().forEach((e) => shapes.push({ type: "line", xref: "paper", yref: "y", x0: 0, x1: 1, y0: T(e.f), y1: T(e.f), line: { color: e.color, width: 2, dash: e.dash } }));
+  if (ann.on && ann.labels) {
+    [["ball", C.ball, "ball label"], ["club", C.club, "club label"]].forEach(([obj, color, label]) => {
+      const pts = ann.labels[obj].points;
+      if (!pts.length) return;
+      traces.push({ type: "scatter", mode: "markers", name: label,
+        x: pts.map((p) => binM(p.range_bin)), y: pts.map((p) => T(p.frame)),
+        marker: { symbol: "diamond", size: 11, color, line: { color: "#ffffff", width: 1.5 } },
+        hovertemplate: `${label} %{x:.3f} m @ %{y:.1f} ms<extra></extra>` });
+    });
+  }
   base.pmap = shapes;
   Plotly.react(el, traces, layout({ xaxis: axis("range (m)"), yaxis: axis("time (ms)"), shapes, margin: { l: 55, r: 10, t: 10, b: 40 } }), PLOT_CFG);
-  if (!el._click) { el._click = true; el.on("plotly_click", (ev) => setFrame(frameAt(ev.points[0].y))); }
+  if (!el._click) { el._click = true; el.on("plotly_click", (ev) => (ann.on ? annClick(ev, el) : setFrame(frameAt(ev.points[0].y)))); }
 }
 
 // ---------- timeline ----------

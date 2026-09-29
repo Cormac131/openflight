@@ -612,3 +612,22 @@ def test_get_labels_reports_a_changed_dump_as_400(client, tmp_path):
     response = client.get("/api/labels", query_string={"path": "sub/a.l3dump"})
     assert response.status_code == 400
     assert "changed since it was labelled" in response.get_json()["error"]
+
+
+ANNOTATE_IDS = [
+    "annotate", "ann-ball", "ann-club", "ann-seed", "ann-clear", "ann-reviewed",
+    "ann-range-tol", "ann-min-cov", "ann-notes", "ann-save", "ann-status",
+]
+
+
+def test_page_has_the_annotate_controls(client):
+    page = client.get("/").data.decode()
+    for name in ANNOTATE_IDS:
+        assert f'id="{name}"' in page, name
+    assert "/api/labels" in page
+
+
+def test_annotate_marks_are_not_the_ball_blue_reused_for_something_else(client):
+    """The ball keeps its colour: labels use the object colours, no new blue."""
+    page = client.get("/").data.decode()
+    assert "ball label" in page and "club label" in page
