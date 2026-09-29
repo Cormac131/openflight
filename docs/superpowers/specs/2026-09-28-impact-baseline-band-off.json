@@ -45,14 +45,11 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260916_184825_011_002.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "ball_out"
-        ],
-        "spread_us": 1813.4013671875,
-        "refined_minus_trigger_us": 516.26513671875,
-        "c_spread_us": 1700.0,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
+        "c_spread_us": null,
         "club_points_in_band": 0
       }
     },
@@ -66,14 +63,11 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260916_184851_109_003.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "ball_out"
-        ],
-        "spread_us": 122.169921875,
-        "refined_minus_trigger_us": 1630.8251953125,
-        "c_spread_us": 550.0,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
+        "c_spread_us": null,
         "club_points_in_band": 0
       }
     },
@@ -87,15 +81,11 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260916_184937_318_004.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "club_out",
-          "ball_out"
-        ],
-        "spread_us": 3298.9140625,
-        "refined_minus_trigger_us": 3836.8671875,
-        "c_spread_us": 1800.0,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
+        "c_spread_us": null,
         "club_points_in_band": 0
       }
     },
@@ -109,13 +99,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260916_185013_572_005.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "ball_out"
-        ],
-        "spread_us": 1344.46484375,
-        "refined_minus_trigger_us": 4973.0625,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -130,13 +117,11 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260916_190937_131_002.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "club_in"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": -3955.47412109375,
-        "c_spread_us": 21800.0,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
+        "c_spread_us": null,
         "club_points_in_band": 0
       }
     },
@@ -150,13 +135,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260919_185328_673_001.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "ball_out"
-        ],
-        "spread_us": 2116.241943359375,
-        "refined_minus_trigger_us": -4223.67333984375,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -353,14 +335,11 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260919_190111_221_017.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "ball_out"
-        ],
-        "spread_us": 1365.027099609375,
-        "refined_minus_trigger_us": -4579.4609375,
-        "c_spread_us": 2700.0,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
+        "c_spread_us": null,
         "club_points_in_band": 0
       }
     },
@@ -485,12 +464,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260919_190556_115_025.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "club_in"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": -5422.57666015625,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -601,13 +578,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260919_190932_769_031.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "ball_out"
-        ],
-        "spread_us": 2310.39013671875,
-        "refined_minus_trigger_us": -2902.654296875,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -912,13 +886,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_130505_440_008.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "ball_out"
-        ],
-        "spread_us": 57.8515625,
-        "refined_minus_trigger_us": -4503.48193359375,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1005,15 +976,11 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_130725_534_013.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "club_out",
-          "ball_out"
-        ],
-        "spread_us": 5079.23486328125,
-        "refined_minus_trigger_us": -2249.745361328125,
-        "c_spread_us": 2950.0,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
+        "c_spread_us": null,
         "club_points_in_band": 0
       }
     },
@@ -1099,13 +1066,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_130847_205_018.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "ball_out"
-        ],
-        "spread_us": 196.409912109375,
-        "refined_minus_trigger_us": -2690.091796875,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1120,13 +1084,13 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_130903_679_019.l3dump",
-        "verdict": "inconsistent",
+        "verdict": "consistent",
         "tracks_ok": [
-          "club_out",
-          "ball_out"
+          "club_in",
+          "club_out"
         ],
-        "spread_us": 4889.34619140625,
-        "refined_minus_trigger_us": 1100.69482421875,
+        "spread_us": 767.210205078125,
+        "refined_minus_trigger_us": -3169.919677734375,
         "c_spread_us": 2050.0,
         "club_points_in_band": 0
       }
@@ -1287,13 +1251,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_131232_075_029.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "ball_out"
-        ],
-        "spread_us": 2405.172607421875,
-        "refined_minus_trigger_us": -2172.760009765625,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1459,13 +1420,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_131519_058_038.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_out",
-          "ball_out"
-        ],
-        "spread_us": 1977.08984375,
-        "refined_minus_trigger_us": -2110.847900390625,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1480,12 +1438,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_131544_116_039.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "ball_out"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": -371.099853515625,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1536,12 +1492,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_131659_803_042.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "ball_out"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": -4727.22705078125,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1846,12 +1800,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_183514_618_004.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "ball_out"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": -1317.1783447265625,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1884,13 +1836,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_183638_401_006.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "ball_out"
-        ],
-        "spread_us": 1662.7041015625,
-        "refined_minus_trigger_us": 401.240234375,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1905,13 +1854,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_183703_832_007.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "ball_out"
-        ],
-        "spread_us": 387.66845703125,
-        "refined_minus_trigger_us": -1577.2255859375,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1944,15 +1890,11 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_183813_987_009.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "club_out",
-          "ball_out"
-        ],
-        "spread_us": 1188.2607421875,
-        "refined_minus_trigger_us": 2403.087890625,
-        "c_spread_us": 500.0,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
+        "c_spread_us": null,
         "club_points_in_band": 0
       }
     },
@@ -2009,13 +1951,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_184026_592_001.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "ball_out"
-        ],
-        "spread_us": 315.6220703125,
-        "refined_minus_trigger_us": 1997.6259765625,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -2030,15 +1969,11 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_184055_463_002.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "club_out",
-          "ball_out"
-        ],
-        "spread_us": 736.3701171875,
-        "refined_minus_trigger_us": 3259.4326171875,
-        "c_spread_us": 550.0,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
+        "c_spread_us": null,
         "club_points_in_band": 0
       }
     },
@@ -2052,13 +1987,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_184122_450_003.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "ball_out"
-        ],
-        "spread_us": 809.97265625,
-        "refined_minus_trigger_us": 2979.849609375,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -2326,13 +2258,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_184805_180_019.l3dump",
-        "verdict": "consistent",
-        "tracks_ok": [
-          "club_in",
-          "ball_out"
-        ],
-        "spread_us": 474.2216796875,
-        "refined_minus_trigger_us": 1869.8544921875,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -2403,14 +2332,14 @@
   ],
   "impact": {
     "captures": 124,
-    "with_estimate": 51,
-    "consistent": 37,
-    "inconsistent": 5,
-    "single_track": 9,
-    "none": 73,
-    "median_spread_us": 1334.43896484375,
+    "with_estimate": 27,
+    "consistent": 19,
+    "inconsistent": 4,
+    "single_track": 4,
+    "none": 97,
+    "median_spread_us": 1076.9208984375,
     "median_c_spread_us": 1250.0,
-    "median_refined_minus_trigger_us": 516.26513671875,
+    "median_refined_minus_trigger_us": 1572.4072265625,
     "club_points_in_band": 0,
     "c_wins": false
   }

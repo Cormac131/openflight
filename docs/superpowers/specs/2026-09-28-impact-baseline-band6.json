@@ -98,12 +98,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260916_185013_572_005.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "ball_out"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": -14747.1357421875,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -462,12 +460,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260919_190556_115_025.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "ball_out"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": -6650.689453125,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -574,12 +570,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260919_190932_769_031.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "ball_out"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": -1478.9775390625,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1066,12 +1060,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_130847_205_018.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "ball_out"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": -5399.92138671875,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1266,12 +1258,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_131242_071_030.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "ball_out"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": -7277.2001953125,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1412,12 +1402,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_131519_058_038.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "ball_out"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": -11468.0810546875,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1432,12 +1420,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_131544_116_039.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "ball_out"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": 2774.6455078125,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1798,12 +1784,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_183514_618_004.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "ball_out"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": -8130.21728515625,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -1856,12 +1840,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_183703_832_007.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "ball_out"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": -8813.1953125,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -2119,12 +2101,10 @@
       "launch_hla_deg": null,
       "impact": {
         "name": "iwr6843_20260923_184447_518_011.l3dump",
-        "verdict": "single_track",
-        "tracks_ok": [
-          "club_in"
-        ],
-        "spread_us": 0.0,
-        "refined_minus_trigger_us": 1235.60546875,
+        "verdict": "none",
+        "tracks_ok": [],
+        "spread_us": null,
+        "refined_minus_trigger_us": null,
         "c_spread_us": null,
         "club_points_in_band": 0
       }
@@ -2304,11 +2284,11 @@
   ],
   "impact": {
     "captures": 124,
-    "with_estimate": 27,
+    "with_estimate": 17,
     "consistent": 0,
     "inconsistent": 1,
-    "single_track": 26,
-    "none": 97,
+    "single_track": 16,
+    "none": 107,
     "median_spread_us": null,
     "median_c_spread_us": null,
     "median_refined_minus_trigger_us": -6935.15625,
