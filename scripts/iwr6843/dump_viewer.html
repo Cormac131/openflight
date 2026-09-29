@@ -92,6 +92,7 @@
       <label>sub-bin <select id="subbin"><option>parabolic</option><option>centroid</option></select></label>
       <label>post from frame <input type="number" id="post_from_frame" placeholder="gate"></label>
       <label>pitch (deg) <input type="number" id="pitch_deg" step="0.1" value="0"></label>
+      <label>band bins <input type="number" id="band_bins" step="0.5" placeholder="off"></label>
       <label>ball search <select id="ball_hypotheses"><option value="">firmware default</option><option value="true">hypotheses</option><option value="false">legacy</option></select></label>
       <label class="chk"><input type="checkbox" id="impact_armed"> impact armed</label>
       <label class="chk"><input type="checkbox" id="stop_at_fire"> stop at fire</label>
@@ -180,8 +181,8 @@ const C = {};
   .forEach((k) => (C[k] = css("--" + k)));
 C.jball = C["joint-ball"]; C.jclub = C["joint-club"];
 const OPTS = ["tee_bin", "dest_bin", "snr", "track_frames", "stat", "subbin", "post_from_frame",
-  "pitch_deg", "impact_armed", "stop_at_fire", "tee_range_m", "py_level", "py_hits", "ball_hypotheses",
-  "joint_search"];
+  "pitch_deg", "band_bins", "impact_armed", "stop_at_fire", "tee_range_m", "py_level", "py_hits",
+  "ball_hypotheses", "joint_search"];
 const FORM_DEFAULTS = {};
 OPTS.forEach((k) => { const el = $("#" + k); FORM_DEFAULTS[k] = el.type === "checkbox" ? el.checked : el.value; });
 
@@ -453,6 +454,7 @@ function renderMap() {
     hovertemplate: `range %{x:.3f} m (bin %{customdata})<br>t %{y:.1f} ms<br>%{z:.1f} ${vel ? "m/s" : "dB"}<extra></extra>`,
     customdata: y.map(() => x.map((_, i) => D.maps.bin0 + i)),
   }];
+  const shapes = [];
   const F = fw(), P = py();
   if (F) {
     const wx = [], wy = [];
@@ -479,6 +481,17 @@ function renderMap() {
     });
     if (hx.length) traces.push({ type: "scatter", mode: "lines+markers", name: "ball hypotheses", x: hx, y: hy,
       line: { color: "rgba(255,146,43,.45)", width: 1, dash: "dot" }, marker: { size: 4, color: "rgba(255,146,43,.45)" }, hoverinfo: "skip" });
+    if (F.band) shapes.push({ type: "rect", xref: "x", yref: "paper", x0: binM(F.band[0]), x1: binM(F.band[1]), y0: 0, y1: 1, fillcolor: "rgba(255,105,180,.10)", line: { width: 0 } });
+    if (F.impact_fit) {
+      const colors = { club_in: C.club, club_out: C.jclub, ball_out: C.ball };
+      Object.entries(F.impact_fit.tracks).forEach(([name, t]) => {
+        if (!t.line) return;
+        traces.push({ type: "scatter", mode: "lines", name: `${name} fit`, x: t.line.map((p) => p[1]), y: t.line.map((p) => p[0] / 1000),
+          line: { color: colors[name], width: 2, dash: "dash" }, hovertemplate: `${name} ${t.why} %{y:.2f} ms<extra></extra>` });
+      });
+      if (F.impact_fit.impact_us != null) shapes.push({ type: "line", xref: "paper", yref: "y", x0: 0, x1: 1,
+        y0: F.impact_fit.impact_us / 1000, y1: F.impact_fit.impact_us / 1000, line: { color: "#ffd43b", width: 2 } });
+    }
   }
   if (P) {
     const px = [], pyy = [];
@@ -486,7 +499,6 @@ function renderMap() {
     traces.push({ type: "scatter", mode: "markers", name: "host approach peak", x: px, y: pyy, marker: { symbol: "x-thin", size: 9, line: { width: 2, color: C.py } },
       hovertemplate: "host approach peak %{x:.3f} m<extra></extra>" });
   }
-  const shapes = [];
   const vline = (b, color, dash) => shapes.push({ type: "line", xref: "x", yref: "paper", x0: binM(b), x1: binM(b), y0: 0, y1: 1, line: { color, width: 1.5, dash } });
   vline(D.tee_bin, "#ffffff", "dash");
   if (F && F.config.dest_bin != null) vline(F.config.dest_bin, C.ball, "dash");

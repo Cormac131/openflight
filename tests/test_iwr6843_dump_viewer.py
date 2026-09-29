@@ -268,6 +268,42 @@ def test_a_whole_shot_carries_the_gate_the_tracks_and_their_3d_points():
     assert "clubtrack" in firmware["report"]
 
 
+@needs_compiler
+def test_a_whole_shot_carries_the_band_and_the_impact_fit():
+    raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
+    data = dv.analyze_dump(
+        raw,
+        dv.ViewerOptions(tee_bin=TEE_BIN, dest_bin=TEE_BIN, tee_range_m=TEE_RANGE_M, band_bins=6.0),
+    )
+    json.dumps(data, allow_nan=False)
+    firmware = data["firmware"]
+    assert firmware["ok"], firmware.get("error")
+    lo, hi = firmware["band"]
+    assert lo < TEE_BIN < hi
+    fit = firmware["impact_fit"]
+    assert fit is not None and fit["verdict"] in fw.FIT_VERDICT_NAMES
+    ball_m = firmware["ball_range_m"]
+    assert ball_m == pytest.approx(TEE_BIN * 6.0 / 128)
+    drawn = 0
+    for track in fit["tracks"].values():
+        if track["why"] != "ok":
+            assert track["line"] is None
+            continue
+        (t0, r0), (t1, r1) = track["line"]
+        assert t1 == pytest.approx(track["time_us"])
+        assert r1 == pytest.approx(ball_m)
+        assert r0 == pytest.approx(ball_m + track["speed_mps"] * (t0 - t1) * 1e-6)
+        drawn += 1
+    assert drawn >= 1
+
+
+@needs_compiler
+def test_default_options_leave_the_band_off():
+    raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
+    data = dv.analyze_dump(raw, dv.ViewerOptions(tee_bin=TEE_BIN, tee_range_m=TEE_RANGE_M))
+    assert data["firmware"]["band"] is None
+
+
 # --- session context ---------------------------------------------------------
 
 

@@ -56,6 +56,7 @@ class ViewerOptions:  # pylint: disable=too-many-instance-attributes
     py_hits: int = st.DEFAULT_HITS
     ball_hypotheses: bool | None = None  # the ball search; None: the firmware default
     joint_search: bool = False  # run l3_joint_search in parallel (host-only, viz)
+    band_bins: float | None = None  # the tee band's half width; None: off
 
     @classmethod
     def from_mapping(cls, raw: dict) -> ViewerOptions:
@@ -200,6 +201,28 @@ def _jsonable(value):
     return value
 
 
+# The drawn segment of a fitted track: from this long before its crossing.
+FIT_LINE_SPAN_US = 12_000.0  # the K = 4 points at 3 ms frames
+
+
+def _impact_fit_json(result: fr.ReplayResult) -> dict | None:
+    """The impact fit with, per kept track, the fitted line as two (t_us, range_m) points."""
+    if result.impact_fit is None:
+        return None
+    ball_m = result.config.destination * bin_width_m(result.config.fft_size)
+    out = _jsonable(result.impact_fit)
+    for name, track in result.impact_fit.tracks.items():
+        line = None
+        if track.why == "ok" and track.time_us is not None:
+            t0 = track.time_us - FIT_LINE_SPAN_US
+            line = [
+                [t0, ball_m + track.speed_mps * (t0 - track.time_us) * 1e-6],
+                [track.time_us, ball_m],
+            ]
+        out["tracks"][name]["line"] = line
+    return out
+
+
 def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOptions) -> dict:
     """The compiled firmware's replay, with each frame's watched-stat peak against its threshold."""
     config = fr.ReplayConfig(
@@ -215,6 +238,7 @@ def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOp
         pitch_deg=options.pitch_deg,
         ball_hypotheses=options.ball_hypotheses,
         joint_search=options.joint_search,
+        band_bins=options.band_bins,
     )
     result = fr.replay_dump(raw, config)
     n_tx = int(meta["n_tx"])
@@ -252,6 +276,10 @@ def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOp
         "track_counters": result.track_counters,
         "trig_counters": result.trig_counters,
         "report": fr.format_report(result, points=True),
+        "band": list(result.band) if result.band is not None else None,
+        "range_frame": result.range_frame,
+        "ball_range_m": result.config.destination * bin_width_m(result.config.fft_size),
+        "impact_fit": _impact_fit_json(result),
     }
 
 
