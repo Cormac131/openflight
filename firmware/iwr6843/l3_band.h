@@ -16,6 +16,29 @@ typedef struct {
     float   hiBin;
 } l3_band_t;
 
+#define L3_BAND_NOISE_BINS        64U
+#define L3_BAND_NOISE_SHIFT       4U    /* EMA constant 1/16 */
+#define L3_BAND_NOISE_MIN_UPDATES 8U
+
+typedef struct {
+    uint32_t firstBin;                 /* global bin of avg[0] */
+    uint32_t count;                    /* bins covered, 0 before the first update */
+    uint32_t updates;
+    float    avg[L3_BAND_NOISE_BINS];
+} l3_band_noise_t;
+
+void l3_band_noise_reset(l3_band_noise_t *noise);
+/* One idle frame's observations over global bins [firstBin, firstBin + count):
+ * EMA of l3_obs_stat(stat, ...); a different window restarts the map. */
+void l3_band_noise_update(l3_band_noise_t *noise, uint32_t stat, uint32_t firstBin,
+                          const l3_bin_obs_t *obs, uint32_t count);
+/* The contiguous run of round(widthBins) bins with the largest summed noise,
+ * inside [centre - searchBins, centre + searchBins] and the map; ties nearest
+ * the centre. Centred on round(centreBin) without enough history or room.
+ * widthBins < 0.5 gives an invalid band. */
+void l3_band_place(const l3_band_noise_t *noise, float centreBin, float searchBins,
+                   float widthBins, l3_band_t *out);
+
 /* [centre - halfWidth, centre + halfWidth]; halfWidth <= 0 disables it. */
 void l3_band_around(float centreBin, float halfWidthBins, l3_band_t *out);
 /* 1 when bin lies inside a valid band. */

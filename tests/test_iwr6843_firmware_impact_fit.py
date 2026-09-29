@@ -81,6 +81,7 @@ BALL_OUT_T = (36_000, 39_000, 42_000, 45_000)
 def test_defaults_are_the_specs(lib):
     c = cfg(lib)
     assert c.bandBins == 0.0  # off by default; 6 is the 2026-09-28 capture's ridge
+    assert c.bandSearchBins == 10.0
     assert c.fitPoints == 4 and c.minPoints == 3
     assert (c.clubMinMps, c.clubMaxMps, c.clubOutMaxRatio) == (10.0, 70.0, pytest.approx(1.10))
     assert (c.ballMinMps, c.ballMaxMps) == (15.0, 90.0)

@@ -52,6 +52,8 @@ HOST_SOURCES = (
 
 # l3_observation.h
 OBS_MAX_BINS = 64
+BAND_NOISE_BINS = 64
+BAND_NOISE_MIN_UPDATES = 8
 OBS_MAX_TARGETS = 8
 OBS_WAVELENGTH_M = 0.00484
 OBS_FLOOR_MIN = 1.0
@@ -315,6 +317,17 @@ class Band(ctypes.Structure):
         ("valid", ctypes.c_uint8),
         ("loBin", ctypes.c_float),
         ("hiBin", ctypes.c_float),
+    ]
+
+
+class BandNoise(ctypes.Structure):
+    """``l3_band_noise_t``: per-bin EMA of the trigger statistic on idle frames."""
+
+    _fields_ = [
+        ("firstBin", ctypes.c_uint32),
+        ("count", ctypes.c_uint32),
+        ("updates", ctypes.c_uint32),
+        ("avg", ctypes.c_float * BAND_NOISE_BINS),
     ]
 
 
@@ -616,6 +629,7 @@ class ImpactFitCfg(ctypes.Structure):
         ("gateSigmas", ctypes.c_float),
         ("minSigmaUs", ctypes.c_float),
         ("maxSigmaUs", ctypes.c_float),
+        ("bandSearchBins", ctypes.c_float),
     ]
 
 
@@ -1274,6 +1288,9 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_obs_format_target": ([_P(TargetObs), *_TEXT], ctypes.c_int32),
     "l3_obs_parabolic_offset": ([_F32, _F32, _F32], _F32),
     # l3_band.h
+    "l3_band_noise_reset": ([_P(BandNoise)], None),
+    "l3_band_noise_update": ([_P(BandNoise), _U32, _U32, _P(BinObs), _U32], None),
+    "l3_band_place": ([_P(BandNoise), _F32, _F32, _F32, _P(Band)], None),
     "l3_band_around": ([_F32, _F32, _P(Band)], None),
     "l3_band_contains": ([_P(Band), _F32], ctypes.c_int32),
     "l3_band_filter": ([_P(Band), _P(TargetObs), _U32], _U32),

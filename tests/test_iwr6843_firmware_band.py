@@ -165,3 +165,88 @@ def test_armed_at_the_ball_the_band_hides_every_point_its_origin_gate_would_take
     ball = depart(lib, b, 47.0, FIRST_SEEN_PAST_THE_BAND)
     assert ball.core.count == 0
     assert ball.confirmed == 0
+
+
+def obs_row(values, stat="peak"):
+    """l3_bin_obs_t per bin carrying `values` as the peak statistic."""
+    arr = (fw.BinObs * len(values))()
+    for i, v in enumerate(values):
+        arr[i].peak = v
+        arr[i].energy = v
+    return arr
+
+
+STAT = fw.STAT_NAMES["peak"]
+
+
+def noisy_map(lib, first_bin, values, updates=8):
+    noise = fw.BandNoise()
+    lib.l3_band_noise_reset(ctypes.byref(noise))
+    row = obs_row(values)
+    for _ in range(updates):
+        lib.l3_band_noise_update(ctypes.byref(noise), STAT, first_bin, row, len(values))
+    return noise
+
+
+def place(lib, noise, centre, width, search=10.0):
+    out = fw.Band()
+    lib.l3_band_place(ctypes.byref(noise), centre, search, width, ctypes.byref(out))
+    return out
+
+
+def test_noise_map_is_an_ema_of_the_statistic(lib):
+    noise = fw.BandNoise()
+    lib.l3_band_noise_reset(ctypes.byref(noise))
+    lib.l3_band_noise_update(ctypes.byref(noise), STAT, 20, obs_row([16.0, 0.0]), 2)
+    assert (noise.firstBin, noise.count, noise.updates) == (20, 2, 1)
+    assert noise.avg[0] == pytest.approx(16.0)  # the first frame seeds the map
+    lib.l3_band_noise_update(ctypes.byref(noise), STAT, 20, obs_row([0.0, 16.0]), 2)
+    assert noise.avg[0] == pytest.approx(15.0) and noise.avg[1] == pytest.approx(1.0)
+
+
+def test_noise_map_restarts_when_the_window_moves(lib):
+    noise = noisy_map(lib, 20, [5.0] * 10)
+    lib.l3_band_noise_update(ctypes.byref(noise), STAT, 32, obs_row([1.0] * 10), 10)
+    assert (noise.firstBin, noise.updates) == (32, 1)
+    assert noise.avg[0] == pytest.approx(1.0)
+
+
+def test_placement_takes_the_noisiest_contiguous_run(lib):
+    values = [1.0] * 53
+    for b in range(24, 29):  # global bins 44..48 (first bin 20)
+        values[b] = 50.0
+    band = place(lib, noisy_map(lib, 20, values), centre=47.0, width=5.0)
+    assert (band.valid, band.loBin, band.hiBin) == (1, 44.0, 48.0)
+
+
+def test_placement_stays_in_the_search_window(lib):
+    values = [1.0] * 53
+    values[50] = 1000.0  # global 70: outside 47 +/- 10
+    band = place(lib, noisy_map(lib, 20, values), centre=47.0, width=5.0)
+    assert 37.0 <= band.loBin and band.hiBin <= 57.0
+
+
+def test_ties_go_to_the_run_nearest_the_centre(lib):
+    band = place(lib, noisy_map(lib, 20, [3.0] * 53), centre=47.0, width=5.0)
+    assert (band.loBin, band.hiBin) == (45.0, 49.0)
+
+
+def test_without_history_the_band_is_centred(lib):
+    band = place(lib, noisy_map(lib, 20, [3.0] * 53, updates=7), centre=47.0, width=5.0)
+    assert (band.loBin, band.hiBin) == (45.0, 49.0)
+
+
+def test_width_wider_than_the_window_falls_back_to_centred(lib):
+    band = place(lib, noisy_map(lib, 40, [3.0] * 6), centre=42.0, width=12.0, search=3.0)
+    assert band.valid == 1
+    assert band.hiBin - band.loBin == 11.0
+
+
+def test_even_width_centred_is_deterministic(lib):
+    # centred: lo = round(centre) - (width - 1) // 2 = 47 - 1
+    band = place(lib, noisy_map(lib, 20, [3.0] * 53, updates=0), centre=47.0, width=4.0)
+    assert (band.loBin, band.hiBin) == (46.0, 49.0)
+
+
+def test_zero_width_is_no_band(lib):
+    assert place(lib, noisy_map(lib, 20, [3.0] * 53), centre=47.0, width=0.0).valid == 0

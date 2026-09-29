@@ -45,7 +45,7 @@ enum {
 
 typedef struct {
     float    binWidthM;
-    float    bandBins;          /* the tee band's half width; 0: no band */
+    float    bandBins;          /* the tee band's total width in bins (0 = off) */
     uint32_t fitPoints;         /* K nearest the band */
     uint32_t minPoints;
     float    clubMinMps;        /* club in */
@@ -56,6 +56,7 @@ typedef struct {
     float    gateSigmas;        /* agreement gate ... */
     float    minSigmaUs;        /* ... on at least this sigma */
     float    maxSigmaUs;        /* a looser estimate is uncertain; 0 disables */
+    float    bandSearchBins;    /* the band may slide this far off the tee bin */
 } l3_impact_fit_cfg_t;
 
 typedef struct {
