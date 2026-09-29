@@ -1200,6 +1200,7 @@ def init_iwr6843(
         raise ValueError(f"--iwr6843-ball-detector must be one of {BALL_DETECTOR_MODES}")
     try:
         from .iwr6843 import Calibration
+        from .iwr6843.board_calibration import BoardCalibration
         from .iwr6843.monitor import (
             TEE_BAND_DEFAULT_BINS,
             IWR6843CaptureMonitor,
@@ -1230,6 +1231,9 @@ def init_iwr6843(
         if radar_height_m is not None:
             calibration.meta["radar_height_m"] = radar_height_m
 
+        board_calibration = BoardCalibration.from_calibration(
+            calibration, horizontal_phase_reference_rad=horizontal_phase_reference_rad
+        )
         capture_monitor = IWR6843CaptureMonitor(
             config_path=config_path,
             output_dir=output_dir,
@@ -1245,6 +1249,7 @@ def init_iwr6843(
             tee_range_m=tee_range_m,
             tee_band_bins=tee_band_bins,
             ball_snr=ball_snr,
+            board_calibration=board_calibration,
         )
         if self_trigger is not None:
             logger.warning(
@@ -1291,6 +1296,7 @@ def init_iwr6843(
             "tee_slant_range_m": tee_range_m,
             "tee_band_bins": tee_band_bins,
             "ball_snr": ball_snr,
+            "board_calibration": board_calibration.to_dict(),
             "net_range_m": net_range_m,
             "flight": flight,
             "self_trigger": (

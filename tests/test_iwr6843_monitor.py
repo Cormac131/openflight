@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 import openflight.iwr6843.monitor as iwr_monitor
+from openflight.iwr6843.board_calibration import BoardCalibration
 from openflight.iwr6843.dump import pack_dump
 from openflight.iwr6843.monitor import (
     SELF_TRIGGER_DEFAULT_SNR,
@@ -51,6 +52,13 @@ class FakeRadar:
     def set_ball_snr(self, snr: float) -> bool:
         """The monitor sends the ball snr (0: the firmware default) at every start."""
         self.ball_snrs.append(snr)
+        return True
+
+    def set_radar_cal(self, args, *, identity):
+        """The monitor sends the board calibration (identity included) at every start."""
+        return True
+
+    def set_elements(self, phases, gains, *, identity):
         return True
 
     def read_dump(self):
@@ -1219,12 +1227,17 @@ class TeeBandRadar(FakeRadar):
     """Records the config and the tee band in the order the monitor sends them."""
 
     def __init__(
-        self, raw: bytes, band_error: Exception | None = None, band_supported: bool = True
+        self,
+        raw: bytes,
+        band_error: Exception | None = None,
+        band_supported: bool = True,
+        cal_supported: bool = True,
     ):
         super().__init__(raw)
         self.events: list[tuple[str, object]] = []
         self.band_error = band_error
         self.band_supported = band_supported
+        self.cal_supported = cal_supported
 
     def send_config(self, path: str, lines=None):
         super().send_config(path, lines)
@@ -1235,6 +1248,14 @@ class TeeBandRadar(FakeRadar):
         if self.band_error is not None:
             raise self.band_error
         return self.band_supported
+
+    def set_radar_cal(self, args, *, identity):
+        self.events.append(("cal", tuple(args)))
+        return self.cal_supported
+
+    def set_elements(self, phases, gains, *, identity):
+        self.events.append(("elem", tuple(phases)))
+        return self.cal_supported
 
 
 def _tee_band_monitor(tmp_path, radar, **kwargs):
@@ -1256,7 +1277,7 @@ def test_tee_band_is_sent_after_the_config(tmp_path, bins):
 
     monitor.start(armed=False)
     try:
-        assert radar.events == [("config", str(tmp_path / "radar.cfg")), ("band", bins)]
+        assert radar.events[:2] == [("config", str(tmp_path / "radar.cfg")), ("band", bins)]
     finally:
         monitor.stop()
 
@@ -1270,7 +1291,7 @@ def test_tee_band_off_is_still_sent_so_a_restart_clears_a_stale_band(tmp_path):
     monitor.start(armed=False)
     try:
         assert monitor.tee_band_bins == 0.0
-        assert radar.events == [("config", str(tmp_path / "radar.cfg")), ("band", 0.0)]
+        assert radar.events[:2] == [("config", str(tmp_path / "radar.cfg")), ("band", 0.0)]
     finally:
         monitor.stop()
 
@@ -1363,6 +1384,69 @@ def test_tee_band_is_on_at_the_firmware_default_width_by_default(tmp_path):
     monitor.start(armed=False)
     try:
         assert TEE_BAND_DEFAULT_BINS == 6.0
-        assert radar.events[-1] == ("band", TEE_BAND_DEFAULT_BINS)
+        assert radar.events[1] == ("band", TEE_BAND_DEFAULT_BINS)
     finally:
         monitor.stop()
+
+
+def test_board_calibration_is_sent_after_band_and_ball_snr_before_the_trigger(tmp_path):
+    radar = TeeBandRadar(_raw_dump())
+    board = BoardCalibration.from_file("config/iwr6843_calibration_reference.json")
+    monitor = _tee_band_monitor(tmp_path, radar, board_calibration=board)
+    monitor.start(armed=False)
+    try:
+        kinds = [kind for kind, _ in radar.events]
+        assert kinds.index("band") < kinds.index("cal") < kinds.index("elem")
+        assert radar.events[kinds.index("cal")][1] == board.cal_args
+        assert monitor.calibration_applied is True
+    finally:
+        monitor.stop()
+
+
+def test_no_calibration_sends_identity_so_a_restart_clears_it(tmp_path):
+    radar = TeeBandRadar(_raw_dump())
+    monitor = _tee_band_monitor(tmp_path, radar)
+    monitor.start(armed=False)
+    try:
+        cal = next(args for kind, args in radar.events if kind == "cal")
+        assert cal == BoardCalibration.identity().cal_args
+    finally:
+        monitor.stop()
+
+
+def test_old_firmware_calibration_refusal_doubts_onboard_angles_and_continues(tmp_path, caplog):
+    radar = TeeBandRadar(_raw_dump(), cal_supported=False)
+    monitor = _tee_band_monitor(tmp_path, radar)
+    with caplog.at_level(logging.WARNING, logger="openflight.iwr6843.monitor"):
+        monitor.start(armed=False)
+    try:
+        assert monitor._running  # pylint: disable=protected-access
+        assert monitor.calibration_applied is False
+        assert any("calibration" in r.getMessage() for r in caplog.records)
+    finally:
+        monitor.stop()
+
+
+class _FakePacket:
+    """Stands in for a ShotResultPacket: records whether it was doubted."""
+
+    shot_id = 1
+    verdict = "ok"
+    club_points = 0
+    ball_points = 0
+    doubted = False
+
+    def with_launch_angles_doubted(self):
+        doubted = _FakePacket()
+        doubted.doubted = True
+        return doubted
+
+
+@pytest.mark.parametrize("applied, doubted", [(True, False), (False, True)])
+def test_onboard_result_is_doubted_only_when_the_board_is_uncalibrated(tmp_path, applied, doubted):
+    radar = TeeBandRadar(_raw_dump())
+    radar.shot_result = _FakePacket
+    monitor = _tee_band_monitor(tmp_path, radar)
+    monitor.calibration_applied = applied
+    result = monitor._read_onboard_result()  # pylint: disable=protected-access
+    assert result.doubted is doubted

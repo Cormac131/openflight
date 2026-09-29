@@ -590,6 +590,26 @@ class IWR6843Radar:
         """
         return self._set_track_cfg_sub_mode(f"trackCfg ballSnr {snr:g}", snr == 0.0)
 
+    def set_radar_cal(self, args: tuple[float, ...], *, identity: bool) -> bool:
+        """``trackCfg cal``: the attitude and baseline zeros (``BoardCalibration.cal_args``).
+
+        Kept by the firmware across ``triggerCfg`` and ``sensorStart``; the next
+        ``triggerCfg`` copies it into the track configs. False when firmware
+        without it refuses the identity; any other refusal, and silence, raise.
+        """
+        text = " ".join(f"{value:g}" for value in args)
+        return self._set_track_cfg_sub_mode(f"trackCfg cal {text}", identity)
+
+    def set_elements(self, phases, gains, *, identity: bool) -> bool:
+        """``trackCfg elem i phase gain`` for every element, physical order."""
+        applied = True
+        for index, (phase, gain) in enumerate(zip(phases, gains)):
+            applied = (
+                self._set_track_cfg_sub_mode(f"trackCfg elem {index} {phase:g} {gain:g}", identity)
+                and applied
+            )
+        return applied
+
     def _set_track_cfg_sub_mode(self, command: str, is_default: bool) -> bool:
         """Send a persistent ``trackCfg`` sub-mode; old firmware may refuse its default.
 

@@ -805,3 +805,38 @@ def test_restoring_the_ball_snr_on_a_silent_board_still_fails(monkeypatch):
 
     with pytest.raises(RuntimeError, match="did not acknowledge"):
         radar.set_ball_snr(0.0)
+
+
+def test_set_radar_cal_and_elements_send_the_track_cfg_sub_modes(monkeypatch):
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    calls = []
+    monkeypatch.setattr(radar, "cmd", lambda command, window: calls.append(command) or "Done\n")
+
+    assert radar.set_radar_cal((10.4, 0.0, 0.0, 0.12, 0.0, 0.066), identity=False) is True
+    assert radar.set_elements((0.28, -0.43) + (0.0,) * 6, (0.95, 1.01) + (1.0,) * 6, identity=False)
+
+    assert calls[0] == "trackCfg cal 10.4 0 0 0.12 0 0.066"
+    assert calls[1:] == [
+        "trackCfg elem 0 0.28 0.95",
+        "trackCfg elem 1 -0.43 1.01",
+        *[f"trackCfg elem {i} 0 1" for i in range(2, 8)],
+    ]
+
+
+@pytest.mark.parametrize(
+    "reply", ["Error: trackCfg <loopPeriodS> ...\n", "'trackCfg' is not recognized as a CLI command\n"]
+)
+def test_identity_calibration_on_firmware_without_it_is_not_an_error(monkeypatch, reply):
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    monkeypatch.setattr(radar, "cmd", lambda *_a, **_k: reply)
+    assert radar.set_radar_cal((0.0,) * 6, identity=True) is False
+    assert radar.set_elements((0.0,) * 8, (1.0,) * 8, identity=True) is False
+    with pytest.raises(RuntimeError):
+        radar.set_radar_cal((10.4, 0, 0, 0, 0, 0), identity=False)
+
+
+def test_calibration_on_a_silent_board_fails(monkeypatch):
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    monkeypatch.setattr(radar, "cmd", lambda *_a, **_k: "")
+    with pytest.raises(RuntimeError, match="did not acknowledge"):
+        radar.set_elements((0.0,) * 8, (1.0,) * 8, identity=True)

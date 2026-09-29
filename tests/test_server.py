@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import sys
 import threading
 from datetime import datetime
@@ -519,7 +520,7 @@ class TestIWR6843ShotIntegration:
     def _init_capturing_monitor_kwargs(self, monkeypatch, tmp_path, **init_kwargs):
         """init_iwr6843 over a monitor double; returns the kwargs it was built with."""
         captured = {}
-        calibration = Calibration.identity()
+        calibration = Calibration.load("config/iwr6843_calibration_reference.json")
 
         class FakeCaptureMonitor:
             def __init__(self, **kwargs):
@@ -599,6 +600,19 @@ class TestIWR6843ShotIntegration:
 
         assert captured["tee_band_bins"] == 6.0
         assert server_module.iwr6843_runtime_config["tee_band_bins"] == 6.0
+        server_module.iwr6843_runtime = None
+
+    def test_init_iwr6843_sends_the_calibration_the_host_uses(self, monkeypatch, tmp_path):
+        captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path, tilt_deg=12.0)
+        board = captured["board_calibration"]
+        assert board.pitch_deg == pytest.approx(12.0), "--iwr6843-tilt-deg reaches the board"
+        assert server_module.iwr6843_runtime.calibration.tilt_rad == pytest.approx(math.radians(12.0))
+        server_module.iwr6843_runtime = None
+
+    def test_session_config_records_the_board_calibration(self, monkeypatch, tmp_path):
+        self._init_capturing_monitor_kwargs(monkeypatch, tmp_path)
+        recorded = server_module.iwr6843_runtime_config["board_calibration"]
+        assert set(recorded) >= {"pitch_deg", "elem_phase_rad", "elem_gain"}
         server_module.iwr6843_runtime = None
 
     def _init_with_ball_detector(self, monkeypatch, tmp_path, mode, emitted):

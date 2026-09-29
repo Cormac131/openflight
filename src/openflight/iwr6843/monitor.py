@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from openflight.gpio_factory import ensure_lgpio_pin_factory
+from openflight.iwr6843.board_calibration import BoardCalibration
 from openflight.iwr6843.driver import IWR6843Radar, UnsupportedCommand
 from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
 from openflight.iwr6843.self_trigger import (
@@ -366,6 +367,7 @@ class IWR6843CaptureMonitor:
         tee_range_m: float | None = None,
         tee_band_bins: float = TEE_BAND_DEFAULT_BINS,
         ball_snr: float | None = None,
+        board_calibration: BoardCalibration | None = None,
     ):
         # "not <=" also refuses NaN.
         if not 0.0 <= tee_band_bins <= TEE_BAND_MAX_BINS:
@@ -379,6 +381,10 @@ class IWR6843CaptureMonitor:
         # The ball tracker's extraction snr, apart from the trigger's; None
         # sends 0, the firmware's own default.
         self.ball_snr = None if ball_snr is None else check_ball_snr(ball_snr)
+        # Sent to the board at every start (identity when None); False until
+        # the firmware has acknowledged it.
+        self.board_calibration = board_calibration or BoardCalibration.identity()
+        self.calibration_applied = False
         self.config_path = Path(config_path)
         # With the tee known, the impact and ball windows are placed on it
         # (tee_relative_config) instead of the cfg's fixed ones.
@@ -481,6 +487,23 @@ class IWR6843CaptureMonitor:
                 logger.info(
                     "[IWR6843] Firmware has no ball snr setting (trackCfg ballSnr); "
                     "it uses its own default"
+                )
+            # Always sent, identity included: the firmware keeps it across
+            # sensorStart. Sent before triggerCfg, which copies it into the tracks.
+            board = self.board_calibration
+            applied = self.radar.set_radar_cal(board.cal_args, identity=board.is_identity)
+            applied = (
+                self.radar.set_elements(
+                    board.elem_phase_rad, board.elem_gain, identity=board.is_identity
+                )
+                and applied
+            )
+            self.calibration_applied = applied
+            if not applied:
+                logger.warning(
+                    "[IWR6843] Firmware has no trackCfg cal/elem, so the calibration was not "
+                    "applied: onboard launch angles are uncalibrated and will not be "
+                    "used this session"
                 )
             if onboard_track_config is not None:
                 self._configure_onboard_tracking(onboard_track_config)
@@ -703,6 +726,8 @@ class IWR6843CaptureMonitor:
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("[IWR6843] Onboard result unreadable: %s", exc)
             return None
+        if result is not None and not self.calibration_applied:
+            result = result.with_launch_angles_doubted()
         if result is not None:
             logger.info(
                 "[IWR6843] Onboard result: shot %d %s, %d club / %d ball points",

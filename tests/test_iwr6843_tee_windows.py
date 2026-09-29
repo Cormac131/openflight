@@ -204,6 +204,12 @@ class ConfigRadar:
     def set_ball_snr(self, snr):
         return True
 
+    def set_radar_cal(self, args, *, identity):
+        return True
+
+    def set_elements(self, phases, gains, *, identity):
+        return True
+
     def stop_sensor(self):
         pass
 
