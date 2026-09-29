@@ -23,6 +23,11 @@ as the firmware ships): ``--fast-ball`` (m/s, or ``club`` for the session's
 club-class floor, ``shot.CLUB_MIN_BALL_MS``) with ``--fast-support``,
 ``--min-departure-mps`` and ``--far-window-bins``. The launch's horizontal
 angle is recorded per capture so runs can be compared.
+
+``--impact`` adds the impact-time evaluation (``impact_eval``): the firmware's
+three-track fit (method A) against the joint-fit comparator (method C), per
+capture and summarised under ``"impact"``. ``--band-bins`` sets the tee band's
+half width for every capture (unset: the firmware default, off).
 """
 
 from __future__ import annotations
@@ -35,7 +40,7 @@ from pathlib import Path
 
 import numpy as np
 
-from openflight.iwr6843 import firmware_replay as fr
+from openflight.iwr6843 import firmware_replay as fr, impact_eval
 from openflight.iwr6843.dump import is_range_snapshot, parse_header
 from openflight.iwr6843.dump_viewer import (
     ViewerOptions,
@@ -74,6 +79,7 @@ class Outcome:
     launch_mps: float | None
     ops_mps: float
     launch_hla_deg: float | None = None
+    impact: impact_eval.ImpactOutcome | None = None  # with --impact
 
 
 def club_verdict(points: Sequence, split_frame: int | None) -> str:
@@ -179,8 +185,11 @@ def evaluate(
     tuning: fr.BallTuning | None = None,
     fast_ball_from_club: bool = False,
     joint_search: bool = False,
+    band_bins: float | None = None,
+    impact: bool = False,
 ) -> Outcome:
-    """Replay one capture and judge its club and ball tracks."""
+    """Replay one capture and judge its club and ball tracks (and its impact
+    time, when asked). ``band_bins`` None keeps the case's own tee band."""
     config = case.config
     if ball_hypotheses is not None:
         config = replace(config, ball_hypotheses=ball_hypotheses)
@@ -189,6 +198,8 @@ def evaluate(
         config = replace(config, ball_tuning=tuning)
     if joint_search:
         config = replace(config, joint_search=True)
+    if band_bins is not None:
+        config = replace(config, band_bins=band_bins)
     result = fr.replay_dump(case.path.read_bytes(), config, lib=lib)
     split = split_frame(result)
     post = [f for f in result.frames if split is not None and f.frame >= split]
@@ -204,6 +215,7 @@ def evaluate(
         launch_mps=launch,
         ops_mps=case.ops_mps,
         launch_hla_deg=(None if joint_search or result.launch is None else result.launch.hla_deg),
+        impact=impact_eval.impact_outcome(case.path.name, result) if impact else None,
     )
 
 
@@ -300,6 +312,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Score the joint club/ball path search's launch instead of the firmware default",
     )
+    parser.add_argument(
+        "--band-bins",
+        type=float,
+        help="Tee band half width in bins for every capture (unset: the firmware default, off)",
+    )
+    parser.add_argument(
+        "--impact",
+        action="store_true",
+        help="Also report impact from the tracks either side of the tee band (A vs C)",
+    )
     args = parser.parse_args(argv)
     search = {"firmware": None, "on": True, "off": False}[args.ball_hypotheses]
     from_club = args.fast_ball == "club"
@@ -311,17 +333,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             tuning=tuning,
             fast_ball_from_club=from_club,
             joint_search=args.joint_search,
+            band_bins=args.band_bins,
+            impact=args.impact,
         )
         for case in iter_cases(args.roots)
     ]
     summary = summarize(outcomes)
     print(json.dumps(summary, indent=2))
+    written = {"summary": summary, "outcomes": [asdict(o) for o in outcomes]}
+    if args.impact:
+        impact = impact_eval.summarize_impact([o.impact for o in outcomes])
+        print("impact:")
+        print(json.dumps(impact, indent=2))
+        written["impact"] = impact
     if args.json is not None:
-        args.json.write_text(
-            json.dumps({"summary": summary, "outcomes": [asdict(o) for o in outcomes]}, indent=2)
-            + "\n",
-            encoding="utf-8",
-        )
+        args.json.write_text(json.dumps(written, indent=2) + "\n", encoding="utf-8")
     if args.compare is not None:
         baseline = json.loads(args.compare.read_text(encoding="utf-8"))["summary"]
         problems = compare(summary, baseline, allow_more_none=args.allow_more_none)

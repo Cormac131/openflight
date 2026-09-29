@@ -211,6 +211,14 @@ def test_a_synthetic_shot_with_its_session_log_is_scored_end_to_end(ev, tmp_path
     assert ev.main([str(tmp_path), "--json", str(tmp_path / "out.json")]) == 0
     written = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
     assert written["summary"]["captures"] == 1
+    assert "impact" not in written and written["outcomes"][0]["impact"] is None
+    # --impact adds the impact summary and each capture's impact outcome.
+    argv = [str(tmp_path), "--impact", "--band-bins", "6", "--json", str(tmp_path / "i.json")]
+    assert ev.main(argv) == 0
+    written = json.loads((tmp_path / "i.json").read_text(encoding="utf-8"))
+    assert written["impact"]["captures"] == 1
+    assert written["impact"]["club_points_in_band"] == 0
+    assert written["outcomes"][0]["impact"]["name"] == dump.name
 
 
 def test_joint_launch_mps_averages_the_confirmed_points_after_the_first(ev):
@@ -279,6 +287,8 @@ def args_for(ev, *extra):
         tuning=None,
         fast_ball_from_club,
         joint_search=False,
+        band_bins=None,
+        impact=False,
     ):
         seen.update(tuning=tuning, from_club=fast_ball_from_club)
         return ev.Outcome("x", "club", "ok", True, 40.0, 40.0)
@@ -344,3 +354,58 @@ def test_the_club_floor_fills_in_the_runs_tuning(ev, tmp_path):
     assert ev.tuning_for(case, kept, fast_ball_from_club=True) == ev.fr.BallTuning(
         far_window_bins=3.0, fast_ball_mps=50.0
     )
+
+
+def test_band_bins_reaches_the_replay_config_only_when_given(ev, monkeypatch, tmp_path):
+    configs = []
+
+    def fake_replay(data, config, lib=None):
+        configs.append(config)
+        return SimpleNamespace(config=config, frames=[], points=[], fired_frame=None, launch=None)
+
+    monkeypatch.setattr(ev.fr, "replay_dump", fake_replay)
+    path = tmp_path / "x.l3dump"
+    path.write_bytes(b"")
+    case = ev.Case(path, ev.fr.ReplayConfig(tee_bin=29), 40.0)
+    ev.evaluate(case)
+    ev.evaluate(case, band_bins=6.0)
+    ev.evaluate(case, band_bins=0.0)
+    assert [c.band_bins for c in configs] == [None, 6.0, 0.0]
+    assert configs[0] == case.config  # unset: the case's own config, unchanged
+
+
+def test_evaluate_attaches_the_impact_outcome_only_when_asked(ev, monkeypatch, tmp_path):
+    result = SimpleNamespace(
+        config=ev.fr.ReplayConfig(tee_bin=29), frames=[], points=[], fired_frame=None, launch=None
+    )
+    monkeypatch.setattr(ev.fr, "replay_dump", lambda data, config, lib=None: result)
+    marker = object()
+    monkeypatch.setattr(ev.impact_eval, "impact_outcome", lambda name, r: (name, r, marker))
+    path = tmp_path / "x.l3dump"
+    path.write_bytes(b"")
+    case = ev.Case(path, ev.fr.ReplayConfig(tee_bin=29), 40.0)
+    assert ev.evaluate(case).impact is None
+    assert ev.evaluate(case, impact=True).impact == ("x.l3dump", result, marker)
+
+
+def test_the_cli_passes_band_bins_and_impact_through(ev, monkeypatch, tmp_path, capsys):
+    seen = []
+    monkeypatch.setattr(ev, "iter_cases", lambda roots: iter([object()]))
+    impact = ev.impact_eval.ImpactOutcome("x", "consistent", ("club_in",), 100.0, -1.0, None, 0)
+
+    def fake_evaluate(case, *, band_bins=None, impact=False, **_rest):
+        seen.append((band_bins, impact))
+        return ev.Outcome(
+            "x", "club", "ok", True, 40.0, 40.0, impact=impact_outcome if impact else None
+        )
+
+    impact_outcome = impact
+    monkeypatch.setattr(ev, "evaluate", fake_evaluate)
+    assert ev.main([str(tmp_path)]) == 0
+    assert "impact:" not in capsys.readouterr().out
+    out = tmp_path / "o.json"
+    assert ev.main([str(tmp_path), "--band-bins", "6", "--impact", "--json", str(out)]) == 0
+    assert "impact:" in capsys.readouterr().out
+    assert seen == [(None, False), (6.0, True)]
+    written = json.loads(out.read_text(encoding="utf-8"))
+    assert written["impact"] == ev.impact_eval.summarize_impact([impact])
