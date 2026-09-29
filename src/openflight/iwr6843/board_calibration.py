@@ -41,15 +41,15 @@ class BoardCalibration:  # pylint: disable=too-many-instance-attributes
         return cls(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, (0.0,) * N_ELEMENTS, (1.0,) * N_ELEMENTS)
 
     @classmethod
-    def from_calibration(
-        cls, cal: Calibration, *, horizontal_phase_reference_rad: float | None = None
-    ) -> BoardCalibration:
+    def from_calibration(cls, cal: Calibration) -> BoardCalibration:
         correction = np.asarray(cal.elem_correction, dtype=complex)
         return cls(
             pitch_deg=math.degrees(cal.tilt_rad),
             yaw_deg=0.0,
             roll_deg=0.0,
-            az_offset_rad=float(horizontal_phase_reference_rad or 0.0),
+            # Always 0: the firmware subtracts azimuthOffsetRad in both l3_angle.c and
+            # l3_frames.c, so a non-zero value would be applied twice (tracked separately).
+            az_offset_rad=0.0,
             el_offset_deg=0.0,
             range_bias_m=float(cal.range_bias_m),
             elem_phase_rad=tuple(float(-np.angle(c)) for c in correction),

@@ -1187,32 +1187,45 @@ class TestIWR6843ShotIntegration:
         assert shot.ball_speed_mph == 100.0
         assert shot.to_dict()["iwr6843_onboard"]["shot_id"] == 4
 
-    def test_onboard_metrics_flag_applies_usable_angles_and_keeps_ops_ball_speed(self, monkeypatch):
+    def test_onboard_metrics_flag_applies_club_delivery_but_never_launch_angles(self, monkeypatch):
         monkeypatch.setattr(server_module, "iwr6843_onboard_metrics", True)
         shot = self._onboard_shot(monkeypatch, self._onboard_packet())
 
-        assert shot.launch_angle_vertical == pytest.approx(14.5)
-        assert shot.launch_angle_vertical_source == "radar_onboard"
-        assert shot.launch_angle_vertical_confidence == pytest.approx(0.8)
-        assert shot.angle_source == "radar"
-        assert shot.launch_angle_horizontal == pytest.approx(-1.2)
-        assert shot.launch_angle_horizontal_source == "radar_onboard"
+        assert shot.launch_angle_vertical is None, "launch angles always come from the host"
+        assert shot.launch_angle_vertical_source != "radar_onboard"
+        assert shot.launch_angle_horizontal is None
+        assert shot.launch_angle_horizontal_source != "radar_onboard"
+        assert shot.iwr6843_onboard["metrics"]["vertical_launch"]["value"] == pytest.approx(14.5)
         assert shot.experimental_club_path_deg == pytest.approx(2.5)
         assert shot.experimental_club_path_status == "onboard"
         assert shot.experimental_attack_angle_deg == pytest.approx(-3.0)
         assert shot.experimental_attack_angle_status == "onboard"
         assert shot.ball_speed_mph == 100.0, "OPS ball speed is never overridden"
 
+    def test_onboard_metrics_flag_keeps_host_launch_angles(self, monkeypatch):
+        monkeypatch.setattr(server_module, "iwr6843_onboard_metrics", True)
+        shot = Shot(
+            ball_speed_mph=100.0,
+            club_speed_mph=80.0,
+            timestamp=datetime.now(),
+            club=ClubType.IRON_9,
+            launch_angle_vertical=11.0,
+            launch_angle_vertical_source="radar_lcmf",
+            launch_angle_horizontal=-0.9,
+        )
+        server_module._apply_onboard_metrics(shot, self._onboard_packet())
+        assert shot.launch_angle_vertical == 11.0
+        assert shot.launch_angle_vertical_source == "radar_lcmf"
+        assert shot.launch_angle_horizontal == -0.9
+
     def test_onboard_metrics_flag_skips_invalid_results_and_unusable_metrics(self, monkeypatch):
         monkeypatch.setattr(server_module, "iwr6843_onboard_metrics", True)
         shot = self._onboard_shot(monkeypatch, self._onboard_packet(verdict="invalid"))
-        assert shot.launch_angle_vertical is None
+        assert shot.experimental_club_path_deg is None
         assert shot.iwr6843_onboard["verdict"] == "invalid"
 
         partial = self._onboard_packet(verdict="partial", vertical=None, path=None)
         shot = self._onboard_shot(monkeypatch, partial)
-        assert shot.launch_angle_vertical is None
-        assert shot.launch_angle_horizontal == pytest.approx(-1.2)
         assert shot.experimental_club_path_deg is None
         assert shot.experimental_attack_angle_deg == pytest.approx(-3.0)
 

@@ -54,11 +54,11 @@ class FakeRadar:
         self.ball_snrs.append(snr)
         return True
 
-    def set_radar_cal(self, args, *, identity):
+    def set_radar_cal(self, args):
         """The monitor sends the board calibration (identity included) at every start."""
         return True
 
-    def set_elements(self, phases, gains, *, identity):
+    def set_elements(self, phases, gains):
         return True
 
     def read_dump(self):
@@ -1249,11 +1249,11 @@ class TeeBandRadar(FakeRadar):
             raise self.band_error
         return self.band_supported
 
-    def set_radar_cal(self, args, *, identity):
+    def set_radar_cal(self, args):
         self.events.append(("cal", tuple(args)))
         return self.cal_supported
 
-    def set_elements(self, phases, gains, *, identity):
+    def set_elements(self, phases, gains):
         self.events.append(("elem", tuple(phases)))
         return self.cal_supported
 
@@ -1414,15 +1414,28 @@ def test_no_calibration_sends_identity_so_a_restart_clears_it(tmp_path):
         monitor.stop()
 
 
-def test_old_firmware_calibration_refusal_doubts_onboard_angles_and_continues(tmp_path, caplog):
+def test_old_firmware_refusing_a_real_calibration_warns_doubts_and_continues(tmp_path, caplog):
     radar = TeeBandRadar(_raw_dump(), cal_supported=False)
-    monitor = _tee_band_monitor(tmp_path, radar)
+    board = BoardCalibration.from_file("config/iwr6843_calibration_reference.json")
+    monitor = _tee_band_monitor(tmp_path, radar, board_calibration=board)
     with caplog.at_level(logging.WARNING, logger="openflight.iwr6843.monitor"):
         monitor.start(armed=False)
     try:
         assert monitor._running  # pylint: disable=protected-access
         assert monitor.calibration_applied is False
         assert any("calibration" in r.getMessage() for r in caplog.records)
+    finally:
+        monitor.stop()
+
+
+def test_old_firmware_refusing_identity_is_not_a_warning_or_a_doubt(tmp_path, caplog):
+    radar = TeeBandRadar(_raw_dump(), cal_supported=False)
+    monitor = _tee_band_monitor(tmp_path, radar)
+    with caplog.at_level(logging.WARNING, logger="openflight.iwr6843.monitor"):
+        monitor.start(armed=False)
+    try:
+        assert monitor.calibration_applied is True
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
     finally:
         monitor.stop()
 
@@ -1436,7 +1449,7 @@ class _FakePacket:
     ball_points = 0
     doubted = False
 
-    def with_launch_angles_doubted(self):
+    def with_onboard_angles_doubted(self):
         doubted = _FakePacket()
         doubted.doubted = True
         return doubted

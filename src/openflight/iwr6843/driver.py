@@ -577,7 +577,9 @@ class IWR6843Radar:
         returns False: there is no band to clear. Any other refusal, and a
         board that does not answer at all, raises RuntimeError.
         """
-        return self._set_track_cfg_sub_mode(f"trackCfg impactFit {bins:g}", bins == 0.0)
+        return self._set_track_cfg_sub_mode(
+            f"trackCfg impactFit {bins:g}", refusal_ok=bins == 0.0
+        )
 
     def set_ball_snr(self, snr: float) -> bool:
         """Set the ball tracker's extraction snr apart from the trigger's (0: firmware default).
@@ -588,37 +590,42 @@ class IWR6843Radar:
         since it uses that default anyway. Any other refusal, and silence,
         raises RuntimeError.
         """
-        return self._set_track_cfg_sub_mode(f"trackCfg ballSnr {snr:g}", snr == 0.0)
+        return self._set_track_cfg_sub_mode(f"trackCfg ballSnr {snr:g}", refusal_ok=snr == 0.0)
 
-    def set_radar_cal(self, args: tuple[float, ...], *, identity: bool) -> bool:
+    def set_radar_cal(self, args: tuple[float, ...]) -> bool:
         """``trackCfg cal``: the attitude and baseline zeros (``BoardCalibration.cal_args``).
 
         Kept by the firmware across ``triggerCfg`` and ``sensorStart``; the next
         ``triggerCfg`` copies it into the track configs. False when firmware
-        without it refuses the identity; any other refusal, and silence, raise.
+        without it refuses it (``Error`` or ``not recognized``), for any values;
+        silence raises.
         """
         text = " ".join(f"{value:g}" for value in args)
-        return self._set_track_cfg_sub_mode(f"trackCfg cal {text}", identity)
+        return self._set_track_cfg_sub_mode(f"trackCfg cal {text}", refusal_ok=True)
 
-    def set_elements(self, phases, gains, *, identity: bool) -> bool:
-        """``trackCfg elem i phase gain`` for every element, physical order."""
+    def set_elements(self, phases, gains) -> bool:
+        """``trackCfg elem i phase gain`` for every element, physical order.
+
+        False when firmware without it refuses any of them; silence raises.
+        """
         applied = True
         for index, (phase, gain) in enumerate(zip(phases, gains)):
             applied = (
-                self._set_track_cfg_sub_mode(f"trackCfg elem {index} {phase:g} {gain:g}", identity)
+                self._set_track_cfg_sub_mode(
+                    f"trackCfg elem {index} {phase:g} {gain:g}", refusal_ok=True
+                )
                 and applied
             )
         return applied
 
-    def _set_track_cfg_sub_mode(self, command: str, is_default: bool) -> bool:
-        """Send a persistent ``trackCfg`` sub-mode; old firmware may refuse its default.
+    def _set_track_cfg_sub_mode(self, command: str, *, refusal_ok: bool) -> bool:
+        """Send a persistent ``trackCfg`` sub-mode; old firmware may refuse it.
 
-        A refusal (``Error`` or ``not recognized``) of the default value is
-        firmware without the sub-mode, which already behaves as the default:
-        False. Anything else must answer ``Done``.
+        With ``refusal_ok``, a refusal (``Error`` or ``not recognized``) is
+        firmware without the sub-mode: False. Anything else must answer ``Done``.
         """
         reply = self.cmd(command, 2.0)
-        if is_default and "Done" not in reply and ("Error" in reply or "not recognized" in reply):
+        if refusal_ok and "Done" not in reply and ("Error" in reply or "not recognized" in reply):
             return False
         self._require_done(command, reply)
         return True

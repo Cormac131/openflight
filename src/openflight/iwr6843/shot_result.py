@@ -97,11 +97,12 @@ class ShotResultPacket:
     def __getitem__(self, name: str) -> Measurement:
         return self.metrics[name]
 
-    def with_launch_angles_doubted(self) -> ShotResultPacket:
-        """The same packet with the ball's launch angles marked implausible:
-        the board ran without the calibration the Pi uses."""
+    def with_onboard_angles_doubted(self) -> ShotResultPacket:
+        """The same packet with every angle-derived metric marked implausible
+        (launch angles, club path, angle of attack): the board ran without
+        the calibration the Pi uses."""
         metrics = dict(self.metrics)
-        for name in ("vertical_launch", "horizontal_launch"):
+        for name in ("vertical_launch", "horizontal_launch", "club_path", "angle_of_attack"):
             if metrics[name].value is not None:
                 metrics[name] = replace(metrics[name], implausible=True)
         return replace(self, metrics=metrics)

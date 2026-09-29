@@ -812,8 +812,8 @@ def test_set_radar_cal_and_elements_send_the_track_cfg_sub_modes(monkeypatch):
     calls = []
     monkeypatch.setattr(radar, "cmd", lambda command, window: calls.append(command) or "Done\n")
 
-    assert radar.set_radar_cal((10.4, 0.0, 0.0, 0.12, 0.0, 0.066), identity=False) is True
-    assert radar.set_elements((0.28, -0.43) + (0.0,) * 6, (0.95, 1.01) + (1.0,) * 6, identity=False)
+    assert radar.set_radar_cal((10.4, 0.0, 0.0, 0.12, 0.0, 0.066)) is True
+    assert radar.set_elements((0.28, -0.43) + (0.0,) * 6, (0.95, 1.01) + (1.0,) * 6)
 
     assert calls[0] == "trackCfg cal 10.4 0 0 0.12 0 0.066"
     assert calls[1:] == [
@@ -826,17 +826,19 @@ def test_set_radar_cal_and_elements_send_the_track_cfg_sub_modes(monkeypatch):
 @pytest.mark.parametrize(
     "reply", ["Error: trackCfg <loopPeriodS> ...\n", "'trackCfg' is not recognized as a CLI command\n"]
 )
-def test_identity_calibration_on_firmware_without_it_is_not_an_error(monkeypatch, reply):
+def test_calibration_refused_by_old_firmware_returns_false_for_any_values(monkeypatch, reply):
     radar = IWR6843Radar.__new__(IWR6843Radar)
     monkeypatch.setattr(radar, "cmd", lambda *_a, **_k: reply)
-    assert radar.set_radar_cal((0.0,) * 6, identity=True) is False
-    assert radar.set_elements((0.0,) * 8, (1.0,) * 8, identity=True) is False
-    with pytest.raises(RuntimeError):
-        radar.set_radar_cal((10.4, 0, 0, 0, 0, 0), identity=False)
+    assert radar.set_radar_cal((0.0,) * 6) is False
+    assert radar.set_elements((0.0,) * 8, (1.0,) * 8) is False
+    assert radar.set_radar_cal((10.4, 0, 0, 0, 0, 0.066)) is False
+    assert radar.set_elements((0.28,) + (0.0,) * 7, (0.95,) + (1.0,) * 7) is False
 
 
 def test_calibration_on_a_silent_board_fails(monkeypatch):
     radar = IWR6843Radar.__new__(IWR6843Radar)
     monkeypatch.setattr(radar, "cmd", lambda *_a, **_k: "")
     with pytest.raises(RuntimeError, match="did not acknowledge"):
-        radar.set_elements((0.0,) * 8, (1.0,) * 8, identity=True)
+        radar.set_elements((0.28,) + (0.0,) * 7, (0.95,) + (1.0,) * 7)
+    with pytest.raises(RuntimeError, match="did not acknowledge"):
+        radar.set_radar_cal((10.4, 0, 0, 0, 0, 0.066))

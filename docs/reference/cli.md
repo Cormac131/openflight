@@ -71,7 +71,7 @@ The supported angle radar.
 | `--iwr6843-self-trigger` | flag | Freeze the IWR ring when the firmware tracks the clubhead into the tee and send S! to the OPS, instead of the sound-gate edge. Disconnect the SEN-14262 GATE from HOST_INT. Requires --iwr6843 and --trigger sound |
 | `--iwr6843-full-capture` | flag | Transfer all samples and TX channels instead of selected cells; about 7 seconds for the default profile. Use with `--debug` to save full diagnostic dumps. |
 | `--no-iwr6843-onboard-track` | flag | Select cells on the Pi instead of onboard; still transfers selected samples unless `--iwr6843-full-capture` is set. |
-| `--iwr6843-onboard-metrics` | flag | Prefer the firmware's usable launch angles, club path and attack angle over the host pipeline's. The onboard result rides on every shot as `iwr6843_onboard` either way; OPS ball speed is never replaced. |
+| `--iwr6843-onboard-metrics` | flag | Prefer the firmware's usable club path and attack angle over the host pipeline's; launch angles always come from the host. The onboard result rides on every shot as `iwr6843_onboard` either way; OPS ball speed is never replaced. |
 | `--iwr6843-ball-detector` | choices: `off`, `on`, `follow`; default `on` | Firmware ball-placement detector: `on` locks the ball for the onboard shot machine and drives the kiosk setup banner; `follow` also aims the self-trigger at the locked ball; `off` keeps the configured tee bin |
 | `--iwr6843-setup-poll-s` | float; default `1.0` | Seconds between `ball status` polls for the setup banner |
 | `--iwr6843-self-trigger-bin` | int | Global range-FFT bin the trigger watches, inside the cfg's first capture window (default: 42, 1.97 m, whatever --iwr6843-tee-m says; bin 34 is 1.59 m). Requires --iwr6843-self-trigger |

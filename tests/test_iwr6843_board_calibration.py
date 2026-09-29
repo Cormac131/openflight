@@ -23,10 +23,10 @@ def test_identity_is_zero_attitude_and_unit_elements():
 
 def test_from_calibration_maps_tilt_bias_and_elements():
     cal = Calibration.load(REFERENCE)
-    board = BoardCalibration.from_calibration(cal, horizontal_phase_reference_rad=0.12)
+    board = BoardCalibration.from_calibration(cal)
     assert board.pitch_deg == pytest.approx(math.degrees(cal.tilt_rad))
     assert (board.yaw_deg, board.roll_deg, board.el_offset_deg) == (0.0, 0.0, 0.0)
-    assert board.az_offset_rad == pytest.approx(0.12)
+    assert board.az_offset_rad == 0.0
     assert board.range_bias_m == pytest.approx(cal.range_bias_m)
     rebuilt = np.exp(-1j * np.array(board.elem_phase_rad)) / np.array(board.elem_gain)
     assert rebuilt == pytest.approx(cal.elem_correction, rel=1e-9)

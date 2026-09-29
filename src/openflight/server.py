@@ -155,8 +155,8 @@ ballistics_enabled: bool = True
 # altitude from the CLI (later the environmental sensors). Standard by default.
 flight_environment: Environment = STANDARD_ENVIRONMENT
 # The IWR6843 firmware's own shot result rides on every shot as
-# shot.iwr6843_onboard. With --iwr6843-onboard-metrics its usable launch angles
-# and club delivery also replace the host pipeline's values on the shot.
+# shot.iwr6843_onboard. With --iwr6843-onboard-metrics its usable club delivery
+# (path, attack) also replaces the host pipeline's; launch angles stay the host's.
 iwr6843_onboard_metrics: bool = False
 
 # Simulator connectors (optional). Populated in main() from config/sim.json +
@@ -1231,9 +1231,7 @@ def init_iwr6843(
         if radar_height_m is not None:
             calibration.meta["radar_height_m"] = radar_height_m
 
-        board_calibration = BoardCalibration.from_calibration(
-            calibration, horizontal_phase_reference_rad=horizontal_phase_reference_rad
-        )
+        board_calibration = BoardCalibration.from_calibration(calibration)
         capture_monitor = IWR6843CaptureMonitor(
             config_path=config_path,
             output_dir=output_dir,
@@ -2705,26 +2703,15 @@ def _log_onboard_comparison(shot: Shot, onboard, measurement, club_path) -> None
 
 
 def _apply_onboard_metrics(shot: Shot, onboard) -> None:
-    """Prefer the firmware's usable launch angles and club delivery on the shot.
+    """Prefer the firmware's usable club delivery (path, attack) on the shot.
 
-    Ball speed stays the OPS measurement, which is the trusted one; the
-    onboard ball speed is kept for comparison in shot.iwr6843_onboard.
+    Launch angles are never taken from the board: the host LCMF-v1 fit is the
+    only launch-angle source, and the onboard values stay on
+    shot.iwr6843_onboard for comparison. Ball speed stays the OPS measurement.
     Nothing implausible or invalid is copied.
     """
     if onboard.verdict == "invalid":
         return
-    vertical = onboard["vertical_launch"]
-    if vertical.usable:
-        shot.launch_angle_vertical = vertical.value
-        shot.launch_angle_vertical_source = "radar_onboard"
-        shot.launch_angle_vertical_confidence = vertical.confidence
-        shot.launch_angle_confidence = vertical.confidence
-        shot.angle_source = "radar"
-    horizontal = onboard["horizontal_launch"]
-    if horizontal.usable:
-        shot.launch_angle_horizontal = horizontal.value
-        shot.launch_angle_horizontal_source = "radar_onboard"
-        shot.launch_angle_horizontal_confidence = horizontal.confidence
     path = onboard["club_path"]
     if path.usable:
         shot.experimental_club_path_deg = round(path.value, 1)
@@ -4974,8 +4961,9 @@ def main():
     parser.add_argument(
         "--iwr6843-onboard-metrics",
         action="store_true",
-        help="Prefer the IWR6843 firmware's usable launch angles and club delivery over the host "
-        "pipeline's. The onboard result rides on every shot as iwr6843_onboard either way.",
+        help="Prefer the IWR6843 firmware's usable club delivery (path, attack) over the host "
+        "pipeline's. Launch angles always come from the host. The onboard result rides on "
+        "every shot as iwr6843_onboard either way.",
     )
     parser.add_argument(
         "--iwr6843-self-trigger-frames",

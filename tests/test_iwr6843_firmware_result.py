@@ -583,9 +583,13 @@ def test_the_host_uses_an_unflagged_balls_launch_angles(lib):
     assert packet["vertical_launch"].usable and packet["horizontal_launch"].usable
 
 
-def test_doubting_launch_angles_leaves_everything_else(lib):
+def test_doubting_onboard_angles_leaves_the_speeds_usable(lib):
     packet = _parsed(lib, build(lib, make_shot(lib), make_ball(lib), make_launch()))
-    doubted = packet.with_launch_angles_doubted()
-    assert not doubted["vertical_launch"].usable and not doubted["horizontal_launch"].usable
-    for name in ("ball_speed", "club_speed", "club_path", "angle_of_attack"):
-        assert doubted[name].usable == packet[name].usable, name
+    doubted = packet.with_onboard_angles_doubted()
+    angles = ("vertical_launch", "horizontal_launch", "club_path", "angle_of_attack")
+    for name in angles:
+        assert not doubted[name].usable, name
+    for name in packet.metrics:
+        if name not in angles:
+            assert doubted[name].usable == packet[name].usable, name
+    assert doubted["ball_speed"].usable and doubted["club_speed"].usable

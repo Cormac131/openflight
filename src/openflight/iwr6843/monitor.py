@@ -491,19 +491,16 @@ class IWR6843CaptureMonitor:
             # Always sent, identity included: the firmware keeps it across
             # sensorStart. Sent before triggerCfg, which copies it into the tracks.
             board = self.board_calibration
-            applied = self.radar.set_radar_cal(board.cal_args, identity=board.is_identity)
-            applied = (
-                self.radar.set_elements(
-                    board.elem_phase_rad, board.elem_gain, identity=board.is_identity
-                )
-                and applied
-            )
-            self.calibration_applied = applied
-            if not applied:
+            applied = self.radar.set_radar_cal(board.cal_args)
+            applied = self.radar.set_elements(board.elem_phase_rad, board.elem_gain) and applied
+            # Firmware without the sub-modes already runs the identity, so an
+            # identity refusal loses nothing.
+            self.calibration_applied = applied or board.is_identity
+            if not self.calibration_applied:
                 logger.warning(
                     "[IWR6843] Firmware has no trackCfg cal/elem, so the calibration was not "
-                    "applied: onboard launch angles are uncalibrated and will not be "
-                    "used this session"
+                    "applied: onboard launch angles, club path and angle of attack are "
+                    "uncalibrated and will not be used this session"
                 )
             if onboard_track_config is not None:
                 self._configure_onboard_tracking(onboard_track_config)
@@ -727,7 +724,7 @@ class IWR6843CaptureMonitor:
             logger.warning("[IWR6843] Onboard result unreadable: %s", exc)
             return None
         if result is not None and not self.calibration_applied:
-            result = result.with_launch_angles_doubted()
+            result = result.with_onboard_angles_doubted()
         if result is not None:
             logger.info(
                 "[IWR6843] Onboard result: shot %d %s, %d club / %d ball points",
