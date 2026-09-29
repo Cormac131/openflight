@@ -6,8 +6,19 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from iwr6843_synth import synth_shot_dump
 
-from openflight.iwr6843 import label_scoring as ls, labels as lb
+from openflight.iwr6843 import (
+    firmware_host as fw,
+    firmware_replay as fr,
+    label_scoring as ls,
+    labels as lb,
+)
+
+needs_compiler = pytest.mark.skipif(
+    fw.host_compiler() is None, reason="no C compiler for the firmware modules"
+)
+TEE_BIN = int(1.372 / (6.0 / 128))
 
 
 def _fw(frame, range_bin, doppler=0.0):
@@ -116,3 +127,76 @@ def test_baseline_round_trip_and_missing_file(tmp_path):
     assert ls.load_baseline(tmp_path) == {"a.l3dump": 0.9, "b.l3dump": 0.5}
     text = (tmp_path / ls.BASELINE_NAME).read_text(encoding="utf-8")
     assert list(json.loads(text)) == ["a.l3dump", "b.l3dump"]
+
+
+# --- end to end on a synthetic recording ---------------------------------------
+
+
+def _recordings_dir(tmp_path):
+    """A recordings folder with one synthetic dump and a manifest entry for it."""
+    (tmp_path / "synth.l3dump").write_bytes(synth_shot_dump(ball_speed_ms=60.0, tee_range_m=1.372))
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"default": {"tee_bin": TEE_BIN, "dest_bin": TEE_BIN}}), encoding="utf-8"
+    )
+    return tmp_path
+
+
+def _labels_from_result(dump, result, *, shift=0.0, unseen_ball_frames=(), reviewed=True):
+    base = lb.empty_labels(dump)
+    ball = tuple(lb.LabelPoint(p.frame, p.range_bin + shift) for p in result.ball_points)
+    # frames a reviewer labelled that the firmware never tracked: a miss
+    ball += tuple(lb.LabelPoint(f, 20.0) for f in unseen_ball_frames)
+    club = tuple(lb.LabelPoint(p.frame, p.range_bin) for p in result.points)
+    return lb.Labels(base.dump, base.dump_sha256, reviewed, ball=ball, club=club)
+
+
+@needs_compiler
+def test_reviewed_recordings_pairs_each_labelled_dump_with_its_manifest_config(tmp_path):
+    directory = _recordings_dir(tmp_path)
+    dump = directory / "synth.l3dump"
+    assert ls.reviewed_recordings(directory) == []  # no labels yet
+    result = fr.replay_dump(dump.read_bytes(), fr.recording_configs(directory)[0][1])
+    lb.save_labels(dump, _labels_from_result(dump, result, reviewed=False))
+    assert ls.reviewed_recordings(directory) == []  # not reviewed
+    lb.save_labels(dump, _labels_from_result(dump, result))
+    (found,) = ls.reviewed_recordings(directory)
+    assert found[0] == dump and found[1].dest_bin == TEE_BIN and found[2].reviewed
+
+
+@needs_compiler
+def test_a_dump_that_changed_after_labelling_fails_loudly(tmp_path):
+    directory = _recordings_dir(tmp_path)
+    dump = directory / "synth.l3dump"
+    result = fr.replay_dump(dump.read_bytes(), fr.recording_configs(directory)[0][1])
+    lb.save_labels(dump, _labels_from_result(dump, result))
+    dump.write_bytes(dump.read_bytes() + b"\x00")
+    with pytest.raises(lb.LabelError, match="changed since it was labelled"):
+        ls.reviewed_recordings(directory)
+
+
+@needs_compiler
+def test_labels_equal_to_the_firmware_track_score_one_and_pass(tmp_path):
+    directory = _recordings_dir(tmp_path)
+    dump, config = fr.recording_configs(directory)[0]
+    result = fr.replay_dump(dump.read_bytes(), config)
+    assert result.ball_points, "the synthetic ball must be tracked for this test to mean anything"
+    labels = _labels_from_result(dump, result)
+    scores = ls.score_labels(labels, result)
+    assert ls.dump_score(scores) == pytest.approx(1.0)
+    assert ls.check_labels(labels, scores) == []
+
+
+@needs_compiler
+def test_a_wrong_label_lowers_the_score_and_a_missing_one_fails_coverage(tmp_path):
+    directory = _recordings_dir(tmp_path)
+    dump, config = fr.recording_configs(directory)[0]
+    result = fr.replay_dump(dump.read_bytes(), config)
+    shifted = _labels_from_result(dump, result, shift=5.0)
+    shifted_scores = ls.score_labels(shifted, result)
+    assert ls.dump_score(shifted_scores) < 1.0
+    assert ls.check_labels(shifted, shifted_scores)  # coverage collapsed
+    tracked = {p.frame for p in result.ball_points}
+    unseen = [f for f in range(60) if f not in tracked][: 3 * len(tracked)]
+    missed = _labels_from_result(dump, result, unseen_ball_frames=unseen)
+    missed_scores = ls.score_labels(missed, result)
+    assert any("ball: coverage" in f for f in ls.check_labels(missed, missed_scores))
