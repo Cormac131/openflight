@@ -590,6 +590,50 @@ class TestIWR6843ShotIntegration:
         assert config["array_depth_m"] == ARRAY_DEPTH_M
         server_module.iwr6843_runtime = None
 
+    def test_init_iwr6843_adds_the_array_depth_to_a_net_measured_from_the_front(
+        self, monkeypatch, tmp_path
+    ):
+        """The net is measured from the enclosure front too; the ball-track clamp
+        (net - 0.25 m) is in range from the array. The log keeps the tape reading."""
+        self._init_capturing_monitor_kwargs(monkeypatch, tmp_path)
+
+        assert server_module.iwr6843_runtime.net_range_m == pytest.approx(4.6 + ARRAY_DEPTH_M)
+        assert server_module.iwr6843_runtime_config["net_range_m"] == 4.6
+        server_module.iwr6843_runtime = None
+
+    def test_a_missing_net_stays_missing(self, monkeypatch, tmp_path):
+        """No net (None) is not a net at the array depth."""
+        calibration = Calibration.load("config/iwr6843_calibration_reference.json")
+
+        class FakeCaptureMonitor:
+            def __init__(self, **kwargs):
+                self.port = "/dev/ttyUSB0"
+
+            def start(self, *, armed=True, onboard_track_config=None):
+                self.self_trigger = None
+                self.onboard_tracking = False
+
+            def stop(self):
+                return None
+
+        monkeypatch.setattr(Calibration, "load", lambda _path: calibration)
+        monkeypatch.setattr("openflight.iwr6843.monitor.IWR6843CaptureMonitor", FakeCaptureMonitor)
+        monkeypatch.setattr("openflight.iwr6843.monitor.tx_order_from_config", lambda _p: "normal")
+
+        assert server_module.init_iwr6843(
+            port="/dev/ttyUSB0",
+            config_path="snapshot.cfg",
+            calibration_path="cal.json",
+            output_dir=tmp_path,
+            trigger_pin=17,
+            tee_range_m=1.575,
+            net_range_m=None,
+            tx_order="auto",
+            capture_timeout_s=12.0,
+        )
+        assert server_module.iwr6843_runtime.net_range_m is None
+        server_module.iwr6843_runtime = None
+
     def test_init_iwr6843_puts_the_tee_band_on_by_default(self, monkeypatch, tmp_path):
         captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path)
 

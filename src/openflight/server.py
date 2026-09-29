@@ -1212,10 +1212,11 @@ def init_iwr6843(
 
     if ball_detector not in BALL_DETECTOR_MODES:
         raise ValueError(f"--iwr6843-ball-detector must be one of {BALL_DETECTOR_MODES}")
-    # ``tee_range_m`` is the tape reading from the enclosure front to the ball.
-    # The calibration (shot geometry, club gate) and the monitor (capture windows,
-    # trigger) work in range from the array, which sits behind the front; the
-    # session log keeps the tape reading so older logs mean the same thing.
+    # ``tee_range_m`` and ``net_range_m`` are tape readings from the enclosure
+    # front. The calibration (shot geometry, club gate), the monitor (capture
+    # windows, trigger) and the runtime (ball-track clamp at the net) work in
+    # range from the array, which sits behind the front; the session log keeps
+    # the tape readings so older logs mean the same thing.
     from .iwr6843.calibration import (  # pylint: disable=import-outside-toplevel
         ARRAY_DEPTH_M,
         antenna_range_m,
@@ -1223,6 +1224,8 @@ def init_iwr6843(
 
     tee_from_front_m = tee_range_m
     tee_range_m = antenna_range_m(tee_from_front_m)
+    net_from_front_m = net_range_m
+    net_range_m = None if net_from_front_m is None else antenna_range_m(net_from_front_m)
     try:
         from .iwr6843 import Calibration
         from .iwr6843.board_calibration import BoardCalibration
@@ -1321,7 +1324,7 @@ def init_iwr6843(
             "tee_band_bins": tee_band_bins,
             "ball_snr": ball_snr,
             "board_calibration": board_calibration.to_dict(),
-            "net_range_m": net_range_m,
+            "net_range_m": net_from_front_m,
             "flight": flight,
             "self_trigger": (
                 capture_monitor.self_trigger.command
@@ -5048,7 +5051,10 @@ def main():
         "--iwr6843-net-m",
         type=float,
         default=4.6,
-        help="Antenna-center to net range in metres (default: 4.6)",
+        help="Distance in metres from the enclosure front to the net or screen; the "
+        "array's depth behind the front is added internally. Only used when hitting "
+        "into a net (--iwr6843-flight net): ball tracks are kept 0.25 m short of it "
+        "(default: 4.6)",
     )
     parser.add_argument(
         "--iwr6843-flight",

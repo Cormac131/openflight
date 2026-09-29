@@ -8,8 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **IWR6843 tee distance is measured from the enclosure front; the software adds
-  the array depth.** `--iwr6843-tee-m` is now the tape reading from the front of
+- **IWR6843 tee and net distances are measured from the enclosure front; the
+  software adds the array depth.** `--iwr6843-net-m` is measured from the front
+  too (the ball-track clamp at the net is 0.25 m short of it, in `net` flight).
+  `--iwr6843-tee-m` is now the tape reading from the front of
   the enclosure to the centre of the ball (not the golfer's feet). The antenna
   array sits 0.30 m behind the front (`ARRAY_DEPTH_M`, `iwr6843/calibration.py`)
   and that is added internally wherever the distance becomes a range or a bin:
@@ -17,8 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trigger) and the dump viewer. Before, the tape reading was used as if it were
   from the antenna and put the tee about 6.4 bins short of the ball: on the
   2026-08-24 session `--iwr6843-tee-m` was 1.524 m and the ball rested at bins
-  39-41 (1.83-1.92 m). The session log's `tee_slant_range_m` keeps the tape
-  reading (a new `array_depth_m` records the depth), so logs from before this
+  39-41 (1.83-1.92 m). The session log's `tee_slant_range_m` and `net_range_m` keep
+  the tape readings (a new `array_depth_m` records the depth), so logs from before this
   change mean the same thing and the viewer converts them the same way.
 - **IWR6843 self-trigger bin follows the tee again: two bins short of the ball.**
   `--iwr6843-self-trigger-bin` defaults to the bin of the tee (the tape reading

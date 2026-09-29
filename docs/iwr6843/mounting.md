@@ -47,7 +47,7 @@ OpenFlight needs these physical inputs:
 | Argument | Measurement |
 |---|---|
 | `--iwr6843-tee-m` | Distance from the enclosure front to the ball center (the array's depth is added for you) |
-| `--iwr6843-net-m` | Distance from antenna center to net or screen |
+| `--iwr6843-net-m` | Distance from the enclosure front to the net or screen (the array's depth is added for you) |
 | `--iwr6843-tilt-deg` | Antenna-face mount tilt from an inclinometer |
 | `--iwr6843-radar-height-m` | Antenna-center height above the floor reference |
 | `--iwr6843-ball-height-m` | Ball-center height above the same floor reference |
@@ -55,7 +55,8 @@ OpenFlight needs these physical inputs:
 Measurement guidance:
 
 - Measure `tee-m` from the enclosure front to the centre of the ball, along the line the radar looks down. The array sits 0.30 m behind the front (`ARRAY_DEPTH_M` in `iwr6843/calibration.py`) and the software adds that itself, so do not add it to the tape reading. Measure to the ball, not the golfer's feet: the golfer stands beside the ball and is a strong standing return of their own, and their feet are not where the club meets the ball.
-- Measure `net-m`, the radar height and the tilt from the antenna center, not the enclosure edge or mounting feet.
+- Measure `net-m` from the enclosure front too. It only matters when hitting into a net (`--iwr6843-flight net`, the default), where ball tracks stop 0.25 m short of it; in `range` and `course` flight it is ignored.
+- Measure the radar height and the tilt from the antenna center, not the enclosure edge or mounting feet.
 - The horizontal distance to the ball is fine for `tee-m`: at 2 m the ball's height above the radar changes the slant range by under a centimetre.
 - Keep `net-m` honest so late net reflections can be excluded.
 - Measure radar and ball height from the same floor reference. If the radar and

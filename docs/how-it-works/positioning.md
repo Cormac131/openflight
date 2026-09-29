@@ -37,7 +37,7 @@ You must measure and supply:
 | Value | Flag |
 | --- | --- |
 | Enclosure face to the centre of the ball (the array depth is added) | `--iwr6843-tee-m` |
-| Antenna-centre to net range | `--iwr6843-net-m` |
+| Enclosure front to the net (the array depth is added) | `--iwr6843-net-m` |
 | Ball-centre height above the mat | `--iwr6843-ball-height-m` |
 | Mount tilt | from the calibration JSON, or `--iwr6843-tilt-deg` |
 | Antenna-centre height | from the calibration JSON, or `--iwr6843-radar-height-m` |
