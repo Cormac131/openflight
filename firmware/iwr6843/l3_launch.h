@@ -22,7 +22,12 @@ typedef struct {
     uint8_t   speedValid;
     uint8_t   hlaValid;
     uint8_t   vlaValid;
+    /* Index of the first ball point the angles were fitted from (the late
+     * window), L3_LAUNCH_NO_LATE when no late fit gave angles. */
+    uint8_t   lateFrom;
 } l3_launch_t;
+
+#define L3_LAUNCH_NO_LATE 0xFFU
 
 /* The launch from a delivery fit over the ball's points: the fitted line is
  * anchored at its newest point, so it is walked back to impactTimestampUs. */

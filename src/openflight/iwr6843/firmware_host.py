@@ -80,6 +80,9 @@ ANGLE_GRID_STEPS = 161
 # l3_observation.h anglesValid bits
 ANGLE_AZIMUTH, ANGLE_ELEVATION = 1, 2
 
+# l3_launch.h: lateFrom when no late fit gave angles
+LAUNCH_NO_LATE = 0xFF
+
 # l3_impact.h
 IMPACT_WHY_NAMES = (
     "none",
@@ -842,6 +845,7 @@ class BallTrackCfg(ctypes.Structure):
         ("snr", ctypes.c_float),
         ("useHypotheses", ctypes.c_uint32),
         ("skipClubClaim", ctypes.c_uint32),
+        ("lateRangeM", ctypes.c_float),
         ("hyps", BallHypsCfg),
     ]
 
@@ -882,6 +886,7 @@ class Launch(ctypes.Structure):
         ("speedValid", ctypes.c_uint8),
         ("hlaValid", ctypes.c_uint8),
         ("vlaValid", ctypes.c_uint8),
+        ("lateFrom", ctypes.c_uint8),
     ]
 
 
@@ -1386,6 +1391,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     ),
     "l3_track_recent_rate": ([_P(ClubTrack)], _F32),
     "l3_track_set_angles": ([_P(ClubTrack), _F32, _F32, ctypes.c_uint8], ctypes.c_int32),
+    "l3_track_set_point_angles": ([_P(ClubTrack), _U32, _F32, _F32, ctypes.c_uint8], ctypes.c_int32),
     "l3_track_point": ([_P(ClubTrack), _U32, _P(TrackPoint)], ctypes.c_int32),
     "l3_track_delivery": ([_P(ClubTrack), _U32, _P(Delivery)], _U32),
     "l3_track_delivery_range": ([_P(ClubTrack), _U32, _U32, _U32, _P(Delivery)], _U32),

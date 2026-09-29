@@ -612,3 +612,99 @@ def test_fastest_credible_keeps_an_unclaimed_follow_through_off_the_ball(lib, de
 
     assert launch_speed() < 30.0, "without the rule the follow-through is the ball"
     assert launch_speed(fastBallMps=30.0) == pytest.approx(42.0, rel=0.1)
+
+
+# --- late-flight launch angles (2026-09-29 spec) ------------------------------------
+
+
+BOTH = fw.ANGLE_AZIMUTH | fw.ANGLE_ELEVATION
+
+
+def _set_point_angles(lib, ball, *, vla_deg, hla_deg, speed, flip_first):
+    """Rewrite each point's angles from the true geometry; the first ``flip_first``
+    read the floor image (elevation mirrored, azimuth thrown 40 deg), as the
+    captures near launch show."""
+    core = ball.track.core
+    cal = core.cfg.cal
+    vx = speed * math.cos(vla_deg * DEG) * math.cos(hla_deg * DEG)
+    vy = speed * math.cos(vla_deg * DEG) * math.sin(hla_deg * DEG)
+    vz = speed * math.sin(vla_deg * DEG)
+    for index in range(core.count):
+        point = fw.TrackPoint()
+        lib.l3_track_point(ctypes.byref(core), index, ctypes.byref(point))
+        s = (point.timestampUs - IMPACT_US) * 1e-6
+        golf = fw.Vec3(ORIGIN[0] + vx * s, ORIGIN[1] + vy * s, ORIGIN[2] + vz * s)
+        radar = fw.Vec3()
+        lib.l3_frames_golf_to_radar(ctypes.byref(cal), ctypes.byref(golf), ctypes.byref(radar))
+        sph = fw.Spherical()
+        lib.l3_frames_to_spherical(ctypes.byref(radar), ctypes.byref(sph))
+        az, el = sph.azimuthRad, sph.elevationRad
+        if index < flip_first:
+            az, el = az + 40.0 * DEG, -el
+        assert lib.l3_track_set_point_angles(ctypes.byref(core), index, az, el, BOTH) == 1
+
+
+def test_defaults_put_the_late_window_0p6_m_past_the_ball(lib):
+    cfg = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
+    assert cfg.lateRangeM == pytest.approx(0.6)
+
+
+def test_launch_angles_come_from_the_late_points_when_the_early_ones_flip(lib):
+    ball, _ = fly(lib, speed=45.0, vla_deg=14.0, hla_deg=2.0, frames=14, angles=False)
+    _set_point_angles(lib, ball, vla_deg=14.0, hla_deg=2.0, speed=45.0, flip_first=4)
+    used, launch = ball.launch()
+    assert launch.vlaValid and launch.hlaValid
+    assert launch.vlaRad / DEG == pytest.approx(14.0, abs=0.5)
+    assert launch.hlaRad / DEG == pytest.approx(2.0, abs=0.5)
+    assert launch.lateFrom != fw.LAUNCH_NO_LATE
+    first = fw.TrackPoint()
+    lib.l3_track_point(ctypes.byref(ball.track.core), launch.lateFrom, ctypes.byref(first))
+    assert (first.rangeBin - ORIGIN_BIN) * BIN_M >= 0.6
+
+
+def test_the_speed_is_still_the_early_fit(lib):
+    """Speed, points, residual and confidence do not move with the late window."""
+    ball, _ = fly(lib, speed=45.0, vla_deg=14.0, frames=14, angles=False)
+    early = fw.Launch()
+    ref = fw.Delivery()
+    lib.l3_track_delivery_range(ctypes.byref(ball.track.core), 0, 6, 6, ctypes.byref(ref))
+    lib.l3_launch_from_delivery(ctypes.byref(ref), IMPACT_US, ctypes.byref(early))
+    _, launch = ball.launch()
+    assert launch.points == early.points == 6
+    assert launch.speedMps == pytest.approx(early.speedMps)
+    assert launch.radialSpeedMps == pytest.approx(early.radialSpeedMps)
+    assert launch.confidence == pytest.approx(early.confidence)
+
+
+def test_a_short_flight_reports_speed_and_no_angles(lib):
+    """Review focus 1: 5 points at 45 m/s never reach 0.6 m with three of them."""
+    ball, _ = fly(lib, speed=45.0, vla_deg=14.0, frames=5)
+    used, launch = ball.launch()
+    assert used > 0 and launch.speedValid
+    assert not launch.vlaValid and not launch.hlaValid
+    assert launch.lateFrom == fw.LAUNCH_NO_LATE
+
+
+def test_late_points_without_angles_give_no_angles(lib):
+    ball, _ = fly(lib, speed=45.0, vla_deg=14.0, frames=14, angles=False)
+    _, launch = ball.launch()
+    assert launch.speedValid and not launch.vlaValid and not launch.hlaValid
+
+
+def test_scattered_late_angles_are_still_rejected(lib):
+    ball, _ = fly(lib, speed=45.0, vla_deg=14.0, frames=14, angles=False)
+    core = ball.track.core
+    for index in range(core.count):
+        jitter = 25.0 * DEG if index % 2 else -25.0 * DEG
+        lib.l3_track_set_point_angles(ctypes.byref(core), index, jitter, jitter, BOTH)
+    _, launch = ball.launch()
+    assert launch.speedValid and not launch.vlaValid
+
+
+def test_the_late_window_is_measured_from_the_origin(lib):
+    """A larger lateRangeM starts the late fit further out, or not at all."""
+    near = fly(lib, speed=45.0, vla_deg=14.0, frames=14, ball=Ball(lib, lateRangeM=0.3))[0]
+    far = fly(lib, speed=45.0, vla_deg=14.0, frames=14, ball=Ball(lib, lateRangeM=3.0))[0]
+    assert near.launch()[1].lateFrom < 6
+    assert far.launch()[1].lateFrom == fw.LAUNCH_NO_LATE

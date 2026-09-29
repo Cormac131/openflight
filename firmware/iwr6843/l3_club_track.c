@@ -625,20 +625,32 @@ int32_t l3_track_point(const l3_club_track_t *track, uint32_t index, l3_track_po
     return 1;
 }
 
-int32_t l3_track_set_angles(l3_club_track_t *track, float azimuthRad, float elevationRad,
-                            uint8_t anglesValid)
+int32_t l3_track_set_point_angles(l3_club_track_t *track, uint32_t index, float azimuthRad,
+                                  float elevationRad, uint8_t anglesValid)
 {
     l3_track_point_t *point;
+    uint32_t oldest;
 
-    if (track->lastTargetIndex == L3_TRACK_NO_TARGET || track->count == 0U) {
+    if (index >= track->count) {
         return 0;
     }
-    point = &track->points[(track->next + L3_TRACK_POINTS - 1U) % L3_TRACK_POINTS];
+    oldest = (track->next + L3_TRACK_POINTS - track->count) % L3_TRACK_POINTS;
+    point = &track->points[(oldest + index) % L3_TRACK_POINTS];
     point->azimuthRad = azimuthRad;
     point->elevationRad = elevationRad;
     point->anglesValid = anglesValid;
     l3_track_locate(track, point);
     return 1;
+}
+
+int32_t l3_track_set_angles(l3_club_track_t *track, float azimuthRad, float elevationRad,
+                            uint8_t anglesValid)
+{
+    if (track->lastTargetIndex == L3_TRACK_NO_TARGET || track->count == 0U) {
+        return 0;
+    }
+    return l3_track_set_point_angles(track, track->count - 1U, azimuthRad, elevationRad,
+                                     anglesValid);
 }
 
 /* Least squares of one coordinate against time over the selected points:

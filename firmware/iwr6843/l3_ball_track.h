@@ -46,6 +46,10 @@ typedef struct {
     /* Once confirmed, skip the club's claimed target while another candidate
      * is in the gate. */
     uint32_t skipClubClaim;
+    /* Launch angles are fitted only from points at least this far beyond the
+     * ball's origin (metres): near launch the floor image flips them
+     * (2026-09-29 stage comparison). The speed keeps the earliest points. */
+    float    lateRangeM;
 #if L3_BALL_HYPOTHESES
     l3_ball_hyps_cfg_t hyps;      /* binWidthM and velocitySpanMps come from core */
 #endif

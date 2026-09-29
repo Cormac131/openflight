@@ -252,6 +252,10 @@ float l3_track_recent_rate(const l3_club_track_t *track);
  * Returns 0 when the last update appended nothing. */
 int32_t l3_track_set_angles(l3_club_track_t *track, float azimuthRad, float elevationRad,
                             uint8_t anglesValid);
+/* The same for any stored point (index 0 is the oldest held): sets its angles
+ * and recomputes its golf-frame position. Returns 0 when index is not stored. */
+int32_t l3_track_set_point_angles(l3_club_track_t *track, uint32_t index, float azimuthRad,
+                                  float elevationRad, uint8_t anglesValid);
 /* Point index 0 is the oldest held. Returns 0 when out of range. */
 int32_t l3_track_point(const l3_club_track_t *track, uint32_t index, l3_track_point_t *out);
 /* The delivery from the newest maxPoints points (at least 3). Returns the

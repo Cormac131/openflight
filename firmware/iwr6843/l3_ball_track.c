@@ -28,6 +28,7 @@ void l3_ball_track_cfg_defaults(l3_ball_track_cfg_t *cfg)
     cfg->snr = 1.0F;                  /* the floor itself: the ball is weak and moving */
     cfg->useHypotheses = 0U;          /* decided by the recorded captures */
     cfg->skipClubClaim = 1U;
+    cfg->lateRangeM = 0.6F;           /* past the floor-image flips near launch */
 #if L3_BALL_HYPOTHESES
     l3_ball_hyps_cfg_defaults(&cfg->hyps);
 #endif
@@ -302,12 +303,31 @@ int32_t l3_ball_track_set_angles(l3_ball_track_t *track, float azimuthRad, float
     return l3_track_set_angles(&track->core, azimuthRad, elevationRad, anglesValid);
 }
 
+/* The first point at least lateRangeM beyond the origin; count when none. */
+static uint32_t l3_ball_track_late_first(const l3_ball_track_t *track)
+{
+    uint32_t i;
+    l3_track_point_t point;
+
+    for (i = 0U; i < track->core.count; i++) {
+        if (l3_track_point(&track->core, i, &point) &&
+            (point.rangeBin - track->originBin) * track->core.cfg.binWidthM >=
+                track->cfg.lateRangeM) {
+            return i;
+        }
+    }
+    return track->core.count;
+}
+
 uint32_t l3_ball_track_launch(const l3_ball_track_t *track, l3_launch_t *out)
 {
     l3_delivery_t fit;
+    l3_delivery_t late;
     uint32_t used;
+    uint32_t first;
 
     memset(out, 0, sizeof(*out));
+    out->lateFrom = L3_LAUNCH_NO_LATE;
     if (!track->confirmed) {
         return 0U;
     }
@@ -317,6 +337,27 @@ uint32_t l3_ball_track_launch(const l3_ball_track_t *track, l3_launch_t *out)
         return 0U;
     }
     l3_launch_from_delivery(&fit, track->impactTimestampUs, out);
+    /* The speed keeps the early fit; angles only from the late window. */
+    out->hlaValid = 0U;
+    out->vlaValid = 0U;
+    out->hlaRad = 0.0F;
+    out->vlaRad = 0.0F;
+    first = l3_ball_track_late_first(track);
+    if (first < track->core.count &&
+        l3_track_delivery_range(&track->core, first, track->cfg.launchPoints,
+                                track->cfg.launchPoints, &late) != 0U) {
+        if (late.pathValid) {
+            out->hlaRad = late.pathRad;
+            out->hlaValid = 1U;
+        }
+        if (late.attackValid) {
+            out->vlaRad = late.attackRad;
+            out->vlaValid = 1U;
+        }
+        if (out->hlaValid || out->vlaValid) {
+            out->lateFrom = (uint8_t)((first > 0xFEU) ? 0xFEU : first);
+        }
+    }
     return used;
 }
 
