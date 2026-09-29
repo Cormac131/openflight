@@ -142,12 +142,17 @@ def synth_shot_dump(
     loops=12,
     t_impact_s=None,
     amp=1000.0,
+    club_out_speed_ms=None,
+    club_amp=None,
 ):
     """A club approaching the tee, then a ball leaving it: the whole shot.
 
-    The club follows ``synth_club_dump``'s straight line up to impact and
-    stops there (it is the ball, not the club, the post-impact frames must
-    find). From impact the ball leaves the tee at ``ball_speed_ms`` with the
+    The club follows ``synth_club_dump``'s straight line up to impact and,
+    by default, stops there (it is the ball, not the club, the post-impact
+    frames must find). With ``club_out_speed_ms`` the club carries on after
+    impact along its approach direction at that speed (slower than the ball,
+    as a real club leaves), with amplitude ``club_amp`` (``amp`` when None);
+    two objects in one range bin add. From impact the ball leaves the tee at ``ball_speed_ms`` with the
     horizontal launch ``hla_deg`` (positive right, the +y direction) and the
     vertical launch ``vla_deg`` (positive up, +z) of l3_frames.h. Azimuth
     goes on TX1 as in ``synth_club_dump``; elevation goes on the 8-element
@@ -167,37 +172,49 @@ def synth_shot_dump(
     )
     tdm_offsets = (0.0, doa.TDM_TAU_S, doa.TX2_VERTICAL_TDM_TAU_S)
     cube = np.zeros((n_frames, loops * n_tx, n_rx, n_samples), dtype=complex)
+
+    def scatterers(s):
+        """(velocity, amplitude) of every object at time s from impact."""
+        if s < 0:
+            return [(club_v, amp)]
+        out = [(ball_v, amp)]
+        if club_out_speed_ms is not None:
+            scale = club_out_speed_ms / club_speed_ms
+            out.append((tuple(scale * c for c in club_v), club_amp or amp))
+        return out
+
     for frame in range(n_frames):
         for loop in range(loops):
             t = frame * FRAME_PERIOD_S + loop * TX2_LOOP_PERIOD_S
             s = t - t_impact
-            velocity = club_v if s < 0 else ball_v
-            x = tee_range_m + s * velocity[0]
-            y = s * velocity[1]
-            z = s * velocity[2]
-            range_m = math.sqrt(x * x + y * y + z * z)
-            bin_at = int(range_m / res)
-            if not 0 <= bin_at < n_samples:
-                continue
-            az_rad = math.atan2(y, x)
-            el_rad = math.atan2(z, math.hypot(x, y))
-            phase_az = -math.pi * math.sin(az_rad)
-            v_r = (x * velocity[0] + y * velocity[1] + z * velocity[2]) / range_m
-            doppler_phase = 4.0 * math.pi * range_m / doa.LAM
-            # Elevation: physical element m carries exp(j pi sin(el) m); the
-            # logical [tx0.rx, tx2.rx] order is the reverse of physical.
-            physical = np.exp(1j * math.pi * math.sin(el_rad) * np.arange(2 * n_rx))
-            logical = physical[::-1]
-            for tx in range(n_tx):
-                tdm_phase = 4.0 * np.pi * v_r * tdm_offsets[tx] / doa.LAM
-                common = amp * np.exp(1j * (tdm_phase + doppler_phase))
-                if tx == 1:
-                    elevation = 0.5 * (logical[:n_rx] + logical[n_rx:])
-                    value = common * elevation * np.exp(1j * phase_az)
-                else:
-                    elevation = logical[:n_rx] if tx == 0 else logical[n_rx:]
-                    value = common * elevation
-                cube[frame, loop * n_tx + tx, :, bin_at] = value
+            for velocity, amplitude in scatterers(s):
+                x = tee_range_m + s * velocity[0]
+                y = s * velocity[1]
+                z = s * velocity[2]
+                range_m = math.sqrt(x * x + y * y + z * z)
+                bin_at = int(range_m / res)
+                if not 0 <= bin_at < n_samples:
+                    continue
+                az_rad = math.atan2(y, x)
+                el_rad = math.atan2(z, math.hypot(x, y))
+                phase_az = -math.pi * math.sin(az_rad)
+                v_r = (x * velocity[0] + y * velocity[1] + z * velocity[2]) / range_m
+                doppler_phase = 4.0 * math.pi * range_m / doa.LAM
+                # Elevation: physical element m carries exp(j pi sin(el) m); the
+                # logical [tx0.rx, tx2.rx] order is the reverse of physical.
+                physical = np.exp(1j * math.pi * math.sin(el_rad) * np.arange(2 * n_rx))
+                logical = physical[::-1]
+                for tx in range(n_tx):
+                    tdm_phase = 4.0 * np.pi * v_r * tdm_offsets[tx] / doa.LAM
+                    common = amplitude * np.exp(1j * (tdm_phase + doppler_phase))
+                    if tx == 1:
+                        elevation = 0.5 * (logical[:n_rx] + logical[n_rx:])
+                        value = common * elevation * np.exp(1j * phase_az)
+                    else:
+                        elevation = logical[:n_rx] if tx == 0 else logical[n_rx:]
+                        value = common * elevation
+                    # += so two objects in one bin add
+                    cube[frame, loop * n_tx + tx, :, bin_at] += value
     return pack_dump(
         cube,
         n_tx=n_tx,

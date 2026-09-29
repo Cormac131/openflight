@@ -159,3 +159,20 @@ def test_track_log_prints_the_impact_fit_after_the_impact():
 def test_new_modules_are_in_the_board_image():
     makefile = (FIRMWARE_DIR / "makefile").read_text(encoding="utf-8")
     assert "l3_band.c" in makefile and "l3_impact_fit.c" in makefile
+
+
+def test_post_impact_ball_runs_before_the_club_which_gets_the_scene():
+    ball_track = body("l3_considerBallTrack")
+    ball = ball_track.index("l3_ball_track_update_joint(&gBallTrack")
+    club = ball_track.index("l3_track_follow(&gClubTrack")
+    assert ball < club
+    assert "L3_TRACK_NO_TARGET" in ball_track[ball:club]
+    assert "&follow)" in ball_track[club : club + 200]
+    assert "l3_track_recent_rate(&gBallTrack.core)" in ball_track
+    assert "gBallTrack.lastTargetIndex" in ball_track
+
+
+def test_post_impact_unknown_approach_falls_back_to_the_club_ceiling():
+    ball_track = body("l3_considerBallTrack")
+    assert "L3_TRACK_FOLLOW_UNKNOWN_APPROACH_MPS" in ball_track
+    assert "gShot.delivery.speedValid" in ball_track

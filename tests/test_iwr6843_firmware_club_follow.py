@@ -7,6 +7,7 @@ tee band 30..40, ball at rest at bin 35, impact at 18 000 us.
 from __future__ import annotations
 
 import ctypes
+import re
 
 import pytest
 
@@ -171,3 +172,24 @@ def test_recent_rate(lib):
     assert lib.l3_track_recent_rate(ctypes.byref(track)) == pytest.approx(APPROACH, rel=1e-3)
     track = approached_track(lib, frames=6)
     assert lib.l3_track_recent_rate(ctypes.byref(track)) == pytest.approx(APPROACH, rel=1e-3)
+
+
+def test_unknown_approach_mirrors_the_header():
+    header = (fw.FIRMWARE_DIR / "l3_club_track.h").read_text(encoding="utf-8")
+    match = re.search(r"#define L3_TRACK_FOLLOW_UNKNOWN_APPROACH_MPS ([0-9.]+)F", header)
+    assert match is not None
+    assert float(match.group(1)) == fw.TRACK_FOLLOW_UNKNOWN_APPROACH_MPS == 70.0
+
+
+def test_the_unknown_approach_ceiling_reacquires_what_a_measured_one_refuses(lib):
+    """No delivery at impact: the context's approach is the fastest club, so
+    a fast departing club (1333 bins/s, slower than the 1500 bins/s ball) is
+    re-acquired; a measured 30 m/s approach refuses it as too fast."""
+    cfg = fw.TrackCfg()
+    lib.l3_track_cfg_defaults(ctypes.byref(cfg))
+    ceiling = fw.TRACK_FOLLOW_UNKNOWN_APPROACH_MPS / cfg.binWidthM
+    track = fresh_track(lib)
+    assert follow(lib, track, 11, [target(11, 55.0)], ctx(approach=APPROACH)) == 0
+    assert follow(lib, track, 11, [target(11, 55.0)], ctx(approach=ceiling)) == 1
+    assert track.lastBin == pytest.approx(55.0)
+    assert track.followBinsPerS == pytest.approx(ceiling)

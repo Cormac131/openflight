@@ -42,6 +42,7 @@
 /* After impact the club is no faster than it arrived: re-acquisition takes a
  * return whose rate from the ball is at most this times the approach speed. */
 #define L3_TRACK_FOLLOW_MAX_RATIO 1.10F
+#define L3_TRACK_FOLLOW_UNKNOWN_APPROACH_MPS 70.0F  /* no approach measured: the fastest club (l3_impact_fit clubMaxMps) */
 
 typedef struct {
     uint32_t frame;

@@ -937,3 +937,77 @@ def test_replay_of_a_phased_dump_counts_only_its_post_frames(lib):
     result = fr.replay_dump(raw, fr.ReplayConfig(tee_bin=29), lib=lib)
     assert result.ball_track_frames_known is True
     assert result.ball_track_frames == 2
+
+
+def _club_after_impact(result):
+    impact = result.shot.impactFrame
+    return [p for p in result.points if p.frame > impact]
+
+
+# Band width semantics (bandBins as a total width) and band 10 are asserted in Task 6.
+@pytest.mark.parametrize("band_bins", [5.0])
+def test_with_the_band_on_every_recording_has_the_club_after_impact(lib, band_bins):
+    """The club crosses the band coasting and is re-acquired beyond it: every
+    recording that declared impact keeps club points after it, none of them
+    the ball's."""
+    for path, config in fr.recording_configs():
+        result = fr.replay_file(path, replace(config, band_bins=band_bins), lib=lib)
+        if fw.SHOT_STATE_NAMES[result.shot.state] in fr.PRE_IMPACT_SHOT_STATES:
+            continue
+        club = _club_after_impact(result)
+        assert len(club) >= 3, f"{path.name}: {len(club)} club points after impact"
+        ball_keys = {(p.frame, round(p.range_bin, 3)) for p in result.ball_points}
+        assert not ball_keys & {(p.frame, round(p.range_bin, 3)) for p in club}, path.name
+
+
+def test_synthetic_club_after_impact_is_slower_than_the_ball_and_gives_club_out(lib):
+    raw = synth_shot_dump(ball_speed_ms=60.0, club_out_speed_ms=20.0, tee_range_m=1.372)
+    result = fr.replay_dump(
+        raw, fr.ReplayConfig(tee_bin=29, dest_bin=29, impact_armed=True, band_bins=5.0), lib=lib
+    )
+    club = _club_after_impact(result)
+    assert len(club) >= 3
+    assert result.impact_fit is not None
+    assert result.impact_fit.tracks["club_out"].why == "ok"
+    assert (
+        result.impact_fit.tracks["club_out"].speed_mps
+        < result.impact_fit.tracks["ball_out"].speed_mps
+    )
+
+
+@pytest.mark.parametrize("valid", [True, False])
+def test_follow_ctx_approach_is_the_delivery_or_the_club_ceiling(lib, valid):
+    """No valid delivery at impact: the approach is the fastest club, as the board."""
+    bin_width_m = 0.046875
+    shot = fw.Shot()
+    shot.impactTimestampUs = 21_000
+    shot.delivery.speedValid = 1 if valid else 0
+    shot.delivery.radialSpeedMps = 30.0
+    ball_track = fw.BallTrack()
+    band = fw.Band(1, 34.0, 44.0)
+    follow = fr._follow_ctx(  # pylint: disable=protected-access
+        lib, shot, ball_track, band, 39, bin_width_m, 3000, fw.TRACK_NO_TARGET
+    )
+    expected = 30.0 if valid else fw.TRACK_FOLLOW_UNKNOWN_APPROACH_MPS
+    assert follow.approachBinsPerS == pytest.approx(expected / bin_width_m)
+    assert (follow.bandValid, follow.bandHiBin, follow.originBin) == (1, 44.0, 39.0)
+    assert follow.impactTimestampUs == 21_000 and follow.frameUs == 3000
+    assert follow.ballBinsPerS == 0.0 and follow.ballClaimIndex == fw.TRACK_NO_TARGET
+
+
+def test_a_club_seen_only_after_impact_is_reacquired_beyond_the_band(lib):
+    """The capture starts with the club already inside the band: no approach is
+    measured, and the club leaving slower than the ball is still found."""
+    raw = synth_shot_dump(
+        ball_speed_ms=60.0, club_out_speed_ms=20.0, tee_range_m=1.372, t_impact_s=0.004
+    )
+    result = fr.replay_dump(
+        raw, fr.ReplayConfig(tee_bin=29, dest_bin=29, impact_armed=True, band_bins=5.0), lib=lib
+    )
+    assert fw.SHOT_STATE_NAMES[result.shot.state] not in fr.PRE_IMPACT_SHOT_STATES
+    assert result.shot.delivery.speedValid == 0
+    club = _club_after_impact(result)
+    assert len(club) >= 3
+    assert all(p.range_bin > result.band[1] for p in club)
+    ball_keys = {(p.frame, round(p.range_bin, 3)) for p in result.ball_points}
+    assert not ball_keys & {(p.frame, round(p.range_bin, 3)) for p in club}

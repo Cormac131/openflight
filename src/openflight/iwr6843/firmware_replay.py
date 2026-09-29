@@ -891,6 +891,7 @@ def replay_dump(
     ball_position = fw.Vec3()
     bin_width_m = RANGE_SPAN_M / config.fft_size
     chirp_period_s = loop_period_s / n_tx
+    frame_us = int(meta.get("frame_period_us") or FALLBACK_FRAME_PERIOD_US)
 
     shot_cfg = fw.ShotCfg()
     lib.l3_shot_cfg_defaults(ctypes.byref(shot_cfg))
@@ -1059,6 +1060,9 @@ def replay_dump(
                     track,
                     points,
                     band,
+                    destination,
+                    bin_width_m,
+                    frame_us,
                 )
             )
             if fitted_frozen_us is None and shot.state == _SHOT_RESULT:
@@ -1492,6 +1496,29 @@ def _club_fit(lib, track: fw.ClubTrack) -> tuple[float, float, float]:
     )
 
 
+def _follow_ctx(  # pylint: disable=too-many-arguments
+    lib, shot, ball_track, band, destination, bin_width_m, frame_us, ball_claim
+) -> fw.FollowCtx:
+    """The scene after impact for l3_track_follow, as l3_considerBallTrack builds it."""
+    ctx = fw.FollowCtx()
+    ctx.bandValid = band.valid
+    ctx.bandHiBin = band.hiBin
+    ctx.originBin = float(destination)
+    ctx.impactTimestampUs = shot.impactTimestampUs
+    delivery = shot.delivery
+    # No approach measured (the capture began with the club in the band): the
+    # fastest club bounds re-acquisition instead.
+    approach_mps = (
+        delivery.radialSpeedMps if delivery.speedValid else fw.TRACK_FOLLOW_UNKNOWN_APPROACH_MPS
+    )
+    ctx.approachBinsPerS = approach_mps / bin_width_m
+    ball_rate = float(lib.l3_track_recent_rate(ctypes.byref(ball_track.core)))
+    ctx.ballBinsPerS = ball_rate if ball_rate > 0.0 else 0.0  # a receding "ball" is no rate
+    ctx.ballClaimIndex = ball_claim
+    ctx.frameUs = frame_us
+    return ctx
+
+
 def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
     lib,
     cube,
@@ -1514,12 +1541,15 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
     track,
     points,
     band,
+    destination,
+    bin_width_m,
+    frame_us,
 ) -> ReplayFrame:
     """``l3_considerBallTrack``: the whole window as targets against the post
-    window's own floor; the club track followed through them (the stronger of
-    the two tracks after impact) and the ball tracker beside it, angles for
-    the ball point, the launch fit and the shot machine's post-impact
-    transitions."""
+    window's own floor; the ball tracker first, then the club track followed
+    through the scene the ball leaves (the ball's claim and rate, the band it
+    coasts across), angles for the ball point, the launch fit and the shot
+    machine's post-impact transitions."""
     ball_params = fw.ObsParams(params.stat, ball_track.cfg.snr, params.loopPeriodS, params.subBin)
     found, count, floor = _banded_window_targets(
         lib,
@@ -1534,15 +1564,22 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
         targets,
         running_floor=ball_floor,
     )
+    # The ball first: its claim and rate tell the club what it is not.
+    appended = lib.l3_ball_track_update_joint(
+        ctypes.byref(ball_track), targets, found, frame, timestamp_us, fw.TRACK_NO_TARGET
+    )
+    ball_claim = ball_track.lastTargetIndex if appended else fw.TRACK_NO_TARGET
+    follow = _follow_ctx(
+        lib, shot, ball_track, band, destination, bin_width_m, frame_us, ball_claim
+    )
     track_bin = None
-    if lib.l3_track_follow(ctypes.byref(track), targets, found, frame, timestamp_us, None):
+    if lib.l3_track_follow(
+        ctypes.byref(track), targets, found, frame, timestamp_us, ctypes.byref(follow)
+    ):
         newest = fw.TrackPoint()
         lib.l3_track_point(ctypes.byref(track), track.count - 1, ctypes.byref(newest))
         points.append(_point_summary(newest))
         track_bin = float(newest.rangeBin)
-    appended = lib.l3_ball_track_update_joint(
-        ctypes.byref(ball_track), targets, found, frame, timestamp_us, track.lastTargetIndex
-    )
     ball_bin = None
     angle = None
     if appended:

@@ -3617,6 +3617,7 @@ static void l3_considerBallTrack(uint32_t slot)
     uint32_t bin;
     uint32_t frameIndex;
     uint32_t ticks;
+    int32_t ballAppended;
 
     if (!gBallTrack.armed || gCapturePlan.loops == 0U) {
         return;
@@ -3649,13 +3650,32 @@ static void l3_considerBallTrack(uint32_t slot)
     found = l3_band_filter(&gBand, targets, found);
     /* After impact two tracks are visible: the club carries on (followed by
      * association only, the stronger return) beside the departing ball.
-     * gDelivery was read at impact and stays the approach's. The ball tracker
-     * does not use the club's claim yet: on the 2026-09-27 captures that lost
-     * more balls than it saved. */
-    (void)l3_track_follow(&gClubTrack, targets, found, frameIndex, gPostTimestampUs, NULL);
-    if (l3_ball_track_update_joint(&gBallTrack, targets, found, frameIndex, gPostTimestampUs,
-                                   gClubTrack.lastTargetIndex) &&
-        gBallTrack.lastTargetIndex < found && gBallTrack.core.count > 1U &&
+     * gDelivery was read at impact and stays the approach's. The ball no
+     * longer receives the club's claim (on the 2026-09-27 captures that lost
+     * more balls than it saved); the club receives the ball's instead. */
+    /* The ball first: its claim and its rate tell the club what it is not. */
+    ballAppended =
+        l3_ball_track_update_joint(&gBallTrack, targets, found, frameIndex, gPostTimestampUs,
+                                   L3_TRACK_NO_TARGET);
+    {
+        l3_follow_ctx_t follow;
+        float ballRate = l3_track_recent_rate(&gBallTrack.core);
+
+        follow.bandValid = gBand.valid;
+        follow.bandHiBin = gBand.hiBin;
+        follow.originBin = (float)gClubTrackDest;
+        follow.impactTimestampUs = gShot.impactTimestampUs;
+        /* No approach measured: the fastest club bounds re-acquisition. */
+        follow.approachBinsPerS = (gShot.delivery.speedValid
+                                       ? gShot.delivery.radialSpeedMps
+                                       : L3_TRACK_FOLLOW_UNKNOWN_APPROACH_MPS) /
+                                  gClubTrack.cfg.binWidthM;
+        follow.ballBinsPerS = (ballRate > 0.0F) ? ballRate : 0.0F;
+        follow.ballClaimIndex = ballAppended ? gBallTrack.lastTargetIndex : L3_TRACK_NO_TARGET;
+        follow.frameUs = gFramePeriodUs;
+        (void)l3_track_follow(&gClubTrack, targets, found, frameIndex, gPostTimestampUs, &follow);
+    }
+    if (ballAppended && gBallTrack.lastTargetIndex < found && gBallTrack.core.count > 1U &&
         l3_track_point(&gBallTrack.core, gBallTrack.core.count - 1U, &newest)) {
         const l3_target_obs_t *hit = &targets[gBallTrack.lastTargetIndex];
 

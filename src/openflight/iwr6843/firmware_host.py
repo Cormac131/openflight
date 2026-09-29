@@ -231,6 +231,8 @@ PROFILE_STAGE_NAMES = (
 # l3_club_track.h
 TRACK_POINTS = 32
 TRACK_NO_TARGET = 0xFFFFFFFF
+# No approach measured at impact: the fastest club (l3_impact_fit clubMaxMps).
+TRACK_FOLLOW_UNKNOWN_APPROACH_MPS = 70.0
 TRACK_WHY_NAMES = ("none", "acquired", "associated", "coasted", "dropped", "idle", "released")
 
 # l3_joint_search.h
@@ -1668,6 +1670,7 @@ __all__ = [
     "ANGLE_AZIMUTH",
     "ANGLE_ELEVATION",
     "TRACK_NO_TARGET",
+    "TRACK_FOLLOW_UNKNOWN_APPROACH_MPS",
     "ClubTrack",
     "Cpx",
     "Delivery",
