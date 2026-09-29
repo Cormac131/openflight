@@ -15,12 +15,13 @@ from itertools import combinations
 
 import numpy as np
 
+from openflight.iwr6843.tracking import RANGE_SPAN_M
+
 Track = Sequence[tuple[float, float]]  # (t_us, range_m)
 FIT_POINTS = 4
 MIN_POINTS = 3
 SEARCH_MARGIN_US = 20_000.0
 C_WIN_FACTOR = 0.7  # C must cut the median spread by at least 30 %
-RANGE_SPAN_M = 6.0  # every cfg keeps a 6 m span over its range FFT
 
 
 def _anchored_rss(track: Track, t_i: float, ball_range_m: float) -> float:
