@@ -14,6 +14,7 @@ import importlib.util
 import io
 import json
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -503,3 +504,24 @@ def test_the_viewer_can_switch_the_ball_search_and_shows_the_hypotheses():
     assert any(frame["ball_hypotheses"] for frame in frames)
     first = next(frame["ball_hypotheses"] for frame in frames if frame["ball_hypotheses"])
     assert {"id", "points"} <= set(first[0])
+
+
+# --- CSS colour tokens ------
+
+
+def _css_tokens() -> dict[str, str]:
+    html = (Path(__file__).parents[1] / "scripts" / "iwr6843" / "dump_viewer.html").read_text(
+        encoding="utf-8"
+    )
+    return dict(re.findall(r"--([a-z-]+):\s*(#[0-9a-fA-F]{6})", html))
+
+
+def test_the_ball_is_blue_and_nothing_else_uses_that_blue():
+    tokens = _css_tokens()
+    assert tokens["ball"].lower() == "#339af0"
+    others = {name: value.lower() for name, value in tokens.items() if name != "ball"}
+    assert "#339af0" not in others.values(), others
+
+
+def test_host_approach_peaks_are_grey_not_blue():
+    assert _css_tokens()["py"].lower() == "#868e96"
