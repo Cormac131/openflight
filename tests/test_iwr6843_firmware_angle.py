@@ -149,7 +149,7 @@ def test_snapshot_init_clamps_dimensions_and_sets_the_shipped_chirp_period(lib):
     assert snap.chirpPeriodS == pytest.approx(45e-6)
 
 
-# --- continuous TDM from a track rate (2026-09-29 late-flight spec) ---------------
+# --- TDM motion phase ---------------
 
 
 def test_motion_phase_is_four_pi_v_t_over_lambda(lib):
@@ -159,57 +159,6 @@ def test_motion_phase_is_four_pi_v_t_over_lambda(lib):
     assert lib.l3_angle_motion_phase(-30.0, 45e-6) == pytest.approx(
         -4 * math.pi * 30.0 * 45e-6 / 0.00484, rel=1e-6
     )
-
-
-def test_snapshot_init_leaves_continuous_tdm_off(lib):
-    snap = fw.AngleSnapshot()
-    snap.continuousTdm = 7
-    lib.l3_angle_snapshot_init(ctypes.byref(snap), 3, 4)
-    assert snap.continuousTdm == 0
-
-
-@pytest.mark.parametrize("velocity", [5.0, 38.0, 61.0])
-def test_continuous_tdm_uses_the_track_rate_not_the_lag1_branch(lib, velocity):
-    """A lag-1 phase that points at the wrong branch cannot move a continuous
-    correction: the chirp phase is exactly 4 pi v tau / lambda."""
-    snap = fw.AngleSnapshot()
-    lib.l3_angle_snapshot_init(ctypes.byref(snap), 3, 4)
-    for i in range(12):
-        snap.channel[i] = fw.Cpx(1.0, 0.0)
-    snap.chirpPeriodS = 45e-6
-    snap.radialVelocityMps = velocity
-    snap.lag1PhaseRad = 2.5  # a branch nowhere near the track rate
-    snap.continuousTdm = 1
-    obs = fw.AngleObs()
-    assert lib.l3_angle_estimate(ctypes.byref(identity_cal(lib)), ctypes.byref(snap), ctypes.byref(obs))
-    assert obs.chirpPhaseRad == pytest.approx(lib.l3_angle_motion_phase(velocity, 45e-6), rel=1e-6)
-
-
-def test_continuous_tdm_corrects_beyond_the_branch_search(lib):
-    """Review focus 3: 70 m/s is past the +/-63 m/s the branch snap can reach."""
-    snap = fw.AngleSnapshot()
-    lib.l3_angle_snapshot_init(ctypes.byref(snap), 3, 4)
-    for i in range(12):
-        snap.channel[i] = fw.Cpx(1.0, 0.0)
-    snap.chirpPeriodS = 45e-6
-    snap.radialVelocityMps = 70.0
-    snap.continuousTdm = 1
-    obs = fw.AngleObs()
-    lib.l3_angle_estimate(ctypes.byref(identity_cal(lib)), ctypes.byref(snap), ctypes.byref(obs))
-    assert obs.chirpPhaseRad == pytest.approx(lib.l3_angle_motion_phase(70.0, 45e-6), rel=1e-6)
-
-
-def test_without_continuous_tdm_the_branch_snap_is_unchanged(lib):
-    snap = fw.AngleSnapshot()
-    lib.l3_angle_snapshot_init(ctypes.byref(snap), 3, 4)
-    for i in range(12):
-        snap.channel[i] = fw.Cpx(1.0, 0.0)
-    snap.chirpPeriodS = 45e-6
-    snap.radialVelocityMps = 38.0
-    snap.lag1PhaseRad = 2.5
-    obs = fw.AngleObs()
-    lib.l3_angle_estimate(ctypes.byref(identity_cal(lib)), ctypes.byref(snap), ctypes.byref(obs))
-    assert obs.chirpPhaseRad == pytest.approx(lib.l3_angle_chirp_phase(2.5, 3, 38.0, 45e-6))
 
 
 @pytest.mark.parametrize("v_radial", [0.0, 3.0, -8.0, 22.0, 35.0, -30.0])

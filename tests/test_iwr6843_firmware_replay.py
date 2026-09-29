@@ -432,16 +432,6 @@ def whole_shot() -> bytes:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Task 3 finding, controller to rule: with ball angles taken from the fitted track rate "
-        "(continuous TDM) the synthetic whole_shot reads VLA 17.96 deg (was 12.09, expected 12+-0.7). "
-        "The synth's ball hops bins, so the fitted rate is off by ~1 m/s (e.g. 59.4/58.9/60.1/60.7/61.3) "
-        "while the old exact lag-1 Doppler phase matches its motion; +-1 m/s in the TDM phase moves "
-        "per-point elevation 3.2/4.2/5.1/5.7/6.3 -> 3.2/3.7/5.5/6.6/7.5 deg."
-    ),
-)
 def test_post_impact_frames_go_to_the_ball_tracker_and_the_launch_is_recovered(lib, whole_shot):
     """The acceptance for items 11-15: from the frames after the trigger the
     replay finds the departing ball and reads its speed, HLA and VLA back."""
@@ -1171,15 +1161,6 @@ def test_replay_ball_angles_use_the_track_rate(lib, monkeypatch):
     assert any(rate is not None and rate > 0.0 for rate in seen)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Task 3 finding, controller to rule: 24-frame synthetic 12 deg shot reads VLA 18.48 deg, "
-        "not 12+-2. The generator does model the array phase (ball points carry valid angles, the "
-        "old lag-1 path recovered 12.09), but its bin-hopping ball makes the fitted range rate "
-        "noisy (~1 m/s), and the continuous TDM phase from that rate biases elevation high."
-    ),
-)
 def test_synthetic_shot_late_flight_vla_matches_its_launch(lib):
     """End to end: the synthesized 12 deg launch is read back from the late
     points. The synthetic scene has no floor, so this pins the chain, not the
@@ -1196,3 +1177,22 @@ def test_replay_late_range_reaches_the_ball_track(lib):
     raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
     result = replay_dump(raw, ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN, late_range_m=0.9), lib=lib)
     assert result.ball_track.cfg.lateRangeM == pytest.approx(0.9)
+
+
+def test_replay_track_rate_picks_the_branch_and_the_measured_phase_stays_the_rotor(lib):
+    raw = synth_shot_dump(ball_speed_ms=60.0, vla_deg=12.0, hla_deg=0.0, tee_range_m=TEE_RANGE_M, n_frames=24)
+    meta, cube = parse_dump(raw)
+    n_tx = int(meta["n_tx"])
+    chirp_period_s = 45e-6
+    hit = fw.TargetObs()
+    hit.peakBin = TEE_BIN
+    hit.dopplerPhaseRad = 2.5
+    cal = fr._radar_cal(lib, ReplayConfig(tee_bin=TEE_BIN))  # pylint: disable=protected-access
+    rate = 58.0
+    obs, _ = fr._estimate_angles(  # pylint: disable=protected-access
+        lib, cal, cube, 8, 0, n_tx, hit, 1.0, chirp_period_s, track_rate_mps=rate
+    )
+    assert obs is not None
+    assert obs.chirpPhaseRad == pytest.approx(
+        lib.l3_angle_chirp_phase(2.5, n_tx, rate, chirp_period_s), rel=1e-6
+    )

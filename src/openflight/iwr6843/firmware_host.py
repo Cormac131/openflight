@@ -386,7 +386,6 @@ class AngleSnapshot(ctypes.Structure):
         ("lag1PhaseRad", ctypes.c_float),
         ("radialVelocityMps", ctypes.c_float),
         ("chirpPeriodS", ctypes.c_float),
-        ("continuousTdm", ctypes.c_uint8),
     ]
 
 

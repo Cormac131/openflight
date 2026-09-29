@@ -240,22 +240,22 @@ def test_ball_extraction_uses_the_configured_ball_snr_else_the_default():
     assert "params.snr = (gBallSnr > 0.0F) ? gBallSnr : gBallTrackCfg.snr;" in ball_track
 
 
-def test_ball_angles_use_the_ball_tracks_rate_continuously():
+def test_ball_angles_take_the_ball_tracks_rate_for_the_tdm_branch():
     ball = body("l3_considerBallTrack")
-    # l3_track_recent_rate(&gBallTrack.core) already feeds the club follow;
-    # pin the angle use itself.
     assert (
         "float rateMps = l3_track_recent_rate(&gBallTrack.core) * gBallTrack.core.cfg.binWidthM;"
         in ball
     )
-    assert "l3_angle_motion_phase(rateMps, gTrigLoopPeriodS)" in ball
-    assert "snapshot.continuousTdm = 1U;" in ball
+    # the measured lag-1 phase stays the rotor; the fitted rate is the radial velocity
+    flat = " ".join(ball.split())
+    assert "hit->dopplerPhaseRad, (rateMps != 0.0F) ? rateMps : newest.radialVelocityMps" in flat
+    assert "continuousTdm" not in SOURCE
 
 
-def test_hypothesis_angles_use_their_fitted_rate_continuously():
+def test_hypothesis_angles_take_their_fitted_rate_for_the_tdm_branch():
     ball = body("l3_considerBallTrack")
     hyps = ball[ball.index("l3_ball_hyp_fit(") :]
-    assert "snapshot.continuousTdm = (radial != 0.0F) ? 1U : 0U;" in hyps
+    assert "hit->dopplerPhaseRad, radial, &snapshot);" in hyps
 
 
 def test_track_cfg_cal_and_elem_survive_trigger_cfg_and_sensor_start():

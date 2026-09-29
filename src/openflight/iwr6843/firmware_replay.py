@@ -732,26 +732,20 @@ def _estimate_angles(
 ) -> tuple[fw.AngleObs | None, int]:
     """One target's angles as the board would estimate them; (obs, flags).
 
-    With ``track_rate_mps`` (the fitted range rate) the loops are summed with
-    the rotor and the TDM phase taken continuously from it, as the board does.
+    ``track_rate_mps`` (the fitted range rate), when given, replaces the radial
+    velocity that picks the TDM branch; the measured lag-1 phase stays the rotor.
     """
     if track_rate_mps:
-        loop = lib.l3_angle_motion_phase(track_rate_mps, chirp_period_s * n_tx)
-        lag1_phase_rad = math.atan2(math.sin(loop), math.cos(loop))
         radial_velocity_mps = track_rate_mps
-    else:
-        lag1_phase_rad = float(hit.dopplerPhaseRad)
     snapshot = channel_snapshot(
         cube,
         frame,
         int(hit.peakBin) - window_start,
         n_tx,
-        lag1_phase_rad=lag1_phase_rad,
+        lag1_phase_rad=float(hit.dopplerPhaseRad),
         radial_velocity_mps=radial_velocity_mps,
         chirp_period_s=chirp_period_s,
     )
-    if track_rate_mps:
-        snapshot.continuousTdm = 1
     obs = fw.AngleObs()
     if not lib.l3_angle_estimate(ctypes.byref(cal), ctypes.byref(snapshot), ctypes.byref(obs)):
         return None, 0

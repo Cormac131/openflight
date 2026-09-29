@@ -59,9 +59,6 @@ typedef struct {
     float    lag1PhaseRad;       /* per-loop Doppler phase, aliased to +/- pi */
     float    radialVelocityMps;  /* coarse, unambiguous; positive away from the radar */
     float    chirpPeriodS;       /* TDM tau */
-    /* 1: the per-chirp TDM phase is l3_angle_motion_phase(radialVelocityMps,
-     * chirpPeriodS), a fitted track rate; 0: the lag-1 branch snap. */
-    uint8_t  continuousTdm;
 } l3_angle_snapshot_t;
 
 /* Peak-to-mean ratio at which the elevation confidence reaches 1: an

@@ -3696,19 +3696,13 @@ static void l3_considerBallTrack(uint32_t slot)
 
         {
             l3_angle_obs_t angle;
-            /* The fitted range rate, not the two-point difference: continuous
-             * TDM and loop summing from it (late-flight spec, 2026-09-29). */
+            /* The fitted range rate, not the two-point difference, picks the
+             * TDM branch; the measured lag-1 phase stays the loop rotor. */
             float rateMps = l3_track_recent_rate(&gBallTrack.core) * gBallTrack.core.cfg.binWidthM;
-            float loopPhase = l3_angle_motion_phase(rateMps, gTrigLoopPeriodS);
 
-            if (rateMps != 0.0F) {
-                l3_channelSnapshot(&frame, (uint32_t)hit->peakBin - frame.binStart,
-                                   atan2f(sinf(loopPhase), cosf(loopPhase)), rateMps, &snapshot);
-                snapshot.continuousTdm = 1U;
-            } else {
-                l3_channelSnapshot(&frame, (uint32_t)hit->peakBin - frame.binStart,
-                                   hit->dopplerPhaseRad, newest.radialVelocityMps, &snapshot);
-            }
+            l3_channelSnapshot(&frame, (uint32_t)hit->peakBin - frame.binStart,
+                               hit->dopplerPhaseRad,
+                               (rateMps != 0.0F) ? rateMps : newest.radialVelocityMps, &snapshot);
             if (l3_angle_estimate(&gRadarCal, &snapshot, &angle)) {
                 uint8_t flags = 0U;
 
@@ -3747,16 +3741,8 @@ static void l3_considerBallTrack(uint32_t slot)
                                 &residual)) {
                 radial = rate * gBallTrack.hyps.cfg.binWidthM;
             }
-            if (radial != 0.0F) {
-                float loopPhase = l3_angle_motion_phase(radial, gTrigLoopPeriodS);
-
-                l3_channelSnapshot(&frame, (uint32_t)hit->peakBin - frame.binStart,
-                                   atan2f(sinf(loopPhase), cosf(loopPhase)), radial, &snapshot);
-            } else {
-                l3_channelSnapshot(&frame, (uint32_t)hit->peakBin - frame.binStart,
-                                   hit->dopplerPhaseRad, radial, &snapshot);
-            }
-            snapshot.continuousTdm = (radial != 0.0F) ? 1U : 0U;
+            l3_channelSnapshot(&frame, (uint32_t)hit->peakBin - frame.binStart,
+                               hit->dopplerPhaseRad, radial, &snapshot);
             if (l3_angle_estimate(&gRadarCal, &snapshot, &angle)) {
                 uint8_t flags = 0U;
 

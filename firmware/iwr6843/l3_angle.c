@@ -186,12 +186,9 @@ int32_t l3_angle_estimate(const l3_radar_cal_t *cal, const l3_angle_snapshot_t *
     if (ntx < 2U || ntx > L3_ANGLE_MAX_TX || nrx < 2U || nrx > L3_ANGLE_MAX_RX) {
         return 0;
     }
-    out->chirpPhaseRad = snapshot->continuousTdm
-                             ? l3_angle_motion_phase(snapshot->radialVelocityMps,
-                                                     snapshot->chirpPeriodS)
-                             : l3_angle_chirp_phase(snapshot->lag1PhaseRad, ntx,
-                                                    snapshot->radialVelocityMps,
-                                                    snapshot->chirpPeriodS);
+    out->chirpPhaseRad = l3_angle_chirp_phase(snapshot->lag1PhaseRad, ntx,
+                                              snapshot->radialVelocityMps,
+                                              snapshot->chirpPeriodS);
     /* Every TX block back to the loop's first chirp. */
     for (tx = 0U; tx < ntx; tx++) {
         l3_cpx_t undo = l3_angle_phasor(-out->chirpPhaseRad * (float)tx);
