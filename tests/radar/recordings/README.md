@@ -65,3 +65,40 @@ trajectory: one acquisition per swing, a longest run covering the approach,
 and a fitted speed in the range a clubhead reaches. The test asserts the
 weaker, capture-independent form (a track exists and did not reacquire more
 than once); read the report for the rest.
+
+## Labelled dumps
+
+A dump can carry hand labels: the frames where a person can see the ball or
+the club on the range-time map. The replay tests score the firmware's tracks
+against them, and `scripts/analysis/fit_constants.py` uses them to judge
+config constants.
+
+1. Label a dump. Run
+   `uv run python scripts/iwr6843/dump_viewer.py --dir tests/radar/recordings`,
+   choose the capture from the list, tick **Annotate tracks**, pick ball or
+   club, and click the range-time map once per frame where the object is
+   visible. Clicking the same frame again moves that point (there is no
+   dragging); shift-click removes it. **Seed from firmware** starts from the
+   firmware's own points for the chosen object. Tick **reviewed**, then
+   **Save labels**. Annotate does not work on an uploaded file, only on a
+   capture chosen from the list.
+2. A reviewed object with no points means "the firmware must not track this".
+3. The sidecar is `<dump>.l3dump.labels.json`, committed with the dump. It is
+   tied to the dump by SHA-256, so replacing a dump invalidates its labels
+   (the tests fail with "changed since it was labelled").
+4. Replay settings for the dump still come from `manifest.json`; add a
+   per-file entry if the default `tee_bin`/`dest_bin` are wrong for it.
+5. Accept a deliberate score change with
+   `uv run python scripts/analysis/fit_constants.py --update-baseline` and
+   commit `label_baseline.json`. The labelled-replay test fails if a dump has
+   no baseline entry or scores below it.
+6. Fit constants with
+   `uv run python scripts/analysis/fit_constants.py [--dir DIR] [--passes N] [--only PREFIX]`.
+   It only prints a report and edits nothing. Rows with flat n/n should be
+   left alone. It sweeps the runtime config fields in
+   `src/openflight/iwr6843/tunables.py`, not the `#define`s in the C headers.
+
+Limits. Labels are ground truth as marked by one person, so they carry that
+person's judgement. With few labelled dumps the fit tells you little; the
+report prints the number of dumps and points it was based on, so read that
+before trusting a row.

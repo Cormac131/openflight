@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **IWR6843 track labels.** The dump viewer gains an annotate mode: click the
+  ball or club onto the range-time map, seed from the firmware's points, mark
+  the object reviewed and save `<dump>.l3dump.labels.json` (tied to the dump
+  by SHA-256). Labelled dumps are replayed by a new test that scores the
+  firmware's tracks against the labels and fails below the committed
+  `label_baseline.json` (`fit_constants.py --update-baseline` accepts a
+  deliberate change). `ReplayConfig.overrides` lets a replay change firmware
+  config constants, and `scripts/analysis/fit_constants.py` sweeps the
+  runtime constants in `iwr6843/tunables.py` against the labels and prints a
+  report without editing anything.
 - **IWR6843 impact from the tracks either side of the tee band.** The
   firmware fits the club approaching, the club carrying on and the ball
   leaving as straight lines in range and fuses where they cross the ball

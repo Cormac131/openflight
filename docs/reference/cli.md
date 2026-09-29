@@ -102,6 +102,16 @@ The detector is `firmware/iwr6843/l3_trigger.c`.
 `tests/test_iwr6843_firmware_trigger.py` builds it on the host.
 Flash an image built from the matching firmware.
 
+## IWR6843 dump viewer and label tools
+
+These are scripts, not server flags. Run them with `uv run python`.
+
+| Command | Description |
+|---------|-------------|
+| `scripts/iwr6843/dump_viewer.py [--dir DIR] [--host H] [--port P] [--no-browser]` | Dump viewer. **Annotate tracks** lets you click the ball or club onto the range-time map (click the same frame again to move a point, shift-click to remove, **Seed from firmware** to start from the firmware's points); **reviewed** + **Save labels** writes `<dump>.l3dump.labels.json` next to the dump. Annotate works only on a capture chosen from the list, not an uploaded file. Restart the viewer to pick up edits to the page (it is cached at startup) |
+| `scripts/analysis/fit_constants.py --update-baseline` | Rescore every labelled dump and write `tests/radar/recordings/label_baseline.json`. The labelled-replay test fails if a dump has no baseline entry or scores below it |
+| `scripts/analysis/fit_constants.py [--dir DIR] [--passes N] [--only PREFIX]` | Constants sweep. Replays the labelled dumps in `--dir` (default `tests/radar/recordings`) with each runtime config field in `src/openflight/iwr6843/tunables.py` varied, `--passes` times (default 2), optionally only fields whose name starts with `PREFIX`. Prints a report and edits nothing; leave rows with flat n/n alone. It does not cover the `#define`s in the C headers |
+
 ## Inclinometer
 
 LIS3DH enclosure tilt compensation.
