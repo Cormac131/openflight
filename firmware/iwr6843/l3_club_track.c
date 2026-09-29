@@ -221,6 +221,48 @@ static int32_t l3_track_acquire(l3_club_track_t *track, const l3_target_obs_t *t
     return 1;
 }
 
+/* After impact: the club is a departing return beyond the band (or the
+ * ball, without a band) whose rate from the ball at the impact time is
+ * positive, no faster than it arrived (x L3_TRACK_FOLLOW_MAX_RATIO) and
+ * slower than the ball, and not the ball's target; the strongest such
+ * return. With a last point (from != NULL, an active track the band hid),
+ * a return that left that point at the ball's rate or faster is refused as
+ * well, as association refuses it. Returns its index, L3_TRACK_NO_TARGET for
+ * none. Shared by re-acquisition and the hidden club's re-emergence. */
+static uint32_t l3_track_pickBeyondBand(const l3_target_obs_t *targets, uint32_t n,
+                                        uint32_t timestampUs, const l3_follow_ctx_t *ctx,
+                                        const l3_track_point_t *from)
+{
+    float dtS = (float)(int32_t)(timestampUs - ctx->impactTimestampUs) * 1.0e-6F;
+    float fromDtS = (from != NULL)
+                        ? (float)(int32_t)(timestampUs - from->timestampUs) * 1.0e-6F
+                        : 0.0F;
+    float edge = ctx->bandValid ? ctx->bandHiBin : ctx->originBin;
+    float maxRate = ctx->approachBinsPerS * L3_TRACK_FOLLOW_MAX_RATIO;
+    uint32_t bestIndex = L3_TRACK_NO_TARGET;
+    uint32_t i;
+
+    if (dtS <= 0.0F || ctx->approachBinsPerS <= 0.0F) {
+        return L3_TRACK_NO_TARGET;
+    }
+    for (i = 0U; i < n; i++) {
+        float rate = (targets[i].rangeBin - ctx->originBin) / dtS;
+
+        if (i == ctx->ballClaimIndex || targets[i].rangeBin <= edge || rate <= 0.0F ||
+            rate > maxRate || (ctx->ballBinsPerS > 0.0F && rate >= ctx->ballBinsPerS)) {
+            continue;
+        }
+        if (from != NULL && ctx->ballBinsPerS > 0.0F && fromDtS > 0.0F &&
+            (targets[i].rangeBin - from->rangeBin) / fromDtS >= ctx->ballBinsPerS) {
+            continue;
+        }
+        if (bestIndex == L3_TRACK_NO_TARGET || targets[i].stat > targets[bestIndex].stat) {
+            bestIndex = i;
+        }
+    }
+    return bestIndex;
+}
+
 /* After impact the tee band hides the club for as long as it takes to cross
  * it at its arriving speed; it is coasted, not dropped, until then plus a
  * frame. */
@@ -328,6 +370,25 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
             track->lastTargetIndex = i;
         }
     }
+    if (best == NULL && following && ctx != NULL && ctx->bandValid &&
+        track->lastBin < ctx->bandHiBin) {
+        /* The band hid the club and nothing is in the follow window: a return
+         * beyond the band that re-acquisition would take is the club
+         * re-emerging, however slowly it was fitted going in. */
+        uint32_t index = l3_track_pickBeyondBand(targets, n, timestampUs, ctx, last);
+
+        if (index != L3_TRACK_NO_TARGET) {
+            /* As a re-acquisition: no frame-to-frame velocity across the gap. */
+            l3_track_append(track, &targets[index], 0.0F, 0.0F);
+            track->misses = 0U;
+            track->lastFrame = frame;
+            track->lastBin = targets[index].rangeBin;
+            track->lastTargetIndex = index;
+            l3_track_countBin(track, targets[index].rangeBin, 1);
+            l3_track_note(track, L3_TRACK_WHY_ASSOCIATED);
+            return 1;
+        }
+    }
     if (best == NULL) {
         track->lastTargetIndex = L3_TRACK_NO_TARGET;
         track->misses++;
@@ -385,39 +446,19 @@ int32_t l3_track_update(l3_club_track_t *track, const l3_target_obs_t *targets, 
     return l3_track_acquire(track, targets, n, frame, 0);
 }
 
-/* After impact with no track: the club is a departing return beyond the band
- * (or the ball) whose rate from the ball at the impact time is positive, no
- * faster than it arrived and slower than the ball, and not the ball's target;
- * the strongest such return. */
+/* After impact with no track: the strongest departing return beyond the
+ * band (l3_track_pickBeyondBand) starts a following track. */
 static int32_t l3_track_reacquire(l3_club_track_t *track, const l3_target_obs_t *targets,
                                   uint32_t n, uint32_t frame, uint32_t timestampUs,
                                   const l3_follow_ctx_t *ctx)
 {
-    float dtS = (float)(int32_t)(timestampUs - ctx->impactTimestampUs) * 1.0e-6F;
-    float edge = ctx->bandValid ? ctx->bandHiBin : ctx->originBin;
-    float maxRate = ctx->approachBinsPerS * L3_TRACK_FOLLOW_MAX_RATIO;
-    const l3_target_obs_t *best = NULL;
-    uint32_t bestIndex = L3_TRACK_NO_TARGET;
-    uint32_t i;
+    uint32_t bestIndex = l3_track_pickBeyondBand(targets, n, timestampUs, ctx, NULL);
+    const l3_target_obs_t *best;
 
-    if (dtS <= 0.0F || ctx->approachBinsPerS <= 0.0F) {
+    if (bestIndex == L3_TRACK_NO_TARGET) {
         return 0;
     }
-    for (i = 0U; i < n; i++) {
-        float rate = (targets[i].rangeBin - ctx->originBin) / dtS;
-
-        if (i == ctx->ballClaimIndex || targets[i].rangeBin <= edge || rate <= 0.0F ||
-            rate > maxRate || (ctx->ballBinsPerS > 0.0F && rate >= ctx->ballBinsPerS)) {
-            continue;
-        }
-        if (best == NULL || targets[i].stat > best->stat) {
-            best = &targets[i];
-            bestIndex = i;
-        }
-    }
-    if (best == NULL) {
-        return 0;
-    }
+    best = &targets[bestIndex];
     track->active = 1U;
     track->misses = 0U;
     track->following = 1U;

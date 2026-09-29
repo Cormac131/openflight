@@ -193,3 +193,82 @@ def test_the_unknown_approach_ceiling_reacquires_what_a_measured_one_refuses(lib
     assert follow(lib, track, 11, [target(11, 55.0)], ctx(approach=ceiling)) == 1
     assert track.lastBin == pytest.approx(55.0)
     assert track.followBinsPerS == pytest.approx(ceiling)
+
+
+# --- a club the band hides: re-emerging beyond it while the track coasts ---------
+
+
+def dwelling_track(lib):
+    """A club that dwells just short of the band (hi 40): four points 0.1 bin
+    apart (two per rounded bin, so no same-bin release), frames 2..5: the
+    fitted follow speed is ~33 bins/s and the follow window barely moves."""
+    cfg = fw.TrackCfg()
+    lib.l3_track_cfg_defaults(ctypes.byref(cfg))
+    track = fw.ClubTrack()
+    lib.l3_track_init(ctypes.byref(track), ctypes.byref(cfg))
+    for f, bin_ in zip(range(2, 6), (38.3, 38.4, 38.5, 38.6), strict=True):
+        arr = (fw.TargetObs * 1)(target(f, bin_))
+        lib.l3_track_update(ctypes.byref(track), arr, 1, f, f * FRAME_US)
+    assert track.active == 1 and track.count == 4
+    return track
+
+
+def test_a_dwelling_club_re_emerging_beyond_the_band_is_taken_at_once(lib):
+    """Frame 11 (15 ms after impact): 41.0 is 400 bins/s from the ball at 35
+    -- positive, under 1.1 x approach, slower than the ball -- but beyond the
+    follow window (38.6 + 33 bins/s x 18 ms + 0.5 = 39.7). It is appended to
+    the same track on the first frame it shows."""
+    track = dwelling_track(lib)
+    c = ctx()
+    for f in range(6, 11):
+        assert follow(lib, track, f, [], c) == 0
+        assert track.active == 1, f
+    total = track.total
+    assert follow(lib, track, 11, [target(11, 41.0)], c) == 1
+    assert track.active == 1 and track.following == 1
+    assert track.misses == 0
+    assert track.total == total + 1, "the same track, one point more"
+    assert track.lastBin == pytest.approx(41.0)
+    assert track.lastFrame == 11
+    assert track.lastTargetIndex == 0
+    assert (track.sameBin, track.sameBinCount) == (41, 1)
+    assert fw.TRACK_WHY_NAMES[track.why] == "associated"
+
+
+def test_the_strongest_qualifying_return_beyond_the_band_wins(lib):
+    track = dwelling_track(lib)
+    c = ctx()
+    for f in range(6, 11):
+        follow(lib, track, f, [], c)
+    targets = [
+        target(11, 41.0, stat=50.0),
+        target(11, 42.0, stat=200.0),
+        target(11, 60.0, stat=900.0),  # 1667 bins/s: faster than approach x 1.1
+    ]
+    assert follow(lib, track, 11, targets, c) == 1
+    assert track.lastTargetIndex == 1
+    assert track.lastBin == pytest.approx(42.0)
+
+
+@pytest.mark.parametrize(
+    "bin_, kwargs",
+    [
+        (41.0, {"ball": 300.0}),  # 400 bins/s from the ball: faster than the ball
+        (41.0, {"approach": 300.0}),  # 400 > 1.1 x 300
+        (41.0, {"claim": 0}),  # the ball's target
+        (39.8, {}),  # inside the band: not beyond it (and outside the follow window)
+    ],
+)
+def test_a_dwelling_club_refuses_what_re_acquisition_refuses(lib, bin_, kwargs):
+    track = dwelling_track(lib)
+    for f in range(6, 11):
+        follow(lib, track, f, [], ctx())
+    assert follow(lib, track, 11, [target(11, bin_)], ctx(**kwargs)) == 0
+    assert fw.TRACK_WHY_NAMES[track.why] == "coasted"
+
+
+def test_band_off_a_dwelling_club_does_not_jump_to_a_distant_return(lib):
+    track = dwelling_track(lib)
+    c = ctx(band=False)
+    follow(lib, track, 6, [], c)
+    assert follow(lib, track, 7, [target(7, 41.0)], c) == 0

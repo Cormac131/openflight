@@ -191,8 +191,11 @@ typedef struct {
  *  - the ball's claimed target (ballClaimIndex) is never the club, nor is a
  *    return that left the last point at the ball's rate or faster;
  *  - while the last point is short of the tee band's far edge, a frame with
- *    nothing to take coasts instead of counting toward a drop, for as long as
- *    crossing the band at the impact speed takes, plus a frame;
+ *    nothing in the follow window takes the return beyond the band that
+ *    re-acquisition would (below; also slower than the ball from the last
+ *    point) onto the same track; with none it coasts instead of counting
+ *    toward a drop, for as long as crossing the band at the impact speed
+ *    takes, plus a frame;
  *  - an inactive track is re-acquired from the strongest departing return
  *    beyond the band (the ball's bin without a band) whose rate from the ball
  *    since the impact time is positive, at most L3_TRACK_FOLLOW_MAX_RATIO
