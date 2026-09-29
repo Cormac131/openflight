@@ -3652,7 +3652,7 @@ static void l3_considerBallTrack(uint32_t slot)
      * gDelivery was read at impact and stays the approach's. The ball tracker
      * does not use the club's claim yet: on the 2026-09-27 captures that lost
      * more balls than it saved. */
-    (void)l3_track_follow(&gClubTrack, targets, found, frameIndex, gPostTimestampUs);
+    (void)l3_track_follow(&gClubTrack, targets, found, frameIndex, gPostTimestampUs, NULL);
     if (l3_ball_track_update_joint(&gBallTrack, targets, found, frameIndex, gPostTimestampUs,
                                    gClubTrack.lastTargetIndex) &&
         gBallTrack.lastTargetIndex < found && gBallTrack.core.count > 1U &&

@@ -39,6 +39,9 @@
 /* The club's speed at impact, for l3_track_follow's cap, is fitted over this
  * many of its newest points. */
 #define L3_TRACK_FOLLOW_FIT_POINTS 4U
+/* After impact the club is no faster than it arrived: re-acquisition takes a
+ * return whose rate from the ball is at most this times the approach speed. */
+#define L3_TRACK_FOLLOW_MAX_RATIO 1.10F
 
 typedef struct {
     uint32_t frame;
@@ -163,18 +166,45 @@ void l3_track_reset(l3_club_track_t *track);
  * observations; the prediction uses frame numbers, so call once per frame. */
 int32_t l3_track_update(l3_club_track_t *track, const l3_target_obs_t *targets, uint32_t n,
                         uint32_t frame, uint32_t timestampUs);
+/* The scene after impact, as l3_track_follow needs it. NULL: plain follow. */
+typedef struct {
+    uint8_t  bandValid;
+    float    bandHiBin;          /* the tee band's far edge (global bin) */
+    float    originBin;          /* the ball's bin at rest */
+    uint32_t impactTimestampUs;
+    float    approachBinsPerS;   /* the club's range rate arriving, > 0 when known */
+    float    ballBinsPerS;       /* the ball track's current rate, 0 when unknown */
+    uint32_t ballClaimIndex;     /* this frame's ball target, L3_TRACK_NO_TARGET for none */
+    uint32_t frameUs;            /* nominal frame period */
+} l3_follow_ctx_t;
+
 /* After impact: continue an active track by association alone -- never
- * acquire, never release (a club slowing after impact repeats its bin) --
- * taking the STRONGEST target between L3_TRACK_FOLLOW_RETREAT_BINS behind the
- * last point and where the club would be at its impact speed (fitted in bins
- * per second on the first call) plus L3_TRACK_FOLLOW_LEAD_BINS, never a third consecutive point
- * in one bin: of the two tracks visible after impact the club is the
- * stronger, the ball the weaker, and the club only slows while the ball
- * leaves faster. lastTargetIndex
- * says which of this frame's targets it claimed. Returns 1 when a point was
- * appended. */
+ * release (a club slowing after impact repeats its bin) -- taking the
+ * STRONGEST target between L3_TRACK_FOLLOW_RETREAT_BINS behind the last point
+ * and where the club would be at its impact speed (fitted in bins per second
+ * on the first call; the context's approach speed when the fit gives none)
+ * plus L3_TRACK_FOLLOW_LEAD_BINS, never a third consecutive point in one bin:
+ * of the two tracks visible after impact the club is the stronger, the ball
+ * the weaker, and the club only slows while the ball leaves faster.
+ * With a context (ctx != NULL) the scene after impact is used as well:
+ *  - the ball's claimed target (ballClaimIndex) is never the club, nor is a
+ *    return that left the last point at the ball's rate or faster;
+ *  - while the last point is short of the tee band's far edge, a frame with
+ *    nothing to take coasts instead of counting toward a drop, for as long as
+ *    crossing the band at the impact speed takes, plus a frame;
+ *  - an inactive track is re-acquired from the strongest departing return
+ *    beyond the band (the ball's bin without a band) whose rate from the ball
+ *    since the impact time is positive, at most L3_TRACK_FOLLOW_MAX_RATIO
+ *    times the approach speed, slower than the ball, and not the ball's
+ *    target.
+ * With NULL it only continues an active track and never acquires.
+ * lastTargetIndex says which of this frame's targets it claimed. Returns 1
+ * when a point was appended. */
 int32_t l3_track_follow(l3_club_track_t *track, const l3_target_obs_t *targets, uint32_t n,
-                        uint32_t frame, uint32_t timestampUs);
+                        uint32_t frame, uint32_t timestampUs, const l3_follow_ctx_t *ctx);
+/* Range rate (bins/s) over the newest points: the fit of up to four when three
+ * or more are held, the two newest otherwise, 0 below two. */
+float l3_track_recent_rate(const l3_club_track_t *track);
 /* Angles for the point the last update appended (the target at
  * lastTargetIndex), measured after association so only one target per frame
  * needs an angle estimate. Recomputes that point's golf-frame position.

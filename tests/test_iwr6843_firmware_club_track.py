@@ -752,7 +752,9 @@ def test_same_bin_release_sets_released_valid_and_prevents_re_taking_same_bin(li
 def _follow(tr, frame, targets):
     arr = (Target * max(1, len(targets)))(*targets)
     return bool(
-        tr.lib.l3_track_follow(ctypes.byref(tr.track), arr, len(targets), frame, frame * FRAME_US)
+        tr.lib.l3_track_follow(
+            ctypes.byref(tr.track), arr, len(targets), frame, frame * FRAME_US, None
+        )
     )
 
 
@@ -884,7 +886,7 @@ def _follow_at(tr, frame, timestamp_us, bins):
         targets.append(t)
     arr = (Target * max(1, len(targets)))(*targets)
     return bool(
-        tr.lib.l3_track_follow(ctypes.byref(tr.track), arr, len(targets), frame, timestamp_us)
+        tr.lib.l3_track_follow(ctypes.byref(tr.track), arr, len(targets), frame, timestamp_us, None)
     )
 
 

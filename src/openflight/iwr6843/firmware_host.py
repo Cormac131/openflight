@@ -556,6 +556,21 @@ class ClubTrack(ctypes.Structure):
     ]
 
 
+class FollowCtx(ctypes.Structure):
+    """``l3_follow_ctx_t``: the scene after impact for ``l3_track_follow``."""
+
+    _fields_ = [
+        ("bandValid", ctypes.c_uint8),
+        ("bandHiBin", ctypes.c_float),
+        ("originBin", ctypes.c_float),
+        ("impactTimestampUs", ctypes.c_uint32),
+        ("approachBinsPerS", ctypes.c_float),
+        ("ballBinsPerS", ctypes.c_float),
+        ("ballClaimIndex", ctypes.c_uint32),
+        ("frameUs", ctypes.c_uint32),
+    ]
+
+
 class ImpactCfg(ctypes.Structure):
     """``l3_impact_cfg_t``."""
 
@@ -1322,7 +1337,11 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_track_reset": ([_P(ClubTrack)], None),
     "l3_track_update": ([_P(ClubTrack), _P(TargetObs), _U32, _U32, _U32], ctypes.c_int32),
     "l3_track_wrapped_diff": ([ctypes.c_float, ctypes.c_float, ctypes.c_float], ctypes.c_float),
-    "l3_track_follow": ([_P(ClubTrack), _P(TargetObs), _U32, _U32, _U32], ctypes.c_int32),
+    "l3_track_follow": (
+        [_P(ClubTrack), _P(TargetObs), _U32, _U32, _U32, _P(FollowCtx)],
+        ctypes.c_int32,
+    ),
+    "l3_track_recent_rate": ([_P(ClubTrack)], _F32),
     "l3_track_set_angles": ([_P(ClubTrack), _F32, _F32, ctypes.c_uint8], ctypes.c_int32),
     "l3_track_point": ([_P(ClubTrack), _U32, _P(TrackPoint)], ctypes.c_int32),
     "l3_track_delivery": ([_P(ClubTrack), _U32, _P(Delivery)], _U32),
@@ -1652,6 +1671,7 @@ __all__ = [
     "ClubTrack",
     "Cpx",
     "Delivery",
+    "FollowCtx",
     "IMPACT_WHY_NAMES",
     "MEAS_FALLBACK",
     "MEAS_IMPLAUSIBLE",

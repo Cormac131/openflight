@@ -1535,7 +1535,7 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
         running_floor=ball_floor,
     )
     track_bin = None
-    if lib.l3_track_follow(ctypes.byref(track), targets, found, frame, timestamp_us):
+    if lib.l3_track_follow(ctypes.byref(track), targets, found, frame, timestamp_us, None):
         newest = fw.TrackPoint()
         lib.l3_track_point(ctypes.byref(track), track.count - 1, ctypes.byref(newest))
         points.append(_point_summary(newest))

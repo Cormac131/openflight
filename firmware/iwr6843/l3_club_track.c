@@ -221,6 +221,24 @@ static int32_t l3_track_acquire(l3_club_track_t *track, const l3_target_obs_t *t
     return 1;
 }
 
+/* After impact the tee band hides the club for as long as it takes to cross
+ * it at its arriving speed; it is coasted, not dropped, until then plus a
+ * frame. */
+static int32_t l3_track_coasting_across_band(const l3_club_track_t *track,
+                                             const l3_follow_ctx_t *ctx, uint32_t timestampUs,
+                                             const l3_track_point_t *last)
+{
+    float crossUs;
+
+    if (ctx == NULL || !ctx->bandValid || track->followBinsPerS <= 0.0F ||
+        track->lastBin >= ctx->bandHiBin) {
+        return 0;
+    }
+    crossUs = (ctx->bandHiBin - track->lastBin) / track->followBinsPerS * 1.0e6F +
+              (float)ctx->frameUs;
+    return ((float)(int32_t)(timestampUs - last->timestampUs) <= crossUs) ? 1 : 0;
+}
+
 /* One frame of association for an active track; coast, then drop, when
  * nothing qualifies. Approaching: the best-scoring target in the gate around
  * the prediction, never below the last point's rounded bin when
@@ -231,10 +249,13 @@ static int32_t l3_track_acquire(l3_club_track_t *track, const l3_target_obs_t *t
  * stronger of the two returns after impact and only slows from its impact
  * speed, so it is anywhere between; beyond, it would be moving faster than
  * it arrived, which only the ball does -- and never a third consecutive point
- * in one bin, which a stall beside the ball is and the club is not. */
+ * in one bin, which a stall beside the ball is and the club is not. With a
+ * follow context (following only): never the ball's claimed target nor a
+ * return that left the last point at the ball's rate or faster, and a frame
+ * with nothing coasts while the club is still crossing the tee band. */
 static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t *targets,
                                   uint32_t n, uint32_t frame, uint32_t timestampUs,
-                                  int32_t following)
+                                  int32_t following, const l3_follow_ctx_t *ctx)
 {
     const l3_track_cfg_t *cfg = &track->cfg;
     uint32_t elapsed = frame - track->lastFrame;
@@ -267,6 +288,15 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
                 l3_track_roundBin(targets[i].rangeBin) == track->sameBin &&
                 track->sameBinCount >= cfg->maxSameBinPoints) {
                 continue;
+            }
+            if (ctx != NULL) {
+                if (i == ctx->ballClaimIndex) {
+                    continue;
+                }
+                if (ctx->ballBinsPerS > 0.0F && dtS > 0.0F &&
+                    (targets[i].rangeBin - track->lastBin) / dtS >= ctx->ballBinsPerS) {
+                    continue;
+                }
             }
             if (best == NULL || targets[i].stat > best->stat) {
                 best = &targets[i];
@@ -301,6 +331,10 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
     if (best == NULL) {
         track->lastTargetIndex = L3_TRACK_NO_TARGET;
         track->misses++;
+        if (following && l3_track_coasting_across_band(track, ctx, timestampUs, last)) {
+            l3_track_note(track, L3_TRACK_WHY_COASTED);
+            return 0;
+        }
         if (track->misses > cfg->maxMisses) {
             track->active = 0U;
             l3_track_note(track, L3_TRACK_WHY_DROPPED);
@@ -336,7 +370,7 @@ int32_t l3_track_update(l3_club_track_t *track, const l3_target_obs_t *targets, 
 
     track->lastTargetIndex = L3_TRACK_NO_TARGET;
     if (track->active) {
-        if (!l3_track_associate(track, targets, n, frame, timestampUs, 0)) {
+        if (!l3_track_associate(track, targets, n, frame, timestampUs, 0, NULL)) {
             return 0;
         }
         if (cfg->maxSameBinPoints == 0U || track->sameBinCount <= cfg->maxSameBinPoints) {
@@ -351,34 +385,93 @@ int32_t l3_track_update(l3_club_track_t *track, const l3_target_obs_t *targets, 
     return l3_track_acquire(track, targets, n, frame, 0);
 }
 
+/* After impact with no track: the club is a departing return beyond the band
+ * (or the ball) whose rate from the ball at the impact time is positive, no
+ * faster than it arrived and slower than the ball, and not the ball's target;
+ * the strongest such return. */
+static int32_t l3_track_reacquire(l3_club_track_t *track, const l3_target_obs_t *targets,
+                                  uint32_t n, uint32_t frame, uint32_t timestampUs,
+                                  const l3_follow_ctx_t *ctx)
+{
+    float dtS = (float)(int32_t)(timestampUs - ctx->impactTimestampUs) * 1.0e-6F;
+    float edge = ctx->bandValid ? ctx->bandHiBin : ctx->originBin;
+    float maxRate = ctx->approachBinsPerS * L3_TRACK_FOLLOW_MAX_RATIO;
+    const l3_target_obs_t *best = NULL;
+    uint32_t bestIndex = L3_TRACK_NO_TARGET;
+    uint32_t i;
+
+    if (dtS <= 0.0F || ctx->approachBinsPerS <= 0.0F) {
+        return 0;
+    }
+    for (i = 0U; i < n; i++) {
+        float rate = (targets[i].rangeBin - ctx->originBin) / dtS;
+
+        if (i == ctx->ballClaimIndex || targets[i].rangeBin <= edge || rate <= 0.0F ||
+            rate > maxRate || (ctx->ballBinsPerS > 0.0F && rate >= ctx->ballBinsPerS)) {
+            continue;
+        }
+        if (best == NULL || targets[i].stat > best->stat) {
+            best = &targets[i];
+            bestIndex = i;
+        }
+    }
+    if (best == NULL) {
+        return 0;
+    }
+    track->active = 1U;
+    track->misses = 0U;
+    track->following = 1U;
+    track->followBinsPerS = ctx->approachBinsPerS;
+    track->velocityBinsPerFrame = 0.0F;
+    track->lastFrame = frame;
+    track->lastBin = best->rangeBin;
+    track->lastTargetIndex = bestIndex;
+    l3_track_append(track, best, 0.0F, 0.0F);
+    l3_track_countBin(track, best->rangeBin, 1);
+    l3_track_note(track, L3_TRACK_WHY_ACQUIRED);
+    return 1;
+}
+
 int32_t l3_track_follow(l3_club_track_t *track, const l3_target_obs_t *targets, uint32_t n,
-                        uint32_t frame, uint32_t timestampUs)
+                        uint32_t frame, uint32_t timestampUs, const l3_follow_ctx_t *ctx)
 {
     track->lastTargetIndex = L3_TRACK_NO_TARGET;
     if (!track->active) {
-        return 0;
+        return (ctx != NULL) ? l3_track_reacquire(track, targets, n, frame, timestampUs, ctx) : 0;
     }
     if (!track->following) {
-        /* The first frame after impact: the club can only slow from here. */
-        float slope = 0.0F;
-        float residual = 0.0F;
+        /* The first frame after impact: the club can only slow from here.
+         * Too few points for a fit (a track reacquired just before impact)
+         * gives the rate between its last two points; none at all, the
+         * context's approach speed. */
+        float slope = l3_track_recent_rate(track);
 
         track->following = 1U;
-        if (l3_track_fit(track, L3_TRACK_FOLLOW_FIT_POINTS, &slope, &residual) == 0U &&
-            track->count >= 2U) {
-            /* Too few points for a fit (a track reacquired just before
-             * impact): the rate between its last two points. */
-            const l3_track_point_t *last =
-                &track->points[(track->next + L3_TRACK_POINTS - 1U) % L3_TRACK_POINTS];
-            const l3_track_point_t *prev =
-                &track->points[(track->next + L3_TRACK_POINTS - 2U) % L3_TRACK_POINTS];
-            float dtS = (float)(int32_t)(last->timestampUs - prev->timestampUs) * 1.0e-6F;
-
-            slope = (dtS > 0.0F) ? (last->rangeBin - prev->rangeBin) / dtS : 0.0F;
-        }
         track->followBinsPerS = (slope > 0.0F) ? slope : 0.0F;
+        if (track->followBinsPerS <= 0.0F && ctx != NULL && ctx->approachBinsPerS > 0.0F) {
+            track->followBinsPerS = ctx->approachBinsPerS;
+        }
     }
-    return l3_track_associate(track, targets, n, frame, timestampUs, 1);
+    return l3_track_associate(track, targets, n, frame, timestampUs, 1, ctx);
+}
+
+float l3_track_recent_rate(const l3_club_track_t *track)
+{
+    float slope = 0.0F;
+    float residual = 0.0F;
+    l3_track_point_t newest;
+    l3_track_point_t previous;
+    float dtS;
+
+    if (l3_track_fit(track, L3_TRACK_FOLLOW_FIT_POINTS, &slope, &residual) != 0U) {
+        return slope;
+    }
+    if (track->count < 2U || !l3_track_point(track, track->count - 1U, &newest) ||
+        !l3_track_point(track, track->count - 2U, &previous)) {
+        return 0.0F;
+    }
+    dtS = (float)(int32_t)(newest.timestampUs - previous.timestampUs) * 1.0e-6F;
+    return (dtS > 0.0F) ? (newest.rangeBin - previous.rangeBin) / dtS : 0.0F;
 }
 
 int32_t l3_track_point(const l3_club_track_t *track, uint32_t index, l3_track_point_t *out)
