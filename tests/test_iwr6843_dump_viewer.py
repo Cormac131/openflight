@@ -9,6 +9,7 @@ the server must only read captures under its folder.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import io
 import json
@@ -302,6 +303,24 @@ def test_default_options_leave_the_band_off():
     raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
     data = dv.analyze_dump(raw, dv.ViewerOptions(tee_bin=TEE_BIN, tee_range_m=TEE_RANGE_M))
     assert data["firmware"]["band"] is None
+
+
+@needs_compiler
+def test_impact_fit_json_stays_json_safe_when_a_track_speed_is_non_finite():
+    raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
+    config = fr.ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN, band_bins=6.0)
+    result = fr.replay_dump(raw, config)
+    ok_name = next(name for name, t in result.impact_fit.tracks.items() if t.why == "ok")
+    broken = dataclasses.replace(result.impact_fit.tracks[ok_name], speed_mps=float("nan"))
+    tracks = dict(result.impact_fit.tracks)
+    tracks[ok_name] = broken
+    result = dataclasses.replace(
+        result, impact_fit=dataclasses.replace(result.impact_fit, tracks=tracks)
+    )
+
+    out = dv._impact_fit_json(result)
+    json.dumps(out, allow_nan=False)
+    assert out["tracks"][ok_name]["line"] is None
 
 
 # --- session context ---------------------------------------------------------

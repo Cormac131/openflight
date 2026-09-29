@@ -206,7 +206,12 @@ FIT_LINE_SPAN_US = 12_000.0  # the K = 4 points at 3 ms frames
 
 
 def _impact_fit_json(result: fr.ReplayResult) -> dict | None:
-    """The impact fit with, per kept track, the fitted line as two (t_us, range_m) points."""
+    """The impact fit with, per kept track, the fitted line as two (t_us, range_m) points.
+
+    Every number is run through ``_finite`` before it reaches JSON: a track
+    with a non-finite speed or time drops its line instead of poisoning the
+    whole payload.
+    """
     if result.impact_fit is None:
         return None
     ball_m = result.config.destination * bin_width_m(result.config.fft_size)
@@ -215,10 +220,11 @@ def _impact_fit_json(result: fr.ReplayResult) -> dict | None:
         line = None
         if track.why == "ok" and track.time_us is not None:
             t0 = track.time_us - FIT_LINE_SPAN_US
-            line = [
-                [t0, ball_m + track.speed_mps * (t0 - track.time_us) * 1e-6],
-                [track.time_us, ball_m],
-            ]
+            r0 = ball_m + track.speed_mps * (t0 - track.time_us) * 1e-6
+            points = [_finite(t0), _finite(r0), _finite(track.time_us), _finite(ball_m)]
+            if all(v is not None for v in points):
+                t0, r0, t1, r1 = points
+                line = [[t0, r0], [t1, r1]]
         out["tracks"][name]["line"] = line
     return out
 
@@ -278,7 +284,7 @@ def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOp
         "report": fr.format_report(result, points=True),
         "band": list(result.band) if result.band is not None else None,
         "range_frame": result.range_frame,
-        "ball_range_m": result.config.destination * bin_width_m(result.config.fft_size),
+        "ball_range_m": _finite(result.config.destination * bin_width_m(result.config.fft_size)),
         "impact_fit": _impact_fit_json(result),
     }
 
