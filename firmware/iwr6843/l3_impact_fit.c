@@ -206,8 +206,9 @@ static int32_t l3_fit_ok(const l3_fit_estimate_t *e)
     return (e->why == L3_FIT_WHY_OK) ? 1 : 0;
 }
 
-/* Inverse-variance mean of the kept estimates; returns how many. */
-static uint32_t l3_fit_mean(const l3_impact_fit_t *fit, float *mean)
+/* Inverse-variance mean of the kept estimates other than skip (L3_FIT_NO_TRACK
+ * skips none); returns how many were used. */
+static uint32_t l3_fit_mean(const l3_impact_fit_t *fit, uint8_t skip, float *mean)
 {
     float weights = 0.0F;
     float sum = 0.0F;
@@ -218,7 +219,7 @@ static uint32_t l3_fit_mean(const l3_impact_fit_t *fit, float *mean)
         const l3_fit_estimate_t *e = &fit->track[i];
         float w;
 
-        if (!l3_fit_ok(e)) {
+        if (i == (uint32_t)skip || !l3_fit_ok(e)) {
             continue;
         }
         w = 1.0F / (e->sigmaUs * e->sigmaUs);
@@ -230,31 +231,71 @@ static uint32_t l3_fit_mean(const l3_impact_fit_t *fit, float *mean)
     return used;
 }
 
-/* The kept estimate furthest outside its gate around mean, L3_FIT_NO_TRACK
- * when every one agrees. */
-static uint8_t l3_fit_worst(const l3_impact_fit_cfg_t *cfg, const l3_impact_fit_t *fit,
-                            float mean)
+/* How far one estimate lies from mean in units of its gate,
+ * gateSigmas * max(sigma, minSigmaUs); it agrees when this is at most 1. */
+static float l3_fit_gate_ratio(const l3_impact_fit_cfg_t *cfg, const l3_fit_estimate_t *e,
+                               float mean)
 {
-    uint8_t worst = L3_FIT_NO_TRACK;
-    float worstRatio = 1.0F;
+    float sigma = (e->sigmaUs > cfg->minSigmaUs) ? e->sigmaUs : cfg->minSigmaUs;
+
+    return fabsf(e->timeUs - mean) / (cfg->gateSigmas * sigma);
+}
+
+/* The largest gate ratio of the kept estimates other than skip around mean:
+ * the group agrees when it is at most 1. */
+static float l3_fit_disagreement(const l3_impact_fit_cfg_t *cfg, const l3_impact_fit_t *fit,
+                                 uint8_t skip, float mean)
+{
+    float worst = 0.0F;
     uint32_t i;
 
     for (i = 0U; i < L3_FIT_TRACKS; i++) {
-        const l3_fit_estimate_t *e = &fit->track[i];
-        float sigma;
         float ratio;
 
-        if (!l3_fit_ok(e)) {
+        if (i == (uint32_t)skip || !l3_fit_ok(&fit->track[i])) {
             continue;
         }
-        sigma = (e->sigmaUs > cfg->minSigmaUs) ? e->sigmaUs : cfg->minSigmaUs;
-        ratio = fabsf(e->timeUs - mean) / (cfg->gateSigmas * sigma);
-        if (ratio > worstRatio) {
-            worstRatio = ratio;
-            worst = (uint8_t)i;
+        ratio = l3_fit_gate_ratio(cfg, &fit->track[i], mean);
+        if (ratio > worst) {
+            worst = ratio;
         }
     }
     return worst;
+}
+
+/* Three kept estimates that do not all agree around their mean: the track to
+ * drop, or L3_FIT_NO_TRACK when no pair justifies dropping one. Each
+ * leave-one-out pair is judged around its own inverse-variance mean, so a
+ * sharp outlier cannot drag the mean onto itself and push the good tracks
+ * out of their gates. Among the pairs that agree the one with the smallest
+ * disagreement wins; ties go to the pair leaving out the earlier track
+ * (club_in, then club_out, then ball_out). The left-out track is dropped only
+ * if it fails its gate around the winning pair's mean. */
+static uint8_t l3_fit_pick_drop(const l3_impact_fit_cfg_t *cfg, const l3_impact_fit_t *fit,
+                                float *pairMean)
+{
+    uint8_t best = L3_FIT_NO_TRACK;
+    float bestRatio = 0.0F;
+    float bestMean = 0.0F;
+    uint8_t k;
+
+    for (k = 0U; k < (uint8_t)L3_FIT_TRACKS; k++) {
+        float mean;
+        float ratio;
+
+        (void)l3_fit_mean(fit, k, &mean);
+        ratio = l3_fit_disagreement(cfg, fit, k, mean);
+        if (ratio <= 1.0F && (best == L3_FIT_NO_TRACK || ratio < bestRatio)) {
+            best = k;
+            bestRatio = ratio;
+            bestMean = mean;
+        }
+    }
+    if (best == L3_FIT_NO_TRACK || l3_fit_gate_ratio(cfg, &fit->track[best], bestMean) <= 1.0F) {
+        return L3_FIT_NO_TRACK;
+    }
+    *pairMean = bestMean;
+    return best;
 }
 
 static float l3_fit_sharpest(const l3_impact_fit_t *fit)
@@ -302,7 +343,7 @@ void l3_impact_fit_solve(const l3_impact_fit_cfg_t *cfg, l3_impact_fit_t *fit, u
     l3_fit_estimate_t *co = &fit->track[L3_FIT_CLUB_OUT];
     l3_fit_estimate_t *bo = &fit->track[L3_FIT_BALL_OUT];
     uint32_t used;
-    uint8_t worst;
+    uint8_t drop;
     float mean;
 
     fit->verdict = L3_FIT_VERDICT_NONE;
@@ -316,22 +357,18 @@ void l3_impact_fit_solve(const l3_impact_fit_cfg_t *cfg, l3_impact_fit_t *fit, u
     if (l3_fit_ok(co) && l3_fit_ok(bo) && bo->speedMps <= co->speedMps) {
         bo->why = L3_FIT_WHY_PHYSICS;
     }
-    used = l3_fit_mean(fit, &mean);
+    used = l3_fit_mean(fit, L3_FIT_NO_TRACK, &mean);
     if (used == 0U) {
         return;
     }
-    if (used == 1U) {
-        fit->verdict = L3_FIT_VERDICT_SINGLE;
+    if (used == 1U || l3_fit_disagreement(cfg, fit, L3_FIT_NO_TRACK, mean) <= 1.0F) {
+        fit->verdict = (used == 1U) ? L3_FIT_VERDICT_SINGLE : L3_FIT_VERDICT_CONSISTENT;
         fit->impactUs = mean;
     } else {
-        worst = l3_fit_worst(cfg, fit, mean);
-        if (worst != L3_FIT_NO_TRACK && used == 3U) {
-            fit->track[worst].why = L3_FIT_WHY_DROPPED;
-            fit->droppedTrack = worst;
-            (void)l3_fit_mean(fit, &mean);
-            worst = l3_fit_worst(cfg, fit, mean);
-        }
-        if (worst == L3_FIT_NO_TRACK) {
+        drop = (used == 3U) ? l3_fit_pick_drop(cfg, fit, &mean) : L3_FIT_NO_TRACK;
+        if (drop != L3_FIT_NO_TRACK) {
+            fit->track[drop].why = L3_FIT_WHY_DROPPED;
+            fit->droppedTrack = drop;
             fit->verdict = L3_FIT_VERDICT_CONSISTENT;
             fit->impactUs = mean;
         } else {

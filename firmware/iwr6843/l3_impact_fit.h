@@ -104,8 +104,11 @@ void l3_impact_fit_track(const l3_impact_fit_cfg_t *cfg, uint8_t which, l3_point
 
 /* Physics across the tracks, then fusion: inverse-variance mean; each kept
  * estimate must lie within gateSigmas * max(sigma, minSigmaUs) of it. Three
- * with one outlier: drop it and fuse the two. Two that disagree, or three
- * that still disagree: inconsistent, impact from the smallest sigma. */
+ * that do not all agree: every leave-one-out pair is judged around its own
+ * mean; the agreeing pair with the smallest disagreement (ties: the pair
+ * leaving out club_in, then club_out, then ball_out) is fused and the third
+ * dropped if it fails its gate around that pair's mean. Two that disagree, or
+ * three with no such pair: inconsistent, impact from the smallest sigma. */
 void l3_impact_fit_solve(const l3_impact_fit_cfg_t *cfg, l3_impact_fit_t *fit, uint32_t triggerUs);
 /* All three tracks and the solve. A NULL list or span is a missing track. */
 void l3_impact_fit_run(const l3_impact_fit_cfg_t *cfg, const l3_fit_list_t *clubIn,

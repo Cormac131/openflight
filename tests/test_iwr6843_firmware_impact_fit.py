@@ -268,6 +268,89 @@ def test_one_outlier_of_three_is_dropped_and_the_rest_fused(lib):
     assert fit.spreadUs == pytest.approx(200)
 
 
+def test_a_sharp_outlier_does_not_mask_itself_by_dragging_the_mean(lib):
+    # The review's probe: the ball's small sigma pulls the three-way mean to
+    # ~34.9 ms, so judged against that mean the two club tracks look like the
+    # outliers. Judged pair by pair, only the club pair agrees and the ball
+    # fails the gate around the club pair's own mean.
+    fit = solved(
+        lib,
+        {
+            CLUB_IN: ("ok", 30_000, 800, 30),
+            CLUB_OUT: ("ok", 30_100, 800, 25),
+            BALL_OUT: ("ok", 35_000, 100, 60),
+        },
+    )
+    assert fit.verdict == VERDICT["consistent"]
+    assert fit.droppedTrack == BALL_OUT
+    assert fit.track[BALL_OUT].why == WHY["dropped"]
+    assert fit.track[CLUB_IN].why == fit.track[CLUB_OUT].why == WHY["ok"]
+    assert fit.impactUs == pytest.approx(30_050, abs=0.5)
+    assert fit.spreadUs == pytest.approx(100)
+
+
+@pytest.mark.parametrize("outlier", [CLUB_IN, CLUB_OUT, BALL_OUT])
+def test_each_track_as_the_sharp_outlier_is_the_one_dropped(lib, outlier):
+    speeds = {CLUB_IN: 30, CLUB_OUT: 25, BALL_OUT: 60}
+    good = iter((30_000, 30_100))
+    estimates = {}
+    for which in (CLUB_IN, CLUB_OUT, BALL_OUT):
+        if which == outlier:
+            estimates[which] = ("ok", 35_000, 100, speeds[which])
+        else:
+            estimates[which] = ("ok", next(good), 800, speeds[which])
+    fit = solved(lib, estimates)
+    assert fit.verdict == VERDICT["consistent"]
+    assert fit.droppedTrack == outlier
+    assert fit.track[outlier].why == WHY["dropped"]
+    assert fit.impactUs == pytest.approx(30_050, abs=0.5)
+
+
+def test_two_agreeing_pairs_keep_the_tighter_one(lib):
+    # club_in/club_out and club_out/ball_out both agree; the three together do
+    # not. The club_out/ball_out pair disagrees less, so club_in is dropped.
+    fit = solved(
+        lib,
+        {
+            CLUB_IN: ("ok", 30_000, 500, 30),
+            CLUB_OUT: ("ok", 31_400, 500, 25),
+            BALL_OUT: ("ok", 31_600, 100, 60),
+        },
+    )
+    assert fit.verdict == VERDICT["consistent"]
+    assert fit.droppedTrack == CLUB_IN
+
+
+def test_equal_pairs_tie_to_leaving_out_the_earlier_track(lib):
+    # club_in and ball_out sit symmetrically either side of club_out; the two
+    # pairs that include club_out disagree equally, so the pair leaving out
+    # club_in (the earlier index) wins and club_in is dropped.
+    fit = solved(
+        lib,
+        {
+            CLUB_IN: ("ok", 28_000, 500, 30),
+            CLUB_OUT: ("ok", 30_000, 500, 25),
+            BALL_OUT: ("ok", 32_000, 500, 60),
+        },
+    )
+    assert fit.verdict == VERDICT["consistent"]
+    assert fit.droppedTrack == CLUB_IN
+    assert fit.impactUs == pytest.approx(31_000, abs=0.5)
+
+
+def test_three_agreeing_around_their_mean_drop_nothing_even_with_a_sharp_one(lib):
+    fit = solved(
+        lib,
+        {
+            CLUB_IN: ("ok", 30_000, 800, 30),
+            CLUB_OUT: ("ok", 30_100, 800, 25),
+            BALL_OUT: ("ok", 30_300, 100, 60),
+        },
+    )
+    assert fit.verdict == VERDICT["consistent"]
+    assert fit.droppedTrack == fw.FIT_NO_TRACK
+
+
 def test_two_disagreeing_tracks_are_inconsistent_and_take_the_smaller_sigma(lib):
     fit = solved(lib, {CLUB_IN: ("ok", 30_000, 600, 30), BALL_OUT: ("ok", 36_000, 200, 60)})
     assert fit.verdict == VERDICT["inconsistent"]
