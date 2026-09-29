@@ -244,8 +244,10 @@ def test_without_history_the_band_is_centred(lib):
     values = peaked()
     band = place(lib, noisy_map(lib, 20, values, updates=7), centre=47.0, width=5.0)
     assert (band.loBin, band.hiBin) == (45.0, 49.0)
+    # With history: the ridge (51..55) is entirely beyond the centre, so the
+    # band slides to the ridge-side edge and still holds the centre.
     band = place(lib, noisy_map(lib, 20, values, updates=8), centre=47.0, width=5.0)
-    assert (band.loBin, band.hiBin) == (51.0, 55.0)
+    assert (band.loBin, band.hiBin) == (47.0, 51.0)
 
 
 def test_width_wider_than_the_window_falls_back_to_centred(lib):
@@ -261,11 +263,12 @@ def test_even_width_centred_is_deterministic(lib):
 
 
 def test_search_window_is_clamped_to_the_map(lib):
-    # map covers global bins 40..50, narrower than 45 +/- 10; peak at its edge
+    # map covers global bins 40..50, narrower than 48 +/- 10; peak at its edge.
+    # Holding the centre allows starts 44..48; the map ends the last start at 46.
     values = [1.0] * 11
     for b in range(6, 11):  # global 46..50
         values[b] = 50.0
-    band = place(lib, noisy_map(lib, 40, values), centre=45.0, width=5.0)
+    band = place(lib, noisy_map(lib, 40, values), centre=48.0, width=5.0)
     assert (band.valid, band.loBin, band.hiBin) == (1, 46.0, 50.0)
 
 
@@ -284,3 +287,31 @@ def test_empty_update_is_a_no_op(lib):
 
 def test_zero_width_is_no_band(lib):
     assert place(lib, noisy_map(lib, 20, [3.0] * 53), centre=47.0, width=0.0).valid == 0
+
+
+@pytest.mark.parametrize(
+    "ridge, expected",
+    [
+        (range(33, 38), (29.0, 33.0)),  # entirely beyond the ball: slides to the far edge
+        (range(22, 27), (25.0, 29.0)),  # entirely short of it: slides to the near edge
+        (range(27, 32), (27.0, 31.0)),  # around it: the ridge itself
+    ],
+)
+def test_the_band_always_holds_the_centre(lib, ridge, expected):
+    """start <= round(centre) <= start + width - 1: the ball's own bin is
+    always inside the band, wherever the ridge lies (final-review ruling)."""
+    values = [1.0] * 40
+    for b in ridge:  # map first bin 10
+        values[b - 10] = 50.0
+    band = place(lib, noisy_map(lib, 10, values), centre=29.0, width=5.0)
+    assert (band.valid, band.loBin, band.hiBin) == (1, *expected)
+    assert band.loBin <= 29.0 <= band.hiBin
+
+
+def test_holding_the_centre_rounds_it(lib):
+    """centre 28.6 rounds to 29: a ridge beyond puts the band at 29..33."""
+    values = [1.0] * 40
+    for b in range(33, 38):
+        values[b - 10] = 50.0
+    band = place(lib, noisy_map(lib, 10, values), centre=28.6, width=5.0)
+    assert (band.loBin, band.hiBin) == (29.0, 33.0)

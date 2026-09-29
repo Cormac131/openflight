@@ -71,7 +71,9 @@ meaning), docs, tests.
 - **Placement.** `l3_band_place(noise, centreBin, searchBins, widthBins,
   out)`: the contiguous run of `widthBins` bins, fully inside
   `[centre − searchBins, centre + searchBins]` and the noise map's coverage,
-  with the largest summed average; ties go to the run whose centre is
+  and holding the ball's bin (`start ≤ round(centreBin) ≤ start + width − 1`;
+  final-review ruling: a ridge wholly to one side puts the band at that
+  side's edge), with the largest summed average; ties go to the run whose centre is
   nearest `centreBin`. `centreBin` is the ball lock, else the configured
   tee. `searchBins` is a new cfg field (`bandSearchBins`, default 10, last
   field of `l3_impact_fit_cfg_t`). With no noise history (fewer than 8

@@ -104,6 +104,13 @@ void l3_band_place(const l3_band_noise_t *noise, float centreBin, float searchBi
     width = (uint32_t)(widthBins + 0.5F);
     first = (int32_t)ceilf(centreBin - searchBins);
     last = (int32_t)floorf(centreBin + searchBins) - (int32_t)width + 1;
+    /* The band always holds the ball's bin: start <= centre <= start + width - 1. */
+    if (first < centre - (int32_t)width + 1) {
+        first = centre - (int32_t)width + 1;
+    }
+    if (last > centre) {
+        last = centre;
+    }
     if (noise->updates >= L3_BAND_NOISE_MIN_UPDATES) {
         if (first < (int32_t)noise->firstBin) {
             first = (int32_t)noise->firstBin;

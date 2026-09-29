@@ -33,8 +33,10 @@ void l3_band_noise_reset(l3_band_noise_t *noise);
 void l3_band_noise_update(l3_band_noise_t *noise, uint32_t stat, uint32_t firstBin,
                           const l3_bin_obs_t *obs, uint32_t count);
 /* The contiguous run of round(widthBins) bins with the largest summed noise,
- * inside [centre - searchBins, centre + searchBins] and the map; ties nearest
- * the centre. Centred on round(centreBin) without enough history or room.
+ * inside [centre - searchBins, centre + searchBins] and the map, that holds
+ * round(centreBin) (the ball's bin is always inside the band: a ridge wholly
+ * to one side puts the band at that side's edge); ties nearest the centre.
+ * Centred on round(centreBin) without enough history or room.
  * widthBins < 0.5 gives an invalid band. */
 void l3_band_place(const l3_band_noise_t *noise, float centreBin, float searchBins,
                    float widthBins, l3_band_t *out);

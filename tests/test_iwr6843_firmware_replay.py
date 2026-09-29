@@ -1037,7 +1037,9 @@ def test_the_band_lands_on_the_ridge_not_centred_on_the_tee(lib):
     result = fr.replay_dump(
         raw, fr.ReplayConfig(tee_bin=29, dest_bin=29, impact_armed=True, band_bins=5.0), lib=lib
     )
-    assert result.band == (33.0, 37.0)
+    # The band must hold the tee (29): the ridge 33..37 lies entirely beyond
+    # it, so the band slides to the ridge-side edge (final-review ruling).
+    assert result.band == (29.0, 33.0)
 
 
 def test_band_freezes_on_the_frame_the_club_is_acquired(lib):
@@ -1071,8 +1073,9 @@ def test_band_thaws_when_the_club_drops_and_moves_to_a_ridge_learned_since(lib):
     """Club acquired at frame 10 over a quiet scene: the band freezes centred
     (27..31, no ridge in the map yet). A ridge appears at frame 13 while the
     radar loses the club for frames 13..17: the track drops, the band thaws,
-    the idle frames feed the ridge to the map and the band moves onto it,
-    where it freezes again when the club is re-acquired."""
+    the idle frames feed the ridge to the map and the band moves toward it,
+    where it freezes again when the club is re-acquired (holding the tee,
+    29..33: the ridge lies entirely beyond it)."""
     from iwr6843_synth import synth_shot_dump  # pylint: disable=import-outside-toplevel
 
     ridge = (33, 34, 35, 36, 37)
@@ -1092,7 +1095,9 @@ def test_band_thaws_when_the_club_drops_and_moves_to_a_ridge_learned_since(lib):
     acquired = [f.frame for f in result.frames if f.track_why == "acquired"]
     assert len(acquired) >= 2 and "dropped" in whys, whys
     assert result.band_frozen_frame == acquired[0], "the first freeze"
-    assert result.band == (33.0, 37.0), "thawed, re-placed on the ridge, frozen again"
+    # The band must hold the tee (29): the ridge 33..37 lies entirely beyond
+    # it, so the band slides to the ridge-side edge (final-review ruling).
+    assert result.band == (29.0, 33.0), "thawed, re-placed toward the ridge, frozen again"
     quiet = [result.band_noise[b] for b in (27, 28, 29, 30, 31)]
     loud = [result.band_noise[b] for b in ridge]
     assert min(loud) > max(quiet), "the map kept accumulating on the idle frames"
