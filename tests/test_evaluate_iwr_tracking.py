@@ -142,7 +142,9 @@ def test_a_modern_session_with_a_slant_range_but_no_triggercfg_is_still_a_case(e
         "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
     )
     cases = list(ev.iter_cases([tmp_path]))
-    assert len(cases) == 1 and cases[0].config.tee_bin == 29
+    # The log holds the tape reading from the enclosure front: 1.372 m plus the array's
+    # 0.30 m is 1.672 m from the antenna, bin 36 (bin 29 was the tape reading alone).
+    assert len(cases) == 1 and cases[0].config.tee_bin == 36
 
 
 def test_a_raw_adc_capture_is_skipped_instead_of_crashing_the_batch(ev, tmp_path):

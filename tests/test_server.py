@@ -17,6 +17,7 @@ from openflight import server as server_module
 from openflight.camera.replay import ReplayNotFoundError, ReplayPreparationError
 from openflight.clubs import ClubType
 from openflight.iwr6843 import Calibration
+from openflight.iwr6843.calibration import ARRAY_DEPTH_M
 from openflight.kld7.types import KLD7Angle
 from openflight.launch_monitor import Shot
 from openflight.ops243 import UART_BAUD_COMMANDS
@@ -565,11 +566,28 @@ class TestIWR6843ShotIntegration:
         captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path)
 
         assert "freeze_delay_s" not in captured
-        # The monitor places the impact and ball windows on the tee.
-        assert captured["tee_range_m"] == 1.575
+        # The monitor places the impact and ball windows on the tee, from the
+        # antenna: the tape reading is from the enclosure face, the array 0.30 m behind it.
+        assert captured["tee_range_m"] == pytest.approx(1.875)
         assert captured["armed"] is False
         assert server_module.iwr6843_runtime.tdm_sign_policy == "positive"
         assert server_module.iwr6843_runtime_config["tdm_sign_policy"] == "positive"
+        server_module.iwr6843_runtime = None
+
+    def test_init_iwr6843_adds_the_array_depth_to_a_tee_measured_from_the_face(
+        self, monkeypatch, tmp_path
+    ):
+        """The tape reads from the enclosure face; every consumer (the calibration the
+        shot geometry and club gate use, the monitor's windows) wants range from the
+        array. The session log keeps the tape reading, so logs from before this
+        change (2026-08-24: 1.524 m, ball at bins 39-41) mean the same thing."""
+        captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path)
+
+        assert captured["tee_range_m"] == pytest.approx(1.575 + ARRAY_DEPTH_M)
+        assert server_module.iwr6843_runtime.calibration.tee_range_m == pytest.approx(1.875)
+        config = server_module.iwr6843_runtime_config
+        assert config["tee_slant_range_m"] == 1.575
+        assert config["array_depth_m"] == ARRAY_DEPTH_M
         server_module.iwr6843_runtime = None
 
     def test_init_iwr6843_puts_the_tee_band_on_by_default(self, monkeypatch, tmp_path):
@@ -5232,20 +5250,36 @@ class TestSelfTriggerCli:
         with pytest.raises(ValueError, match="requires --iwr6843-self-trigger"):
             server_module._self_trigger_config(_self_trigger_args(**{flag: value}))
 
-    def test_switch_alone_uses_the_default_bin_and_snr(self):
-        """Bin 42 and snr 1 whatever --iwr6843-tee-m says (the tee distance
-        still places the geometry and the capture windows)."""
+    def test_switch_alone_watches_two_bins_short_of_the_ball_at_snr_1(self):
+        """A tee measured 1.575 m from the enclosure face is 1.875 m from the
+        antenna array (0.30 m behind the face): bin 40. The trigger watches two
+        bins short of it, where the club reaches the gate as the ball is struck."""
         config = server_module._self_trigger_config(_self_trigger_args(iwr6843_self_trigger=True))
 
-        assert (config.tee_bin, config.snr, config.track_frames) == (42, 1.0, 2)
-        assert config.command == "triggerCfg 42 1.0 2"
+        assert (config.tee_bin, config.snr, config.track_frames) == (38, 1.0, 2)
+        assert config.command == "triggerCfg 38 1.0 2"
 
-    def test_default_bin_ignores_the_tee_distance(self):
+    @pytest.mark.parametrize(
+        ("tee_m", "expected_bin"),
+        [
+            (1.575, 38),  # the default setup
+            (1.524, 37),  # 2026-08-24: ball rested at bins 39-41
+            (2.200, 51),  # 2026-09-19: ball rested at bins 52-55
+        ],
+    )
+    def test_default_bin_follows_the_tee_distance_from_the_enclosure_face(
+        self, tee_m, expected_bin
+    ):
         config = server_module._self_trigger_config(
-            _self_trigger_args(iwr6843_self_trigger=True, iwr6843_tee_m=2.5)
+            _self_trigger_args(iwr6843_self_trigger=True, iwr6843_tee_m=tee_m)
         )
 
-        assert config.tee_bin == 42
+        assert config.tee_bin == expected_bin
+
+    def test_the_tee_is_measured_from_the_face_and_the_array_sits_behind_it(self):
+        args = _self_trigger_args(iwr6843_tee_m=1.575)
+
+        assert server_module._iwr6843_tee_range_m(args) == pytest.approx(1.575 + ARRAY_DEPTH_M)
 
     def test_bin_outside_the_capture_window_is_refused(self):
         with pytest.raises(ValueError, match="outside the first capture window"):

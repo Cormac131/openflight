@@ -218,6 +218,12 @@ SELF_TRIGGER_DEFAULT_SNR = FIRMWARE_TRIGGER_DEFAULT_SNR
 SELF_TRIGGER_DEFAULT_BIN = FIRMWARE_TRIGGER_DEFAULT_BIN
 # Frames a candidate must be tracked approaching before the gate may fire.
 SELF_TRIGGER_DEFAULT_TRACK_FRAMES = 2
+# Bins short of the ball the trigger (and the ball search it arms) is aimed at
+# by default. The gate has to sit just short of where the club reaches the ball,
+# and the ball tracker only accepts a return within its origin gate of the arm
+# bin: on 38 labelled swings the ball was best tracked 2 bins short of its rest
+# bin (470/552 ball points) and lost outright from 4-5 bins short.
+SELF_TRIGGER_TEE_LEAD_BINS = 2
 
 
 @dataclass(frozen=True)
@@ -947,6 +953,7 @@ class IWR6843CaptureMonitor:
 
 __all__ = [
     "SELF_TRIGGER_DEFAULT_BIN",
+    "SELF_TRIGGER_TEE_LEAD_BINS",
     "SELF_TRIGGER_DEFAULT_SNR",
     "TEE_BAND_DEFAULT_BINS",
     "TEE_BAND_MAX_BINS",

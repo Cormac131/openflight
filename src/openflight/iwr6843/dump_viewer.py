@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from openflight.iwr6843 import firmware_replay as fr, self_trigger as st
+from openflight.iwr6843.calibration import antenna_range_m
 from openflight.iwr6843.dump import is_range_snapshot, parse_dump, range_data
 from openflight.iwr6843.firmware_host import OBS_WAVELENGTH_M
 from openflight.iwr6843.shot import geometry_from_header
@@ -118,10 +119,12 @@ def bin_width_m(fft_size: int = fr.DEFAULT_FFT_SIZE) -> float:
 
 
 def tee_bin_for(options: ViewerOptions, fft_size: int = fr.DEFAULT_FFT_SIZE) -> int:
-    """The firmware tee bin: the explicit one, else the slant range rounded to a bin."""
+    """The firmware tee bin: the explicit one, else the tee's range from the array
+    (``tee_range_m`` is measured from the enclosure front, as the session log
+    holds it) rounded to a bin."""
     if options.tee_bin is not None:
         return options.tee_bin
-    return int(round(options.tee_range_m / bin_width_m(fft_size)))
+    return int(round(antenna_range_m(options.tee_range_m) / bin_width_m(fft_size)))
 
 
 def _finite(value: float | None) -> float | None:
@@ -316,13 +319,16 @@ def python_trigger_section(
 ) -> dict:
     """The host ball-leave detector over the capture, and the loop-0 power it thresholds."""
     observations = st.replay_dump(
-        raw, tee_range_m=options.tee_range_m, level=options.py_level, hits=options.py_hits
+        raw,
+        tee_range_m=antenna_range_m(options.tee_range_m),
+        level=options.py_level,
+        hits=options.py_hits,
     )
     geometry = geometry_from_header(meta)
     fired = next((o.frame for o in observations if o.fired), None)
     power = st.loop0_vertical_power(range_data(meta, cube), int(meta["n_tx"]))
     return {
-        "tee_bin": int(round(options.tee_range_m / geometry.range_res_m)),
+        "tee_bin": int(round(antenna_range_m(options.tee_range_m) / geometry.range_res_m)),
         "level": options.py_level,
         "hits": options.py_hits,
         "approach_bins": st.APPROACH_BINS,

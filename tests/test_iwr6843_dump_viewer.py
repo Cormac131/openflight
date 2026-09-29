@@ -112,9 +112,11 @@ def test_options_reject_unknown_keys_and_bad_numbers():
 
 def test_tee_bin_is_explicit_or_the_rounded_slant_range_when_cleared():
     assert dv.tee_bin_for(dv.ViewerOptions(tee_bin=12)) == 12
-    assert (
-        dv.tee_bin_for(dv.ViewerOptions(tee_bin=None, tee_range_m=1.845)) == 39
-    )  # 1.845 / 0.046875
+    # The tee distance is what was measured from the enclosure face (and logged):
+    # the array sits ARRAY_DEPTH_M behind it, and the bin is range from the array.
+    assert dv.tee_bin_for(dv.ViewerOptions(tee_bin=None, tee_range_m=1.845)) == 46
+    # 2026-08-24's log holds 1.524 m; the ball rested at bins 39-41.
+    assert dv.tee_bin_for(dv.ViewerOptions(tee_bin=None, tee_range_m=1.524)) == 39
     assert dv.bin_width_m() == pytest.approx(6.0 / 128)
 
 

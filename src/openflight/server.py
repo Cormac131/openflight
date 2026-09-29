@@ -1104,6 +1104,15 @@ _OPS_BUFFER_SEGMENTS = 32
 _OPS_BUFFER_SAMPLES = 4096
 
 
+def _iwr6843_tee_range_m(args) -> float:
+    """Antenna-to-tee range: the tape reading from the enclosure face plus the
+    array's depth behind it. The firmware, the capture windows and the shot
+    geometry all work in range from the antenna."""
+    from .iwr6843.calibration import antenna_range_m  # pylint: disable=import-outside-toplevel
+
+    return antenna_range_m(args.iwr6843_tee_m)
+
+
 def _self_trigger_config(args) -> "SelfTriggerConfig | None":
     """--iwr6843-self-trigger turns the firmware trigger on; the rest only tunes it.
 
@@ -1111,11 +1120,12 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
     command line cannot silently change which trigger drives the shot.
     """
     from .iwr6843.monitor import (
-        SELF_TRIGGER_DEFAULT_BIN,
         SELF_TRIGGER_DEFAULT_SNR,
         SELF_TRIGGER_DEFAULT_TRACK_FRAMES,
+        SELF_TRIGGER_TEE_LEAD_BINS,
         SelfTriggerConfig,
         check_first_window_bin,
+        tee_global_bin,
     )
 
     tuning = [
@@ -1133,7 +1143,11 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
         return None
     bin_index = args.iwr6843_self_trigger_bin
     if bin_index is None:
-        bin_index = SELF_TRIGGER_DEFAULT_BIN
+        # Just short of the ball, where the club reaches the gate as it is struck.
+        bin_index = (
+            tee_global_bin(_iwr6843_tee_range_m(args), args.iwr6843_config)
+            - SELF_TRIGGER_TEE_LEAD_BINS
+        )
     check_first_window_bin(bin_index, args.iwr6843_config, f"self-trigger bin {bin_index}")
     snr = args.iwr6843_self_trigger_snr
     frames = args.iwr6843_self_trigger_frames
@@ -1198,6 +1212,17 @@ def init_iwr6843(
 
     if ball_detector not in BALL_DETECTOR_MODES:
         raise ValueError(f"--iwr6843-ball-detector must be one of {BALL_DETECTOR_MODES}")
+    # ``tee_range_m`` is the tape reading from the enclosure front to the ball.
+    # The calibration (shot geometry, club gate) and the monitor (capture windows,
+    # trigger) work in range from the array, which sits behind the front; the
+    # session log keeps the tape reading so older logs mean the same thing.
+    from .iwr6843.calibration import (  # pylint: disable=import-outside-toplevel
+        ARRAY_DEPTH_M,
+        antenna_range_m,
+    )
+
+    tee_from_front_m = tee_range_m
+    tee_range_m = antenna_range_m(tee_from_front_m)
     try:
         from .iwr6843 import Calibration
         from .iwr6843.board_calibration import BoardCalibration
@@ -1291,7 +1316,8 @@ def init_iwr6843(
             "config": str(config_path),
             "calibration": str(calibration_path),
             "trigger_pin_bcm": trigger_pin,
-            "tee_slant_range_m": tee_range_m,
+            "tee_slant_range_m": tee_from_front_m,
+            "array_depth_m": ARRAY_DEPTH_M,
             "tee_band_bins": tee_band_bins,
             "ball_snr": ball_snr,
             "board_calibration": board_calibration.to_dict(),
@@ -4949,7 +4975,8 @@ def main():
         type=int,
         default=None,
         help="Global range-FFT bin the trigger watches, inside the cfg's first capture "
-        "window (default: 42, whatever --iwr6843-tee-m says). Requires --iwr6843-self-trigger",
+        "window (default: two bins short of the ball, from --iwr6843-tee-m). "
+        "Requires --iwr6843-self-trigger",
     )
     parser.add_argument(
         "--iwr6843-self-trigger-snr",
@@ -5010,7 +5037,10 @@ def main():
         "--iwr6843-tee-m",
         type=float,
         default=DEFAULT_TEE_RANGE_M,
-        help=f"Antenna-center to tee slant range in metres (default: {DEFAULT_TEE_RANGE_M})",
+        help="Distance in metres from the enclosure front to the centre of the ball, not "
+        "the golfer's feet (horizontal is fine: the ball's height barely changes it). "
+        "The array's depth behind the front is added internally "
+        f"(default: {DEFAULT_TEE_RANGE_M})",
     )
     _add_iwr6843_tee_band_argument(parser)
     _add_iwr6843_ball_snr_argument(parser)
@@ -5421,7 +5451,7 @@ def main():
             ball_snr=args.iwr6843_ball_snr,
         ):
             calibration = iwr6843_runtime.calibration
-            ball_speed_correction_distance_ft = args.iwr6843_tee_m * 3.28084
+            ball_speed_correction_distance_ft = _iwr6843_tee_range_m(args) * 3.28084
             ball_speed_correction_ball_above_radar_ft = (
                 calibration.tee_ball_height_m - calibration.radar_height_m
             ) * 3.28084

@@ -25,6 +25,16 @@ DEFAULT_CAL_PATH = "config/iwr6843_calibration_reference.json"
 # Antenna-center to tee slant range when the setup has not measured one.
 DEFAULT_TEE_RANGE_M = 1.575
 
+# Enclosure face to the antenna array. A tape measured from the face reads this
+# much less than the radar's range, which is measured from the array: about 6.4
+# range bins (2026-08-24: tee 1.524 m from the face, ball at bins 39-41).
+ARRAY_DEPTH_M = 0.30
+
+
+def antenna_range_m(face_range_m: float) -> float:
+    """Range from the antenna array for a distance measured from the enclosure face."""
+    return face_range_m + ARRAY_DEPTH_M
+
 
 @dataclass
 class Calibration:

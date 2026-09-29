@@ -8,9 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **IWR6843 tee distance is measured from the enclosure front; the software adds
+  the array depth.** `--iwr6843-tee-m` is now the tape reading from the front of
+  the enclosure to the centre of the ball (not the golfer's feet). The antenna
+  array sits 0.30 m behind the front (`ARRAY_DEPTH_M`, `iwr6843/calibration.py`)
+  and that is added internally wherever the distance becomes a range or a bin:
+  the calibration (shot geometry, club gate), the monitor (capture windows,
+  trigger) and the dump viewer. Before, the tape reading was used as if it were
+  from the antenna and put the tee about 6.4 bins short of the ball: on the
+  2026-08-24 session `--iwr6843-tee-m` was 1.524 m and the ball rested at bins
+  39-41 (1.83-1.92 m). The session log's `tee_slant_range_m` keeps the tape
+  reading (a new `array_depth_m` records the depth), so logs from before this
+  change mean the same thing and the viewer converts them the same way.
+- **IWR6843 self-trigger bin follows the tee again: two bins short of the ball.**
+  `--iwr6843-self-trigger-bin` defaults to the bin of the tee (the tape reading
+  plus the array depth) minus 2, not a fixed 42. Bin 42
+  had replaced a tee-derived default that landed 6 bins short for want of the
+  array depth. On 38 labelled swings the range gate fired on 37 of 38 at a
+  tee 1.88 m from the array and 29 of 38 at 42, and the ball search, which only
+  accepts a return within its origin gate of where it is armed, tracked 470 of
+  552 labelled ball points 2 bins short of the ball and lost the ball from 4-5
+  bins short.
 - **IWR6843 defaults: trigger bin 42, trigger and ball snr 1, tee band 6.**
-  `--iwr6843-self-trigger-bin` defaults to 42 (1.97 m) instead of the bin of
-  `--iwr6843-tee-m`, and is checked against the cfg's first capture window;
+  `--iwr6843-self-trigger-bin` defaulted to 42 (1.97 m, superseded above) and is checked against the cfg's first capture window;
   `--iwr6843-self-trigger-snr` defaults to 1 (was 6);
   `--iwr6843-tee-band-bins` defaults to 6 (was off) and the firmware's own
   default band is 6; the firmware ball tracker's snr defaults to 1 (was 3).
