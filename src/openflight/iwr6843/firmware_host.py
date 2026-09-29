@@ -383,6 +383,7 @@ class AngleSnapshot(ctypes.Structure):
         ("lag1PhaseRad", ctypes.c_float),
         ("radialVelocityMps", ctypes.c_float),
         ("chirpPeriodS", ctypes.c_float),
+        ("continuousTdm", ctypes.c_uint8),
     ]
 
 
@@ -1340,6 +1341,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_frames_speed": ([_P(Vec3)], _F32),
     # l3_angle.h
     "l3_angle_snapshot_init": ([_P(AngleSnapshot), _U32, _U32], None),
+    "l3_angle_motion_phase": ([_F32, _F32], _F32),
     "l3_angle_chirp_phase": ([_F32, _U32, _F32, _F32], _F32),
     "l3_angle_bartlett": ([_P(Cpx), _U32, _P(_F32)], _F32),
     "l3_angle_estimate": ([_P(RadarCal), _P(AngleSnapshot), _P(AngleObs)], ctypes.c_int32),
