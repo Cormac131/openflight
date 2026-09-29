@@ -27,7 +27,8 @@ angle is recorded per capture so runs can be compared.
 ``--impact`` adds the impact-time evaluation (``impact_eval``): the firmware's
 three-track fit (method A) against the joint-fit comparator (method C), per
 capture and summarised under ``"impact"``. ``--band-bins`` sets the tee band's
-half width for every capture (unset: the firmware default, off).
+total width in bins for every capture, placed by the firmware on the noisiest
+idle bins near the tee (unset: the firmware default, off).
 """
 
 from __future__ import annotations
@@ -315,7 +316,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--band-bins",
         type=float,
-        help="Tee band half width in bins for every capture (unset: the firmware default, off)",
+        help="Tee band total width in bins for every capture, placed on the noisiest "
+        "idle bins near the tee (unset: the firmware default, off)",
     )
     parser.add_argument(
         "--impact",

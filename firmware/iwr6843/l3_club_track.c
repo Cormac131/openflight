@@ -380,6 +380,10 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
         if (index != L3_TRACK_NO_TARGET) {
             /* As a re-acquisition: no frame-to-frame velocity across the gap. */
             l3_track_append(track, &targets[index], 0.0F, 0.0F);
+            /* The fit going in was the dwell, not the club's speed: follow
+             * at the approach from here, as a re-acquired club does. */
+            track->followBinsPerS = ctx->approachBinsPerS;
+            track->velocityBinsPerFrame = 0.0F;
             track->misses = 0U;
             track->lastFrame = frame;
             track->lastBin = targets[index].rangeBin;

@@ -272,3 +272,37 @@ def test_band_off_a_dwelling_club_does_not_jump_to_a_distant_return(lib):
     c = ctx(band=False)
     follow(lib, track, 6, [], c)
     assert follow(lib, track, 7, [target(7, 41.0)], c) == 0
+
+
+def _taken_beyond_the_band(lib):
+    """A dwelling club taken at 41.0 on frame 11 (see above)."""
+    track = dwelling_track(lib)
+    c = ctx()
+    for f in range(6, 11):
+        follow(lib, track, f, [], c)
+    assert follow(lib, track, 11, [target(11, 41.0)], c) == 1
+    return track, c
+
+
+def test_a_club_taken_beyond_the_band_is_followed_at_its_approach(lib):
+    """After the jump the dwelling fit (~33 bins/s) no longer describes the
+    club: it follows at the approach speed, as a re-acquired club does, so
+    the next frame's point approach x 3 ms further on is associated."""
+    track, c = _taken_beyond_the_band(lib)
+    assert track.followBinsPerS == pytest.approx(APPROACH)
+    assert track.velocityBinsPerFrame == 0.0
+    step = APPROACH * FRAME_US * 1e-6  # 1.92 bins
+    assert follow(lib, track, 12, [target(12, 41.0 + step)], c) == 1
+    assert track.lastBin == pytest.approx(41.0 + step)
+    assert fw.TRACK_WHY_NAMES[track.why] == "associated"
+
+
+def test_beyond_the_band_the_jump_no_longer_applies(lib):
+    """Once the last point is at or past the band's far edge only the follow
+    window decides: 44.0 on frame 12 would qualify for re-acquisition (500
+    bins/s from the ball, 1000 from 41.0, both under the ball's 1500) but is
+    past the reach (41.0 + 1.92 + 0.5 = 43.4), so the track coasts."""
+    track, c = _taken_beyond_the_band(lib)
+    assert track.lastBin >= c.bandHiBin
+    assert follow(lib, track, 12, [target(12, 44.0)], c) == 0
+    assert fw.TRACK_WHY_NAMES[track.why] == "coasted"

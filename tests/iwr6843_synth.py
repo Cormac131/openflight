@@ -147,6 +147,8 @@ def synth_shot_dump(
     ridge_bins=(),
     ridge_amp=None,
     seed=0,
+    ridge_start_frame=0,
+    club_hidden_frames=(),
 ):
     """A club approaching the tee, then a ball leaving it: the whole shot.
 
@@ -168,7 +170,10 @@ def synth_shot_dump(
     every frame, as the tee-band clutter does. Empty (the default) draws
     nothing, so the cube is unchanged. An object whose position is behind
     the radar (x <= 0, only with an impact long after the capture starts) is
-    out of view and draws nothing.
+    out of view and draws nothing. ``ridge_start_frame`` draws the ridge
+    only from that frame on (0, the default: every frame).
+    ``club_hidden_frames`` leaves the approaching club out of those frames
+    (a club the radar loses for a while before impact); empty by default.
     """
     n_tx, n_rx = 3, 4
     res = 6.0 / n_samples
@@ -184,10 +189,10 @@ def synth_shot_dump(
     tdm_offsets = (0.0, doa.TDM_TAU_S, doa.TX2_VERTICAL_TDM_TAU_S)
     cube = np.zeros((n_frames, loops * n_tx, n_rx, n_samples), dtype=complex)
 
-    def scatterers(s):
+    def scatterers(frame, s):
         """(velocity, amplitude) of every object at time s from impact."""
         if s < 0:
-            return [(club_v, amp)]
+            return [] if frame in club_hidden_frames else [(club_v, amp)]
         out = [(ball_v, amp)]
         if club_out_speed_ms is not None:
             scale = club_out_speed_ms / club_speed_ms
@@ -198,7 +203,7 @@ def synth_shot_dump(
         for loop in range(loops):
             t = frame * FRAME_PERIOD_S + loop * TX2_LOOP_PERIOD_S
             s = t - t_impact
-            for velocity, amplitude in scatterers(s):
+            for velocity, amplitude in scatterers(frame, s):
                 x = tee_range_m + s * velocity[0]
                 if x <= 0.0:
                     # Behind the radar (a long pre-impact lead-in): out of
@@ -233,7 +238,7 @@ def synth_shot_dump(
     # A ridge: returns whose phase is random from loop to loop, so the burst
     # MTI keeps a residual there on every frame, as the tee-band clutter does.
     rng = np.random.default_rng(seed)
-    for frame in range(n_frames):
+    for frame in range(ridge_start_frame, n_frames):
         for loop in range(loops):
             for bin_index in ridge_bins:
                 phase = np.exp(1j * rng.uniform(0.0, 2.0 * np.pi))

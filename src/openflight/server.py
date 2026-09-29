@@ -4637,7 +4637,7 @@ def environment_from_args(args) -> Environment:
 
 
 def _add_iwr6843_tee_band_argument(parser):
-    """Add the firmware tee band's half width (0: off, the firmware default)."""
+    """Add the firmware tee band's total width (0: off, the firmware default)."""
     parser.add_argument(
         "--iwr6843-tee-band-bins",
         type=float,

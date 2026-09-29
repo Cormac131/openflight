@@ -193,7 +193,8 @@ typedef struct {
  *  - while the last point is short of the tee band's far edge, a frame with
  *    nothing in the follow window takes the return beyond the band that
  *    re-acquisition would (below; also slower than the ball from the last
- *    point) onto the same track; with none it coasts instead of counting
+ *    point) onto the same track, then follows at the approach speed as a
+ *    re-acquired club does; with none it coasts instead of counting
  *    toward a drop, for as long as crossing the band at the impact speed
  *    takes, plus a frame;
  *  - an inactive track is re-acquired from the strongest departing return
