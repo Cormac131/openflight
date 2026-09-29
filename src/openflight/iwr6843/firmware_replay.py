@@ -1644,7 +1644,6 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
     ball_points,
     trig_state,
     track,
-    ctx.approachKnown = 1 if delivery.speedValid else 0
     points,
     band,
     destination,
@@ -1652,33 +1651,6 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
     frame_us,
 ) -> ReplayFrame:
     """``l3_considerBallTrack``: the whole window as targets against the post
-def _follow_club(  # pylint: disable=too-many-arguments
-    lib, track, targets, found, frame, timestamp_us, follow, points
-) -> float | None:
-    """One post-impact frame of ``l3_track_follow``, kept in ``points``: an
-    appended point is logged; a tentative point the frame withdrew (the track's
-    total fell) is taken off the log again. Returns the appended bin."""
-    total = int(track.total)
-    appended = lib.l3_track_follow(
-        ctypes.byref(track), targets, found, frame, timestamp_us, ctypes.byref(follow)
-    )
-    if int(track.total) < total and points:
-        points.pop()
-    if not appended:
-        return None
-    newest = fw.TrackPoint()
-    lib.l3_track_point(ctypes.byref(track), track.count - 1, ctypes.byref(newest))
-    points.append(_point_summary(newest))
-    return float(newest.rangeBin)
-
-
-def _confirmed_points(points: list[PointSummary], track) -> list[PointSummary]:
-    """The logged points less a newest point still tentative when the capture
-    ends: nothing confirmed it, so it is not a club point
-    (``l3_fit_span_after`` leaves it out of club out on the board)."""
-    return points[:-1] if track.tentative and points else points
-
-
     window's own floor; the ball tracker first, then the club track followed
     through the scene the ball leaves (the ball's claim and rate, the band it
     coasts across), angles for the ball point, the launch fit and the shot

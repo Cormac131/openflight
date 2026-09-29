@@ -241,8 +241,6 @@ TRACK_FOLLOW_UNKNOWN_APPROACH_MPS = 70.0
 TRACK_TENTATIVE_ADVANCE_BINS = 1.0
 TRACK_WHY_NAMES = ("none", "acquired", "associated", "coasted", "dropped", "idle", "released")
 
-# A tentative point is confirmed by the next point this far downrange of it.
-TRACK_TENTATIVE_ADVANCE_BINS = 1.0
 # l3_joint_search.h
 JOINT_CLUB_BEAM = 4
 JOINT_BALL_BEAM = 4
@@ -567,22 +565,6 @@ class TrackHeld(ctypes.Structure):
 
 class ClubTrack(ctypes.Structure):
     """``l3_club_track_t``."""
-class TrackHeld(ctypes.Structure):
-    """``l3_track_held_t``: the track before its tentative point."""
-
-    _fields_ = [
-        ("active", ctypes.c_uint8),
-        ("following", ctypes.c_uint8),
-        ("misses", ctypes.c_uint32),
-        ("lastFrame", ctypes.c_uint32),
-        ("lastBin", ctypes.c_float),
-        ("velocityBinsPerFrame", ctypes.c_float),
-        ("followBinsPerS", ctypes.c_float),
-        ("sameBin", ctypes.c_int32),
-        ("sameBinCount", ctypes.c_uint32),
-    ]
-
-
 
     _fields_ = [
         ("cfg", TrackCfg),
@@ -605,7 +587,6 @@ class TrackHeld(ctypes.Structure):
         ("tentative", ctypes.c_uint8),
         ("followBinsPerS", ctypes.c_float),
         ("releasedValid", ctypes.c_uint8),
-        ("tentative", ctypes.c_uint8),
         ("releasedBin", ctypes.c_float),
         ("releasedDopplerMps", ctypes.c_float),
         ("held", TrackHeld),
@@ -628,7 +609,6 @@ class FollowCtx(ctypes.Structure):
     ]
 
 
-        ("approachKnown", ctypes.c_uint8),
 class ImpactCfg(ctypes.Structure):
     """``l3_impact_cfg_t``."""
 

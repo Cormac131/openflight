@@ -3691,7 +3691,6 @@ static void l3_considerBallTrack(uint32_t slot)
         (void)l3_track_follow(&gClubTrack, targets, found, frameIndex, gPostTimestampUs, &follow);
     }
     if (ballAppended && gBallTrack.lastTargetIndex < found && gBallTrack.core.count > 1U &&
-        follow.approachKnown = gShot.delivery.speedValid ? 1U : 0U;
         l3_track_point(&gBallTrack.core, gBallTrack.core.count - 1U, &newest)) {
         const l3_target_obs_t *hit = &targets[gBallTrack.lastTargetIndex];
 
