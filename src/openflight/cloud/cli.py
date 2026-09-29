@@ -117,7 +117,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         save_config(config, args.config)
         if config.upload_raw:
             print(
-                "Raw uploads ON: new sessions upload unfiltered (raw radar data included) "
+                "Raw uploads ON: all unpushed sessions upload unfiltered (raw radar data included) "
                 "and each shot's IWR6843 L3 dump uploads too. The OpenFlight server saves "
                 "L3 dumps to disk while this is on (restart it to apply)."
             )
