@@ -66,6 +66,7 @@ The supported angle radar.
 | `--iwr6843-trigger-pin` | int; default `17` | BCM GPIO receiving the shared sound-trigger edge (default: 17) |
 | `--iwr6843-tee-m` | float; default `1.575` | Antenna-center to tee slant range in metres (default: 1.575) |
 | `--iwr6843-net-m` | float; default `4.6` | Antenna-center to net range in metres (default: 4.6) |
+| `--iwr6843-tee-band-bins` | float; default `0` | **Experimental.** Half width, in range bins, of the tee band the IWR6843 club and ball trackers ignore; impact is then fitted from the tracks either side (`trackCfg impactFit`). 0 = off (default). The value is sent at every start, 0 included, so a restart clears a band a previous run set. ±6 bins failed acceptance on the recorded sessions (club tracking collapsed); leave it off unless you are testing a cluttered setup |
 | `--iwr6843-flight` | choices: `net`, `range`, `course`; default `net` | net clamps tracks at the net. range or course keeps returns past it and measures the late-window descent after the shot is published |
 | `--iwr6843-self-trigger` | flag | Freeze the IWR ring when the firmware tracks the clubhead into the tee and send S! to the OPS, instead of the sound-gate edge. Disconnect the SEN-14262 GATE from HOST_INT. Requires --iwr6843 and --trigger sound |
 | `--iwr6843-full-capture` | flag | Transfer all samples and TX channels instead of selected cells; about 7 seconds for the default profile. Use with `--debug` to save full diagnostic dumps. |

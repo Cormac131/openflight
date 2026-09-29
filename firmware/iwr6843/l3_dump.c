@@ -3582,7 +3582,7 @@ static void l3_considerBall(uint32_t slot)
 /* SOLVE: impact from the tracks either side of the band (club in as the shot
  * froze it, club out after the impact frame, ball out); a verdict other than
  * none replaces the frozen impact time. firmware_replay runs the same call
- * once impact is declared. */
+ * when the shot first reaches RESULT, as here. */
 static void l3_impactFitRun(void)
 {
     l3_fit_list_t clubIn = { gShot.clubTrajectory, gShot.clubPoints };
@@ -4754,7 +4754,7 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
             CLI_write("%s\n", line);
         }
         {
-            /* 200 hex characters is longer than a CLI line; two halves. */
+            /* 328 hex characters is longer than a CLI line; two halves. */
             static char hex[L3_RESULT_PACKET_BYTES * 2U + 1U];
 
             (void)l3_result_format_hex(&gShotResult, hex, sizeof(hex));

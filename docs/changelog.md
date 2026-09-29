@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **IWR6843 impact from the tracks either side of the tee band.** The
+  firmware fits the club approaching, the club carrying on and the ball
+  leaving as straight lines in range and fuses where they cross the ball
+  (`l3_impact_fit.c`, `l3_band.c`). A verdict other than `none` replaces the
+  shot's impact time with the refined one on the board and in the replay. A
+  range-only impact prediction (impact source `range`) fires from the club's
+  approach alone. `--iwr6843-tee-band-bins` (experimental, off by default)
+  sets the band the trackers ignore via `trackCfg impactFit <bins>`; the Pi
+  sends it at every start, 0 included. ±6 bins failed acceptance on the
+  recorded sessions.
+- **Result packet version 2 (164 bytes)** carries the impact fit. The Pi
+  still reads version 1; older Pi code refuses version 2, so update the Pi
+  before flashing the new firmware.
+- **`impact_uncertain` quality bit** on the onboard result when the impact
+  fit's tracks disagree (verdict `inconsistent`).
 - **Spin probe A/B and the IQ16 roadmap status.** `scripts/analysis/spin_probe.py
   --iq8` runs the micro-Doppler probe on the firmware-exact IQ8 of the same
   capture and prints the frame-by-frame spread, off-bulk and spectrum
@@ -89,6 +104,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The prebuilt image in `firmware/releases/` has not been rebuilt yet.
 
 ### Changed
+- **IWR6843 club path and attack need three angled points.** A delivery with
+  fewer than three angled points used to mix boresight and angled positions
+  and skip the residual guard; it now falls back to the radial-only delivery,
+  so path and attack are reported invalid rather than wrong.
 - **Chromium fallback is reachable during Electron upgrades.** If `ui/dist`
   already exists, a missing Electron install no longer requires Node 22.12 and
   a successful `npm install` before the kiosk can start. Old Node or a failed

@@ -284,9 +284,14 @@ speed, path, attack, spin rate, spin axis, impact range) each with value,
 confidence and flags (valid; measured rather than inferred; radial-only;
 implausible; the tee stood in for a locked ball), evidence and plausibility
 flags, and a VALID, PARTIAL or INVALID verdict. Spin stays invalid until it
-is measured. `triggerLog result` prints the lines and the fixed 100-byte
-little-endian packet as two hex lines; `openflight.iwr6843.shot_result`
-parses it and labels every metric MEASURED or ESTIMATED for the UI.
+is measured. `triggerLog result` prints the lines and the fixed 164-byte
+little-endian packet (version 2: the version-1 100 bytes followed by the
+impact fit — verdict, fused time, spread and each track's estimate) as two
+hex lines; `openflight.iwr6843.shot_result` parses it and labels every metric
+MEASURED or ESTIMATED for the UI. The Pi still parses version-1 (100-byte)
+packets from older firmware, but older Pi code refuses version 2, so
+**update the Pi before flashing this firmware.** An `inconsistent` impact fit
+sets the `impact_uncertain` quality bit.
 
 The host reads that packet on every self-triggered capture, before the
 readback (`l3track`/`l3sparse` rearm the ring, which resets the result). It
@@ -528,7 +533,7 @@ numbers.
 | 29 confidence from real error | tool ready; needs 27 and 28 to have run | `confidence_calibration` |
 | 30 cadence experiment | protocol below; needs the rig | — |
 | 31 HWA/DSP | waits for `triggerLog perf` numbers on the rig | `l3_profile.c` |
-| 32 production result path | done (100-byte packet, per-domain confidence on the host) | `l3_result.c`, `shot_result.py` |
+| 32 production result path | done (164-byte v2 packet with the impact fit; v1 still parsed on the Pi — update the Pi before the firmware; per-domain confidence on the host) | `l3_result.c`, `shot_result.py` |
 
 ### Rig protocols the code is waiting on
 
