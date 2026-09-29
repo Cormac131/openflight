@@ -84,15 +84,16 @@
 
     <h2>Firmware replay (l3_*.c)</h2>
     <div class="form">
-      <label>tee bin <input type="number" id="tee_bin" placeholder="from range"></label>
+      <label>tee bin <input type="number" id="tee_bin" placeholder="default"></label>
       <label>dest bin (ball) <input type="number" id="dest_bin" placeholder="none"></label>
-      <label>snr <input type="number" id="snr" step="0.5" value="6"></label>
-      <label>track frames <input type="number" id="track_frames" value="2"></label>
+      <label>trigger snr <input type="number" id="snr" step="0.5" min="1"></label>
+      <label>ball snr <input type="number" id="ball_snr" step="0.5" min="1" placeholder="firmware"></label>
+      <label>track frames <input type="number" id="track_frames"></label>
       <label>stat <select id="stat"><option>peak</option><option>energy</option></select></label>
       <label>sub-bin <select id="subbin"><option>parabolic</option><option>centroid</option></select></label>
       <label>post from frame <input type="number" id="post_from_frame" placeholder="gate"></label>
-      <label>pitch (deg) <input type="number" id="pitch_deg" step="0.1" value="0"></label>
-      <label>band bins <input type="number" id="band_bins" step="0.5" placeholder="off"></label>
+      <label>pitch (deg) <input type="number" id="pitch_deg" step="0.1"></label>
+      <label>band bins <input type="number" id="band_bins" step="0.5" min="0" placeholder="0 = off"></label>
       <label>ball search <select id="ball_hypotheses"><option value="">firmware default</option><option value="true">hypotheses</option><option value="false">legacy</option></select></label>
       <label class="chk"><input type="checkbox" id="impact_armed"> impact armed</label>
       <label class="chk"><input type="checkbox" id="stop_at_fire"> stop at fire</label>
@@ -102,9 +103,9 @@
 
     <h2>Host ball-leave trigger</h2>
     <div class="form">
-      <label>tee range (m) <input type="number" id="tee_range_m" step="0.01" value="1.372"></label>
-      <label>level <input type="number" id="py_level" step="100" value="1000"></label>
-      <label>hits <input type="number" id="py_hits" value="2"></label>
+      <label>tee range (m) <input type="number" id="tee_range_m" step="0.01"></label>
+      <label>level <input type="number" id="py_level" step="100"></label>
+      <label>hits <input type="number" id="py_hits"></label>
     </div>
 
     <div class="row">
@@ -200,11 +201,19 @@ const C = {};
   "joint-ball", "joint-club"]
   .forEach((k) => (C[k] = css("--" + k)));
 C.jball = C["joint-ball"]; C.jclub = C["joint-club"];
-const OPTS = ["tee_bin", "dest_bin", "snr", "track_frames", "stat", "subbin", "post_from_frame",
-  "pitch_deg", "band_bins", "impact_armed", "stop_at_fire", "tee_range_m", "py_level", "py_hits",
-  "ball_hypotheses", "joint_search"];
+const OPTS = ["tee_bin", "dest_bin", "snr", "ball_snr", "track_frames", "stat", "subbin",
+  "post_from_frame", "pitch_deg", "band_bins", "impact_armed", "stop_at_fire", "tee_range_m",
+  "py_level", "py_hits", "ball_hypotheses", "joint_search"];
+// The form's defaults are ViewerOptions' (GET /api/defaults): one place for them.
 const FORM_DEFAULTS = {};
-OPTS.forEach((k) => { const el = $("#" + k); FORM_DEFAULTS[k] = el.type === "checkbox" ? el.checked : el.value; });
+async function loadDefaults() {
+  const d = await fetch("/api/defaults").then((r) => r.json());
+  OPTS.forEach((k) => {
+    const v = d[k];
+    FORM_DEFAULTS[k] = $("#" + k).type === "checkbox" ? Boolean(v) : v == null ? "" : String(v);
+  });
+  resetForm();
+}
 
 let files = [], current = null, upload = null, D = null, ctx = null, frame = 0, playing = null;
 let view3d = "mti", viewMap = "mti_db";
@@ -834,7 +843,7 @@ function useUpload(file) {
   history.replaceState(null, "", "#");
   run(true);
 }
-loadFiles();
+loadDefaults().then(loadFiles);
 </script>
 </body>
 </html>

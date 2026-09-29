@@ -14,7 +14,9 @@ import pytest
 import openflight.iwr6843.monitor as iwr_monitor
 from openflight.iwr6843.dump import pack_dump
 from openflight.iwr6843.monitor import (
+    SELF_TRIGGER_DEFAULT_SNR,
     SELF_TRIGGER_OFF_COMMAND,
+    TEE_BAND_DEFAULT_BINS,
     IWR6843CaptureMonitor,
     SelfTriggerConfig,
     measure_trigger_level,
@@ -37,12 +39,18 @@ class FakeRadar:
         self.closed = False
         self.read_started_at = None
         self.shutdown_events = []
+        self.ball_snrs = []
 
     def send_config(self, path: str, lines=None):
         self.configs.append(path)
 
     def set_tee_band(self, bins: float) -> bool:
         """The monitor sends the band (0 included) at every start."""
+        return True
+
+    def set_ball_snr(self, snr: float) -> bool:
+        """The monitor sends the ball snr (0: the firmware default) at every start."""
+        self.ball_snrs.append(snr)
         return True
 
     def read_dump(self):
@@ -600,9 +608,11 @@ def test_measure_trigger_level_reads_p95_and_stops_if_the_probe_is_rejected():
         pause=lambda seconds: clock.__setitem__("t", clock["t"] + seconds),
     )
 
-    assert radar.commands[0] == "triggerCfg 14 6.0 2", "the real arm, at the default snr"
+    assert radar.commands[0] == f"triggerCfg 14 {SELF_TRIGGER_DEFAULT_SNR} 2", (
+        "the real arm, at the default snr"
+    )
     assert floor == pytest.approx(200000.0)
-    assert level == pytest.approx(6.0 * 200000.0), "threshold = floor x snr"
+    assert level == pytest.approx(SELF_TRIGGER_DEFAULT_SNR * 200000.0), "threshold = floor x snr"
 
     rejected = _Radar("Error: trigger power\n")
     with pytest.raises(RuntimeError, match="background probe rejected"):
@@ -862,7 +872,10 @@ def test_self_trigger_config_rejects_values_the_firmware_would_misread(kwargs, m
 
 
 def test_self_trigger_command_is_the_firmware_triggercfg_line():
-    assert SelfTriggerConfig(tee_bin=14, snr=6.0, track_frames=2).command == "triggerCfg 14 6.0 2"
+    assert (
+        SelfTriggerConfig(tee_bin=14, snr=6.0, track_frames=2).command
+        == "triggerCfg 14 6.0 2"
+    )
     # Zero frames is the firmware's "off"; the on-line never sends it.
     assert SELF_TRIGGER_OFF_COMMAND == "triggerCfg 0 0 0"
 
@@ -1252,7 +1265,7 @@ def test_tee_band_off_is_still_sent_so_a_restart_clears_a_stale_band(tmp_path):
     """The firmware keeps the band across sensorStart: a Pi restarted without
     the flag must send 0, or the band a previous run set stays live."""
     radar = TeeBandRadar(_raw_dump())
-    monitor = _tee_band_monitor(tmp_path, radar)
+    monitor = _tee_band_monitor(tmp_path, radar, tee_band_bins=0.0)
 
     monitor.start(armed=False)
     try:
@@ -1264,7 +1277,7 @@ def test_tee_band_off_is_still_sent_so_a_restart_clears_a_stale_band(tmp_path):
 
 def test_tee_band_off_on_older_firmware_is_logged_and_start_continues(tmp_path, caplog):
     radar = TeeBandRadar(_raw_dump(), band_supported=False)
-    monitor = _tee_band_monitor(tmp_path, radar)
+    monitor = _tee_band_monitor(tmp_path, radar, tee_band_bins=0.0)
 
     with caplog.at_level(logging.INFO, logger="openflight.iwr6843.monitor"):
         monitor.start(armed=False)
@@ -1292,3 +1305,64 @@ def test_rejected_tee_band_stops_the_configured_sensor(tmp_path):
 
     assert radar.shutdown_events[0] == "sensorStop"
     assert radar.closed
+
+
+def test_ball_snr_restores_the_firmware_default_when_unset(tmp_path):
+    """The firmware keeps the ball snr across sensorStart: without the flag
+    the Pi sends 0 so a stale value from a previous run is cleared."""
+    radar = TeeBandRadar(_raw_dump())
+    monitor = _tee_band_monitor(tmp_path, radar)
+
+    monitor.start(armed=False)
+    try:
+        assert monitor.ball_snr is None
+        assert radar.ball_snrs == [0.0]
+    finally:
+        monitor.stop()
+
+
+def test_ball_snr_is_sent_when_set(tmp_path):
+    radar = TeeBandRadar(_raw_dump())
+    monitor = _tee_band_monitor(tmp_path, radar, ball_snr=4.5)
+
+    monitor.start(armed=False)
+    try:
+        assert radar.ball_snrs == [4.5]
+    finally:
+        monitor.stop()
+
+
+@pytest.mark.parametrize("snr", [0.0, 0.5, -1.0, float("nan"), float("inf")])
+def test_ball_snr_must_be_at_least_the_floor(tmp_path, snr):
+    with pytest.raises(ValueError, match="ball snr"):
+        _tee_band_monitor(tmp_path, TeeBandRadar(_raw_dump()), ball_snr=snr)
+
+
+def test_ball_snr_default_on_older_firmware_is_logged_and_start_continues(tmp_path, caplog):
+    class OldRadar(TeeBandRadar):
+        def set_ball_snr(self, snr: float) -> bool:
+            self.ball_snrs.append(snr)
+            return False
+
+    radar = OldRadar(_raw_dump())
+    monitor = _tee_band_monitor(tmp_path, radar)
+
+    with caplog.at_level(logging.INFO, logger="openflight.iwr6843.monitor"):
+        monitor.start(armed=False)
+    try:
+        assert monitor._running  # pylint: disable=protected-access
+        assert any("ball snr" in r.getMessage() for r in caplog.records)
+    finally:
+        monitor.stop()
+
+
+def test_tee_band_is_on_at_the_firmware_default_width_by_default(tmp_path):
+    radar = TeeBandRadar(_raw_dump())
+    monitor = _tee_band_monitor(tmp_path, radar)
+
+    monitor.start(armed=False)
+    try:
+        assert TEE_BAND_DEFAULT_BINS == 6.0
+        assert radar.events[-1] == ("band", TEE_BAND_DEFAULT_BINS)
+    finally:
+        monitor.stop()

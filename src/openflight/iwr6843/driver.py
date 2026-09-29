@@ -577,9 +577,28 @@ class IWR6843Radar:
         returns False: there is no band to clear. Any other refusal, and a
         board that does not answer at all, raises RuntimeError.
         """
-        command = f"trackCfg impactFit {bins:g}"
+        return self._set_track_cfg_sub_mode(f"trackCfg impactFit {bins:g}", bins == 0.0)
+
+    def set_ball_snr(self, snr: float) -> bool:
+        """Set the ball tracker's extraction snr apart from the trigger's (0: firmware default).
+
+        A ``trackCfg`` sub-mode the firmware keeps across ``triggerCfg`` and
+        ``sensorStart``, like the tee band. Returns True when acknowledged;
+        asking firmware that predates it for its default (0) returns False,
+        since it uses that default anyway. Any other refusal, and silence,
+        raises RuntimeError.
+        """
+        return self._set_track_cfg_sub_mode(f"trackCfg ballSnr {snr:g}", snr == 0.0)
+
+    def _set_track_cfg_sub_mode(self, command: str, is_default: bool) -> bool:
+        """Send a persistent ``trackCfg`` sub-mode; old firmware may refuse its default.
+
+        A refusal (``Error`` or ``not recognized``) of the default value is
+        firmware without the sub-mode, which already behaves as the default:
+        False. Anything else must answer ``Done``.
+        """
         reply = self.cmd(command, 2.0)
-        if bins == 0.0 and "Done" not in reply and ("Error" in reply or "not recognized" in reply):
+        if is_default and "Done" not in reply and ("Error" in reply or "not recognized" in reply):
             return False
         self._require_done(command, reply)
         return True

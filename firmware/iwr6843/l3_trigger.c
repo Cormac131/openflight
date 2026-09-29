@@ -263,6 +263,19 @@ static void l3_trig_startTrack(l3_trig_t *trig, uint32_t frame, uint8_t bin)
     trig->trackStartFrame = frame;
 }
 
+/* The track has been seen L3_TRIG_STALL_FRAMES times or more without
+ * approaching at minStepBins per step from its nearest point: the gate's own
+ * "too slow" rate, so it cannot fire. Counted by age, not by frames since the
+ * nearest point: a return holding still resets that point every frame.
+ * minStepBins 0 accepts any rate, so nothing stalls. */
+static uint8_t l3_trig_stalled(const l3_trig_t *trig)
+{
+    uint32_t progress = (uint32_t)trig->trackBin - (uint32_t)trig->trackStartBin;
+
+    return (trig->cfg.minStepBins > 0.0F && trig->trackAge >= L3_TRIG_STALL_FRAMES &&
+            (float)progress < trig->cfg.minStepBins * (float)(trig->trackAge - 1U)) ? 1U : 0U;
+}
+
 static void l3_trig_dropTrack(l3_trig_t *trig)
 {
     trig->trackBin = L3_TRIG_NO_BIN;
@@ -324,6 +337,27 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t teeBin, uint32_
             continuation = 1U;
         } else {
             best = NULL;
+        }
+        /* A stalled track gives way to the strongest return short of it: the
+         * club approaching a return that stands near the tee. */
+        if (l3_trig_stalled(trig)) {
+            const l3_trig_obs_t *shorter = NULL;
+            uint32_t shorterIndex = 0U;
+
+            for (i = 0U; i < count; i++) {
+                if ((int32_t)(firstBin + i) >= low) {
+                    continue;
+                }
+                if (shorter == NULL || l3_trig_stat(cfg, &obs[i]) > l3_trig_stat(cfg, shorter)) {
+                    shorter = &obs[i];
+                    shorterIndex = i;
+                }
+            }
+            if (shorter != NULL && l3_trig_stat(cfg, shorter) >= threshold) {
+                best = shorter;
+                bestIndex = shorterIndex;
+                continuation = 0U;
+            }
         }
     }
     if (best == NULL) {

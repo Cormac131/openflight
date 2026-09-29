@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import threading
 import webbrowser
+from dataclasses import asdict
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file
@@ -54,6 +56,10 @@ def create_app(root: Path) -> Flask:
     @app.get("/")
     def page():
         return send_file(PAGE)
+
+    @app.get("/api/defaults")
+    def defaults():
+        return jsonify(asdict(ViewerOptions()))
 
     @app.get("/api/files")
     def files():
@@ -114,7 +120,8 @@ def main() -> int:
         help="Folder searched (recursively) for .l3dump files",
     )
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=5057)
+    # PORT lets a launcher assign a free port; 5057 otherwise.
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "5057")))
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
     root = args.dir

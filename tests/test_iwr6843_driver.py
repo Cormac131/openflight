@@ -9,6 +9,7 @@ import pytest
 
 from openflight.iwr6843.driver import IWR6843Radar
 from openflight.iwr6843.dump import TEMP_REPORT_KEYS, pack_dump
+from openflight.iwr6843.monitor import SELF_TRIGGER_DEFAULT_SNR
 
 
 def test_send_config_rejects_missing_cli_acknowledgement(tmp_path, monkeypatch):
@@ -576,7 +577,7 @@ def test_watch_script_arms_above_the_measured_tee_floor(monkeypatch):
 
     main()
 
-    assert calls[:2] == ["debugCfg 1", "triggerCfg 14 6.0 2"]
+    assert calls[:2] == ["debugCfg 1", f"triggerCfg 14 {SELF_TRIGGER_DEFAULT_SNR} 2"]
 
 
 class _PyserialShortRead:
@@ -630,7 +631,9 @@ def test_background_floor_collects_eight_samples_inside_two_seconds():
     )
 
     assert floor == pytest.approx(180000.0)
-    assert level == pytest.approx(6.0 * 180000.0), "threshold is floor x the default snr"
+    assert level == pytest.approx(SELF_TRIGGER_DEFAULT_SNR * 180000.0), (
+        "threshold is floor x the default snr"
+    )
     # The 2s window is the pauses between readings. A timeout on each stats
     # pushes the sixth sample past that window.
     assert port.elapsed == pytest.approx(2.0)
@@ -762,3 +765,43 @@ def test_clearing_the_band_on_a_silent_board_still_fails(monkeypatch):
 
     with pytest.raises(RuntimeError, match="did not acknowledge"):
         radar.set_tee_band(0.0)
+
+
+def test_set_ball_snr_sends_the_track_cfg_sub_mode(monkeypatch):
+    """The ball tracker's snr rides trackCfg beside the band; 0 is the firmware default."""
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    calls = []
+    monkeypatch.setattr(
+        radar, "cmd", lambda command, window: calls.append((command, window)) or "Done\n"
+    )
+
+    assert radar.set_ball_snr(4.5) is True
+    assert radar.set_ball_snr(0.0) is True
+
+    assert [command for command, _ in calls] == ["trackCfg ballSnr 4.5", "trackCfg ballSnr 0"]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Error: trackCfg <loopPeriodS> <rangeResM> ...\n",
+        "'trackCfg' is not recognized as a CLI command\n",
+    ],
+)
+def test_restoring_the_ball_snr_default_on_firmware_without_it_is_not_an_error(monkeypatch, reply):
+    """Older firmware always uses its default: asking for it is a no-op (False),
+    asking for anything else is an error."""
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    monkeypatch.setattr(radar, "cmd", lambda *_args, **_kwargs: reply)
+
+    assert radar.set_ball_snr(0.0) is False
+    with pytest.raises(RuntimeError):
+        radar.set_ball_snr(4.0)
+
+
+def test_restoring_the_ball_snr_on_a_silent_board_still_fails(monkeypatch):
+    radar = IWR6843Radar.__new__(IWR6843Radar)
+    monkeypatch.setattr(radar, "cmd", lambda *_args, **_kwargs: "")
+
+    with pytest.raises(RuntimeError, match="did not acknowledge"):
+        radar.set_ball_snr(0.0)

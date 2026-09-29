@@ -95,7 +95,8 @@ void l3_impact_fit_reset(l3_impact_fit_t *fit);
 /* l3_point_at_fn readers for the two kinds of list. */
 int32_t l3_fit_list_point(const void *ctx, uint32_t index, l3_track_point_t *out);
 int32_t l3_fit_span_point(const void *ctx, uint32_t index, l3_track_point_t *out);
-/* The track's points appended after afterFrame (its follow-through). */
+/* The track's points appended after afterFrame (its follow-through), less a
+ * newest point still tentative (l3_track_follow). */
 void l3_fit_span_after(const l3_club_track_t *track, uint32_t afterFrame, l3_fit_span_t *out);
 /* One track: the last fitPoints of count for club in, the first fitPoints for
  * club out and ball out; out is fully written. */

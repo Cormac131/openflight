@@ -29,11 +29,19 @@ import numpy as np
 
 from openflight.iwr6843 import firmware_host as fw, tunables
 from openflight.iwr6843.dump import is_range_snapshot, parse_dump
+from openflight.iwr6843.self_trigger import BALL_SNR_MAX, check_ball_snr
 from openflight.iwr6843.tracking import RANGE_SPAN_M, same_tx_loop_period_s
 
-# The firmware's defaults for the CLI-configured trigger parameters
-# (monitor.SelfTriggerConfig); the C owns the rest.
+# The CLI-configured trigger parameters the recorded captures were made
+# with (monitor.SelfTriggerConfig then); the C owns the rest. A replay
+# reproduces a recording, so these stay put when the Pi's defaults move
+# (self_trigger.FIRMWARE_TRIGGER_DEFAULT_*).
 DEFAULT_SNR = 6.0
+# The ball tracker's extraction snr then (l3_ball_track_cfg_defaults' old 3);
+# the board's default is now self_trigger.FIRMWARE_BALL_DEFAULT_SNR.
+DEFAULT_BALL_SNR = 3.0
+# The host-only joint search's own extraction snr, not the trigger's.
+JOINT_SEARCH_SNR = 6.0
 DEFAULT_TRACK_FRAMES = 2
 DEFAULT_FFT_SIZE = 128
 # The lag-1 Doppler readout aliases at wavelength / (4 T); at 135 us that
@@ -178,6 +186,17 @@ def post_frame_count(meta: dict) -> int | None:
     return None
 
 
+def freeze_frame(meta: dict) -> int | None:
+    """The first post-impact frame of a saved capture: the frame the board froze on.
+
+    ``n_frames`` less ``post_frame_count``, so a capture without a retention
+    report (before v8) still has one where its plan switches windows; None
+    when the dump cannot tell.
+    """
+    post = post_frame_count(meta)
+    return None if post is None else int(meta["n_frames"]) - post
+
+
 def frame_window(meta: dict, frame: int) -> tuple[int, int]:
     """(global bin of local bin 0, valid bins) of one frame of a parsed dump."""
     starts = meta.get("range_bin_starts")
@@ -316,9 +335,13 @@ class ReplayConfig:
     # The tee band's total width in bins (l3_band.h): placed on the noisiest
     # idle bins near the destination (l3_band_place) and frozen while a club
     # track is active; targets inside it are dropped before any tracker sees
-    # them (before impact the club keeps only targets short of it). None: the
-    # firmware default (l3_impact_fit_cfg_defaults, currently off); 0 disables it.
+    # them (before impact the club keeps only targets short of it). None or
+    # 0: no band, as the recordings were made (the board's own default,
+    # l3_impact_fit_cfg_defaults, is 6 bins).
     band_bins: float | None = None
+    # "trackCfg ballSnr": the ball tracker's extraction snr, apart from the
+    # trigger's ``snr``; None is the recordings' (DEFAULT_BALL_SNR).
+    ball_snr: float | None = None
     # Firmware config constants (tunables.py) set over the defaults; applied last, so they win.
     overrides: Mapping[str, float] = field(default_factory=dict)
 
@@ -849,6 +872,8 @@ def replay_dump(
         raise ValueError(f"stat must be one of {sorted(fw.STAT_NAMES)}, got {config.stat!r}")
     if config.subbin not in fw.SUBBIN_NAMES:
         raise ValueError(f"subbin must be one of {sorted(fw.SUBBIN_NAMES)}, got {config.subbin!r}")
+    if config.ball_snr is not None:
+        check_ball_snr(config.ball_snr)
     tunables.check_overrides(config.overrides)
     n_tx = int(meta["n_tx"])
     loop_period_s = config.loop_period_s or same_tx_loop_period_s(n_tx)
@@ -884,8 +909,7 @@ def replay_dump(
     fit_cfg = fw.ImpactFitCfg()
     lib.l3_impact_fit_cfg_defaults(ctypes.byref(fit_cfg))
     fit_cfg.binWidthM = RANGE_SPAN_M / config.fft_size
-    if config.band_bins is not None:
-        fit_cfg.bandBins = config.band_bins
+    fit_cfg.bandBins = 0.0 if config.band_bins is None else config.band_bins
     tunables.apply_overrides(config.overrides, "fit", fit_cfg)
     # The tee band: re-placed on every idle pre-impact frame from the noise
     # map (l3_band_place), frozen while the club track is active, kept through
@@ -927,6 +951,8 @@ def replay_dump(
         ball_cfg.useHypotheses = 1 if config.ball_hypotheses else 0
     if config.ball_tuning is not None:
         config.ball_tuning.apply(ball_cfg)
+    # The board overrides only the extraction snr (gBallSnr); so does this.
+    ball_cfg.snr = DEFAULT_BALL_SNR if config.ball_snr is None else config.ball_snr
     tunables.apply_overrides(config.overrides, "ball", ball_cfg)
     ball_track = fw.BallTrack()
     lib.l3_ball_track_init(ctypes.byref(ball_track), ctypes.byref(ball_cfg))
@@ -1303,6 +1329,7 @@ def replay_dump(
         frozen_impact_us = fitted_frozen_us
     else:
         frozen_impact_us = int(shot.impactTimestampUs)
+    points = _confirmed_points(points, track)
     return ReplayResult(
         config=config,
         frames=frames,
@@ -1492,7 +1519,7 @@ def _joint_post_frame(  # pylint: disable=too-many-arguments
     band: fw.Band,
 ) -> None:
     """Feed one post-impact frame to the joint search."""
-    joint_params = fw.ObsParams(params.stat, DEFAULT_SNR, params.loopPeriodS, params.subBin)
+    joint_params = fw.ObsParams(params.stat, JOINT_SEARCH_SNR, params.loopPeriodS, params.subBin)
     found, _, _, _ = _banded_window_targets(
         lib,
         cube,
@@ -1570,11 +1597,39 @@ def _follow_ctx(  # pylint: disable=too-many-arguments
         delivery.radialSpeedMps if delivery.speedValid else fw.TRACK_FOLLOW_UNKNOWN_APPROACH_MPS
     )
     ctx.approachBinsPerS = approach_mps / bin_width_m
+    ctx.approachKnown = 1 if delivery.speedValid else 0
     ball_rate = float(lib.l3_track_recent_rate(ctypes.byref(ball_track.core)))
     ctx.ballBinsPerS = ball_rate if ball_rate > 0.0 else 0.0  # a receding "ball" is no rate
     ctx.ballClaimIndex = ball_claim
     ctx.frameUs = frame_us
     return ctx
+
+
+def _follow_club(  # pylint: disable=too-many-arguments
+    lib, track, targets, found, frame, timestamp_us, follow, points
+) -> float | None:
+    """One post-impact frame of ``l3_track_follow``, kept in ``points``: an
+    appended point is logged; a tentative point the frame withdrew (the track's
+    total fell) is taken off the log again. Returns the appended bin."""
+    total = int(track.total)
+    appended = lib.l3_track_follow(
+        ctypes.byref(track), targets, found, frame, timestamp_us, ctypes.byref(follow)
+    )
+    if int(track.total) < total and points:
+        points.pop()
+    if not appended:
+        return None
+    newest = fw.TrackPoint()
+    lib.l3_track_point(ctypes.byref(track), track.count - 1, ctypes.byref(newest))
+    points.append(_point_summary(newest))
+    return float(newest.rangeBin)
+
+
+def _confirmed_points(points: list[PointSummary], track) -> list[PointSummary]:
+    """The logged points less a newest point still tentative when the capture
+    ends: nothing confirmed it, so it is not a club point
+    (``l3_fit_span_after`` leaves it out of club out on the board)."""
+    return points[:-1] if track.tentative and points else points
 
 
 def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
@@ -1630,14 +1685,7 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
     follow = _follow_ctx(
         lib, shot, ball_track, band, destination, bin_width_m, frame_us, ball_claim
     )
-    track_bin = None
-    if lib.l3_track_follow(
-        ctypes.byref(track), targets, found, frame, timestamp_us, ctypes.byref(follow)
-    ):
-        newest = fw.TrackPoint()
-        lib.l3_track_point(ctypes.byref(track), track.count - 1, ctypes.byref(newest))
-        points.append(_point_summary(newest))
-        track_bin = float(newest.rangeBin)
+    track_bin = _follow_club(lib, track, targets, found, frame, timestamp_us, follow, points)
     ball_bin = None
     angle = None
     if appended:
@@ -2038,7 +2086,10 @@ __all__ = [
     "DEFAULT_FFT_SIZE",
     "MANIFEST_NAME",
     "RECORDINGS_DIR",
+    "BALL_SNR_MAX",
+    "DEFAULT_BALL_SNR",
     "DEFAULT_SNR",
+    "JOINT_SEARCH_SNR",
     "DEFAULT_TRACK_FRAMES",
     "EXPECT_KEY",
     "FALLBACK_FRAME_PERIOD_US",
@@ -2062,6 +2113,7 @@ __all__ = [
     "format_report",
     "static_channel_snapshot",
     "frame_timestamps_us",
+    "freeze_frame",
     "frame_window",
     "recording_configs",
     "recording_expectations",

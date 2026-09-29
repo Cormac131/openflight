@@ -534,6 +534,75 @@ def test_without_a_continuation_the_strongest_return_starts_a_new_track(lib):
     assert det.trig.trackStartBin == 22
 
 
+# --- a return standing near the tee (the ridge) -----------------------------
+
+# Mirror L3_TRIG_STALL_FRAMES: sightings a track may hold without approaching at
+# minStepBins per frame before a return short of it may take over.
+STALL_FRAMES = 4
+
+
+def test_a_stalled_return_gives_way_to_a_club_approaching_short_of_it(lib):
+    """Capture 2026-08-24 12:34:01 #025: the static ridge at the tee, 28-76x the
+    floor, was the region's strongest bin from frame 0 and kept the track; the
+    club climbing from short of it was never taken and the gate never fired.
+    A track that has not approached for STALL_FRAMES frames gives way to the
+    strongest return short of it."""
+    det = detector(lib)
+    for _ in range(STALL_FRAMES + 1):
+        assert det.feed({19: 3 * CLUB}) is False
+    assert det.whys()[-1] == "slow"
+    fired = False
+    for local_bin in (9, 12, 15, 18):
+        fired = det.feed({19: 3 * CLUB, local_bin: CLUB})
+        if fired:
+            break
+    assert "jumped" in det.whys()
+    assert det.counter("jump") >= 1
+    assert fired, "the club's approach reaches the gate"
+
+
+def test_a_return_short_of_a_young_track_does_not_take_it(lib):
+    """Before STALL_FRAMES the track keeps its preference, as before."""
+    det = detector(lib)
+    for _ in range(STALL_FRAMES - 1):
+        det.feed({19: 3 * CLUB})
+    det.feed({19: 3 * CLUB, 9: CLUB})
+    assert "jumped" not in det.whys()
+    assert det.records()[-1].bin == 19
+
+
+def test_an_approaching_track_is_never_stalled(lib):
+    """Hands short of an advancing club do not steal it, however long it runs."""
+    det = detector(lib, approachBins=20)  # the region reaches bin 0 for the hands
+    det.feed({9: CLUB})
+    fired = False
+    for local_bin in (10, 11, 12, 13, 14, 15, 16, 17):
+        # The hands trail six bins behind, stronger, outside the track's window.
+        fired = det.feed({local_bin: CLUB, local_bin - 6: 3 * CLUB})
+        if fired:
+            break
+    assert "jumped" not in det.whys()
+    assert fired
+
+
+def test_a_stalled_track_with_nothing_short_of_it_keeps_going(lib):
+    """A target holding still with no other return stays tracked and never fires."""
+    det = detector(lib)
+    for _ in range(3 * STALL_FRAMES):
+        assert det.feed({19: 3 * CLUB}) is False
+    assert "jumped" not in det.whys()
+    assert det.trig.state == STATE_TRACKING
+
+
+def test_min_step_of_zero_never_stalls(lib):
+    """minStepBins 0 accepts any approach rate, so no track is ever stalled."""
+    det = detector(lib, minStepBins=0.0)
+    for _ in range(STALL_FRAMES + 1):
+        det.feed({12: 3 * CLUB})
+    det.feed({12: 3 * CLUB, 9: CLUB})
+    assert "jumped" not in det.whys()
+
+
 def test_the_ball_bin_needs_no_motion_for_the_trigger_to_arm(lib):
     """MTI suppresses the stationary ball; the tee bin sits at the noise floor throughout."""
     det = detector(lib)

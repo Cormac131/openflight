@@ -147,7 +147,7 @@ def iter_cases(roots: Iterable[Path]) -> Iterator[Case]:
                 continue
             if not is_range_snapshot(meta):
                 continue  # raw ADC samples: nothing for the firmware replay to read
-            options = ViewerOptions.from_mapping(defaults)
+            options = ViewerOptions.for_recording(defaults)
             config = fr.ReplayConfig(
                 tee_bin=tee_bin_for(options),
                 snr=options.snr,

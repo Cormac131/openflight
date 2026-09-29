@@ -59,6 +59,11 @@
  * nearest point to the radar, so a tolerated retreat does not count
  * against the downswing that follows it. */
 #define L3_TRIG_JITTER_BINS       2U
+/* A track held this many frames without approaching at minStepBins per frame
+ * (a return standing near the tee: the ridge, a hand) has stalled: it could
+ * never fire, so the strongest return short of it takes over (a jump).
+ * Counted in the track's age (frames it was seen). */
+#define L3_TRIG_STALL_FRAMES      4U
 /* A candidate more than this many bins ahead of the last one is a jump
  * (another scatterer), not the same target: 8 bins/frame is 125 m/s at
  * 4.7 cm bins and 3 ms frames. */

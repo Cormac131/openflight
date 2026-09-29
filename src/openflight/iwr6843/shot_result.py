@@ -237,7 +237,14 @@ def _angle_bits_for(name: str) -> int:
     return (1 << names.index("club_path")) | (1 << names.index("angle_of_attack"))
 
 
+# The ball's own measurements, doubted together when the ball left slower than
+# the club arrived (quality ball_slower_than_club); the club's stay trusted.
+BALL_METRICS = frozenset({"ball_speed", "vertical_launch", "horizontal_launch"})
+
+
 def _plausible(name: str, quality_flags: int) -> bool:
+    if name in BALL_METRICS and quality_flags & fw.QUALITY_FLAGS["ball_slower_than_club"]:
+        return False
     if name in ("ball_speed", "club_speed"):
         return bool(quality_flags & fw.QUALITY_FLAGS["speeds_plausible"])
     if name in ANGLE_METRICS:

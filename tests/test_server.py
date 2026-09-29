@@ -571,11 +571,27 @@ class TestIWR6843ShotIntegration:
         assert server_module.iwr6843_runtime_config["tdm_sign_policy"] == "positive"
         server_module.iwr6843_runtime = None
 
-    def test_init_iwr6843_leaves_the_tee_band_off_by_default(self, monkeypatch, tmp_path):
+    def test_init_iwr6843_puts_the_tee_band_on_by_default(self, monkeypatch, tmp_path):
         captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path)
 
-        assert captured["tee_band_bins"] == 0.0
-        assert server_module.iwr6843_runtime_config["tee_band_bins"] == 0.0
+        assert captured["tee_band_bins"] == 6.0
+        assert server_module.iwr6843_runtime_config["tee_band_bins"] == 6.0
+        server_module.iwr6843_runtime = None
+
+    def test_init_iwr6843_leaves_the_ball_snr_to_the_firmware_by_default(
+        self, monkeypatch, tmp_path
+    ):
+        captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path)
+
+        assert captured["ball_snr"] is None
+        assert server_module.iwr6843_runtime_config["ball_snr"] is None
+        server_module.iwr6843_runtime = None
+
+    def test_init_iwr6843_passes_the_ball_snr_to_the_monitor(self, monkeypatch, tmp_path):
+        captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path, ball_snr=4.5)
+
+        assert captured["ball_snr"] == 4.5
+        assert server_module.iwr6843_runtime_config["ball_snr"] == 4.5
         server_module.iwr6843_runtime = None
 
     def test_init_iwr6843_passes_the_tee_band_to_the_monitor(self, monkeypatch, tmp_path):
@@ -4511,13 +4527,19 @@ class TestBallisticsConfiguration:
 
 
 class TestIWR6843TeeBandArgument:
-    """--iwr6843-tee-band-bins turns the firmware's tee band on; off by default."""
+    """--iwr6843-tee-band-bins sets the firmware's tee band; 6 bins by default, 0 turns it off."""
 
-    def test_cli_default_is_off(self):
+    def test_cli_default_is_six_bins(self):
         parser = argparse.ArgumentParser()
         server_module._add_iwr6843_tee_band_argument(parser)
 
-        assert parser.parse_args([]).iwr6843_tee_band_bins == 0.0
+        assert parser.parse_args([]).iwr6843_tee_band_bins == 6.0
+
+    def test_cli_zero_turns_it_off(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_iwr6843_tee_band_argument(parser)
+
+        assert parser.parse_args(["--iwr6843-tee-band-bins", "0"]).iwr6843_tee_band_bins == 0.0
 
     def test_cli_accepts_a_fractional_width(self):
         parser = argparse.ArgumentParser()
@@ -4546,6 +4568,34 @@ class TestIWR6843TeeBandArgument:
         # code 2: argparse's parser.error(), not the later hardware-init exit.
         assert exc_info.value.code == 2
         assert "--iwr6843-tee-band-bins must be 0..64" in capsys.readouterr().err
+
+
+class TestIWR6843BallSnrArgument:
+    """--iwr6843-ball-snr sets the ball tracker's snr apart from the trigger's."""
+
+    def test_cli_default_leaves_the_firmware_default(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_iwr6843_ball_snr_argument(parser)
+
+        assert parser.parse_args([]).iwr6843_ball_snr is None
+
+    def test_cli_accepts_a_value(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_iwr6843_ball_snr_argument(parser)
+
+        assert parser.parse_args(["--iwr6843-ball-snr", "4.5"]).iwr6843_ball_snr == 4.5
+
+    @pytest.mark.parametrize("value", ["0", "0.5", "-1", "nan", "inf"])
+    def test_ball_snr_under_the_floor_is_a_usage_error(self, monkeypatch, capsys, value):
+        monkeypatch.setattr(
+            sys, "argv", ["openflight-server", "--iwr6843", "--iwr6843-ball-snr", value]
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            server_module.main()
+
+        assert exc_info.value.code == 2
+        assert "--iwr6843-ball-snr must be" in capsys.readouterr().err
 
 
 class TestBatteryConfiguration:
@@ -5155,23 +5205,38 @@ class TestSelfTriggerCli:
         with pytest.raises(ValueError, match="requires --iwr6843-self-trigger"):
             server_module._self_trigger_config(_self_trigger_args(**{flag: value}))
 
-    def test_switch_alone_takes_the_bin_from_the_tee_and_the_defaults(self):
+    def test_switch_alone_uses_the_default_bin_and_snr(self):
+        """Bin 42 and snr 1 whatever --iwr6843-tee-m says (the tee distance
+        still places the geometry and the capture windows)."""
         config = server_module._self_trigger_config(_self_trigger_args(iwr6843_self_trigger=True))
 
-        assert (config.tee_bin, config.snr, config.track_frames) == (34, 6.0, 2)
-        assert config.command == "triggerCfg 34 6.0 2"
+        assert (config.tee_bin, config.snr, config.track_frames) == (42, 1.0, 2)
+        assert config.command == "triggerCfg 42 1.0 2"
+
+    def test_default_bin_ignores_the_tee_distance(self):
+        config = server_module._self_trigger_config(
+            _self_trigger_args(iwr6843_self_trigger=True, iwr6843_tee_m=2.5)
+        )
+
+        assert config.tee_bin == 42
+
+    def test_bin_outside_the_capture_window_is_refused(self):
+        with pytest.raises(ValueError, match="outside the first capture window"):
+            server_module._self_trigger_config(
+                _self_trigger_args(iwr6843_self_trigger=True, iwr6843_self_trigger_bin=9)
+            )
 
     def test_explicit_tuning_wins(self):
         config = server_module._self_trigger_config(
             _self_trigger_args(
                 iwr6843_self_trigger=True,
-                iwr6843_self_trigger_bin=9,
+                iwr6843_self_trigger_bin=30,
                 iwr6843_self_trigger_snr=4.5,
                 iwr6843_self_trigger_frames=4,
             )
         )
 
-        assert (config.tee_bin, config.snr, config.track_frames) == (9, 4.5, 4)
+        assert (config.tee_bin, config.snr, config.track_frames) == (30, 4.5, 4)
 
     def test_zero_frames_is_refused_instead_of_silently_disabling_capture(self):
         with pytest.raises(ValueError, match="track frames must be >= 1"):
@@ -5183,12 +5248,6 @@ class TestSelfTriggerCli:
         with pytest.raises(ValueError, match="snr must be >= 1"):
             server_module._self_trigger_config(
                 _self_trigger_args(iwr6843_self_trigger=True, iwr6843_self_trigger_snr=0.5)
-            )
-
-    def test_tee_outside_the_capture_window_is_refused(self):
-        with pytest.raises(ValueError, match="outside the first capture window"):
-            server_module._self_trigger_config(
-                _self_trigger_args(iwr6843_self_trigger=True, iwr6843_tee_m=0.3)
             )
 
     @pytest.mark.parametrize(

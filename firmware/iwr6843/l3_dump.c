@@ -458,6 +458,11 @@ static l3_shot_cfg_t       gShotCfg;
 static l3_shot_t           gShot;
 static l3_ball_track_cfg_t gBallTrackCfg;
 static l3_ball_track_t     gBallTrack;
+/* "trackCfg ballSnr <snr>": the ball's extraction snr apart from the
+ * trigger's; 0 keeps gBallTrackCfg's default. Kept across triggerCfg and
+ * sensorStart, as the band is. */
+static float               gBallSnr;
+#define L3_BALL_SNR_MAX 1.0e6F
 static l3_launch_t         gLaunch;
 static uint32_t            gPostTimestampUs;   /* time of the newest post frame scored */
 static uint32_t            gPostFramesScored;
@@ -3647,7 +3652,8 @@ static void l3_considerBallTrack(uint32_t slot)
         return;
     }
     params.stat = gTrigCfg.stat;
-    params.snr = gBallTrackCfg.snr;   /* a departing ball is a weaker return than a club */
+    /* A departing ball is a weaker return than a club: its own snr. */
+    params.snr = (gBallSnr > 0.0F) ? gBallSnr : gBallTrackCfg.snr;
     params.loopPeriodS = gTrigLoopPeriodS;
     params.subBin = gObsSubBin;
     l3_obs_floor_update(&gBallFloor, gTrigCfg.stat, obs, count, L3_TRIG_FLOOR_SHIFT);
@@ -3678,6 +3684,7 @@ static void l3_considerBallTrack(uint32_t slot)
                                        ? gShot.delivery.radialSpeedMps
                                        : L3_TRACK_FOLLOW_UNKNOWN_APPROACH_MPS) /
                                   gClubTrack.cfg.binWidthM;
+        follow.approachKnown = gShot.delivery.speedValid ? 1U : 0U;
         follow.ballBinsPerS = (ballRate > 0.0F) ? ballRate : 0.0F;
         follow.ballClaimIndex = ballAppended ? gBallTrack.lastTargetIndex : L3_TRACK_NO_TARGET;
         follow.frameUs = gFramePeriodUs;
@@ -4499,10 +4506,29 @@ static int32_t l3_cli_trackCfgImpactFit(int32_t argc, char *argv[])
     return 0;
 }
 
+/* "trackCfg ballSnr <snr>": the ball tracker's extraction threshold over its
+ * floor, set apart from triggerCfg's; 0 restores the firmware default
+ * (l3_ball_track_cfg_defaults). A sub-mode for the same reason as impactFit. */
+static int32_t l3_cli_trackCfgBallSnr(int32_t argc, char *argv[])
+{
+    float values[1];
+
+    /* Below the floor every bin is a target; !(...) also refuses NaN. */
+    if (l3_parseFloats(argc, argv, 2, 1U, values) != 0 ||
+        !(values[0] == 0.0F || values[0] >= 1.0F) || values[0] > L3_BALL_SNR_MAX) {
+        CLI_write("Error: trackCfg ballSnr <snr: 0 = default, 1..1e6>\n");
+        return -1;
+    }
+    gBallSnr = values[0];
+    CLI_write("Done\n");
+    return 0;
+}
+
 /* CLI "trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM>":
  * the rig limits from IWR6843Runtime.track_config_command. maxRangeM of 0
  * disables the net clamp; clubHiM <= clubLoM disables the club cells.
- * Sub-modes cal, elem, impact and impactFit configure the geometry stack above. */
+ * Sub-modes cal, elem, impact and impactFit configure the geometry stack above;
+ * ballSnr the ball tracker's threshold. */
 static int32_t l3_cli_trackCfg(int32_t argc, char *argv[])
 {
     double values[5];
@@ -4521,6 +4547,9 @@ static int32_t l3_cli_trackCfg(int32_t argc, char *argv[])
     if (argc >= 2 && strcmp(argv[1], "impactFit") == 0) {
         return l3_cli_trackCfgImpactFit(argc, argv);
     }
+    if (argc >= 2 && strcmp(argv[1], "ballSnr") == 0) {
+        return l3_cli_trackCfgBallSnr(argc, argv);
+    }
     if (argc == 3 && strcmp(argv[1], "subbin") == 0) {
         /* "trackCfg subbin centroid|parabolic": how targets read their
          * sub-bin range (l3_observation.h). */
@@ -4537,7 +4566,7 @@ static int32_t l3_cli_trackCfg(int32_t argc, char *argv[])
     }
     if (argc != 6) {
         CLI_write("Error: trackCfg <loopPeriodS> <rangeResM> <maxRangeM> <clubLoM> <clubHiM> "
-                  "| cal ... | elem ... | impact ... | impactFit ... | subbin ...\n");
+                  "| cal ... | elem ... | impact ... | impactFit ... | ballSnr ... | subbin ...\n");
         return -1;
     }
     for (i = 0; i < 5; i++) {

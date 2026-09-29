@@ -142,6 +142,14 @@ void l3_result_build(const l3_shot_t *shot, const l3_ball_track_t *ball, const l
     if (fit != NULL && fit->verdict == L3_FIT_VERDICT_INCONSISTENT) {
         quality |= L3_QUALITY_IMPACT_UNCERTAIN;
     }
+    /* Any launch speed, range-only included: that is what the evidence was
+     * measured on, and a 3D speed only reads higher. */
+    if (launch != NULL && (out->validFlags & (1U << L3_METRIC_BALL_SPEED)) &&
+        delivery->speedValid &&
+        delivery->radialSpeedMps > 0.0F &&
+        launch->speedMps < L3_RESULT_BALL_OVER_APPROACH_MIN * delivery->radialSpeedMps) {
+        quality |= L3_QUALITY_BALL_SLOWER_THAN_CLUB;
+    }
     if (shot->clubPoints >= L3_RESULT_MIN_CLUB_POINTS && delivery->speedValid) {
         quality |= L3_QUALITY_CLUB_TRACK;
         if (delivery->points == shot->clubPoints ||
@@ -180,7 +188,8 @@ void l3_result_build(const l3_shot_t *shot, const l3_ball_track_t *ball, const l
         int32_t flight = l3_result_ok(out, L3_METRIC_BALL_SPEED) &&
                          l3_result_ok(out, L3_METRIC_VERTICAL_LAUNCH) &&
                          l3_result_ok(out, L3_METRIC_HORIZONTAL_LAUNCH) &&
-                         (quality & L3_QUALITY_BALL_FROM_ORIGIN);
+                         (quality & L3_QUALITY_BALL_FROM_ORIGIN) &&
+                         !(quality & L3_QUALITY_BALL_SLOWER_THAN_CLUB);
         int32_t club = l3_result_ok(out, L3_METRIC_CLUB_SPEED) &&
                        (quality & L3_QUALITY_CLUB_TRACK);
 
