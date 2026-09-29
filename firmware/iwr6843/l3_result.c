@@ -139,6 +139,9 @@ void l3_result_build(const l3_shot_t *shot, const l3_ball_track_t *ball, const l
             quality |= L3_QUALITY_GEOMETRIC_IMPACT;
         }
     }
+    if (fit != NULL && fit->verdict == L3_FIT_VERDICT_INCONSISTENT) {
+        quality |= L3_QUALITY_IMPACT_UNCERTAIN;
+    }
     if (shot->clubPoints >= L3_RESULT_MIN_CLUB_POINTS && delivery->speedValid) {
         quality |= L3_QUALITY_CLUB_TRACK;
         if (delivery->points == shot->clubPoints ||

@@ -182,6 +182,7 @@ QUALITY_FLAGS = {
     "angles_plausible": 256,
     "smash_plausible": 512,
     "geometric_impact": 1024,
+    "impact_uncertain": 2048,  # a warning: the impact fit's tracks disagreed
 }
 
 # l3_iq8.h

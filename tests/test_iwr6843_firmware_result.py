@@ -105,6 +105,10 @@ def quality(result) -> set[str]:
     return {name for name, bit in fw.QUALITY_FLAGS.items() if result.qualityFlags & bit}
 
 
+# Every flag a clean shot earns; impact_uncertain is a warning, never earned.
+GOOD_QUALITY = set(fw.QUALITY_FLAGS) - {"impact_uncertain"}
+
+
 def test_a_complete_shot_is_valid_with_every_core_metric_measured(lib):
     result = build(lib, make_shot(lib), make_ball(lib), make_launch())
     assert result.version == 2 and result.shotId == 3
@@ -132,7 +136,7 @@ def test_a_complete_shot_is_valid_with_every_core_metric_measured(lib):
     assert result.smash == pytest.approx(1.5)
     assert result.impactTimestampUs == 23218 and result.impactSource == fw.SHOT_IMPACT_GEOMETRY
     assert result.clubPoints == 7 and result.ballPoints == 6
-    assert quality(result) == set(fw.QUALITY_FLAGS)
+    assert quality(result) == GOOD_QUALITY
 
 
 def test_ball_flight_without_a_club_is_partial_and_club_without_flight_too(lib):
@@ -266,7 +270,7 @@ def test_packet_is_164_little_endian_bytes_the_host_parses_back(lib):
     assert packet["impact_range"].value == pytest.approx(1.36)
     assert packet["spin_rate"].value is None and packet["spin_rate"].label == "-"
     assert packet["ball_speed"].label == "MEASURED" and packet["ball_speed"].usable
-    assert packet.quality == set(fw.QUALITY_FLAGS)
+    assert packet.quality == GOOD_QUALITY
     assert packet["ball_speed"].confidence == pytest.approx(0.9)
     assert packet.impact_fit["verdict"] == "none"
     # The hex line the CLI prints round-trips through the same parser.
@@ -312,7 +316,7 @@ def test_packet_to_dict_keeps_provenance_beside_every_metric(lib):
     assert payload["impact_source"] == "geometry" and payload["impact_timestamp_us"] == 23218
     assert payload["club_points"] == 7 and payload["ball_points"] == 6
     assert payload["smash"] == pytest.approx(1.5)
-    assert payload["quality"] == sorted(fw.QUALITY_FLAGS)
+    assert payload["quality"] == sorted(GOOD_QUALITY)
     assert set(payload["metrics"]) == set(fw.RESULT_METRIC_NAMES)
     ball = payload["metrics"]["ball_speed"]
     assert ball["value"] == pytest.approx(60.0) and ball["label"] == "MEASURED"
@@ -418,3 +422,53 @@ def test_wrong_size_or_version_is_refused():
         shot_result.parse_packet(b"\x02\x00\x00\x00" + bytes(96))
     with pytest.raises(ValueError, match="version"):
         shot_result.parse_packet(struct.pack("<I", 9) + bytes(160))
+
+
+def fit_with(lib, verdict: str) -> fw.ImpactFit:
+    fit = fw.ImpactFit()
+    lib.l3_impact_fit_reset(ctypes.byref(fit))
+    fit.verdict = fw.FIT_VERDICT_NAMES.index(verdict)
+    return fit
+
+
+def build_with_fit(lib, fit) -> fw.ShotResult:
+    out = fw.ShotResult()
+    lib.l3_result_build(
+        ctypes.byref(make_shot(lib)),
+        ctypes.byref(make_ball(lib)),
+        ctypes.byref(make_launch()),
+        ctypes.byref(fit),
+        3,
+        1,
+        ctypes.byref(out),
+    )
+    return out
+
+
+def test_impact_uncertain_is_the_next_bit_after_geometric_impact():
+    assert fw.QUALITY_FLAGS["impact_uncertain"] == fw.QUALITY_FLAGS["geometric_impact"] << 1
+
+
+def test_an_inconsistent_impact_fit_marks_the_shot_impact_uncertain(lib):
+    result = build_with_fit(lib, fit_with(lib, "inconsistent"))
+    assert "impact_uncertain" in quality(result)
+    assert quality(result) == set(fw.QUALITY_FLAGS)  # nothing else is lost
+
+
+@pytest.mark.parametrize("verdict", ["none", "single_track", "consistent"])
+def test_other_impact_fit_verdicts_leave_impact_uncertain_clear(lib, verdict):
+    assert "impact_uncertain" not in quality(build_with_fit(lib, fit_with(lib, verdict)))
+
+
+def test_no_fit_leaves_impact_uncertain_clear(lib):
+    result = build(lib, make_shot(lib), make_ball(lib), make_launch())
+    assert "impact_uncertain" not in quality(result)
+
+
+def test_the_host_parser_surfaces_impact_uncertain(lib):
+    result = build_with_fit(lib, fit_with(lib, "inconsistent"))
+    buffer = ctypes.create_string_buffer(fw.RESULT_PACKET_BYTES)
+    lib.l3_result_serialize(ctypes.byref(result), buffer, fw.RESULT_PACKET_BYTES)
+    packet = shot_result.parse_packet(buffer.raw)
+    assert "impact_uncertain" in packet.quality
+    assert "impact_uncertain" in packet.to_dict()["quality"]

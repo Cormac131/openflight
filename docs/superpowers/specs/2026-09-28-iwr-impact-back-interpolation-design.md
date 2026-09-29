@@ -78,6 +78,13 @@ Runs once at SOLVE. On a verdict other than `none` it replaces the frozen
 time. The whole `l3_impact_fit_t` goes into the result packet (`l3_result`)
 and so to the Pi and the dump viewer.
 
+Decision (final review, 2026-09-29): club speed and smash are **not** re-read
+at the refined time — the club delivery fit already ends at the band edge (at
+impact), so its speed is the speed arriving at the ball and re-reading it
+would change nothing but the code path. An `inconsistent` verdict instead sets
+the result's `impact_uncertain` quality bit (`L3_QUALITY_IMPACT_UNCERTAIN`),
+which is how "shot metrics low-confidence" below is carried.
+
 ## Track models and the per-track solve
 
 - **Model:** range against time, straight line, least squares over the K

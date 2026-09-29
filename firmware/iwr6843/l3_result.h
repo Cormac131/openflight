@@ -64,6 +64,9 @@ enum {
 #define L3_QUALITY_ANGLES_PLAUSIBLE     256U
 #define L3_QUALITY_SMASH_PLAUSIBLE      512U
 #define L3_QUALITY_GEOMETRIC_IMPACT     1024U
+/* A warning, not evidence: the impact fit's tracks disagreed (verdict
+ * inconsistent), so the impact time came from the sharpest track alone. */
+#define L3_QUALITY_IMPACT_UNCERTAIN     2048U
 
 enum {
     L3_RESULT_INVALID = 0,
