@@ -159,7 +159,9 @@ def fake_result(fit, *, band=None, impact_frame=5, points=None, ball_points=None
     return SimpleNamespace(
         impact_fit=fit,
         config=fr.ReplayConfig(tee_bin=DEST_BIN),
-        shot=SimpleNamespace(impactFrame=impact_frame),
+        shot=SimpleNamespace(impactFrame=impact_frame if impact_frame is not None else 0),
+        # None exactly when the replay's shot never declared impact.
+        frozen_impact_timestamp_us=None if impact_frame is None else 27_500,
         band=band,
         points=points,
         ball_points=ball_points,
@@ -216,10 +218,29 @@ def test_club_points_in_band_counts_club_points_up_to_impact_inside_the_band():
     )
     assert ie.impact_outcome("x", result).club_points_in_band == 3
     # Without an impact every club point is pre-impact.
-    no_fit = fake_result(
-        None, band=(DEST_BIN - 6.0, DEST_BIN + 6.0), points=inside_before + inside_after
+    no_impact = fake_result(
+        None,
+        band=(DEST_BIN - 6.0, DEST_BIN + 6.0),
+        points=inside_before + inside_after,
+        impact_frame=None,
     )
-    assert ie.impact_outcome("x", no_fit).club_points_in_band == 4
+    assert ie.impact_outcome("x", no_impact).club_points_in_band == 4
+
+
+def test_impact_declared_without_a_fit_is_none_but_still_splits_the_club_at_impact():
+    """The shot declared impact but never reached RESULT, so the replay (like
+    the board) has no fit: verdict none, and only pre-impact club points count."""
+    inside_before = [pt(i, 20_000 + i, DEST_BIN * BIN_M) for i in range(3)]
+    inside_after = [pt(9, 40_000, DEST_BIN * BIN_M)]
+    result = fake_result(
+        None,
+        band=(DEST_BIN - 6.0, DEST_BIN + 6.0),
+        points=inside_before + inside_after,
+        impact_frame=5,
+    )
+    o = ie.impact_outcome("x", result)
+    assert o.verdict == "none"
+    assert o.club_points_in_band == 3
 
 
 @pytest.mark.skipif(fw.host_compiler() is None, reason="no C compiler for the firmware modules")

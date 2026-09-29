@@ -472,3 +472,38 @@ def test_the_host_parser_surfaces_impact_uncertain(lib):
     packet = shot_result.parse_packet(buffer.raw)
     assert "impact_uncertain" in packet.quality
     assert "impact_uncertain" in packet.to_dict()["quality"]
+
+
+@pytest.mark.parametrize("mask", range(8))
+def test_impact_source_names_match_the_firmware(lib, mask):
+    buffer = ctypes.create_string_buffer(24)
+    assert shot_result.IMPACT_SOURCES[mask] == lib.l3_shot_source_name(mask, buffer, 24).decode()
+
+
+def test_impact_sources_cover_every_bit_combination():
+    bits = fw.SHOT_IMPACT_GATE | fw.SHOT_IMPACT_GEOMETRY | fw.SHOT_IMPACT_RANGE
+    assert set(shot_result.IMPACT_SOURCES) == set(range(bits + 1))
+    assert "SHOT_IMPACT_RANGE" in fw.__all__
+
+
+@pytest.mark.parametrize(
+    ("why", "timed"),
+    [(name, name in ("ok", "dropped", "uncertain")) for name in fw.FIT_WHY_NAMES] + [("?", False)],
+)
+def test_fit_track_timed_is_the_whys_the_c_keeps_a_time_for(why, timed):
+    assert fw.fit_track_timed(why) is timed
+
+
+@pytest.mark.parametrize(
+    ("verdict", "decided"),
+    [("none", False), ("single_track", True), ("consistent", True), ("inconsistent", True)]
+    + [("?", False)],
+)
+def test_fit_verdict_decided_is_any_known_verdict_but_none(verdict, decided):
+    assert fw.fit_verdict_decided(verdict) is decided
+
+
+def test_fit_track_indices_are_named_in_track_order():
+    assert (fw.FIT_CLUB_IN, fw.FIT_CLUB_OUT, fw.FIT_BALL_OUT) == tuple(
+        fw.FIT_TRACK_NAMES.index(n) for n in ("club_in", "club_out", "ball_out")
+    )

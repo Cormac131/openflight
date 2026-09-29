@@ -715,7 +715,8 @@ def test_with_the_band_on_no_pre_impact_club_point_is_in_or_beyond_it(lib):
         result = fr.replay_file(path, replace(config, band_bins=6.0), lib=lib)
         assert result.band is not None
         lo, _hi = result.band
-        impact_frame = result.fired_frame if result.fired_frame is not None else 10**9
+        declared = fw.SHOT_STATE_NAMES[result.shot.state] not in fr.PRE_IMPACT_SHOT_STATES
+        impact_frame = result.shot.impactFrame if declared else 10**9
         not_short = [p for p in result.points if p.frame <= impact_frame and p.range_bin >= lo]
         assert not not_short, f"{path.name}: club points in or beyond the band {not_short}"
 
@@ -728,22 +729,59 @@ def test_the_band_is_off_by_default_and_with_zero(lib):
     assert fr.replay_file(path, replace(config, band_bins=6.0), lib=lib).band is not None
 
 
-PRE_IMPACT_STATES = ("waiting_for_ball", "ready", "club_acquire", "club_track")
-
-
-def test_impact_fit_is_reported_exactly_when_impact_is_declared(lib):
-    declared_any = False
+def test_impact_fit_is_reported_exactly_when_the_shot_reaches_result(lib):
+    """The board fits at RESULT (l3_impactFitRun beside l3_result_build); a
+    capture that declared impact but stopped short of RESULT has no fit and
+    keeps its frozen impact time, as on the board."""
+    reached_any = False
     for path, config in fr.recording_configs():
         result = fr.replay_file(path, config, lib=lib)
-        declared = fw.SHOT_STATE_NAMES[result.shot.state] not in PRE_IMPACT_STATES
-        declared_any |= declared
-        assert (result.impact_fit is not None) == declared, path.name
+        state = fw.SHOT_STATE_NAMES[result.shot.state]
+        reached = state == "result"
+        reached_any |= reached
+        assert (result.impact_fit is not None) == reached, path.name
         assert result.impact_fit_status.startswith("impactfit verdict=")
         assert "impactfit verdict=" in fr.format_report(result)
-        if declared:
+        declared = state not in fr.PRE_IMPACT_SHOT_STATES
+        assert (result.frozen_impact_timestamp_us is not None) == declared, path.name
+        if reached:
             assert result.impact_fit.verdict in fw.FIT_VERDICT_NAMES
             assert set(result.impact_fit.tracks) == set(fw.FIT_TRACK_NAMES)
-    assert declared_any, "no recording reached impact: the test proves nothing"
+        elif declared:
+            assert result.shot.impactTimestampUs == result.frozen_impact_timestamp_us, path.name
+            assert result.impact_fit_status.startswith("impactfit verdict=none"), path.name
+    assert reached_any, "no recording reached RESULT: the test proves nothing"
+
+
+def test_a_shot_that_stops_before_result_is_not_fitted(lib):
+    """Post-impact frames cut short: IMPACT is declared, RESULT never comes."""
+    raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=1.372)
+    config = fr.ReplayConfig(tee_bin=29, dest_bin=29, impact_armed=True, post_impact=False)
+    result = fr.replay_dump(raw, config, lib=lib)
+
+    assert fw.SHOT_STATE_NAMES[result.shot.state] not in fr.PRE_IMPACT_SHOT_STATES
+    assert fw.SHOT_STATE_NAMES[result.shot.state] != "result"
+    assert result.impact_fit is None
+    assert result.shot.impactTimestampUs == result.frozen_impact_timestamp_us
+
+
+@pytest.mark.parametrize("band_bins", [None, 6.0])
+def test_the_fit_uses_the_tracks_as_they_stood_when_result_was_reached(lib, band_bins):
+    """Board parity: the fit runs on the first RESULT frame, so later ball and
+    club points never reach it."""
+    raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=1.372)
+    config = fr.ReplayConfig(tee_bin=29, dest_bin=29, impact_armed=True, band_bins=band_bins)
+    result = fr.replay_dump(raw, config, lib=lib)
+
+    assert result.impact_fit is not None
+    result_frame = next(f.frame for f in result.frames if f.shot_state == "result")
+    k = 4  # l3_impact_fit_cfg_defaults fitPoints
+    ball_then = sum(1 for p in result.ball_points if p.frame <= result_frame)
+    club_out_then = sum(
+        1 for p in result.points if result.shot.impactFrame < p.frame <= result_frame
+    )
+    assert result.impact_fit.tracks["ball_out"].points == min(k, ball_then)
+    assert result.impact_fit.tracks["club_out"].points == min(k, club_out_then)
 
 
 @pytest.mark.parametrize("band_bins", [None, 6.0])
@@ -776,7 +814,7 @@ def test_a_fit_verdict_replaces_the_shot_impact_time_as_the_board_does(lib, band
     assert fit is not None and fit.verdict != "none"
     frozen = result.frozen_impact_timestamp_us
     assert frozen is not None and frozen > 0
-    assert result.shot.impactTimestampUs == int(fit.impact_us + 0.5)
+    assert result.shot.impactTimestampUs == fw.round_us(fit.impact_us)
     assert result.shot.impactTimestampUs != frozen, "the synthetic refinement moves the time"
     assert fit.refined_minus_trigger_us == pytest.approx(fit.impact_us - frozen, abs=1.0)
     assert f"impact={result.shot.impactTimestampUs} " in result.shot_status

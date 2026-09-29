@@ -30,15 +30,29 @@ _SIZES = {1: PACKET_V1.size, 2: PACKET_V2_SIZE}
 ANGLE_METRICS = frozenset(
     {"vertical_launch", "horizontal_launch", "club_path", "angle_of_attack", "spin_axis"}
 )
-IMPACT_SOURCES = {
+_IMPACT_SOURCE_BITS = (
+    ("gate", fw.SHOT_IMPACT_GATE),
+    ("geometry", fw.SHOT_IMPACT_GEOMETRY),
+    ("range", fw.SHOT_IMPACT_RANGE),
+)
+# l3_shot_source_name keeps its original names below the range bit.
+_LEGACY_IMPACT_SOURCES = {
     0: "none",
-    1: "gate",
-    2: "geometry",
-    3: "both",
-    4: "range",
-    5: "gate+range",
-    6: "geometry+range",
-    7: "gate+geometry+range",
+    fw.SHOT_IMPACT_GATE: "gate",
+    fw.SHOT_IMPACT_GEOMETRY: "geometry",
+    fw.SHOT_IMPACT_GATE | fw.SHOT_IMPACT_GEOMETRY: "both",
+}
+
+
+def _impact_source_name(mask: int) -> str:
+    if mask in _LEGACY_IMPACT_SOURCES:
+        return _LEGACY_IMPACT_SOURCES[mask]
+    return "+".join(name for name, bit in _IMPACT_SOURCE_BITS if mask & bit)
+
+
+IMPACT_SOURCES = {
+    mask: _impact_source_name(mask)
+    for mask in range(sum(bit for _, bit in _IMPACT_SOURCE_BITS) + 1)
 }
 
 
@@ -195,7 +209,7 @@ def _impact_fit(fields: tuple) -> dict:
     for index, name in enumerate(fw.FIT_TRACK_NAMES):
         why, points, _pad2, time_us, sigma_us, speed = fields[7 + 6 * index : 13 + 6 * index]
         why_name = fw.FIT_WHY_NAMES[why] if why < len(fw.FIT_WHY_NAMES) else "?"
-        timed = why_name in ("ok", "dropped", "uncertain")
+        timed = fw.fit_track_timed(why_name)
         tracks[name] = {
             "why": why_name,
             "points": points,
@@ -204,7 +218,7 @@ def _impact_fit(fields: tuple) -> dict:
             "speed_mps": speed,
         }
     verdict_name = fw.FIT_VERDICT_NAMES[verdict] if verdict < len(fw.FIT_VERDICT_NAMES) else "?"
-    decided = verdict_name not in ("none", "?")
+    decided = fw.fit_verdict_decided(verdict_name)
     return {
         "verdict": verdict_name,
         "impact_us": impact_us if decided else None,

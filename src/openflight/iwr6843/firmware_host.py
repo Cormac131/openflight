@@ -95,6 +95,7 @@ IMPACT_WHY_NAMES = (
 FIT_MAX_POINTS = 8
 FIT_NO_TRACK = 0xFF
 FIT_TRACK_NAMES = ("club_in", "club_out", "ball_out")
+FIT_CLUB_IN, FIT_CLUB_OUT, FIT_BALL_OUT = 0, 1, 2
 FIT_WHY_NAMES = (
     "ok",
     "missing",
@@ -107,6 +108,19 @@ FIT_WHY_NAMES = (
     "uncertain",
 )
 FIT_VERDICT_NAMES = ("none", "single_track", "consistent", "inconsistent")
+# The whys whose estimate keeps its time and sigma (l3_impact_fit_format prints them).
+_FIT_TIMED_WHYS = frozenset({"ok", "dropped", "uncertain"})
+
+
+def fit_track_timed(why: str) -> bool:
+    """Whether a track estimate with this why carries a time and sigma."""
+    return why in _FIT_TIMED_WHYS
+
+
+def fit_verdict_decided(verdict: str) -> bool:
+    """Whether a fit verdict carries an impact time: any known one but none."""
+    return verdict in FIT_VERDICT_NAMES and verdict != "none"
+
 
 _UINT32_WRAP = 2**32
 
@@ -1660,6 +1674,7 @@ __all__ = [
     "ShotResult",
     "SHOT_IMPACT_GATE",
     "SHOT_IMPACT_GEOMETRY",
+    "SHOT_IMPACT_RANGE",
     "SHOT_STATE_NAMES",
     "Shot",
     "ShotCfg",
@@ -1669,6 +1684,9 @@ __all__ = [
     "FIT_MAX_POINTS",
     "FIT_NO_TRACK",
     "FIT_TRACK_NAMES",
+    "FIT_CLUB_IN",
+    "FIT_CLUB_OUT",
+    "FIT_BALL_OUT",
     "FIT_WHY_NAMES",
     "FIT_VERDICT_NAMES",
     "ImpactFitCfg",
@@ -1677,6 +1695,8 @@ __all__ = [
     "FitList",
     "FitSpan",
     "fit_reader",
+    "fit_track_timed",
+    "fit_verdict_decided",
     "round_us",
     "RadarCal",
     "Spherical",

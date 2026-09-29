@@ -116,11 +116,16 @@ def summarize_impact(outcomes: Sequence[ImpactOutcome]) -> dict:
 
 
 def impact_outcome(name: str, result) -> ImpactOutcome:
-    """One replayed capture's impact outcome (firmware_replay.ReplayResult)."""
+    """One replayed capture's impact outcome (firmware_replay.ReplayResult).
+
+    The replay fits only when the shot reaches RESULT, as the board does; a
+    shot that declared impact but stopped short counts as verdict none, its
+    club still split at the impact frame for the in-band count."""
     fit = result.impact_fit
     bin_m = RANGE_SPAN_M / result.config.fft_size
     ball_m = result.config.destination * bin_m
-    impact_frame = result.shot.impactFrame if fit is not None else None
+    declared = result.frozen_impact_timestamp_us is not None
+    impact_frame = result.shot.impactFrame if declared else None
     in_band = 0
     if result.band is not None:
         lo, hi = result.band

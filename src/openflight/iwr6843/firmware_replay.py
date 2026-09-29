@@ -386,12 +386,50 @@ def apply_impact_fit(shot: fw.Shot, fit: fw.ImpactFit) -> None:
         shot.impactTimestampUs = fw.round_us(fit.impactUs)
 
 
+_SHOT_RESULT = fw.SHOT_STATE_NAMES.index("result")
+
+
+def _run_impact_fit(  # pylint: disable=too-many-arguments
+    lib: ctypes.CDLL,
+    fit_cfg: fw.ImpactFitCfg,
+    shot: fw.Shot,
+    track: fw.ClubTrack,
+    ball_track: fw.BallTrack,
+    ball_range_m: float,
+    no_lock: bool,
+    fit: fw.ImpactFit,
+) -> int:
+    """``l3_impactFitRun``: club in as the shot froze it, club out after the
+    impact frame, ball out; measured against the frozen impact time, which a
+    verdict then replaces on the shot (``apply_impact_fit``). Returns the
+    frozen time."""
+    club_in_list = fw.FitList(
+        ctypes.cast(shot.clubTrajectory, ctypes.POINTER(fw.TrackPoint)), shot.clubPoints
+    )
+    club_out = fw.FitSpan()
+    lib.l3_fit_span_after(ctypes.byref(track), shot.impactFrame, ctypes.byref(club_out))
+    ball_out = fw.FitSpan(ctypes.pointer(ball_track.core), 0, ball_track.core.count)
+    frozen_us = int(shot.impactTimestampUs)
+    lib.l3_impact_fit_run(
+        ctypes.byref(fit_cfg),
+        ctypes.byref(club_in_list),
+        ctypes.byref(club_out),
+        ctypes.byref(ball_out),
+        ball_range_m,
+        1 if no_lock else 0,
+        frozen_us,
+        ctypes.byref(fit),
+    )
+    apply_impact_fit(shot, fit)
+    return frozen_us
+
+
 def _impact_fit_summary(fit: fw.ImpactFit) -> ImpactFitSummary:
     tracks = {}
     for index, name in enumerate(fw.FIT_TRACK_NAMES):
         e = fit.track[index]
         why = fw.FIT_WHY_NAMES[e.why]
-        timed = why in ("ok", "dropped", "uncertain")  # the C keeps their time and sigma
+        timed = fw.fit_track_timed(why)
         tracks[name] = TrackEstimateSummary(
             why,
             int(e.points),
@@ -400,13 +438,17 @@ def _impact_fit_summary(fit: fw.ImpactFit) -> ImpactFitSummary:
             float(e.speedMps),
         )
     verdict = fw.FIT_VERDICT_NAMES[fit.verdict]
-    decided = verdict != "none"
+    decided = fw.fit_verdict_decided(verdict)
     return ImpactFitSummary(
         verdict=verdict,
         impact_us=float(fit.impactUs) if decided else None,
         spread_us=float(fit.spreadUs),
         refined_minus_trigger_us=float(fit.refinedMinusTriggerUs) if decided else None,
-        dropped=fw.FIT_TRACK_NAMES[fit.droppedTrack] if fit.droppedTrack < 3 else None,
+        dropped=(
+            fw.FIT_TRACK_NAMES[fit.droppedTrack]
+            if fit.droppedTrack < len(fw.FIT_TRACK_NAMES)
+            else None
+        ),
         no_lock=bool(fit.noLock),
         tracks=tracks,
     )
@@ -812,6 +854,11 @@ def replay_dump(
         fit_cfg.bandBins = config.band_bins
     band = fw.Band()
     lib.l3_band_around(float(destination), fit_cfg.bandBins, ctypes.byref(band))
+    # The impact fit, run once when the shot first reaches RESULT (as the
+    # board's l3_impactFitRun beside l3_result_build); reset until then.
+    fit = fw.ImpactFit()
+    lib.l3_impact_fit_reset(ctypes.byref(fit))
+    fitted_frozen_us: int | None = None  # the frozen time the fit replaced
     range_impact = fw.Impact()
     lib.l3_impact_init(ctypes.byref(range_impact), ctypes.byref(impact_cfg))
     range_frame: int | None = None
@@ -990,6 +1037,17 @@ def replay_dump(
                     band,
                 )
             )
+            if fitted_frozen_us is None and shot.state == _SHOT_RESULT:
+                fitted_frozen_us = _run_impact_fit(
+                    lib,
+                    fit_cfg,
+                    shot,
+                    track,
+                    ball_track,
+                    destination * bin_width_m,
+                    config.dest_bin is None,
+                    fit,
+                )
             if joint is not None:
                 _joint_post_frame(
                     lib,
@@ -1098,7 +1156,7 @@ def replay_dump(
         club_in = fw.FitEstimate()
         lib.l3_impact_fit_track(
             ctypes.byref(fit_cfg),
-            0,
+            fw.FIT_CLUB_IN,
             club_reader,
             ctypes.byref(club_span),
             track.count,
@@ -1167,31 +1225,13 @@ def replay_dump(
         lib.l3_joint_finish(ctypes.byref(joint))
     club_speed, club_slope, club_residual = club_at_impact or _club_fit(lib, track)
     joint_ball_pts, joint_club_pts = _joint_collect_points(joint) if joint is not None else ([], [])
-    fit = fw.ImpactFit()
     impact_declared = fw.SHOT_STATE_NAMES[shot.state] not in PRE_IMPACT_SHOT_STATES
-    frozen_impact_us = int(shot.impactTimestampUs) if impact_declared else None
-    if impact_declared:
-        club_in_list = fw.FitList(
-            ctypes.cast(shot.clubTrajectory, ctypes.POINTER(fw.TrackPoint)), shot.clubPoints
-        )
-        club_out = fw.FitSpan()
-        lib.l3_fit_span_after(ctypes.byref(track), shot.impactFrame, ctypes.byref(club_out))
-        ball_out = fw.FitSpan(ctypes.pointer(ball_track.core), 0, ball_track.core.count)
-        lib.l3_impact_fit_run(
-            ctypes.byref(fit_cfg),
-            ctypes.byref(club_in_list),
-            ctypes.byref(club_out),
-            ctypes.byref(ball_out),
-            destination * bin_width_m,
-            0 if config.dest_bin is not None else 1,
-            frozen_impact_us,
-            ctypes.byref(fit),
-        )
-        # Run once, here: the fit measured against the frozen time, then the
-        # board's overwrite (l3_impactFitRun) so the shot carries the refined one.
-        apply_impact_fit(shot, fit)
+    if not impact_declared:
+        frozen_impact_us = None
+    elif fitted_frozen_us is not None:
+        frozen_impact_us = fitted_frozen_us
     else:
-        lib.l3_impact_fit_reset(ctypes.byref(fit))
+        frozen_impact_us = int(shot.impactTimestampUs)
     return ReplayResult(
         config=config,
         frames=frames,
@@ -1218,7 +1258,7 @@ def replay_dump(
         joint_confirmed=bool(joint.ballConfirmed) if joint is not None else False,
         band=(float(band.loBin), float(band.hiBin)) if band.valid else None,
         range_frame=range_frame,
-        impact_fit=_impact_fit_summary(fit) if impact_declared else None,
+        impact_fit=_impact_fit_summary(fit) if fitted_frozen_us is not None else None,
         impact_fit_status=fw.c_text(lib.l3_impact_fit_format, ctypes.byref(fit), cap=240),
         frozen_impact_timestamp_us=frozen_impact_us,
         speed_mps=club_speed,
