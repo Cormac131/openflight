@@ -15,6 +15,7 @@ import io
 import json
 import math
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 
 import numpy as np
@@ -615,8 +616,17 @@ def test_get_labels_reports_a_changed_dump_as_400(client, tmp_path):
 
 
 ANNOTATE_IDS = [
-    "annotate", "ann-ball", "ann-club", "ann-seed", "ann-clear", "ann-reviewed",
-    "ann-range-tol", "ann-min-cov", "ann-notes", "ann-save", "ann-status",
+    "annotate",
+    "ann-ball",
+    "ann-club",
+    "ann-seed",
+    "ann-clear",
+    "ann-reviewed",
+    "ann-range-tol",
+    "ann-min-cov",
+    "ann-notes",
+    "ann-save",
+    "ann-status",
 ]
 
 
@@ -639,3 +649,49 @@ def test_upload_drops_annotate_and_map_keeps_zoom(client):
     assert "annOff()" in upload and "ANN_NEEDS_CAPTURE" in upload
     assert 'uirevision: "map"' in page
     assert "!current" in page.split("async function annSave", 1)[1][:200]
+
+
+class _AncestorIds(HTMLParser):
+    """The ids of every open element around each element that has an id."""
+
+    def __init__(self):
+        super().__init__()
+        self.stack: list[str | None] = []
+        self.ancestors: dict[str, list[str]] = {}
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("input", "br", "img", "meta", "link", "hr"):
+            element_id = dict(attrs).get("id")
+            if element_id:
+                self.ancestors[element_id] = [i for i in self.stack if i]
+            return
+        element_id = dict(attrs).get("id")
+        if element_id:
+            self.ancestors[element_id] = [i for i in self.stack if i]
+        self.stack.append(element_id)
+
+    def handle_endtag(self, tag):
+        if self.stack:
+            self.stack.pop()
+
+
+def test_the_annotate_status_is_visible_when_the_annotate_body_is_hidden(client):
+    """Load errors and the upload hint are written before #annBody is ever shown."""
+    parser = _AncestorIds()
+    parser.feed(client.get("/").data.decode())
+    assert "annBody" in parser.ancestors and "ann-status" in parser.ancestors
+    assert "annBody" not in parser.ancestors["ann-status"]
+    assert "annPanel" in parser.ancestors["ann-status"]
+
+
+def test_seeding_without_a_firmware_track_says_so_and_drops_the_aliased_doppler(client):
+    page = client.get("/").data.decode()
+    seed = page.split('$("#ann-seed").addEventListener', 1)[1].split("});", 1)[0]
+    assert "no firmware track to seed from" in seed
+    assert "doppler_mps" not in seed
+
+
+def test_the_reviewed_checkbox_says_it_covers_both_objects(client):
+    page = client.get("/").data.decode()
+    label = re.search(r'<input type="checkbox" id="ann-reviewed">([^<]*)<', page).group(1)
+    assert "BOTH ball and club" in label

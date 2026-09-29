@@ -114,6 +114,7 @@
     <div class="row"><label class="chk" style="display:flex;gap:6px;align-items:center;color:var(--muted)"><input type="checkbox" id="auto" checked> re-run on change</label></div>
     <div class="opts" id="annPanel">
       <label class="chk"><input type="checkbox" id="annotate"> Annotate tracks</label>
+      <div id="ann-status" class="mono"></div>
       <div id="annBody" hidden>
         <div class="row">
           <label class="chk"><input type="radio" name="ann-obj" id="ann-ball" checked> ball</label>
@@ -124,12 +125,11 @@
           <button id="ann-clear">Clear object</button>
         </div>
         <div class="row hint">click the map: place or move a point on that frame &middot; shift-click: remove it</div>
-        <label class="chk"><input type="checkbox" id="ann-reviewed"> reviewed (empty object = must not be tracked)</label>
+        <label class="chk"><input type="checkbox" id="ann-reviewed"> reviewed: an object with no points = must not be tracked; applies to BOTH ball and club</label>
         <label>range tol (bins) <input type="number" id="ann-range-tol" step="0.25" min="0.25" value="1"></label>
         <label>min coverage <input type="number" id="ann-min-cov" step="0.05" min="0" max="1" value="0.8"></label>
         <label>notes <input type="text" id="ann-notes"></label>
         <div class="row"><button class="primary" id="ann-save">Save labels</button></div>
-        <div id="ann-status" class="mono"></div>
       </div>
     </div>
   </aside>
@@ -534,9 +534,12 @@ async function annSave() {
 $("#annotate").addEventListener("change", (e) => (e.target.checked ? annLoad() : annOff()));
 document.querySelectorAll('input[name="ann-obj"]').forEach((r) => r.addEventListener("change", () => (ann.obj = $("#ann-ball").checked ? "ball" : "club")));
 $("#ann-seed").addEventListener("click", () => {
-  const F = fw(); if (!F || !ann.labels) return;
+  if (!ann.labels) return;
+  const F = fw();
+  if (!F) { annStatus("no firmware track to seed from", true); return; }
   const src = ann.obj === "ball" ? F.ball_points : F.points;
-  ann.labels[ann.obj].points = src.map((p) => ({ frame: p.frame, range_bin: p.range_bin, doppler_mps: p.doppler_mps }));
+  // Frame and bin only: the firmware's doppler is aliased, so copying it would make the label circular.
+  ann.labels[ann.obj].points = src.map((p) => ({ frame: p.frame, range_bin: p.range_bin }));
   ann.dirty = true; annStatus("seeded from firmware (unsaved)"); annRedraw();
 });
 $("#ann-clear").addEventListener("click", () => { if (!ann.labels) return; ann.labels[ann.obj].points = []; ann.dirty = true; annStatus("cleared (unsaved)"); annRedraw(); });
