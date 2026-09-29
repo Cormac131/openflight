@@ -359,8 +359,9 @@ class IWR6843CaptureMonitor:
             raise ValueError(
                 f"tee band must be 0..{TEE_BAND_MAX_BINS:g} bins (0 = off), got {tee_band_bins}"
             )
-        # Half width in range bins of the band around the ball that the
-        # firmware's club and ball trackers ignore; 0 leaves the firmware's
+        # Width in range bins of the band near the ball that the firmware's
+        # club and ball trackers ignore (placed by the firmware on the
+        # noisiest idle bins near the tee); 0 leaves the firmware's
         # default (off) and sends nothing, so older firmware still starts.
         self.tee_band_bins = float(tee_band_bins)
         self.config_path = Path(config_path)

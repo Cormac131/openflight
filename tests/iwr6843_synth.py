@@ -144,6 +144,9 @@ def synth_shot_dump(
     amp=1000.0,
     club_out_speed_ms=None,
     club_amp=None,
+    ridge_bins=(),
+    ridge_amp=None,
+    seed=0,
 ):
     """A club approaching the tee, then a ball leaving it: the whole shot.
 
@@ -158,6 +161,14 @@ def synth_shot_dump(
     goes on TX1 as in ``synth_club_dump``; elevation goes on the 8-element
     vertical array as ``music.steer(el)`` in physical order (the flipped
     [tx0.rx0..3, tx2.rx0..3] vector), matching ``doa.canonicalize_tx_blocks``.
+
+    ``ridge_bins`` adds a return at each of those bins on every frame and
+    loop with a random phase per loop (amplitude ``ridge_amp``, ``amp`` when
+    None; phases from ``seed``): the burst MTI keeps a residual there on
+    every frame, as the tee-band clutter does. Empty (the default) draws
+    nothing, so the cube is unchanged. An object whose position is behind
+    the radar (x <= 0, only with an impact long after the capture starts) is
+    out of view and draws nothing.
     """
     n_tx, n_rx = 3, 4
     res = 6.0 / n_samples
@@ -189,6 +200,10 @@ def synth_shot_dump(
             s = t - t_impact
             for velocity, amplitude in scatterers(s):
                 x = tee_range_m + s * velocity[0]
+                if x <= 0.0:
+                    # Behind the radar (a long pre-impact lead-in): out of
+                    # view, not folded back into range.
+                    continue
                 y = s * velocity[1]
                 z = s * velocity[2]
                 range_m = math.sqrt(x * x + y * y + z * z)
@@ -215,6 +230,16 @@ def synth_shot_dump(
                         value = common * elevation
                     # += so two objects in one bin add
                     cube[frame, loop * n_tx + tx, :, bin_at] += value
+    # A ridge: returns whose phase is random from loop to loop, so the burst
+    # MTI keeps a residual there on every frame, as the tee-band clutter does.
+    rng = np.random.default_rng(seed)
+    for frame in range(n_frames):
+        for loop in range(loops):
+            for bin_index in ridge_bins:
+                phase = np.exp(1j * rng.uniform(0.0, 2.0 * np.pi))
+                cube[frame, loop * n_tx : (loop + 1) * n_tx, :, bin_index] += (
+                    ridge_amp or amp
+                ) * phase
     return pack_dump(
         cube,
         n_tx=n_tx,

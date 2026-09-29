@@ -1183,9 +1183,10 @@ def init_iwr6843(
     ``ball_detector`` is off, on or follow: on starts the firmware's placement
     detector (the shot machine locks the ball and the kiosk gets a setup
     banner from a ``ball status`` poll every ``setup_poll_s``); follow also
-    aims the self-trigger at the locked ball. ``tee_band_bins`` is the half
-    width in range bins of the band around the ball that the firmware's club
-    and ball trackers ignore; 0 leaves it off.
+    aims the self-trigger at the locked ball. ``tee_band_bins`` is the width
+    in range bins of the band near the ball that the firmware's club and ball
+    trackers ignore; the firmware places it on the noisiest idle bins near the
+    tee and freezes it while the club swings. 0 leaves it off.
     """
     global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
     from .iwr6843.setup_poll import BALL_DETECTOR_MODES  # pylint: disable=import-outside-toplevel
@@ -4641,8 +4642,8 @@ def _add_iwr6843_tee_band_argument(parser):
         "--iwr6843-tee-band-bins",
         type=float,
         default=0.0,
-        help="Half width in range bins of the tee band the IWR6843 club/ball trackers "
-        "ignore; impact is then fitted from the tracks either side (0 = off, default)",
+        help="Width in range bins of the tee band the club and ball trackers ignore, "
+        "placed on the noisiest bins near the tee (0 = off; experimental)",
     )
 
 

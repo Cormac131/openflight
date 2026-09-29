@@ -1291,7 +1291,6 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_band_noise_reset": ([_P(BandNoise)], None),
     "l3_band_noise_update": ([_P(BandNoise), _U32, _U32, _P(BinObs), _U32], None),
     "l3_band_place": ([_P(BandNoise), _F32, _F32, _F32, _P(Band)], None),
-    "l3_band_around": ([_F32, _F32, _P(Band)], None),
     "l3_band_contains": ([_P(Band), _F32], ctypes.c_int32),
     "l3_band_filter": ([_P(Band), _P(TargetObs), _U32], _U32),
     "l3_band_keep_short": ([_P(Band), _P(TargetObs), _U32], _U32),

@@ -565,10 +565,10 @@ class IWR6843Radar:
         )
 
     def set_tee_band(self, bins: float) -> bool:
-        """Set the tee band's half width in range bins (0: no band).
+        """Set the tee band's width in range bins (0: no band).
 
-        The club and ball trackers ignore targets inside the band around the
-        ball, and the impact is fitted from the tracks either side of it. A
+        The club and ball trackers ignore targets inside the band, which the
+        firmware places on the noisiest idle bins near the ball, and the impact is fitted from the tracks either side of it. A
         ``trackCfg`` sub-mode because the firmware's CLI table is full; the
         firmware keeps it across ``triggerCfg`` and ``sensorStart``.
 

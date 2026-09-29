@@ -7,7 +7,9 @@ the club track reads the trigger's region, the ball is armed at the tee and
 the post-impact targets are unfiltered. Band on: before impact the club track
 reads the whole window, keeping only targets short of the band
 (firmware_replay._pre_impact_club_targets); after impact the band is dropped
-from the targets (l3_band_filter)."""
+from the targets (l3_band_filter). The band is placed on the noisiest idle
+bins near the destination (l3_band_place over gBandNoise) and frozen while a
+club track is active."""
 
 from __future__ import annotations
 
@@ -32,25 +34,56 @@ def test_globals_for_the_band_the_range_impact_and_the_fit():
         "static l3_band_t           gBand;",
         "static l3_impact_t         gRangeImpact;",
         "static l3_impact_fit_t     gImpactFit;",
+        "static l3_band_noise_t     gBandNoise;",
+        "static uint8_t             gBandFrozen;",
     ):
         assert declaration in SOURCE, declaration
     assert '#include "l3_band.h"' in SOURCE
     assert '#include "l3_impact_fit.h"' in SOURCE
 
 
-def test_band_is_placed_around_the_destination_every_pre_impact_frame():
+def test_band_off_is_no_band_on_every_pre_impact_frame():
     self_trigger = body("l3_considerSelfTrigger")
-    around = self_trigger.index("l3_band_around((float)teeBin, gImpactFitCfg.bandBins, &gBand);")
-    assert around < self_trigger.index("l3_preImpactClubTargets(")
+    enabled = self_trigger.index("if (gImpactFitCfg.bandBins > 0.0F) {")
+    off = self_trigger.index("gBand.valid = 0U;")
+    assert enabled < off < self_trigger.index("l3_preImpactClubTargets(")
+
+
+def test_noise_map_is_updated_only_from_idle_whole_window_frames():
+    """After the club track update: an active track freezes the band; an idle
+    frame thaws it and feeds the whole window it scored to the noise map."""
+    self_trigger = body("l3_considerSelfTrigger")
+    track = self_trigger.index("appended = l3_track_update(&gClubTrack,")
+    active = self_trigger.index("if (gClubTrack.active) {", track)
+    frozen = self_trigger.index("gBandFrozen = 1U;", active)
+    thawed = self_trigger.index("gBandFrozen = 0U;", frozen)
+    scored = self_trigger.index("if (windowCount > 0U) {", thawed)
+    update = self_trigger.index(
+        "l3_band_noise_update(&gBandNoise, gTrigCfg.stat, frame.binStart, obs,", scored
+    )
+    assert track < active < frozen < thawed < scored < update
+
+
+def test_noise_map_is_reset_once_with_the_fit_defaults():
+    """The map persists across shots: reset only where the fit's defaults are
+    set once, never at rearm."""
+    ensure = body("l3_ensureRadarCal")
+    defaults = ensure.index("l3_impact_fit_cfg_defaults(&gImpactFitCfg);")
+    assert ensure.index("l3_band_noise_reset(&gBandNoise);") > defaults
+    assert SOURCE.count("l3_band_noise_reset(") == 1
+    assert "l3_band_noise_reset" not in body("l3_trigRearm")
 
 
 def test_pre_impact_club_targets_keep_only_short_of_a_valid_band():
     helper = body("l3_preImpactClubTargets")
-    valid = helper.index("if (gBand.valid) {")
+    valid = helper.index("if (gImpactFitCfg.bandBins > 0.0F) {")
     whole = helper.index("l3_verticalResidual(frame, bin, NULL, &obs[bin]);")
     keep = helper.index("l3_band_keep_short(&gBand, targets, found)")
     region = helper.index("return l3_obs_extract(params, frameIndex, frameUs, regionFirstBin,")
-    assert valid < whole < keep < region, "the whole window only when the band is valid"
+    assert valid < whole < keep < region, "the whole window only when the band is enabled"
+    # The whole-window count is reported for the noise map; the trigger view none.
+    assert "*windowCount = count;" in helper
+    assert "*windowCount = 0U;" in helper
     # The whole window: global first bin frame->binStart, so a target's
     # peakBin - frame.binStart is its local bin in both modes.
     assert "l3_obs_extract(params, frameIndex, frameUs, frame->binStart, obs, count," in helper
@@ -176,3 +209,14 @@ def test_post_impact_unknown_approach_falls_back_to_the_club_ceiling():
     ball_track = body("l3_considerBallTrack")
     assert "L3_TRACK_FOLLOW_UNKNOWN_APPROACH_MPS" in ball_track
     assert "gShot.delivery.speedValid" in ball_track
+
+
+def test_board_places_the_band_from_the_noise_map_until_frozen():
+    self_trigger = body("l3_considerSelfTrigger")
+    place = self_trigger.index("l3_band_place(&gBandNoise,")
+    targets = self_trigger.index("l3_preImpactClubTargets(")
+    assert place < targets
+    assert "gBandFrozen" in self_trigger[: place + 200]
+    assert "l3_band_noise_update(&gBandNoise," in self_trigger
+    assert "gBandFrozen = 0U" in body("l3_trigRearm")
+    assert "l3_band_around" not in SOURCE

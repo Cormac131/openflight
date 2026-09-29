@@ -4519,11 +4519,20 @@ class TestIWR6843TeeBandArgument:
 
         assert parser.parse_args([]).iwr6843_tee_band_bins == 0.0
 
-    def test_cli_accepts_a_fractional_half_width(self):
+    def test_cli_accepts_a_fractional_width(self):
         parser = argparse.ArgumentParser()
         server_module._add_iwr6843_tee_band_argument(parser)
 
         assert parser.parse_args(["--iwr6843-tee-band-bins", "6.5"]).iwr6843_tee_band_bins == 6.5
+
+    def test_help_says_the_value_is_a_width_placed_automatically(self):
+        parser = argparse.ArgumentParser()
+        server_module._add_iwr6843_tee_band_argument(parser)
+        action = next(a for a in parser._actions if a.dest == "iwr6843_tee_band_bins")
+
+        assert "width" in action.help.lower()
+        assert "half width" not in action.help.lower()
+        assert "noisiest" in action.help
 
     @pytest.mark.parametrize("value", ["-1", "64.5", "nan"])
     def test_out_of_range_band_is_a_usage_error(self, monkeypatch, capsys, value):

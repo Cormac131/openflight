@@ -104,6 +104,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The prebuilt image in `firmware/releases/` has not been rebuilt yet.
 
 ### Changed
+- **IWR6843 tee band: the value is now a width and the band is placed
+  automatically.** `--iwr6843-tee-band-bins N` (and `trackCfg impactFit N`)
+  is the band's total width in bins, no longer a half width, so an old `6`
+  (13 bins) is now roughly `13`. The firmware keeps a noise map of the MTI
+  residual over idle pre-impact frames and places the band on the noisiest
+  contiguous run within 10 bins of the ball (centred until 8 idle frames are
+  seen); it freezes while a club track is active and is released at the
+  rearm. The replay (`firmware_replay`) does the same and reports the map.
+- **IWR6843 club after impact.** After impact the ball tracker runs first
+  and the club follows the scene it leaves: it coasts across the band,
+  slower than the ball, and is re-acquired beyond it when lost.
+- **Dump viewer ball colour.** The ball track, ball points and the fitted
+  `ball_out` line are blue; the host approach-peak markers are grey, so blue
+  only means the ball.
 - **IWR6843 club path and attack need three angled points.** A delivery with
   fewer than three angled points used to mix boresight and angled positions
   and skip the residual guard; it now falls back to the radial-only delivery,

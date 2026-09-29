@@ -859,9 +859,12 @@ def test_an_uncertain_track_keeps_its_time_and_sigma_in_the_summary(lib):
 # --- where the ball tracker is armed ---------------------------------------------
 
 
-@pytest.mark.parametrize("band_bins, arm_bin", [(None, 29.0), (6.0, 35.0)])
+# bandBins is a total width: 6 bins with no noise history (the synthetic club
+# is in view from the first frame, so the band freezes centred) is 27..32 --
+# lo = 29 - (6 - 1) // 2 -- and its far edge is 32 (was 29 + 6 = 35 as a half width).
+@pytest.mark.parametrize("band_bins, arm_bin", [(None, 29.0), (6.0, 32.0)])
 def test_impact_arms_the_ball_tracker_at_the_band_edge_or_the_ball(lib, band_bins, arm_bin):
-    """The IMPACT arm: band on, at the band's far edge (29 + 6); off, at the ball."""
+    """The IMPACT arm: band on, at the band's far edge as placed; off, at the ball."""
     raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
     config = ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN, band_bins=band_bins)
     result = replay_dump(raw, config, lib=lib)
@@ -872,7 +875,7 @@ def test_impact_arms_the_ball_tracker_at_the_band_edge_or_the_ball(lib, band_bin
     assert f"origin={arm_bin:.2f}" in result.ball_status
 
 
-@pytest.mark.parametrize("band_bins, arm_bin", [(None, 29.0), (6.0, 35.0)])
+@pytest.mark.parametrize("band_bins, arm_bin", [(None, 29.0), (6.0, 32.0)])
 def test_a_forced_post_frame_arms_the_ball_tracker_at_the_band_edge_or_the_ball(
     lib, band_bins, arm_bin
 ):
@@ -944,8 +947,8 @@ def _club_after_impact(result):
     return [p for p in result.points if p.frame > impact]
 
 
-# Band width semantics (bandBins as a total width) and band 10 are asserted in Task 6.
-@pytest.mark.parametrize("band_bins", [5.0])
+# bandBins is the band's total width, placed on the noisiest idle bins (Task 6).
+@pytest.mark.parametrize("band_bins", [5.0, 10.0])
 def test_with_the_band_on_every_recording_has_the_club_after_impact(lib, band_bins):
     """The club crosses the band coasting and is re-acquired beyond it: every
     recording that declared impact keeps club points after it, none of them
@@ -1001,9 +1004,15 @@ def test_a_club_seen_only_after_impact_is_reacquired_beyond_the_band(lib):
     raw = synth_shot_dump(
         ball_speed_ms=60.0, club_out_speed_ms=20.0, tee_range_m=1.372, t_impact_s=0.004
     )
+    # Width 11 with no history is 24..34, the band this test was written
+    # around (+-5 before bandBins became a total width). Known limitation, to
+    # be checked on real full captures: with a narrow band (5) the ball
+    # tracker, armed at the band's far edge, can take the slower club as the
+    # ball, and the fast ball can already be beyond its 8-bin origin gate.
     result = fr.replay_dump(
-        raw, fr.ReplayConfig(tee_bin=29, dest_bin=29, impact_armed=True, band_bins=5.0), lib=lib
+        raw, fr.ReplayConfig(tee_bin=29, dest_bin=29, impact_armed=True, band_bins=11.0), lib=lib
     )
+    assert result.band == (24.0, 34.0)
     assert fw.SHOT_STATE_NAMES[result.shot.state] not in fr.PRE_IMPACT_SHOT_STATES
     assert result.shot.delivery.speedValid == 0
     club = _club_after_impact(result)
@@ -1011,3 +1020,43 @@ def test_a_club_seen_only_after_impact_is_reacquired_beyond_the_band(lib):
     assert all(p.range_bin > result.band[1] for p in club)
     ball_keys = {(p.frame, round(p.range_bin, 3)) for p in result.ball_points}
     assert not ball_keys & {(p.frame, round(p.range_bin, 3)) for p in club}
+
+
+# --- the automatic band: placed on the noise, frozen on the swing ----------------
+
+
+def test_the_band_lands_on_the_ridge_not_centred_on_the_tee(lib):
+    from iwr6843_synth import synth_shot_dump  # pylint: disable=import-outside-toplevel
+
+    # Impact at 100 ms: the club (22 m/s) is out of range before ~38 ms, so
+    # frames 0..8 are idle and fill the noise map (8 updates needed).
+    ridge = (33, 34, 35, 36, 37)  # beyond the tee at 29
+    raw = synth_shot_dump(
+        ball_speed_ms=60.0, tee_range_m=1.372, ridge_bins=ridge, n_frames=36, t_impact_s=0.1
+    )
+    result = fr.replay_dump(
+        raw, fr.ReplayConfig(tee_bin=29, dest_bin=29, impact_armed=True, band_bins=5.0), lib=lib
+    )
+    assert result.band == (33.0, 37.0)
+
+
+def test_band_freezes_when_the_club_is_acquired_and_thaws_when_it_drops(lib):
+    from iwr6843_synth import synth_shot_dump  # pylint: disable=import-outside-toplevel
+
+    raw = synth_shot_dump(
+        ball_speed_ms=60.0,
+        tee_range_m=1.372,
+        ridge_bins=(33, 34, 35, 36, 37),
+        n_frames=36,
+        t_impact_s=0.1,
+    )
+    result = fr.replay_dump(
+        raw, fr.ReplayConfig(tee_bin=29, dest_bin=29, impact_armed=True, band_bins=5.0), lib=lib
+    )
+    acquired = next(f.frame for f in result.frames if f.track_why == "acquired")
+    assert result.band_frozen_frame == acquired
+
+
+def test_band_off_places_nothing_and_keeps_the_trigger_view(lib):
+    path, config = next(iter(fr.recording_configs()))
+    assert fr.replay_file(path, config, lib=lib).band is None

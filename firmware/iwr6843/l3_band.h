@@ -39,8 +39,6 @@ void l3_band_noise_update(l3_band_noise_t *noise, uint32_t stat, uint32_t firstB
 void l3_band_place(const l3_band_noise_t *noise, float centreBin, float searchBins,
                    float widthBins, l3_band_t *out);
 
-/* [centre - halfWidth, centre + halfWidth]; halfWidth <= 0 disables it. */
-void l3_band_around(float centreBin, float halfWidthBins, l3_band_t *out);
 /* 1 when bin lies inside a valid band. */
 int32_t l3_band_contains(const l3_band_t *band, float bin);
 /* Drop the targets inside the band, keeping the others in their order

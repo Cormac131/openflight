@@ -56,7 +56,7 @@ class ViewerOptions:  # pylint: disable=too-many-instance-attributes
     py_hits: int = st.DEFAULT_HITS
     ball_hypotheses: bool | None = None  # the ball search; None: the firmware default
     joint_search: bool = False  # run l3_joint_search in parallel (host-only, viz)
-    band_bins: float | None = None  # the tee band's half width; None: off
+    band_bins: float | None = None  # the tee band's width, placed automatically; None: off
 
     @classmethod
     def from_mapping(cls, raw: dict) -> ViewerOptions:

@@ -435,11 +435,17 @@ static uint8_t           gTrigFireSource;  /* bit 0 range gate, bit 1 geometry, 
  * is no band: the club track, the ball tracker and the post-impact targets
  * behave exactly as before the band existed. gRangeImpact is the range-only
  * fire from the club-in estimate (l3_impact_update_range), kept apart from
- * gImpact's verdicts. "trackCfg impactFit <bandBins>" sets the band; the
- * defaults are set once (gImpactFitCfgSet), so a configured band survives
- * triggerCfg and sensorStart in either order. */
+ * gImpact's verdicts. "trackCfg impactFit <bandBins>" sets the band's width;
+ * the defaults are set once (gImpactFitCfgSet), so a configured band
+ * survives triggerCfg and sensorStart in either order. The band is placed
+ * on every idle pre-impact frame on the noisiest bins near the destination
+ * (gBandNoise, fed from idle frames' whole windows), frozen while the club
+ * track is active (gBandFrozen) and released at the rearm; the noise map
+ * persists across shots. */
 static l3_impact_fit_cfg_t gImpactFitCfg;
 static l3_band_t           gBand;
+static l3_band_noise_t     gBandNoise;
+static uint8_t             gBandFrozen;
 static l3_impact_t         gRangeImpact;   /* range-only fire (l3_impact_update_range) */
 static l3_impact_fit_t     gImpactFit;
 static uint8_t             gImpactFitCfgSet;
@@ -3421,6 +3427,7 @@ static void l3_trigRearm(void)
     gPostFramesScored = 0U;
     gBallFloor = 0.0F;
     gShotResultReady = 0U;
+    gBandFrozen = 0U;
 }
 
 /* Stage timing: Cycleprofiler ticks at the CPU clock; one call per stage. */
@@ -3445,6 +3452,7 @@ static void l3_ensureRadarCal(void)
     }
     if (!gImpactFitCfgSet) {
         l3_impact_fit_cfg_defaults(&gImpactFitCfg);
+        l3_band_noise_reset(&gBandNoise);
         gImpactFitCfgSet = 1U;
     }
 }
@@ -3769,20 +3777,23 @@ static void l3_considerBallTrack(uint32_t slot)
  *
  * Band off: the trigger region's own observations (obs[0..regionCount), first
  * global bin regionFirstBin), extracted against the trigger's floor -- the
- * view the club track always had. Band on: the trigger region would be mostly
- * band, so the whole window is read into obs (the trigger has scored its
- * region by now) against the same floor, and only targets short of the band
- * are kept: the club approaches the ball, so nothing in the band or beyond it
- * is the club before impact. Either way a target's peakBin is global, and
- * peakBin - frame->binStart is its local bin in the frame. A scratch reused
- * mid-read offers no targets this frame. */
+ * view the club track always had. Band on (bandBins > 0, placed or not): the
+ * trigger region would be mostly band, so the whole window is read into obs
+ * (the trigger has scored its region by now) against the same floor, and
+ * only targets short of the band are kept: the club approaches the ball, so
+ * nothing in the band or beyond it is the club before impact. Either way a
+ * target's peakBin is global, and peakBin - frame->binStart is its local bin
+ * in the frame. *windowCount is how many whole-window bins obs now holds
+ * (for the band's noise map), 0 when the whole window was not read. A
+ * scratch reused mid-read offers no targets this frame. */
 static uint32_t l3_preImpactClubTargets(const l3_detect_frame_t *frame, l3_trig_obs_t *obs,
                                         uint32_t regionFirstBin, uint32_t regionCount,
                                         const l3_obs_params_t *params, float floor,
                                         uint32_t frameIndex, uint32_t frameUs,
-                                        l3_target_obs_t *targets)
+                                        l3_target_obs_t *targets, uint32_t *windowCount)
 {
-    if (gBand.valid) {
+    *windowCount = 0U;
+    if (gImpactFitCfg.bandBins > 0.0F) {
         uint32_t count = frame->binCount;
         uint32_t found;
         uint32_t bin;
@@ -3797,6 +3808,7 @@ static uint32_t l3_preImpactClubTargets(const l3_detect_frame_t *frame, l3_trig_
             gDetectScratchStale++;
             return 0U;
         }
+        *windowCount = count;
         found = l3_obs_extract(params, frameIndex, frameUs, frame->binStart, obs, count,
                                floor, targets, L3_OBS_MAX_TARGETS);
         return l3_band_keep_short(&gBand, targets, found);
@@ -3882,23 +3894,47 @@ static void l3_considerSelfTrigger(uint32_t slot)
         static l3_target_obs_t targets[L3_OBS_MAX_TARGETS];
         l3_obs_params_t params;
         uint32_t found;
+        uint32_t windowCount;
         int32_t appended;
 
         params.stat = gTrigCfg.stat;
         params.snr = gTrigCfg.snr;
         params.loopPeriodS = gTrigLoopPeriodS;
         params.subBin = gObsSubBin;
-        l3_band_around((float)teeBin, gImpactFitCfg.bandBins, &gBand);
+        /* The band: re-placed on the noisiest idle bins near the
+         * destination until a club track freezes it. */
+        if (gImpactFitCfg.bandBins > 0.0F) {
+            if (!gBandFrozen) {
+                l3_band_place(&gBandNoise, (float)teeBin, gImpactFitCfg.bandSearchBins,
+                              gImpactFitCfg.bandBins, &gBand);
+            }
+        } else {
+            gBand.valid = 0U;
+        }
         ticks = Cycleprofiler_getTimeStamp();
         found = l3_preImpactClubTargets(&frame, obs, frame.binStart + first, count, &params,
                                         gTrig.floor, gPreFramesCaptured,
-                                        gPreFramesCaptured * (uint32_t)gFramePeriodUs, targets);
+                                        gPreFramesCaptured * (uint32_t)gFramePeriodUs, targets,
+                                        &windowCount);
         l3_profileStage(L3_PROF_EXTRACT, ticks);
         gClubTrackDest = teeBin;
         ticks = Cycleprofiler_getTimeStamp();
         appended = l3_track_update(&gClubTrack, targets, found, gPreFramesCaptured,
                                    gPreFramesCaptured * (uint32_t)gFramePeriodUs);
         l3_profileStage(L3_PROF_CLUB_TRACK, ticks);
+        /* An active club track freezes the band where it stands; an idle
+         * frame thaws it and feeds the whole window it read to the map. */
+        if (gImpactFitCfg.bandBins > 0.0F) {
+            if (gClubTrack.active) {
+                gBandFrozen = 1U;
+            } else {
+                gBandFrozen = 0U;
+                if (windowCount > 0U) {
+                    l3_band_noise_update(&gBandNoise, gTrigCfg.stat, frame.binStart, obs,
+                                         windowCount);
+                }
+            }
+        }
         if (appended && gClubTrack.lastTargetIndex < found && gClubTrack.count > 1U &&
             l3_track_point(&gClubTrack, gClubTrack.count - 1U, &newest)) {
             /* Angles for the associated target only: one estimate per frame.
@@ -4443,8 +4479,8 @@ static int32_t l3_cli_trackCfgImpact(int32_t argc, char *argv[])
     return 0;
 }
 
-/* "trackCfg impactFit <bandBins>": the tee band's half width in range bins
- * (l3_band.h), 0 for no band. A sub-mode, not a command of its own: the CLI
+/* "trackCfg impactFit <bandBins>": the tee band's total width in range bins
+ * (l3_band.h), placed on the noisiest idle bins near the tee; 0 for no band. A sub-mode, not a command of its own: the CLI
  * table is at the SDK's CLI_MAX_CMD. Kept across triggerCfg and sensorStart;
  * the next pre-impact frame places the band. */
 static int32_t l3_cli_trackCfgImpactFit(int32_t argc, char *argv[])

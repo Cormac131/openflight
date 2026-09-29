@@ -4,17 +4,6 @@
 
 #include "l3_band.h"
 
-void l3_band_around(float centreBin, float halfWidthBins, l3_band_t *out)
-{
-    memset(out, 0, sizeof(*out));
-    if (!(halfWidthBins > 0.0F)) {
-        return;
-    }
-    out->valid = 1U;
-    out->loBin = centreBin - halfWidthBins;
-    out->hiBin = centreBin + halfWidthBins;
-}
-
 int32_t l3_band_contains(const l3_band_t *band, float bin)
 {
     return (band->valid && bin >= band->loBin && bin <= band->hiBin) ? 1 : 0;
