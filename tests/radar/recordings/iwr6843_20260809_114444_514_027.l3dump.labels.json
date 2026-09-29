@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "dump": "iwr6843_20260809_114444_514_027.l3dump",
+  "dump_sha256": "7517effb5b12e3d810f360c7418db659e8a3032c349aeb04dfe66cb356e8668d",
+  "reviewed": true,
+  "ball": {
+    "points": [
+      {
+        "frame": 9,
+        "range_bin": 44.9
+      },
+      {
+        "frame": 10,
+        "range_bin": 48.0
+      },
+      {
+        "frame": 11,
+        "range_bin": 51.0
+      },
+      {
+        "frame": 12,
+        "range_bin": 54.4
+      },
+      {
+        "frame": 13,
+        "range_bin": 57.7
+      },
+      {
+        "frame": 14,
+        "range_bin": 60.2
+      },
+      {
+        "frame": 15,
+        "range_bin": 63.8
+      },
+      {
+        "frame": 16,
+        "range_bin": 66.4
+      },
+      {
+        "frame": 17,
+        "range_bin": 69.6
+      },
+      {
+        "frame": 18,
+        "range_bin": 73.4
+      },
+      {
+        "frame": 19,
+        "range_bin": 76.5
+      },
+      {
+        "frame": 20,
+        "range_bin": 79.2
+      },
+      {
+        "frame": 21,
+        "range_bin": 82.6
+      },
+      {
+        "frame": 22,
+        "range_bin": 85.7
+      },
+      {
+        "frame": 23,
+        "range_bin": 88.4
+      }
+    ]
+  },
+  "club": {
+    "points": [
+      {
+        "frame": 1,
+        "range_bin": 22.411104202270508
+      },
+      {
+        "frame": 2,
+        "range_bin": 24.8
+      },
+      {
+        "frame": 3,
+        "range_bin": 26.8
+      },
+      {
+        "frame": 4,
+        "range_bin": 29.2
+      },
+      {
+        "frame": 5,
+        "range_bin": 32.197998046875
+      },
+      {
+        "frame": 6,
+        "range_bin": 34.45920944213867
+      },
+      {
+        "frame": 7,
+        "range_bin": 36.560340881347656
+      },
+      {
+        "frame": 8,
+        "range_bin": 38.164981842041016
+      },
+      {
+        "frame": 9,
+        "range_bin": 39.850685119628906
+      }
+    ]
+  },
+  "tolerances": {
+    "range_bins": 1.0,
+    "min_coverage": 0.8,
+    "doppler_mps": null
+  },
+  "notes": ""
+}

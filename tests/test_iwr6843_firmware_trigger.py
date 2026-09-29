@@ -436,7 +436,7 @@ def test_fast_club_seen_twice_fires_on_the_second_frame(lib):
     """Two frames of consistent approach are enough by default; no long history needed."""
     det = detector(lib)
     assert det.feed({12: CLUB}) is False
-    assert det.feed({18: CLUB}) is True
+    assert det.feed({17: CLUB}) is True  # 5 bins in a frame is 78 m/s: the fastest club
     assert det.whys() == ["acquired", "fired"]
 
 
@@ -1076,3 +1076,85 @@ def test_why_names_cover_every_reason(lib):
     for name, code in WHY.items():
         assert lib.l3_trig_why_name(code).decode() == name
     assert lib.l3_trig_why_name(len(WHY)).decode() == "?"
+
+
+# --- the standing return must not take the club's track back ----------------
+
+
+def test_a_track_never_steps_back_onto_the_return_it_stalled_on(lib):
+    """Captures 2026-08-24 (12:08:14 #008 and 11 more): a standing return at
+    bins 36-39, far stronger than the club, held the track until it stalled;
+    the club, short of it, took over -- and on the very next frame the
+    continuation window (the strongest bin up to 8 ahead) put the track back on
+    the standing return, whose 'approach' fired the gate 3-7 frames before the
+    club got there. Once a track has stalled on a return, the return is known
+    and is not a candidate again: the club is what fires."""
+    det = detector(lib)
+    for _ in range(STALL_FRAMES + 1):
+        assert det.feed({19: 3 * CLUB}) is False
+    fired_bin = None
+    for local_bin in (9, 12, 15, 18):
+        if det.feed({19: 3 * CLUB, local_bin: CLUB}):
+            fired_bin = det.records()[-1].bin
+            break
+    assert fired_bin == 18, "the club fired the gate, not the standing return"
+    assert all(record.bin != 19 for record in det.records()[STALL_FRAMES + 1 :])
+
+
+def test_a_standing_return_is_not_acquired_again_after_the_track_is_lost(lib):
+    """The known standing return is masked from acquisition as well: with the
+    club gone for two frames the strongest bin in the region is still it."""
+    det = detector(lib)
+    for _ in range(STALL_FRAMES + 1):
+        det.feed({19: 3 * CLUB})
+    det.feed({19: 3 * CLUB, 9: CLUB})  # the club takes over
+    det.feed({19: 3 * CLUB})  # a missed frame
+    det.feed({19: 3 * CLUB})  # the second: the track is lost
+    assert det.trig.trackBin == NO_BIN
+    det.feed({19: 3 * CLUB, 10: CLUB})
+    assert det.records()[-1].bin == 10 and det.whys()[-1] == "acquired"
+
+
+# Mirror L3_TRIG_MAX_STEP_BINS: no club covers more than this between two 3 ms
+# frames (70 m/s is 4.5 bins at 4.7 cm bins).
+MAX_STEP_BINS = 5
+
+
+def test_a_step_of_more_than_five_bins_is_not_the_same_target(lib):
+    """Capture 2026-08-24 12:35:56 #029: a track at bin 37 'advanced' to a
+    return 6 bins on in one frame (94 m/s) and fired the gate 8 frames early."""
+    det = detector(lib)
+    det.feed({9: CLUB})
+    det.feed({9 + MAX_STEP_BINS: CLUB})
+    assert det.whys()[-1] == "advanced"
+    det2 = detector(lib)
+    det2.feed({9: CLUB})
+    det2.feed({9 + MAX_STEP_BINS + 1: CLUB})
+    assert det2.whys()[-1] == "jumped"
+    assert det2.trig.trackStartBin == 9 + MAX_STEP_BINS + 1
+
+
+def test_a_bridged_miss_lets_the_step_cover_the_missed_frames_ground(lib):
+    """A club moving 3 bins a frame that misses one frame is 6 bins on: the
+    same target, not a jump."""
+    det = detector(lib)
+    det.feed({8: CLUB})
+    det.feed({})  # a missed frame, bridged
+    det.feed({8 + MAX_STEP_BINS + 2: CLUB})  # 7 bins on: over one frame's step, short of the gate
+    assert det.whys()[-1] == "advanced"
+
+
+def test_a_track_leaving_a_standing_return_measures_its_approach_from_the_new_bin(lib):
+    """Captures 2026-08-24 (12:13:17 #017, 12:22:26 #006, 12:31:55 #023): a track
+    held a standing return for STALL_FRAMES frames, then 'advanced' 3-5 bins to
+    a new return and fired the gate on the strength of a start bin that was the
+    standing return -- 5 frames before the club. A standing return has no
+    approach to credit: the track keeps its age, but its approach clock starts
+    at the bin it moved to."""
+    det = detector(lib)
+    for _ in range(STALL_FRAMES):
+        assert det.feed({14: 3 * CLUB}) is False  # the standing return, short of the gate
+    assert det.feed({18: CLUB}) is False, "4 bins on: would have been 'advanced' and fired"
+    assert det.whys()[-1] == "slow", "in the gate, no approach measured yet"
+    assert det.trig.trackStartBin == 18 and det.trig.trackAge == STALL_FRAMES + 1
+    assert det.feed({22: CLUB}) is True, "and a real approach from there still fires"

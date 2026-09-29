@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "dump": "iwr6843_20260824_111428_580_003.l3dump",
+  "dump_sha256": "13a1e69712f96c81def6b08eb947b3190e8508cc1ece05d7a983f90b6f1a6783",
+  "reviewed": true,
+  "ball": {
+    "points": [
+      {
+        "frame": 8,
+        "range_bin": 45.2
+      },
+      {
+        "frame": 9,
+        "range_bin": 47.9
+      },
+      {
+        "frame": 10,
+        "range_bin": 51.0
+      },
+      {
+        "frame": 11,
+        "range_bin": 54.0
+      },
+      {
+        "frame": 12,
+        "range_bin": 56.9
+      },
+      {
+        "frame": 13,
+        "range_bin": 60.0
+      },
+      {
+        "frame": 14,
+        "range_bin": 62.6
+      },
+      {
+        "frame": 15,
+        "range_bin": 65.9
+      },
+      {
+        "frame": 16,
+        "range_bin": 68.8
+      },
+      {
+        "frame": 17,
+        "range_bin": 71.7
+      },
+      {
+        "frame": 18,
+        "range_bin": 74.6
+      },
+      {
+        "frame": 19,
+        "range_bin": 77.2
+      },
+      {
+        "frame": 20,
+        "range_bin": 80.5
+      }
+    ]
+  },
+  "club": {
+    "points": [
+      {
+        "frame": 2,
+        "range_bin": 28.3
+      },
+      {
+        "frame": 3,
+        "range_bin": 30.0
+      },
+      {
+        "frame": 4,
+        "range_bin": 32.96489334106445
+      },
+      {
+        "frame": 5,
+        "range_bin": 34.740257263183594
+      },
+      {
+        "frame": 6,
+        "range_bin": 36.213356018066406
+      },
+      {
+        "frame": 7,
+        "range_bin": 38.39685821533203
+      },
+      {
+        "frame": 8,
+        "range_bin": 39.796138763427734
+      },
+      {
+        "frame": 13,
+        "range_bin": 48.0
+      },
+      {
+        "frame": 14,
+        "range_bin": 49.2
+      },
+      {
+        "frame": 15,
+        "range_bin": 50.4
+      }
+    ]
+  },
+  "tolerances": {
+    "range_bins": 1.0,
+    "min_coverage": 0.8,
+    "doppler_mps": null
+  },
+  "notes": ""
+}

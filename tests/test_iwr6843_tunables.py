@@ -129,7 +129,7 @@ def test_overriding_every_constant_with_its_default_replays_the_committed_record
     for path, config in configs:
         raw = path.read_bytes()
         plain = fr.replay_dump(raw, config)
-        explicit = fr.replay_dump(raw, replace(config, overrides=defaults))
+        explicit = fr.replay_dump(raw, replace(config, overrides={**defaults, **config.overrides}))
         for attr in ("points", "ball_points"):
             got = [(p.frame, p.range_bin) for p in getattr(explicit, attr)]
             want = [(p.frame, p.range_bin) for p in getattr(plain, attr)]

@@ -106,5 +106,437 @@
         50
       ]
     }
+  },
+  "iwr6843_20260824_120746_889_007.l3dump": {
+    "tee_bin": 39,
+    "dest_bin": null,
+    "post_from_frame": 9,
+    "pitch_deg": 10.5,
+    "notes": "2026-08-24 trackman session, hand-labelled ball and club tracks (tests/test_iwr6843_labelled_replay.py). Sound-triggered: impact is the pre-frame count (post_from_frame 9), the ball sat near bin 39 so tee_bin 39, and trig.approachBins 18 widens the approach window to bins 21-42 so the club is seen from frame 0-2; snr 3 (as the ball's) because the club's early returns read 3.3-5.7x the floor, under the default 6x.",
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "expect": {
+      "club_points_min": 6
+    },
+    "snr": 3.0
+  },
+  "iwr6843_20260824_120814_285_008.l3dump": {
+    "tee_bin": 39,
+    "dest_bin": null,
+    "post_from_frame": 9,
+    "pitch_deg": 10.5,
+    "notes": "2026-08-24 trackman session, hand-labelled ball and club tracks (tests/test_iwr6843_labelled_replay.py). Sound-triggered: impact is the pre-frame count (post_from_frame 9), the ball sat near bin 39 so tee_bin 39, and trig.approachBins 18 widens the approach window to bins 21-42 so the club is seen from frame 0-2; snr 3 (as the ball's) because the club's early returns read 3.3-5.7x the floor, under the default 6x.",
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "expect": {
+      "club_points_min": 6
+    },
+    "snr": 3.0
+  },
+  "iwr6843_20260824_120840_278_009.l3dump": {
+    "tee_bin": 39,
+    "dest_bin": null,
+    "post_from_frame": 9,
+    "pitch_deg": 10.5,
+    "notes": "2026-08-24 trackman session, hand-labelled ball and club tracks (tests/test_iwr6843_labelled_replay.py). Sound-triggered: impact is the pre-frame count (post_from_frame 9), the ball sat near bin 39 so tee_bin 39, and trig.approachBins 18 widens the approach window to bins 21-42 so the club is seen from frame 0-2; snr 3 (as the ball's) because the club's early returns read 3.3-5.7x the floor, under the default 6x.",
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "expect": {
+      "club_points_min": 6
+    },
+    "snr": 3.0
+  },
+  "iwr6843_20260824_120913_402_010.l3dump": {
+    "tee_bin": 39,
+    "dest_bin": null,
+    "post_from_frame": 9,
+    "pitch_deg": 10.5,
+    "notes": "2026-08-24 trackman session, hand-labelled ball and club tracks (tests/test_iwr6843_labelled_replay.py). Sound-triggered: impact is the pre-frame count (post_from_frame 9), the ball sat near bin 39 so tee_bin 39, and trig.approachBins 18 widens the approach window to bins 21-42 so the club is seen from frame 0-2; snr 3 (as the ball's) because the club's early returns read 3.3-5.7x the floor, under the default 6x.",
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "expect": {
+      "club_points_min": 6
+    },
+    "snr": 3.0
+  },
+  "iwr6843_20260824_120934_201_011.l3dump": {
+    "tee_bin": 39,
+    "dest_bin": null,
+    "post_from_frame": 9,
+    "pitch_deg": 10.5,
+    "notes": "2026-08-24 trackman session, hand-labelled ball and club tracks (tests/test_iwr6843_labelled_replay.py). Sound-triggered: impact is the pre-frame count (post_from_frame 9), the ball sat near bin 39 so tee_bin 39, and trig.approachBins 18 widens the approach window to bins 21-42 so the club is seen from frame 0-2; snr 3 (as the ball's) because the club's early returns read 3.3-5.7x the floor, under the default 6x.",
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "expect": {
+      "club_points_min": 6
+    },
+    "snr": 3.0
+  },
+  "iwr6843_20260824_120958_896_012.l3dump": {
+    "tee_bin": 39,
+    "dest_bin": null,
+    "post_from_frame": 9,
+    "pitch_deg": 10.5,
+    "notes": "2026-08-24 trackman session, hand-labelled ball and club tracks (tests/test_iwr6843_labelled_replay.py). Sound-triggered: impact is the pre-frame count (post_from_frame 9), the ball sat near bin 39 so tee_bin 39, and trig.approachBins 18 widens the approach window to bins 21-42 so the club is seen from frame 0-2; snr 3 (as the ball's) because the club's early returns read 3.3-5.7x the floor, under the default 6x.",
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "expect": {
+      "club_points_min": 6
+    },
+    "snr": 3.0
+  },
+  "iwr6843_20260824_121024_299_013.l3dump": {
+    "tee_bin": 39,
+    "dest_bin": null,
+    "post_from_frame": 9,
+    "pitch_deg": 10.5,
+    "notes": "2026-08-24 trackman session, hand-labelled ball and club tracks (tests/test_iwr6843_labelled_replay.py). Sound-triggered: impact is the pre-frame count (post_from_frame 9), the ball sat near bin 39 so tee_bin 39, and trig.approachBins 18 widens the approach window to bins 21-42 so the club is seen from frame 0-2; snr 3 (as the ball's) because the club's early returns read 3.3-5.7x the floor, under the default 6x.",
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "expect": {
+      "club_points_min": 6
+    },
+    "snr": 3.0
+  },
+  "iwr6843_20260824_121116_485_015.l3dump": {
+    "tee_bin": 39,
+    "dest_bin": null,
+    "post_from_frame": 9,
+    "pitch_deg": 10.5,
+    "notes": "2026-08-24 trackman session, hand-labelled ball and club tracks (tests/test_iwr6843_labelled_replay.py). Sound-triggered: impact is the pre-frame count (post_from_frame 9), the ball sat near bin 39 so tee_bin 39, and trig.approachBins 18 widens the approach window to bins 21-42 so the club is seen from frame 0-2; snr 3 (as the ball's) because the club's early returns read 3.3-5.7x the floor, under the default 6x.",
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "expect": {
+      "club_points_min": 6
+    },
+    "snr": 3.0
+  },
+  "iwr6843_20260824_121226_625_017.l3dump": {
+    "tee_bin": 39,
+    "dest_bin": null,
+    "post_from_frame": 9,
+    "pitch_deg": 10.5,
+    "notes": "2026-08-24 trackman session, hand-labelled ball and club tracks (tests/test_iwr6843_labelled_replay.py). Sound-triggered: impact is the pre-frame count (post_from_frame 9), the ball sat near bin 39 so tee_bin 39, and trig.approachBins 18 widens the approach window to bins 21-42 so the club is seen from frame 0-2; snr 3 (as the ball's) because the club's early returns read 3.3-5.7x the floor, under the default 6x.",
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "expect": {
+      "club_points_min": 6
+    },
+    "snr": 3.0
+  },
+  "iwr6843_20260824_121250_800_018.l3dump": {
+    "tee_bin": 39,
+    "dest_bin": null,
+    "post_from_frame": 9,
+    "pitch_deg": 10.5,
+    "notes": "2026-08-24 trackman session, hand-labelled ball and club tracks (tests/test_iwr6843_labelled_replay.py). Sound-triggered: impact is the pre-frame count (post_from_frame 9), the ball sat near bin 39 so tee_bin 39, and trig.approachBins 18 widens the approach window to bins 21-42 so the club is seen from frame 0-2; snr 3 (as the ball's) because the club's early returns read 3.3-5.7x the floor, under the default 6x.",
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "expect": {
+      "club_points_min": 6
+    },
+    "snr": 3.0
+  },
+  "iwr6843_20260824_121317_498_019.l3dump": {
+    "tee_bin": 39,
+    "dest_bin": null,
+    "post_from_frame": 9,
+    "pitch_deg": 10.5,
+    "notes": "2026-08-24 trackman session, hand-labelled ball and club tracks (tests/test_iwr6843_labelled_replay.py). Sound-triggered: impact is the pre-frame count (post_from_frame 9), the ball sat near bin 39 so tee_bin 39, and trig.approachBins 18 widens the approach window to bins 21-42 so the club is seen from frame 0-2; snr 3 (as the ball's) because the club's early returns read 3.3-5.7x the floor, under the default 6x.",
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "expect": {
+      "club_points_min": 6
+    },
+    "snr": 3.0
+  },
+  "iwr6843_20260824_121350_078_020.l3dump": {
+    "tee_bin": 39,
+    "dest_bin": null,
+    "post_from_frame": 9,
+    "pitch_deg": 10.5,
+    "notes": "2026-08-24 trackman session, hand-labelled ball and club tracks (tests/test_iwr6843_labelled_replay.py). Sound-triggered: impact is the pre-frame count (post_from_frame 9), the ball sat near bin 39 so tee_bin 39, and trig.approachBins 18 widens the approach window to bins 21-42 so the club is seen from frame 0-2; snr 3 (as the ball's) because the club's early returns read 3.3-5.7x the floor, under the default 6x.",
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "expect": {
+      "club_points_min": 6
+    },
+    "snr": 3.0
+  },
+  "iwr6843_20260809_110216_790_005.l3dump": {
+    "tee_bin": 43,
+    "snr": 3.0,
+    "post_from_frame": 14,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-09 trackman session, 36 frames of 2 ms, sound-triggered (impact at frame 14); hand-labelled ball and club tracks. tee_bin 43 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings. One of the two weakest club tracks of the set (4 points): the corpus expectation is only that; the labelled replay test is the strict guard.",
+    "expect": {
+      "club_points_min": 4
+    }
+  },
+  "iwr6843_20260809_110251_829_007.l3dump": {
+    "tee_bin": 43,
+    "snr": 3.0,
+    "post_from_frame": 14,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-09 trackman session, 36 frames of 2 ms, sound-triggered (impact at frame 14); hand-labelled ball and club tracks. tee_bin 43 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings. Club floor lowered to 5 when the standing-return rule removed the standing returns the track used to sit on; the labelled replay test is the strict guard.",
+    "expect": {
+      "club_points_min": 5
+    }
+  },
+  "iwr6843_20260809_110312_094_008.l3dump": {
+    "tee_bin": 43,
+    "snr": 3.0,
+    "post_from_frame": 14,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-09 trackman session, 36 frames of 2 ms, sound-triggered (impact at frame 14); hand-labelled ball and club tracks. tee_bin 43 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings.",
+    "expect": {
+      "club_points_min": 6
+    }
+  },
+  "iwr6843_20260809_110338_659_010.l3dump": {
+    "tee_bin": 43,
+    "snr": 3.0,
+    "post_from_frame": 14,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-09 trackman session, 36 frames of 2 ms, sound-triggered (impact at frame 14); hand-labelled ball and club tracks. tee_bin 43 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings.",
+    "expect": {
+      "club_points_min": 6
+    }
+  },
+  "iwr6843_20260809_111304_873_001.l3dump": {
+    "tee_bin": 43,
+    "snr": 3.0,
+    "post_from_frame": 14,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-09 trackman session, 36 frames of 2 ms, sound-triggered (impact at frame 14); hand-labelled ball and club tracks. tee_bin 43 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings.",
+    "expect": {
+      "club_points_min": 6
+    }
+  },
+  "iwr6843_20260809_111337_707_002.l3dump": {
+    "tee_bin": 43,
+    "snr": 3.0,
+    "post_from_frame": 14,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-09 trackman session, 36 frames of 2 ms, sound-triggered (impact at frame 14); hand-labelled ball and club tracks. tee_bin 43 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings.",
+    "expect": {
+      "club_points_min": 6
+    }
+  },
+  "iwr6843_20260809_111402_385_003.l3dump": {
+    "tee_bin": 43,
+    "snr": 3.0,
+    "post_from_frame": 14,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-09 trackman session, 36 frames of 2 ms, sound-triggered (impact at frame 14); hand-labelled ball and club tracks. tee_bin 43 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings. Club floor lowered to 5 when the standing-return rule removed the standing returns the track used to sit on; the labelled replay test is the strict guard.",
+    "expect": {
+      "club_points_min": 5
+    }
+  },
+  "iwr6843_20260809_113546_514_003.l3dump": {
+    "tee_bin": 42,
+    "snr": 3.0,
+    "post_from_frame": 9,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-09 trackman session, 24 frames of 3 ms, sound-triggered (impact at frame 9); hand-labelled ball and club tracks. tee_bin 42 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings. Club floor lowered to 5 when the standing-return rule removed the standing returns the track used to sit on; the labelled replay test is the strict guard.",
+    "expect": {
+      "club_points_min": 5
+    }
+  },
+  "iwr6843_20260809_114048_395_015.l3dump": {
+    "tee_bin": 42,
+    "snr": 3.0,
+    "post_from_frame": 9,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-09 trackman session, 24 frames of 3 ms, sound-triggered (impact at frame 9); hand-labelled ball and club tracks. tee_bin 42 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings.",
+    "expect": {
+      "club_points_min": 6
+    }
+  },
+  "iwr6843_20260809_114444_514_027.l3dump": {
+    "tee_bin": 42,
+    "snr": 3.0,
+    "post_from_frame": 9,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-09 trackman session, 24 frames of 3 ms, sound-triggered (impact at frame 9); hand-labelled ball and club tracks. tee_bin 42 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings. Club floor lowered to 5 when the standing-return rule removed the standing returns the track used to sit on; the labelled replay test is the strict guard.",
+    "expect": {
+      "club_points_min": 5
+    }
+  },
+  "iwr6843_20260809_114519_526_029.l3dump": {
+    "tee_bin": 42,
+    "snr": 3.0,
+    "post_from_frame": 9,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-09 trackman session, 24 frames of 3 ms, sound-triggered (impact at frame 9); hand-labelled ball and club tracks. tee_bin 42 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings.",
+    "expect": {
+      "club_points_min": 6
+    }
+  },
+  "iwr6843_20260809_114539_230_030.l3dump": {
+    "tee_bin": 42,
+    "snr": 3.0,
+    "post_from_frame": 9,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-09 trackman session, 24 frames of 3 ms, sound-triggered (impact at frame 9); hand-labelled ball and club tracks. tee_bin 42 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings.",
+    "expect": {
+      "club_points_min": 6
+    }
+  },
+  "iwr6843_20260809_114853_678_041.l3dump": {
+    "tee_bin": 42,
+    "snr": 3.0,
+    "post_from_frame": 9,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-09 trackman session, 24 frames of 3 ms, sound-triggered (impact at frame 9); hand-labelled ball and club tracks. tee_bin 42 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings.",
+    "expect": {
+      "club_points_min": 6
+    }
+  },
+  "iwr6843_20260824_104907_741_002.l3dump": {
+    "tee_bin": 43,
+    "snr": 3.0,
+    "post_from_frame": 14,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-24 trackman session, 36 frames of 2 ms, sound-triggered (impact at frame 14); hand-labelled ball and club tracks. tee_bin 43 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings.",
+    "expect": {
+      "club_points_min": 6
+    }
+  },
+  "iwr6843_20260824_110538_535_003.l3dump": {
+    "tee_bin": 43,
+    "snr": 3.0,
+    "post_from_frame": 14,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-24 trackman session, 36 frames of 2 ms, sound-triggered (impact at frame 14); hand-labelled ball and club tracks. tee_bin 43 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings.",
+    "expect": {
+      "club_points_min": 6
+    }
+  },
+  "iwr6843_20260824_111428_580_003.l3dump": {
+    "tee_bin": 39,
+    "snr": 3.0,
+    "post_from_frame": 9,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-24 trackman session, 24 frames of 3 ms, sound-triggered (impact at frame 9); hand-labelled ball and club tracks. tee_bin 39 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings.",
+    "expect": {
+      "club_points_min": 6
+    }
+  },
+  "iwr6843_20260824_112940_807_016.l3dump": {
+    "tee_bin": 39,
+    "snr": 3.0,
+    "post_from_frame": 9,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-24 trackman session, 24 frames of 3 ms, sound-triggered (impact at frame 9); hand-labelled ball and club tracks. tee_bin 39 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings. Club floor lowered to 5 when the standing-return rule removed the standing returns the track used to sit on; the labelled replay test is the strict guard.",
+    "expect": {
+      "club_points_min": 5
+    }
+  },
+  "iwr6843_20260824_113017_589_017.l3dump": {
+    "tee_bin": 39,
+    "snr": 3.0,
+    "post_from_frame": 9,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-24 trackman session, 24 frames of 3 ms, sound-triggered (impact at frame 9); hand-labelled ball and club tracks. tee_bin 39 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings. One of the two weakest club tracks of the set (4 points): the corpus expectation is only that; the labelled replay test is the strict guard.",
+    "expect": {
+      "club_points_min": 4
+    }
+  },
+  "iwr6843_20260824_120615_852_003.l3dump": {
+    "tee_bin": 39,
+    "snr": 3.0,
+    "post_from_frame": 9,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-24 trackman session, 24 frames of 3 ms, sound-triggered (impact at frame 9); hand-labelled ball and club tracks. tee_bin 39 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings.",
+    "expect": {
+      "club_points_min": 6
+    }
+  },
+  "iwr6843_20260824_120638_798_004.l3dump": {
+    "tee_bin": 39,
+    "snr": 3.0,
+    "post_from_frame": 9,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-24 trackman session, 24 frames of 3 ms, sound-triggered (impact at frame 9); hand-labelled ball and club tracks. tee_bin 39 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings. Club floor lowered to 3 when the standing-return rule removed the standing returns the track used to sit on; the labelled replay test is the strict guard.",
+    "expect": {
+      "club_points_min": 3
+    }
+  },
+  "iwr6843_20260824_120707_478_005.l3dump": {
+    "tee_bin": 39,
+    "snr": 3.0,
+    "post_from_frame": 9,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-24 trackman session, 24 frames of 3 ms, sound-triggered (impact at frame 9); hand-labelled ball and club tracks. tee_bin 39 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings. Club floor lowered to 5 when the standing-return rule removed the standing returns the track used to sit on; the labelled replay test is the strict guard.",
+    "expect": {
+      "club_points_min": 5
+    }
+  },
+  "iwr6843_20260824_120724_299_006.l3dump": {
+    "tee_bin": 39,
+    "snr": 3.0,
+    "post_from_frame": 9,
+    "overrides": {
+      "trig.approachBins": 18
+    },
+    "notes": "2026-08-24 trackman session, 24 frames of 3 ms, sound-triggered (impact at frame 9); hand-labelled ball and club tracks. tee_bin 39 is this session's ball position found by scanning the tee for the best label score; snr 3 and trig.approachBins 18 as for the 2026-08-24 recordings. Club floor lowered to 5 when the standing-return rule removed the standing returns the track used to sit on; the labelled replay test is the strict guard.",
+    "expect": {
+      "club_points_min": 5
+    }
   }
 }

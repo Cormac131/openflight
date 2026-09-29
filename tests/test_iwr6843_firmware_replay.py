@@ -1194,3 +1194,61 @@ def test_replay_track_rate_picks_the_branch_and_the_measured_phase_stays_the_rot
     assert obs.chirpPhaseRad == pytest.approx(
         lib.l3_angle_chirp_phase(2.5, n_tx, rate, chirp_period_s), rel=1e-6
     )
+
+
+def test_an_early_gate_fire_does_not_make_the_frames_before_post_from_frame_post_impact(lib):
+    """A sound-triggered recording's freeze is the impact (post_from_frame). A
+    range gate that fires before it (tee 33 fired at frame 4 of a 2026-08-24
+    swing whose impact was frame 9) must not turn the approach into post-impact
+    frames, or the club track is in follow mode five frames early."""
+    path = next(p for p in fr.RECORDINGS_DIR.glob("*20260824_120934_201_011.l3dump"))
+    config = fr.ReplayConfig(tee_bin=33, post_from_frame=9)
+    result = fr.replay_file(path, config, lib=lib)
+    assert result.fired_frame is None
+    assert not any(f.fired for f in result.frames)
+    assert all(f.ball_why == "none" for f in result.frames if f.frame < 9)
+    approach = [p for p in result.points if p.frame < 9]
+    assert len(approach) >= 6
+    assert [round(p.range_bin, 1) for p in approach if 2 <= p.frame <= 6] == [
+        25.7,
+        28.0,
+        31.4,
+        33.2,
+        34.7,
+    ]
+
+
+# The trigger the board runs as its own: the range gate, replayed as the board
+# would (stop_at_fire), against the frame a sound-triggered capture froze on.
+# tee 38 with the firmware's gate of 3 opens at bin 35, where the club is about
+# two frames before it reaches the ball; the window and gate are the defaults.
+_TRIGGER_CFG = dict(tee_bin=38, snr=6.0, stop_at_fire=True, post_impact=False)
+# The persistence that tells a standing return from the club starts at frame 0
+# of a replayed dump, where the board would have watched for many frames before
+# the ring's oldest one: a fire in the first frames is that warm-up, not the club.
+_WARM_UP_FRAMES = 2
+
+
+def test_the_self_trigger_fires_on_every_2026_08_24_recording_around_impact(lib):
+    """Standing returns (hands, body, the ridge, a mat edge at bins 33-44) once
+    held the trigger's track, or handed it a start bin from which it 'advanced'
+    onto the next one: 3-9 frames early, or never. The club is what fires it now:
+    on every recording, no more than three frames before the frame the capture
+    froze on and no more than one after it (bar a fire in the warm-up frames)."""
+    # The 24-frame, 3 ms profile: the other captures of the day (36 frames of
+    # 2 ms) have the ball elsewhere, so a fixed tee bin does not fit them.
+    recordings = [(p, p.read_bytes()) for p in sorted(fr.RECORDINGS_DIR.glob("*20260824*.l3dump"))]
+    paths = [p for p, raw in recordings if parse_dump(raw)[0]["n_frames"] == 24]
+    assert len(paths) >= 13
+    judged = 0
+    for path in paths:
+        raw = path.read_bytes()
+        meta, _ = parse_dump(raw)
+        result = replay_dump(raw, ReplayConfig(**_TRIGGER_CFG), lib=lib)
+        assert result.fired_frame is not None, f"{path.name}: never fired"
+        if result.fired_frame <= _WARM_UP_FRAMES:
+            continue
+        judged += 1
+        early = fr.freeze_frame(meta) - result.fired_frame
+        assert -1 <= early <= 3, f"{path.name}: fired {early} frames before the freeze"
+    assert judged >= len(paths) - 1

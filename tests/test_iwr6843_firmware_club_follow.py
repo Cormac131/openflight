@@ -202,9 +202,14 @@ def test_the_unknown_approach_ceiling_reacquires_what_a_measured_one_refuses(lib
 def dwelling_track(lib):
     """A club that dwells just short of the band (hi 40): four points 0.1 bin
     apart (two per rounded bin, so no same-bin release), frames 2..5: the
-    fitted follow speed is ~33 bins/s and the follow window barely moves."""
+    fitted follow speed is ~33 bins/s and the follow window barely moves. The
+    approach's own same-bin limit is set to the two points it is built from:
+    these tests are about the band's coasting and re-emergence, not that rule
+    or the standing-return one, which both read a dwell as something to skip."""
     cfg = fw.TrackCfg()
     lib.l3_track_cfg_defaults(ctypes.byref(cfg))
+    cfg.approachMaxSameBinPoints = 2
+    cfg.standingFrames = 0  # a dwell is what it models, not a standing return
     track = fw.ClubTrack()
     lib.l3_track_init(ctypes.byref(track), ctypes.byref(cfg))
     for f, bin_ in zip(range(2, 6), (38.3, 38.4, 38.5, 38.6), strict=True):

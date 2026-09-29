@@ -27,6 +27,10 @@ void l3_track_cfg_defaults(l3_track_cfg_t *cfg)
     cfg->maxAngleResidualM = 2.0F * cfg->binWidthM;  /* two bins of scatter */
     cfg->ascendingOnly = 1U;
     cfg->maxSameBinPoints = 2U;
+    cfg->followDopplerTolMps = 4.0F;
+    cfg->followDopplerRiseMps = 1.5F;
+    cfg->approachMaxSameBinPoints = 1U;
+    cfg->standingFrames = 2U;
 }
 
 static float l3_track_absf(float value)
@@ -142,6 +146,51 @@ static int32_t l3_track_roundBin(float rangeBin)
     return (int32_t)floorf(rangeBin + 0.5F);
 }
 
+/* True for a target whose bin a target has stood within one bin of for
+ * standingFrames frames running (counted before this frame). */
+static uint8_t l3_track_standing(const l3_club_track_t *track, float rangeBin)
+{
+    int32_t bin = l3_track_roundBin(rangeBin);
+
+    return (track->cfg.standingFrames > 0U && bin >= 0 && bin < (int32_t)L3_TRACK_GLOBAL_BINS &&
+            track->standHold[bin] >= track->cfg.standingFrames) ? 1U : 0U;
+}
+
+/* After a frame's decision: extend or break each bin's run of frames with a
+ * target within one bin of it. */
+static void l3_track_holdFrame(l3_club_track_t *track, const l3_target_obs_t *targets, uint32_t n)
+{
+    uint8_t seen[L3_TRACK_GLOBAL_BINS];
+    uint32_t i;
+    uint32_t bin;
+
+    if (track->cfg.standingFrames == 0U) {
+        return;
+    }
+    memset(seen, 0, sizeof(seen));
+    for (i = 0U; i < n; i++) {
+        int32_t centre = l3_track_roundBin(targets[i].rangeBin);
+        int32_t offset;
+
+        for (offset = -1; offset <= 1; offset++) {
+            int32_t marked = centre + offset;
+
+            if (marked >= 0 && marked < (int32_t)L3_TRACK_GLOBAL_BINS) {
+                seen[marked] = 1U;
+            }
+        }
+    }
+    for (bin = 0U; bin < L3_TRACK_GLOBAL_BINS; bin++) {
+        if (seen[bin] != 0U) {
+            if (track->standHold[bin] < 0xFFU) {
+                track->standHold[bin]++;
+            }
+        } else {
+            track->standHold[bin] = 0U;
+        }
+    }
+}
+
 /* Count the newest point into its rounded bin's run of consecutive points. */
 static void l3_track_countBin(l3_club_track_t *track, float rangeBin, int32_t first)
 {
@@ -238,7 +287,7 @@ static int32_t l3_track_acquire(l3_club_track_t *track, const l3_target_obs_t *t
         uint8_t moves = (uint8_t)(cfg->minAcquireDopplerMps <= 0.0F ||
                                   l3_track_absf(targets[i].dopplerAliasMps) >=
                                       cfg->minAcquireDopplerMps);
-        if (targets[i].confidence < cfg->minConfidence) {
+        if (targets[i].confidence < cfg->minConfidence || l3_track_standing(track, targets[i].rangeBin)) {
             continue;
         }
         if (track->releasedValid &&
@@ -283,7 +332,8 @@ static int32_t l3_track_acquire(l3_club_track_t *track, const l3_target_obs_t *t
  * unknown (only the ceiling bounds the club) and the ball has no rate yet.
  * Returns its index, L3_TRACK_NO_TARGET for none. Shared by re-acquisition
  * and the hidden club's re-emergence. */
-static uint32_t l3_track_pickBeyondBand(const l3_target_obs_t *targets, uint32_t n,
+static uint32_t l3_track_pickBeyondBand(const l3_club_track_t *track, const l3_target_obs_t *targets,
+                                        uint32_t n,
                                         uint32_t timestampUs, const l3_follow_ctx_t *ctx,
                                         const l3_track_point_t *from, float minConfidence)
 {
@@ -303,7 +353,7 @@ static uint32_t l3_track_pickBeyondBand(const l3_target_obs_t *targets, uint32_t
     for (i = 0U; i < n; i++) {
         float rate = (targets[i].rangeBin - ctx->originBin) / dtS;
 
-        if (targets[i].confidence < minConfidence) {
+        if (targets[i].confidence < minConfidence || l3_track_standing(track, targets[i].rangeBin)) {
             continue;
         }
         if (i == ctx->ballClaimIndex || targets[i].rangeBin <= edge || rate <= 0.0F ||
@@ -382,6 +432,12 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
                 targets[i].rangeBin > reach) {
                 continue;
             }
+            /* A return that has stood in its bin is not the club, however
+             * strong: the stall wobbles between two rounded bins, which the
+             * same-bin rule below never sees. */
+            if (l3_track_standing(track, targets[i].rangeBin)) {
+                continue;
+            }
             /* After impact the club stalls; the same bin for too many consecutive
              * follow-through frames is a stationary return, not the club. */
             if (cfg->maxSameBinPoints > 0U &&
@@ -398,6 +454,18 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
                     continue;
                 }
             }
+            /* The club's Doppler runs on smoothly through impact and decays; a
+             * return that reads a different velocity (the shaft and hands
+             * lag the head) is not the club however strong it is. */
+            if (cfg->followDopplerTolMps > 0.0F && cfg->velocitySpanMps > 0.0F) {
+                float span = cfg->velocitySpanMps;
+                float step = targets[i].dopplerAliasMps - last->dopplerAliasMps;
+
+                step -= span * floorf(step / span + 0.5F); /* wrapped, signed */
+                if (step < -cfg->followDopplerTolMps || step > cfg->followDopplerRiseMps) {
+                    continue;
+                }
+            }
             if (best == NULL || targets[i].stat > best->stat) {
                 best = &targets[i];
                 track->lastTargetIndex = i;
@@ -405,6 +473,16 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
             continue;
         }
         if (rangeErr > cfg->gateBins) {
+            continue;
+        }
+        /* A standing return is not the club, except the one the track is on
+         * (the same-bin release handles that) and one a track already moving
+         * at club speed predicts the club into: the club merges with a
+         * standing return as it sweeps through its bin. */
+        if (l3_track_standing(track, targets[i].rangeBin) &&
+            l3_track_roundBin(targets[i].rangeBin) != floorBin &&
+            !(l3_track_absf(track->velocityBinsPerFrame) >= L3_TRACK_STANDING_PASS_BINS_PER_FRAME &&
+              rangeErr <= L3_TRACK_STANDING_PASS_ERR_BINS)) {
             continue;
         }
         if (cfg->ascendingOnly && l3_track_roundBin(targets[i].rangeBin) < floorBin) {
@@ -451,7 +529,7 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
          * beyond the band that re-acquisition would take is the club
          * re-emerging, however slowly it was fitted going in. */
         uint32_t index =
-            l3_track_pickBeyondBand(targets, n, timestampUs, ctx, last, cfg->minConfidence);
+            l3_track_pickBeyondBand(track, targets, n, timestampUs, ctx, last, cfg->minConfidence);
 
         if (index != L3_TRACK_NO_TARGET) {
             /* Tentative, as a re-acquisition is, and like one with no
@@ -517,8 +595,8 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
     return 1;
 }
 
-int32_t l3_track_update(l3_club_track_t *track, const l3_target_obs_t *targets, uint32_t n,
-                        uint32_t frame, uint32_t timestampUs)
+static int32_t l3_track_updateFrame(l3_club_track_t *track, const l3_target_obs_t *targets,
+                                    uint32_t n, uint32_t frame, uint32_t timestampUs)
 {
     const l3_track_cfg_t *cfg = &track->cfg;
 
@@ -527,7 +605,8 @@ int32_t l3_track_update(l3_club_track_t *track, const l3_target_obs_t *targets, 
         if (!l3_track_associate(track, targets, n, frame, timestampUs, 0, NULL)) {
             return 0;
         }
-        if (cfg->maxSameBinPoints == 0U || track->sameBinCount <= cfg->maxSameBinPoints) {
+        if (cfg->approachMaxSameBinPoints == 0U ||
+            track->sameBinCount <= cfg->approachMaxSameBinPoints) {
             return 1;
         }
         /* One point too many in one bin: not the club. Release it, and let
@@ -547,7 +626,7 @@ static int32_t l3_track_reacquire(l3_club_track_t *track, const l3_target_obs_t 
                                   const l3_follow_ctx_t *ctx)
 {
     uint32_t bestIndex =
-        l3_track_pickBeyondBand(targets, n, timestampUs, ctx, NULL, track->cfg.minConfidence);
+        l3_track_pickBeyondBand(track, targets, n, timestampUs, ctx, NULL, track->cfg.minConfidence);
     const l3_target_obs_t *best;
 
     if (bestIndex == L3_TRACK_NO_TARGET) {
@@ -571,8 +650,9 @@ static int32_t l3_track_reacquire(l3_club_track_t *track, const l3_target_obs_t 
     return 1;
 }
 
-int32_t l3_track_follow(l3_club_track_t *track, const l3_target_obs_t *targets, uint32_t n,
-                        uint32_t frame, uint32_t timestampUs, const l3_follow_ctx_t *ctx)
+static int32_t l3_track_followFrame(l3_club_track_t *track, const l3_target_obs_t *targets,
+                                    uint32_t n, uint32_t frame, uint32_t timestampUs,
+                                    const l3_follow_ctx_t *ctx)
 {
     track->lastTargetIndex = L3_TRACK_NO_TARGET;
     if (!track->active) {
@@ -592,6 +672,24 @@ int32_t l3_track_follow(l3_club_track_t *track, const l3_target_obs_t *targets, 
         }
     }
     return l3_track_associate(track, targets, n, frame, timestampUs, 1, ctx);
+}
+
+int32_t l3_track_update(l3_club_track_t *track, const l3_target_obs_t *targets, uint32_t n,
+                        uint32_t frame, uint32_t timestampUs)
+{
+    int32_t appended = l3_track_updateFrame(track, targets, n, frame, timestampUs);
+
+    l3_track_holdFrame(track, targets, n);
+    return appended;
+}
+
+int32_t l3_track_follow(l3_club_track_t *track, const l3_target_obs_t *targets, uint32_t n,
+                        uint32_t frame, uint32_t timestampUs, const l3_follow_ctx_t *ctx)
+{
+    int32_t appended = l3_track_followFrame(track, targets, n, frame, timestampUs, ctx);
+
+    l3_track_holdFrame(track, targets, n);
+    return appended;
 }
 
 float l3_track_recent_rate(const l3_club_track_t *track)

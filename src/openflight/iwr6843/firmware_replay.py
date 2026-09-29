@@ -1034,10 +1034,14 @@ def replay_dump(
     post_index = 0
     club_at_impact: tuple[float, float, float] | None = None
     for frame in range(int(meta["n_frames"])):
-        ended = fired_frame is not None or (
-            config.impact_armed and (geometric_frame is not None or range_frame is not None)
-        )
         forced = config.post_from_frame is not None and frame >= config.post_from_frame
+        # A sound-triggered recording's freeze is the impact: no gate, however
+        # early it fires, makes the frames before it post-impact.
+        early = config.post_from_frame is not None and not forced
+        ended = not early and (
+            fired_frame is not None
+            or (config.impact_armed and (geometric_frame is not None or range_frame is not None))
+        )
         if config.stop_at_fire and ended and not forced:
             break
         window_start, window_bins = frame_window(meta, frame)
@@ -1290,6 +1294,8 @@ def replay_dump(
         )
         if ranged and range_frame is None:
             range_frame = frame
+        if fired and early:
+            fired = False  # a sound trigger's impact is post_from_frame, not the gate
         if fired:
             fired_frame = frame
         # The shot machine, as l3_shotObserve feeds it; IMPACT arms the ball tracker.

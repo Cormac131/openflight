@@ -1,0 +1,156 @@
+{
+  "version": 1,
+  "dump": "iwr6843_20260824_110538_535_003.l3dump",
+  "dump_sha256": "c949d8c35596f5fedf2383f08162ddccd0084068a2102b6a101cc749100b4b82",
+  "reviewed": true,
+  "ball": {
+    "points": [
+      {
+        "frame": 14,
+        "range_bin": 45.8
+      },
+      {
+        "frame": 15,
+        "range_bin": 48.2
+      },
+      {
+        "frame": 16,
+        "range_bin": 49.7
+      },
+      {
+        "frame": 17,
+        "range_bin": 51.2
+      },
+      {
+        "frame": 18,
+        "range_bin": 53.3
+      },
+      {
+        "frame": 19,
+        "range_bin": 55.1
+      },
+      {
+        "frame": 20,
+        "range_bin": 56.8
+      },
+      {
+        "frame": 21,
+        "range_bin": 58.7
+      },
+      {
+        "frame": 22,
+        "range_bin": 60.5
+      },
+      {
+        "frame": 23,
+        "range_bin": 62.6
+      },
+      {
+        "frame": 24,
+        "range_bin": 64.4
+      },
+      {
+        "frame": 25,
+        "range_bin": 67.0
+      },
+      {
+        "frame": 26,
+        "range_bin": 68.7
+      },
+      {
+        "frame": 27,
+        "range_bin": 70.4
+      }
+    ]
+  },
+  "club": {
+    "points": [
+      {
+        "frame": 1,
+        "range_bin": 23.072813034057617
+      },
+      {
+        "frame": 2,
+        "range_bin": 24.60466766357422
+      },
+      {
+        "frame": 3,
+        "range_bin": 26.0
+      },
+      {
+        "frame": 4,
+        "range_bin": 27.6
+      },
+      {
+        "frame": 5,
+        "range_bin": 29.0
+      },
+      {
+        "frame": 6,
+        "range_bin": 30.139915466308594
+      },
+      {
+        "frame": 7,
+        "range_bin": 31.773344039916992
+      },
+      {
+        "frame": 8,
+        "range_bin": 33.83930969238281
+      },
+      {
+        "frame": 9,
+        "range_bin": 34.50469207763672
+      },
+      {
+        "frame": 10,
+        "range_bin": 35.97770309448242
+      },
+      {
+        "frame": 11,
+        "range_bin": 36.91007995605469
+      },
+      {
+        "frame": 12,
+        "range_bin": 38.02495574951172
+      },
+      {
+        "frame": 21,
+        "range_bin": 47.1
+      },
+      {
+        "frame": 22,
+        "range_bin": 48.2
+      },
+      {
+        "frame": 23,
+        "range_bin": 48.9
+      },
+      {
+        "frame": 24,
+        "range_bin": 49.5
+      },
+      {
+        "frame": 25,
+        "range_bin": 50.3
+      },
+      {
+        "frame": 26,
+        "range_bin": 51.3
+      },
+      {
+        "frame": 27,
+        "range_bin": 52.1
+      },
+      {
+        "frame": 28,
+        "range_bin": 53.5
+      }
+    ]
+  },
+  "tolerances": {
+    "range_bins": 1.0,
+    "min_coverage": 0.8,
+    "doppler_mps": null
+  },
+  "notes": ""
+}

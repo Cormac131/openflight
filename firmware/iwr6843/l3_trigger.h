@@ -35,6 +35,10 @@
 
 /* Watch-region and gate limits. The region is at most one capture window. */
 #define L3_TRIG_MAX_BINS          64U
+/* Global range-FFT bins (a 128-point FFT). */
+#define L3_TRIG_GLOBAL_BINS       128U
+/* Frames running a bin must hold a candidate to be a standing return. */
+#define L3_TRIG_STANDING_FRAMES   3U
 /* Flight-recorder depth: frames with a candidate or an active track. Idle
  * frames only count toward the next record's gap, so a missed swing stays
  * readable for as long as the player takes to ask for it. The board image
@@ -65,9 +69,9 @@
  * Counted in the track's age (frames it was seen). */
 #define L3_TRIG_STALL_FRAMES      4U
 /* A candidate more than this many bins ahead of the last one is a jump
- * (another scatterer), not the same target: 8 bins/frame is 125 m/s at
- * 4.7 cm bins and 3 ms frames. */
-#define L3_TRIG_MAX_STEP_BINS     8U
+ * (another scatterer), not the same target: 5 bins/frame is 78 m/s at
+ * 4.7 cm bins and 3 ms frames, past the fastest club (70 m/s). */
+#define L3_TRIG_MAX_STEP_BINS     5U
 /* Noise-floor smoothing: floor += (median - floor) / 2^shift each frame. */
 #define L3_TRIG_FLOOR_SHIFT       3U
 /* Residual-energy floor never falls below this, so snr stays finite. */
@@ -200,6 +204,8 @@ typedef struct {
     uint8_t  trackAge;
     uint8_t  trackMisses;
     uint32_t trackStartFrame;
+    /* Consecutive frames each global bin has held a candidate above threshold. */
+    uint8_t  standHold[L3_TRIG_GLOBAL_BINS];
     /* Flight recorder. */
     uint32_t counters[L3_TRIG_COUNT_TOTAL];
     uint32_t quietSince;    /* quiet frames since the last record */

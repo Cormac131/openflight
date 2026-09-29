@@ -21,6 +21,13 @@
 #include "l3_observation.h"
 
 #define L3_TRACK_POINTS 32U
+/* Global range-FFT bins the standing-return counts cover. */
+#define L3_TRACK_GLOBAL_BINS 128U
+/* A track moving at least this many bins a frame that predicts the club within
+ * L3_TRACK_STANDING_PASS_ERR_BINS of a target may take it even in a standing
+ * bin: the club sweeps through the bin of a return standing there. */
+#define L3_TRACK_STANDING_PASS_BINS_PER_FRAME 1.0F
+#define L3_TRACK_STANDING_PASS_ERR_BINS 1.0F
 #define L3_TRACK_NO_TARGET 0xFFFFFFFFU
 /* Fit points counted as "enough" for full confidence. */
 #define L3_TRACK_FULL_POINTS 8U
@@ -94,6 +101,28 @@ typedef struct {
      * stays put -- and the track is released so the club can be acquired. */
     uint32_t ascendingOnly;
     uint32_t maxSameBinPoints;
+    /* After impact (l3_track_follow) the club only slows: its aliased Doppler
+     * (m/s, wrapped over the alias span) falls from the last point's by at most
+     * followDopplerTolMps and rises by at most followDopplerRiseMps. A return
+     * outside that (the shaft and hands lag the head and read another velocity)
+     * is not the club however strong it is. followDopplerTolMps 0 disables. */
+    float    followDopplerTolMps;
+    float    followDopplerRiseMps;
+    /* Before impact the club sweeps several bins a frame, so its approach
+     * never holds a bin for two consecutive points: with this many
+     * consecutive points in one rounded bin, one more releases the track (the
+     * hands or body, strong and steady, outranked the weak club at
+     * acquisition). Stricter than maxSameBinPoints, which after impact allows
+     * the stall beside the ball two points. 0 disables. */
+    uint32_t approachMaxSameBinPoints;
+    /* A return that has stood in its bin (a target within one bin of it) for
+     * this many consecutive frames before this one is a standing return -- the
+     * hands, body or the stall beside the ball -- and never a candidate: the
+     * club is in any one bin for about a frame, however strong the standing
+     * return is and whatever its Doppler reads. Acquisition, association and
+     * following skip it (association keeps the track's own bin, which the
+     * same-bin rules handle); 0 disables. */
+    uint32_t standingFrames;
 } l3_track_cfg_t;
 
 /* Club delivery from a regression of position against time over the newest
@@ -176,6 +205,9 @@ typedef struct {
     float    releasedBin;
     float    releasedDopplerMps;
     l3_track_held_t held;         /* the track before its tentative point */
+    /* Per global bin: consecutive frames a target has stood within one bin of
+     * it (see standingFrames). Kept across releases and resets. */
+    uint8_t  standHold[L3_TRACK_GLOBAL_BINS];
 } l3_club_track_t;
 
 void l3_track_cfg_defaults(l3_track_cfg_t *cfg);

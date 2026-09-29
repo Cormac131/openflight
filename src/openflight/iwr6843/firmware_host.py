@@ -471,6 +471,7 @@ class Trig(ctypes.Structure):
         ("trackAge", ctypes.c_uint8),
         ("trackMisses", ctypes.c_uint8),
         ("trackStartFrame", ctypes.c_uint32),
+        ("standHold", ctypes.c_uint8 * 128),
         ("counters", ctypes.c_uint32 * TRIG_COUNT_TOTAL),
         ("quietSince", ctypes.c_uint32),
         ("logNext", ctypes.c_uint32),
@@ -505,6 +506,10 @@ class TrackCfg(ctypes.Structure):
         ("maxAngleResidualM", ctypes.c_float),
         ("ascendingOnly", ctypes.c_uint32),
         ("maxSameBinPoints", ctypes.c_uint32),
+        ("followDopplerTolMps", ctypes.c_float),
+        ("followDopplerRiseMps", ctypes.c_float),
+        ("approachMaxSameBinPoints", ctypes.c_uint32),
+        ("standingFrames", ctypes.c_uint32),
     ]
 
 
@@ -593,6 +598,7 @@ class ClubTrack(ctypes.Structure):
         ("releasedBin", ctypes.c_float),
         ("releasedDopplerMps", ctypes.c_float),
         ("held", TrackHeld),
+        ("standHold", ctypes.c_uint8 * 128),
     ]
 
 

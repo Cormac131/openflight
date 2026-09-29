@@ -20,6 +20,8 @@ void l3_ball_track_cfg_defaults(l3_ball_track_cfg_t *cfg)
      * approach; the ball tracker has its own departure tests. */
     cfg->core.ascendingOnly = 0U;
     cfg->core.maxSameBinPoints = 0U;
+    cfg->core.approachMaxSameBinPoints = 0U;
+    cfg->core.standingFrames = 0U;
     cfg->minDepartureMps = 10.0F;     /* the slowest chip leaves faster than this */
     cfg->maxSpeedMps = 100.0F;
     cfg->originGateBins = 8.0F;       /* the first post frame is at most ~5 bins out */

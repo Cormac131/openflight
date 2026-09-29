@@ -45,6 +45,8 @@ TUNABLES: tuple[Tunable, ...] = (
     _t("club", "minConfidence", "float", 0.0, 0.8, 0.1),
     _t("club", "minAcquireDopplerMps", "float", 0.0, 4.0, 0.5),
     _t("club", "maxSameBinPoints", "int", 1, 5, 1),
+    _t("club", "approachMaxSameBinPoints", "int", 1, 5, 1),
+    _t("club", "standingFrames", "int", 0, 6, 1),
     _t("ball", "minDepartureMps", "float", 5.0, 25.0, 2.5),
     _t("ball", "originGateBins", "float", 2.0, 16.0, 2.0),
     _t("ball", "minDepartureBins", "float", 0.5, 3.0, 0.5),

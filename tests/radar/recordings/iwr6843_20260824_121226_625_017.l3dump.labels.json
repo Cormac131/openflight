@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "dump": "iwr6843_20260824_121226_625_017.l3dump",
+  "dump_sha256": "5d4f8435541205e911aeb993f7e2a228f42cf54ac19a73e9298fb14a68441975",
+  "reviewed": true,
+  "ball": {
+    "points": [
+      {
+        "frame": 8,
+        "range_bin": 43.4
+      },
+      {
+        "frame": 9,
+        "range_bin": 46.3
+      },
+      {
+        "frame": 10,
+        "range_bin": 49.66677474975586
+      },
+      {
+        "frame": 11,
+        "range_bin": 52.39274215698242
+      },
+      {
+        "frame": 12,
+        "range_bin": 55.70526885986328
+      },
+      {
+        "frame": 13,
+        "range_bin": 58.51559066772461
+      },
+      {
+        "frame": 14,
+        "range_bin": 61.793357849121094
+      },
+      {
+        "frame": 15,
+        "range_bin": 64.50997924804688
+      },
+      {
+        "frame": 16,
+        "range_bin": 68.55633544921875
+      },
+      {
+        "frame": 17,
+        "range_bin": 71.72018432617188
+      },
+      {
+        "frame": 18,
+        "range_bin": 74.74502563476562
+      },
+      {
+        "frame": 19,
+        "range_bin": 77.27139282226562
+      },
+      {
+        "frame": 20,
+        "range_bin": 81.58560180664062
+      },
+      {
+        "frame": 21,
+        "range_bin": 84.66951751708984
+      },
+      {
+        "frame": 22,
+        "range_bin": 87.12700653076172
+      },
+      {
+        "frame": 23,
+        "range_bin": 90.83556365966797
+      }
+    ]
+  },
+  "club": {
+    "points": [
+      {
+        "frame": 0,
+        "range_bin": 20.9
+      },
+      {
+        "frame": 1,
+        "range_bin": 23.0
+      },
+      {
+        "frame": 2,
+        "range_bin": 25.13921546936035
+      },
+      {
+        "frame": 3,
+        "range_bin": 27.325788497924805
+      },
+      {
+        "frame": 4,
+        "range_bin": 30.1912784576416
+      },
+      {
+        "frame": 5,
+        "range_bin": 32.74211120605469
+      },
+      {
+        "frame": 6,
+        "range_bin": 34.9240837097168
+      },
+      {
+        "frame": 7,
+        "range_bin": 37.0
+      },
+      {
+        "frame": 15,
+        "range_bin": 48.1
+      },
+      {
+        "frame": 16,
+        "range_bin": 49.2
+      },
+      {
+        "frame": 17,
+        "range_bin": 51.2
+      },
+      {
+        "frame": 18,
+        "range_bin": 52.8
+      }
+    ]
+  },
+  "tolerances": {
+    "range_bins": 1.0,
+    "min_coverage": 0.8,
+    "doppler_mps": null
+  },
+  "notes": ""
+}

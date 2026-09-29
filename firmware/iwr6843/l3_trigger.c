@@ -98,6 +98,21 @@ static float l3_trig_stat(const l3_trig_cfg_t *cfg, const l3_trig_obs_t *obs)
     return l3_obs_stat(cfg->stat, obs);
 }
 
+/* No bin has held a candidate yet. */
+static void l3_trig_clearStanding(l3_trig_t *trig)
+{
+    memset(trig->standHold, 0, sizeof(trig->standHold));
+}
+
+/* A bin that has held a candidate above threshold for L3_TRIG_STANDING_FRAMES
+ * frames running is a standing return (hands, body, the ridge, a mat edge),
+ * not the club: the club is above threshold in any one bin for about a frame. */
+static uint8_t l3_trig_standing(const l3_trig_t *trig, int32_t bin)
+{
+    return (bin >= 0 && bin < (int32_t)L3_TRIG_GLOBAL_BINS &&
+            trig->standHold[bin] >= L3_TRIG_STANDING_FRAMES) ? 1U : 0U;
+}
+
 void l3_trig_init(l3_trig_t *trig, const l3_trig_cfg_t *cfg, float loopPeriodS)
 {
     memset(trig, 0, sizeof(*trig));
@@ -105,6 +120,7 @@ void l3_trig_init(l3_trig_t *trig, const l3_trig_cfg_t *cfg, float loopPeriodS)
     trig->loopPeriodS = loopPeriodS;
     trig->state = L3_TRIG_STATE_IDLE;
     trig->trackBin = L3_TRIG_NO_BIN;
+    l3_trig_clearStanding(trig);
 }
 
 void l3_trig_trace_clear(l3_trig_t *trig)
@@ -184,6 +200,7 @@ static void l3_trig_trace(l3_trig_t *trig, uint32_t frame, uint32_t teeBin, uint
 void l3_trig_rearm(l3_trig_t *trig)
 {
     l3_trig_dropTrack(trig);
+    l3_trig_clearStanding(trig);
     trig->state = L3_TRIG_STATE_IDLE;
 }
 
@@ -285,6 +302,28 @@ static void l3_trig_dropTrack(l3_trig_t *trig)
     trig->trackStartFrame = 0U;
 }
 
+/* After a frame's decision: each bin's run of frames above threshold (the
+ * decision itself judges standing from the frames before this one). */
+static void l3_trig_holdUpdate(l3_trig_t *trig, uint32_t firstBin, const l3_trig_obs_t *obs,
+                               uint32_t count, float threshold)
+{
+    uint32_t i;
+
+    for (i = 0U; i < count; i++) {
+        uint32_t globalBin = firstBin + i;
+
+        if (globalBin < L3_TRIG_GLOBAL_BINS) {
+            if (l3_trig_stat(&trig->cfg, &obs[i]) >= threshold) {
+                if (trig->standHold[globalBin] < 0xFFU) {
+                    trig->standHold[globalBin]++;
+                }
+            } else {
+                trig->standHold[globalBin] = 0U;
+            }
+        }
+    }
+}
+
 int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t teeBin, uint32_t firstBin,
                        const l3_trig_obs_t *obs, uint32_t count)
 {
@@ -322,10 +361,17 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t teeBin, uint32_
      * the region's strongest bin taken, as a new track. */
     if (trackWasActive) {
         int32_t low = (int32_t)trig->trackBin - (int32_t)L3_TRIG_JITTER_BINS;
-        int32_t high = (int32_t)trig->trackBin + (int32_t)L3_TRIG_MAX_STEP_BINS;
+        /* A bridged miss lets the club cover that many frames of ground. */
+        int32_t high = (int32_t)trig->trackBin +
+                       (int32_t)(L3_TRIG_MAX_STEP_BINS * (1U + trig->trackMisses));
         for (i = 0U; i < count; i++) {
             int32_t candidateBin = (int32_t)(firstBin + i);
             if (candidateBin < low || candidateBin > high) {
+                continue;
+            }
+            /* Never onto a standing return the track is not already on: the
+             * club, short of it, is what the track follows. */
+            if (candidateBin != (int32_t)trig->trackBin && l3_trig_standing(trig, candidateBin)) {
                 continue;
             }
             if (best == NULL || l3_trig_stat(cfg, &obs[i]) > l3_trig_stat(cfg, best)) {
@@ -345,7 +391,7 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t teeBin, uint32_
             uint32_t shorterIndex = 0U;
 
             for (i = 0U; i < count; i++) {
-                if ((int32_t)(firstBin + i) >= low) {
+                if ((int32_t)(firstBin + i) >= low || l3_trig_standing(trig, (int32_t)(firstBin + i))) {
                     continue;
                 }
                 if (shorter == NULL || l3_trig_stat(cfg, &obs[i]) > l3_trig_stat(cfg, shorter)) {
@@ -362,6 +408,9 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t teeBin, uint32_
     }
     if (best == NULL) {
         for (i = 0U; i < count; i++) {
+            if (l3_trig_standing(trig, (int32_t)(firstBin + i)) && count > 1U) {
+                continue;
+            }
             if (best == NULL || l3_trig_stat(cfg, &obs[i]) > l3_trig_stat(cfg, best)) {
                 best = &obs[i];
                 bestIndex = i;
@@ -416,12 +465,20 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t teeBin, uint32_
         l3_trig_startTrack(trig, frame, bin);
         why = L3_TRIG_WHY_JUMPED;
     } else {
+        uint8_t leftStanding = (l3_trig_standing(trig, (int32_t)trig->trackBin) &&
+                                bin != trig->trackBin) ? 1U : 0U;
+
         trig->trackBin = bin;
         trig->trackMisses = 0U;
         if (trig->trackAge < 0xFFU) {
             trig->trackAge++;
         }
-        if (bin <= trig->trackStartBin) {
+        if (leftStanding) {
+            /* The nearest point was a standing return, which has no approach:
+             * the approach is measured from the bin the track moved to. */
+            trig->trackStartBin = bin;
+            trig->trackStartFrame = frame;
+        } else if (bin <= trig->trackStartBin) {
             /* Still on the backswing, or wandered: the approach is
              * measured from here. */
             trig->trackStartBin = bin;
@@ -454,6 +511,8 @@ int32_t l3_trig_update(l3_trig_t *trig, uint32_t frame, uint32_t teeBin, uint32_
             fired = 1;
         }
     }
+
+    l3_trig_holdUpdate(trig, firstBin, obs, count, threshold);
 
     if (fired) {
         trig->state = L3_TRIG_STATE_FIRED;

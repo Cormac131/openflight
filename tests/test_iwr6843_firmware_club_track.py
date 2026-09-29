@@ -193,7 +193,7 @@ def test_acquisition_needs_confidence_and_takes_the_most_confident(lib):
 def test_history_keeps_the_newest_32_points(lib):
     tr = Tracker(lib, gateBins=100.0)
     for frame in range(1, 41):
-        tr.update(frame, [target(frame, 20.0 + 0.5 * frame)])
+        tr.update(frame, [target(frame, 20.0 + 1.1 * frame)])
     assert tr.track.count == POINTS and tr.track.total == 40
     assert tr.points()[0].frame == 9 and tr.points()[-1].frame == 40
 
@@ -609,6 +609,7 @@ def test_club_rule_defaults_and_the_ball_tracker_keeps_them_off(lib):
     ball = fw.BallTrackCfg()
     lib.l3_ball_track_cfg_defaults(ctypes.byref(ball))
     assert (ball.core.ascendingOnly, ball.core.maxSameBinPoints) == (0, 0)
+    assert ball.core.approachMaxSameBinPoints == 0
 
 
 def _feed_stationary(tr, frames, bin_=43.5, doppler=5.5):
@@ -620,7 +621,7 @@ def test_a_third_point_in_the_same_bin_triggers_release(lib):
     """A third consecutive point in the same bin exceeds the limit: the track
     is released immediately (not coasted) so the club can be re-acquired from
     the same frame's other targets without waiting for a drop."""
-    tr = Tracker(lib)
+    tr = Tracker(lib, approachMaxSameBinPoints=2)
     _feed_stationary(tr, range(1, 3))  # two points in bin 44 (43.5 rounds up): allowed
     assert tr.track.active == 1 and tr.track.count == 2
     # Third offer in same bin: appended then released; a mover well clear of the
@@ -632,7 +633,7 @@ def test_a_third_point_in_the_same_bin_triggers_release(lib):
 
 
 def test_the_repeat_count_is_consecutive_and_per_rounded_bin(lib):
-    tr = Tracker(lib)
+    tr = Tracker(lib, approachMaxSameBinPoints=2, standingFrames=0)
     # 30.2 and 30.4 share bin 30, 30.6 is bin 31: a club crossing a bin
     # boundary slowly is not a repeat.
     for frame, bin_ in enumerate([30.2, 30.4, 30.6, 31.2, 31.9, 32.8], start=1):
@@ -643,7 +644,7 @@ def test_the_repeat_count_is_consecutive_and_per_rounded_bin(lib):
 def test_release_lets_a_mover_be_acquired_when_the_decoy_is_stuck(lib):
     """When the track is released after the same-bin limit, the real club at a
     higher bin is re-acquired on the same frame rather than waiting for a drop."""
-    tr = Tracker(lib)
+    tr = Tracker(lib, approachMaxSameBinPoints=2)
     for frame, bin_ in enumerate([43.1, 43.9], start=2):  # bins 43, 44
         tr.update(frame, [target(frame, bin_, doppler=5.5)])
     tr.update(4, [target(4, 44.2, doppler=5.5)])  # 44 again: 2 in bin 44, kept
@@ -655,7 +656,7 @@ def test_release_lets_a_mover_be_acquired_when_the_decoy_is_stuck(lib):
     assert tr.why() == "acquired" and tr.points()[0].rangeBin == pytest.approx(49.0)
 
 
-@pytest.mark.parametrize("override", [{"maxSameBinPoints": 0}])
+@pytest.mark.parametrize("override", [{"approachMaxSameBinPoints": 0}])
 def test_the_repeat_rule_can_be_switched_off(lib, override):
     tr = Tracker(lib, **override)
     _feed_stationary(tr, range(1, 20))
@@ -666,7 +667,7 @@ def test_the_repeat_rule_can_be_switched_off(lib, override):
 def test_same_bin_release_without_alternatives_causes_idle_then_reacquisition(lib):
     """When the track is released and no alternative is available, the track
     becomes idle (active=0). On the next frame with a moving target it reacquires."""
-    tr = Tracker(lib, maxMisses=3)
+    tr = Tracker(lib, maxMisses=3, approachMaxSameBinPoints=2)
     _feed_stationary(tr, range(1, 3))  # 2 in bin 44: sameBinCount = 2
     assert tr.track.count == 2
     # 3rd same-bin: appended, released, no alternative → reacquisition fails → released/idle
@@ -714,7 +715,7 @@ def test_association_only_takes_the_same_bin_or_higher(lib):
     # Only lower bins on offer: coasted, not associated.
     assert tr.update(5, [target(5, 33.0)]) is False and tr.why() == "coasted"
     # The same rounded bin passes (sub-bin jitter is not a retreat).
-    tr2 = Tracker(lib)
+    tr2 = Tracker(lib, approachMaxSameBinPoints=2)
     for frame, bin_ in enumerate([30.0, 31.3, 31.1], start=1):
         tr2.update(frame, [target(frame, bin_)])
     assert tr2.track.count == 3
@@ -730,7 +731,7 @@ def test_a_wobble_before_the_downswing_is_not_followed(lib):
 
 
 def test_ascending_can_be_switched_off(lib):
-    tr = Tracker(lib, ascendingOnly=0)
+    tr = Tracker(lib, ascendingOnly=0, approachMaxSameBinPoints=2)
     for frame, bin_ in enumerate([30.0, 29.2, 28.6], start=1):
         tr.update(frame, [target(frame, bin_)])
     assert tr.track.count == 3
@@ -739,7 +740,7 @@ def test_ascending_can_be_switched_off(lib):
 def test_same_bin_release_sets_released_valid_and_prevents_re_taking_same_bin(lib):
     """When released due to same-bin excess, releasedValid is set so that
     reacquisition skips the released bin (preventing an immediate re-grab)."""
-    tr = Tracker(lib)
+    tr = Tracker(lib, approachMaxSameBinPoints=2)
     _feed_stationary(tr, range(1, 3))  # 2 points in bin 44
     tr.update(3, [target(3, 43.6, doppler=5.5)])  # 3rd same-bin: released
     assert tr.track.releasedValid == 1  # release state is set
@@ -768,7 +769,7 @@ def test_follow_continues_an_active_track_by_association(lib):
 
 
 def test_follow_never_acquires_and_never_releases(lib):
-    tr = Tracker(lib)
+    tr = Tracker(lib, standingFrames=0)
     assert _follow(tr, 1, [target(1, 40.0)]) is False
     assert tr.track.active == 0 and tr.track.count == 0
     # A return holding one bin after impact: two points, then refused (the
@@ -785,7 +786,7 @@ def test_follow_never_acquires_and_never_releases(lib):
 def test_follow_takes_the_strongest_return_the_club_not_the_prediction(lib):
     """After impact the club slows while the weaker ball carries on at least
     at the club's pace: where both are in reach, the stronger is the club."""
-    tr = Tracker(lib)
+    tr = Tracker(lib, standingFrames=0)
     for frame, bin_ in enumerate([40.6, 43.1, 45.6, 48.1], start=1):  # ~2.5 bins/frame
         tr.update(frame, [target(frame, bin_)])
     club = [47.4, 48.6, 49.6, 50.4, 51.0]
@@ -800,7 +801,7 @@ def test_follow_takes_the_strongest_return_the_club_not_the_prediction(lib):
 
 def test_follow_looks_one_bin_behind_the_last_point_and_no_further(lib):
     def fresh():
-        tr = Tracker(lib)
+        tr = Tracker(lib, standingFrames=0)
         for frame, bin_ in enumerate([40.0, 41.0, 42.0], start=1):
             tr.update(frame, [target(frame, bin_)])
         return tr
@@ -824,7 +825,7 @@ def test_follow_never_takes_a_third_point_in_the_same_bin(lib):
     return sits at 38.2-38.4 (SNR 350-970) beside the club's weaker
     follow-through. The club never holds a bin for more than two points, so
     the stall is not the club."""
-    tr = Tracker(lib)
+    tr = Tracker(lib, standingFrames=0)
     for frame, bin_ in enumerate([32.9, 34.4, 35.9, 37.4], start=1):  # 1.5 bins/frame
         tr.update(frame, [target(frame, bin_)])
     stall = [38.2, 38.2, 38.2, 38.3, 38.3]
@@ -848,7 +849,7 @@ def test_follow_never_takes_a_third_point_in_the_same_bin(lib):
 def test_follow_caps_speed_at_the_impact_speed_not_the_decaying_estimate(lib):
     """Sitting on a stall shrinks the smoothed velocity; the cap on how far
     ahead the club may be stays the speed it had at impact."""
-    tr = Tracker(lib)
+    tr = Tracker(lib, standingFrames=0)
     for frame, bin_ in enumerate([32.9, 34.4, 35.9, 37.4], start=1):  # 1.5 bins/frame
         tr.update(frame, [target(frame, bin_)])
     assert _follow(tr, 5, [target(5, 38.1)]) is True  # stalling
@@ -925,3 +926,173 @@ def test_append_point_locates_and_counts(lib):
     assert track.lastBin == pytest.approx(40.0)
     stored = tracker.points()[0]
     assert (stored.position.x, stored.position.y, stored.position.z) != (0.0, 0.0, 0.0)
+
+
+def _approach_then_follow(tr, doppler):
+    """A club arriving at ~2.3 bins/frame with the given aliased Doppler."""
+    for frame, bin_ in enumerate([32.0, 34.3, 36.6, 38.9], start=1):
+        tr.update(frame, [target(frame, bin_, doppler=doppler)])
+
+
+def test_follow_refuses_a_stronger_return_reading_another_velocity(lib):
+    """Recorded 2026-08-24 12:09:34: after impact the shaft's return (SNR ~500,
+    Doppler -2..-8) is far stronger than the clubhead (SNR 60-140, Doppler +6
+    decaying), which carries on from its impact Doppler. Doppler continuity, not
+    strength, picks the club."""
+    tr = Tracker(lib)
+    _approach_then_follow(tr, doppler=6.0)
+    shaft, club = target(5, 40.0, doppler=-4.0), target(5, 41.0, doppler=5.2)
+    shaft.stat, club.stat = 9000.0, 300.0
+    assert _follow(tr, 5, [shaft, club]) is True
+    assert tr.track.lastTargetIndex == 1
+    assert tr.points()[-1].rangeBin == pytest.approx(41.0)
+
+
+def test_follow_takes_no_return_when_none_reads_the_clubs_velocity(lib):
+    tr = Tracker(lib)
+    _approach_then_follow(tr, doppler=6.0)
+    assert _follow(tr, 5, [target(5, 40.0, doppler=-4.0)]) is False
+    assert tr.why() == "coasted"
+
+
+def test_follow_allows_the_clubs_doppler_to_fall_but_barely_to_rise(lib):
+    """After impact the club only slows. A return whose Doppler wraps to a rise
+    over the last point's is faster than the club was, so it is not the club:
+    +8.5 at impact, -7.3 later wraps to +10.9."""
+    tr = Tracker(lib, standingFrames=0)
+    _approach_then_follow(tr, doppler=8.5)
+    assert _follow(tr, 5, [target(5, 40.0, doppler=-7.3)]) is False  # wraps to a rise of 2.5
+    assert _follow(tr, 6, [target(6, 40.0, doppler=6.2)]) is True  # a fall of 2.3: slowing
+    assert _follow(tr, 7, [target(7, 41.0, doppler=7.4)]) is True  # a rise of 1.2 is measurement noise
+    assert _follow(tr, 8, [target(8, 42.0, doppler=9.0)]) is False  # a rise of 1.6 is not
+
+
+def test_a_second_point_in_the_same_bin_releases_the_approach_and_the_club_is_taken(lib):
+    """Recorded 2026-08-24 12:12:26: before the swing a strong return stands at
+    bin 37 (SNR 50-280, Doppler ~3, the hands or body) and outranks the weak
+    club sweeping up from bin 21. The club moves several bins a frame, so its
+    approach never holds a bin for two points; the stall is released at its
+    second point and the club, in the same frame's targets, is taken."""
+    tr = Tracker(lib)
+    stall = target(1, 36.9, doppler=2.7, snr=50.0)
+    assert tr.update(1, [stall, target(1, 21.1, doppler=-6.9, snr=23.0)]) is True
+    assert tr.points()[0].rangeBin == pytest.approx(36.9)  # the stronger: acquired first
+    stall2 = target(2, 37.2, doppler=3.0, snr=57.0)
+    assert tr.update(2, [stall2, target(2, 22.7, doppler=-2.2, snr=11.0)]) is True
+    assert tr.why() == "acquired" and tr.points()[0].rangeBin == pytest.approx(22.7)
+
+
+def test_the_approach_same_bin_limit_is_its_own_setting(lib):
+    """The follow phase keeps its own limit (the stall beside the ball gets two
+    points there); the approach is stricter."""
+    cfg = Cfg()
+    lib.l3_track_cfg_defaults(ctypes.byref(cfg))
+    assert (cfg.approachMaxSameBinPoints, cfg.maxSameBinPoints) == (1, 2)
+
+
+# --- standing returns: a bin occupied frame after frame is not the club --------
+
+
+def test_acquisition_skips_a_return_that_has_stood_in_its_bin(lib):
+    """Captures 2026-09-19 (17:52:42 and 15 more): a return at bin 49, SNR 40-90
+    and 2-4 m/s Doppler on every frame (the hands or body), outranks the weak
+    club at acquisition. The club moves; a return that has stood in its bin for
+    the frames before is not it, however strong and however fast it reads."""
+    tr = Tracker(lib)
+    for frame in range(1, 4):  # too weak to acquire, but seen: it stands
+        assert tr.update(frame, [target(frame, 49.0, confidence=0.1, doppler=3.0)]) is False
+    stand = target(4, 49.1, confidence=0.9, doppler=3.2, snr=60.0)
+    club = target(4, 44.0, confidence=0.5, doppler=5.0, snr=8.0)
+    assert tr.update(4, [stand, club]) is True
+    assert tr.points()[-1].rangeBin == pytest.approx(44.0)
+
+
+def test_a_bin_seen_only_now_is_a_candidate(lib):
+    """The club is above threshold in any one bin for about a frame: a strong
+    return that appears for the first time is acquired as before."""
+    tr = Tracker(lib)
+    stand = target(1, 49.1, confidence=0.9, doppler=3.2, snr=60.0)
+    club = target(1, 44.0, confidence=0.5, doppler=5.0, snr=8.0)
+    assert tr.update(1, [stand, club]) is True
+    assert tr.points()[-1].rangeBin == pytest.approx(49.1)
+
+
+def test_follow_takes_the_club_over_a_stall_that_wobbles_between_two_bins(lib):
+    """Captures 2026-09-19: after impact the stall near the ball (SNR 86-250,
+    under 1 m/s) wobbles between two rounded bins, so the three-in-one-bin rule
+    never fires, and 'the strongest' kept the track on it while the club, SNR
+    6-39, moved on. Once the stall has stood for two frames it is not a candidate."""
+    tr = Tracker(lib)
+    for frame, bin_ in enumerate([30.0, 31.6, 33.2, 34.8], start=1):
+        tr.update(frame, [target(frame, bin_, doppler=3.0)])
+    taken = []
+    for frame, (stall_bin, club_bin) in enumerate(
+        zip([36.2, 36.6, 36.2, 36.6, 36.2], [35.4, 36.8, 37.9, 38.9, 39.9]), start=5
+    ):
+        # Dopplers agree: the Doppler gate is its own rule, tested above.
+        stall = target(frame, stall_bin, doppler=2.8)
+        club = target(frame, club_bin, doppler=2.5)
+        stall.stat, club.stat = 9000.0, 300.0
+        assert _follow(tr, frame, [stall, club]) is True
+        taken.append(tr.track.lastTargetIndex)
+    assert taken == [0, 0, 1, 1, 1], "the stall (0) until it has stood, then the club (1)"
+
+
+def test_the_standing_rule_can_be_switched_off(lib):
+    tr = Tracker(lib, standingFrames=0)
+    for frame in range(1, 4):
+        tr.update(frame, [target(frame, 49.0, confidence=0.1, doppler=3.0)])
+    stand = target(4, 49.1, confidence=0.9, doppler=3.2, snr=60.0)
+    club = target(4, 44.0, confidence=0.5, doppler=5.0, snr=8.0)
+    assert tr.update(4, [stand, club]) is True
+    assert tr.points()[-1].rangeBin == pytest.approx(49.1)
+
+
+def test_the_ball_tracker_core_has_no_standing_rule(lib):
+    ball = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(ball))
+    assert ball.core.standingFrames == 0
+    cfg = Cfg()
+    lib.l3_track_cfg_defaults(ctypes.byref(cfg))
+    assert cfg.standingFrames == 2
+
+
+def test_a_club_at_ordinary_speeds_is_never_standing(lib):
+    """A club sweeping 1.5-2.5 bins a frame is in any bin for about a frame:
+    approach and follow carry on with the rule on, from 1.5 bins a frame up."""
+    for bins_per_frame in (1.5, 2.0, 2.5):
+        tr = Tracker(lib)
+        for frame in range(1, 6):
+            assert tr.update(frame, [target(frame, 25.0 + bins_per_frame * frame)]) is True
+        for frame in range(6, 9):
+            assert _follow(tr, frame, [target(frame, 25.0 + bins_per_frame * frame)]) is True
+        assert tr.track.count == 8, bins_per_frame
+
+
+def test_a_moving_track_keeps_the_club_as_it_passes_through_a_standing_bin(lib):
+    """Capture 2026-08-24 12:09:34 #011: a static return at bin 33 (SNR 10) stood
+    on every frame; the club sweeping up at 2.5 bins a frame was there at 33.2
+    and 34.7, merged with it. A track already moving at club speed whose
+    prediction lands in a standing bin keeps that point -- only a track sitting
+    on or beside the standing return is denied it."""
+    tr = Tracker(lib)
+    for frame, bin_ in enumerate([26.2, 28.7, 31.2], start=1):
+        stand = target(frame, 33.1, confidence=0.5, doppler=0.4, snr=10.0)
+        assert tr.update(frame, [target(frame, bin_, doppler=3.0), stand]) is True
+    club = target(4, 33.6, doppler=3.0)
+    stand = target(4, 33.1, confidence=0.5, doppler=0.4, snr=10.0)
+    assert tr.update(4, [club, stand]) is True
+    assert tr.points()[-1].rangeBin == pytest.approx(33.6)
+    assert tr.update(5, [target(5, 36.0, doppler=3.0), stand]) is True
+
+
+def test_a_track_on_a_standing_return_gets_no_such_pass(lib):
+    """The same standing bin, but the track was acquired on a return that does
+    not move: a target in its bin is only its own, never an approach."""
+    tr = Tracker(lib, approachMaxSameBinPoints=0)
+    for frame in range(1, 4):
+        stand = target(frame, 33.1, doppler=3.0)
+        assert tr.update(frame, [stand]) is True
+    stand = target(4, 34.0, doppler=3.0)  # a step onto a neighbouring bin of the standing return
+    tr.update(4, [stand])
+    assert tr.points()[-1].rangeBin != pytest.approx(34.0)

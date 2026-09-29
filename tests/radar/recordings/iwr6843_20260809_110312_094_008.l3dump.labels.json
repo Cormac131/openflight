@@ -1,0 +1,184 @@
+{
+  "version": 1,
+  "dump": "iwr6843_20260809_110312_094_008.l3dump",
+  "dump_sha256": "529893bbfc8e3f37b9e6a11fe4dc2b9615f42d3c48dba09f120965ce36b61923",
+  "reviewed": true,
+  "ball": {
+    "points": [
+      {
+        "frame": 16,
+        "range_bin": 47.6
+      },
+      {
+        "frame": 17,
+        "range_bin": 49.7
+      },
+      {
+        "frame": 18,
+        "range_bin": 50.9
+      },
+      {
+        "frame": 19,
+        "range_bin": 52.7
+      },
+      {
+        "frame": 20,
+        "range_bin": 54.4
+      },
+      {
+        "frame": 21,
+        "range_bin": 56.6
+      },
+      {
+        "frame": 22,
+        "range_bin": 58.4
+      },
+      {
+        "frame": 23,
+        "range_bin": 60.3
+      },
+      {
+        "frame": 24,
+        "range_bin": 62.2
+      },
+      {
+        "frame": 25,
+        "range_bin": 63.8
+      },
+      {
+        "frame": 26,
+        "range_bin": 65.5
+      },
+      {
+        "frame": 27,
+        "range_bin": 67.0
+      },
+      {
+        "frame": 28,
+        "range_bin": 69.3
+      },
+      {
+        "frame": 29,
+        "range_bin": 71.4
+      },
+      {
+        "frame": 30,
+        "range_bin": 72.9
+      },
+      {
+        "frame": 31,
+        "range_bin": 75.3
+      },
+      {
+        "frame": 32,
+        "range_bin": 77.9
+      },
+      {
+        "frame": 33,
+        "range_bin": 79.2
+      },
+      {
+        "frame": 34,
+        "range_bin": 81.1
+      },
+      {
+        "frame": 35,
+        "range_bin": 82.9
+      }
+    ]
+  },
+  "club": {
+    "points": [
+      {
+        "frame": 0,
+        "range_bin": 39.05738067626953
+      },
+      {
+        "frame": 1,
+        "range_bin": 39.068817138671875
+      },
+      {
+        "frame": 2,
+        "range_bin": 24.3
+      },
+      {
+        "frame": 3,
+        "range_bin": 25.0
+      },
+      {
+        "frame": 4,
+        "range_bin": 26.27824592590332
+      },
+      {
+        "frame": 5,
+        "range_bin": 27.269874572753906
+      },
+      {
+        "frame": 6,
+        "range_bin": 29.1
+      },
+      {
+        "frame": 7,
+        "range_bin": 30.7
+      },
+      {
+        "frame": 8,
+        "range_bin": 32.5
+      },
+      {
+        "frame": 9,
+        "range_bin": 33.4
+      },
+      {
+        "frame": 10,
+        "range_bin": 35.1
+      },
+      {
+        "frame": 11,
+        "range_bin": 36.9
+      },
+      {
+        "frame": 21,
+        "range_bin": 46.8
+      },
+      {
+        "frame": 22,
+        "range_bin": 47.9
+      },
+      {
+        "frame": 23,
+        "range_bin": 48.4
+      },
+      {
+        "frame": 24,
+        "range_bin": 49.6
+      },
+      {
+        "frame": 25,
+        "range_bin": 50.5
+      },
+      {
+        "frame": 26,
+        "range_bin": 50.8
+      },
+      {
+        "frame": 27,
+        "range_bin": 51.7
+      },
+      {
+        "frame": 28,
+        "range_bin": 53.1
+      },
+      {
+        "frame": 29,
+        "range_bin": 53.5
+      }
+    ]
+  },
+  "tolerances": {
+    "range_bins": 1.0,
+    "min_coverage": 0.8,
+    "doppler_mps": null
+  },
+  "notes": ""
+}
