@@ -130,3 +130,31 @@ TDD throughout.
 - Band-off acceptance lines from the previous spec re-run after D and
   recorded (no tuning).
 - No new failures in the full suite beyond the 56 pre-existing.
+
+## Acceptance results
+
+Run 2026-09-29 with no tuning: `evaluate_iwr_tracking.py tests/radar/recordings "C:/Users/corma/Desktop/OF Sessions/iwr6843" --impact [--band-bins N]`
+(JSON in `2026-09-29-impact-baseline-band-off.json`, `-band5.json`, `-band10.json`). 124 captures replayed per run, 51 ball-visible.
+Spread = median over all captures with the tracks that have an estimate (JSON `median_spread_us`).
+
+| Run | Estimate (ball-visible) | Consistent (ball-visible) | club_out ok (ball-visible) | Median spread (µs) | Club points in band before impact |
+|---|---|---|---|---|---|
+| Previous plan, band off | 26/51 | 18/51 | n/a | 1077 | n/a |
+| Band off | 50/51 | 36/51 | 10/51 (20%) | 810 | 0 |
+| Band 5 | 48/51 | 12/51 | 8/51 (16%) | 2180 | 0 |
+| Band 10 | 40/51 | 2/51 | 9/51 (18%) | 4381 | 0 |
+
+All-capture counts (estimate / consistent of 124): off 51 / 37, band 5 49 / 12, band 10 41 / 2.
+
+### Acceptance lines
+
+- Band-off re-run after D: passes and improves on the previous plan (estimate 26 -> 50, consistent 18 -> 36 of 51; spread 1077 -> 810 µs).
+- club_out `ok` on at least half of ball-visible captures with the band on: **FAIL** (8/51 at N = 5, 9/51 at N = 10; 10/51 even with the band off).
+- At least 3 club points after impact and none shared with the ball: **not measurable** from the evaluator JSON (it records the per-track verdicts, spread and club points in the band before impact, not the club points after impact). The `club` field in the summary is the pre-existing approach classification (club 23 / few 101 at N = 5; club 20 / few 104 at N = 10), not this line.
+- Full-suite failures beyond the 56 pre-existing: not re-run in this task.
+
+### Observations (not tuned)
+
+- The band degrades the inbound and cross-track agreement: consistent falls from 36 (off) to 12 (N = 5) to 2 (N = 10) of 51, and spread grows from 810 µs to 2180 and 4381 µs. With N = 10 the club_in track is lost on 32 of 51 captures.
+- Ball-visible captures whose club_out is not ok (43 of 51 at N = 5, 42 of 51 at N = 10) are mostly `single_track` (ball_out only or club_in only) or `none`; the JSON does not record why club_out failed (uncertain, missing or speed bounds).
+- `club_points_in_band` is 0 in every run including N = 5 and 10, so the counter does not exercise the band on these recordings.
