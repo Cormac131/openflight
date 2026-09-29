@@ -261,7 +261,11 @@ function resetForm() {
   OPTS.forEach((k) => { const el = $("#" + k); if (el.type === "checkbox") el.checked = FORM_DEFAULTS[k]; else el.value = FORM_DEFAULTS[k]; });
 }
 function applyDefaults(defaults) {
-  Object.entries(defaults || {}).forEach(([k, v]) => { const el = $("#" + k); if (el) el.value = v; });
+  Object.entries(defaults || {}).forEach(([k, v]) => {
+    const el = $("#" + k);
+    if (!el) return;
+    if (el.type === "checkbox") el.checked = !!v; else el.value = v;
+  });
 }
 function readForm() {
   const o = {};
@@ -343,7 +347,7 @@ function renderAll() {
 
 function renderCtx() {
   const c = D.context;
-  if (!c) { $("#ctx").innerHTML = `<span style="color:var(--muted)">No session log found for this capture</span>`; return; }
+  if (!c || !c.session_file) { $("#ctx").innerHTML = `<span style="color:var(--muted)">No session log found for this capture</span>`; return; }
   const rows = [["log", c.session_file], ["trigger", c.trigger_type], ["cfg", (c.cfg || "").split("/").pop()],
     ["self-trigger", c.self_trigger], ["shot #", c.shot_number], ["OPS ball", c.ball_speed_mph != null ? fmt(c.ball_speed_mph) + " mph" : "–"],
     ["club", c.shot && c.shot.club_speed_mph != null ? fmt(c.shot.club_speed_mph) + " mph" : "–"],

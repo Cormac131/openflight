@@ -368,14 +368,43 @@ def _read_jsonl(path: Path) -> list[dict]:
     return rows
 
 
+def manifest_options(dump_path: Path) -> dict:
+    """The options the folder's ``manifest.json`` sets for this dump, as the tests replay it.
+
+    Only keys the manifest actually gives (default merged with the file's own
+    entry) that are also viewer options; ``null`` means "not set". Empty when
+    there is no manifest or it yields no tee bin.
+    """
+    try:
+        entry = fr.recording_entry(dump_path)
+    except ValueError:
+        return {}
+    known = {f.name for f in fields(ViewerOptions)}
+    return {k: v for k, v in entry.items() if k in known and v is not None}
+
+
 def session_context(dump_path: Path, search_dirs: list[Path] | None = None) -> dict | None:
     """The session log entry that saved this capture, and the options it implies.
 
     Looks through ``*.jsonl`` in the dump's folder, its parent and the
     parent's ``session_logs`` (or ``search_dirs``) for an ``iwr6843_capture``
-    whose ``capture_path`` names this file. Returns None when no session
-    mentions it.
+    whose ``capture_path`` names this file. The folder's manifest options
+    (``manifest_options``) override the session's for the keys it sets, and
+    alone make a context (``session_file`` None) when no session mentions the
+    dump. Returns None when neither exists.
     """
+    context = _session_entry(dump_path, search_dirs)
+    manifest = manifest_options(dump_path)
+    if not manifest:
+        return context
+    if context is None:
+        context = {"session_file": None, "defaults": {}}
+    context["defaults"] = {**context["defaults"], **manifest}
+    return context
+
+
+def _session_entry(dump_path: Path, search_dirs: list[Path] | None) -> dict | None:
+    """The session log's view of this capture (``session_context`` without the manifest)."""
     name = dump_path.name
     dirs = search_dirs or [
         dump_path.parent,

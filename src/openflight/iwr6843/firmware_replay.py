@@ -1894,26 +1894,38 @@ def recording_configs(
     guessed tee watches the wrong stretch of air.
     """
     directory = Path(directory)
+    return [
+        (path, ReplayConfig(**recording_entry(path, default_tee_bin=default_tee_bin)))
+        for path in sorted(directory.glob("*.l3dump"))
+    ]
+
+
+def recording_entry(path: str | Path, *, default_tee_bin: int | None = None) -> dict:
+    """One dump's manifest keyword arguments for :class:`ReplayConfig`.
+
+    The manifest's ``default`` entry merged with the file's own, without the
+    ``notes`` and ``expect`` entries. Raises ``ValueError`` when no tee bin
+    results. ``recording_configs`` and the dump viewer share this so a page and
+    a test replay the same way.
+    """
+    path = Path(path)
     manifest: dict = {}
-    manifest_path = directory / MANIFEST_NAME
+    manifest_path = path.parent / MANIFEST_NAME
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     default = dict(manifest.get("default", {}))
     if default_tee_bin is not None:
         default["tee_bin"] = default_tee_bin
-    configs: list[tuple[Path, ReplayConfig]] = []
-    for path in sorted(directory.glob("*.l3dump")):
-        entry = {**default, **manifest.get(path.name, {})}
-        entry.pop("notes", None)
-        entry.pop(EXPECT_KEY, None)
-        if "tee_bin" not in entry:
-            raise ValueError(
-                f"{path.name}: no tee bin. Give --tee-bin or --tee-range-m on the command line, "
-                f'or put {{"default": {{"tee_bin": 34}}}} in {directory / MANIFEST_NAME} '
-                "(34 is 1.59 m on the 128-point FFT)."
-            )
-        configs.append((path, ReplayConfig(**entry)))
-    return configs
+    entry = {**default, **manifest.get(path.name, {})}
+    entry.pop("notes", None)
+    entry.pop(EXPECT_KEY, None)
+    if "tee_bin" not in entry:
+        raise ValueError(
+            f"{path.name}: no tee bin. Give --tee-bin or --tee-range-m on the command line, "
+            f'or put {{"default": {{"tee_bin": 34}}}} in {path.parent / MANIFEST_NAME} '
+            "(34 is 1.59 m on the 128-point FFT)."
+        )
+    return entry
 
 
 def _delivery_line(result: ReplayResult) -> str:

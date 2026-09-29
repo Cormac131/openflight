@@ -695,3 +695,103 @@ def test_the_reviewed_checkbox_says_it_covers_both_objects(client):
     page = client.get("/").data.decode()
     label = re.search(r'<input type="checkbox" id="ann-reviewed">([^<]*)<', page).group(1)
     assert "BOTH ball and club" in label
+
+
+# --- a manifest beside the dump configures the page like it configures the tests ---
+
+
+def _write_manifest(folder, entry=None, default=None):
+    manifest = {
+        "default": default
+        or {"tee_bin": 34, "dest_bin": 49, "post_from_frame": 9, "notes": "range session"},
+        "a.l3dump": entry
+        or {"pitch_deg": 10.4, "band_bins": 3.0, "expect": {"ball_speed_mps": [28, 45]}},
+    }
+    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_session_context_offers_the_manifest_options_when_no_session_mentions_the_dump(tmp_path):
+    dump = tmp_path / "a.l3dump"
+    dump.write_bytes(b"")
+    _write_manifest(tmp_path)
+
+    context = dv.session_context(dump)
+
+    assert context["session_file"] is None
+    assert context["defaults"] == {
+        "tee_bin": 34,
+        "dest_bin": 49,
+        "post_from_frame": 9,
+        "pitch_deg": 10.4,
+        "band_bins": 3.0,
+    }
+    dv.ViewerOptions.from_mapping(context["defaults"])  # the page can post them back
+
+
+def test_the_manifest_wins_over_the_session_log_for_the_keys_it_sets(tmp_path):
+    dump = tmp_path / "a.l3dump"
+    dump.write_bytes(b"")
+    _write_session(tmp_path / "session_a.jsonl", dump.name)
+    _write_manifest(tmp_path, entry={"tee_bin": 39, "dest_bin": None})
+
+    context = dv.session_context(dump)
+
+    assert context["session_file"] == "session_a.jsonl"
+    defaults = context["defaults"]
+    assert defaults["tee_bin"] == 39  # the session log said 41
+    assert defaults["post_from_frame"] == 9
+    assert defaults["snr"] == 6.0  # the manifest is silent on it: the session still applies
+    assert defaults["pitch_deg"] == 10.4
+    assert "dest_bin" not in defaults  # a null entry is "not set", never the string "None"
+
+
+def test_a_manifest_that_gives_the_dump_no_tee_bin_is_no_manifest_options(tmp_path):
+    dump = tmp_path / "a.l3dump"
+    dump.write_bytes(b"")
+    (tmp_path / "manifest.json").write_text(json.dumps({"a.l3dump": {"notes": "x"}}))
+    assert dv.session_context(dump) is None
+
+
+def test_a_dump_without_a_manifest_entry_gets_the_manifest_default(tmp_path):
+    dump = tmp_path / "other.l3dump"
+    dump.write_bytes(b"")
+    _write_manifest(tmp_path)
+    assert dv.session_context(dump)["defaults"]["tee_bin"] == 34
+
+
+def test_context_endpoint_returns_the_manifest_options(client, tmp_path):
+    _write_manifest(tmp_path / "sub")
+    context = client.get("/api/context?path=sub/a.l3dump").get_json()
+    assert context["defaults"]["dest_bin"] == 49
+    assert context["defaults"]["post_from_frame"] == 9
+
+
+def test_the_analysed_firmware_config_uses_the_manifest_options(client, tmp_path, monkeypatch):
+    _write_manifest(tmp_path / "sub")
+    seen = []
+
+    def record(_raw, config):
+        seen.append(config)
+        raise ValueError("stop after the config")
+
+    monkeypatch.setattr(dv.fr, "replay_dump", record)
+    context = client.get("/api/context?path=sub/a.l3dump").get_json()
+    response = client.post(
+        "/api/analyze", json={"path": "sub/a.l3dump", "options": context["defaults"]}
+    )
+    assert response.status_code == 200, response.get_json()
+    (config,) = seen
+    assert (config.tee_bin, config.dest_bin, config.post_from_frame) == (34, 49, 9)
+    assert config.pitch_deg == 10.4
+
+
+def test_the_page_applies_checkbox_and_select_defaults(client):
+    page = client.get("/").data.decode()
+    apply = page.split("function applyDefaults", 1)[1].split("function readForm", 1)[0]
+    assert "checkbox" in apply
+
+
+def test_the_page_says_when_no_session_log_was_found_even_with_manifest_options(client):
+    page = client.get("/").data.decode()
+    ctx = page.split("function renderCtx", 1)[1].split("function chip", 1)[0]
+    assert "!c || !c.session_file" in ctx
