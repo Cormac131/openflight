@@ -201,6 +201,9 @@ class ConfigRadar:
     def set_tee_band(self, bins):
         return True
 
+    def set_ball_snr(self, snr):
+        return True
+
     def stop_sensor(self):
         pass
 

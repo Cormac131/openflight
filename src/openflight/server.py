@@ -1111,10 +1111,11 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
     command line cannot silently change which trigger drives the shot.
     """
     from .iwr6843.monitor import (
+        SELF_TRIGGER_DEFAULT_BIN,
         SELF_TRIGGER_DEFAULT_SNR,
         SELF_TRIGGER_DEFAULT_TRACK_FRAMES,
         SelfTriggerConfig,
-        tee_global_bin,
+        check_first_window_bin,
     )
 
     tuning = [
@@ -1132,7 +1133,8 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
         return None
     bin_index = args.iwr6843_self_trigger_bin
     if bin_index is None:
-        bin_index = tee_global_bin(args.iwr6843_tee_m, args.iwr6843_config)
+        bin_index = SELF_TRIGGER_DEFAULT_BIN
+    check_first_window_bin(bin_index, args.iwr6843_config, f"self-trigger bin {bin_index}")
     snr = args.iwr6843_self_trigger_snr
     frames = args.iwr6843_self_trigger_frames
     return SelfTriggerConfig(
@@ -1174,7 +1176,8 @@ def init_iwr6843(
     full_capture: bool = False,
     ball_detector: str = "off",
     setup_poll_s: float = 1.0,
-    tee_band_bins: float = 0.0,
+    tee_band_bins: float | None = None,
+    ball_snr: float | None = None,
 ) -> bool:
     """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator.
 
@@ -1186,7 +1189,9 @@ def init_iwr6843(
     aims the self-trigger at the locked ball. ``tee_band_bins`` is the width
     in range bins of the band near the ball that the firmware's club and ball
     trackers ignore; the firmware places it on the noisiest idle bins near the
-    tee and freezes it while the club swings. 0 leaves it off.
+    tee and freezes it while the club swings; None is the default width, 0
+    turns it off. ``ball_snr`` is the ball tracker's threshold apart from the
+    trigger's; None keeps the firmware's.
     """
     global iwr6843_runtime, iwr6843_runtime_config  # pylint: disable=global-statement
     from .iwr6843.setup_poll import BALL_DETECTOR_MODES  # pylint: disable=import-outside-toplevel
@@ -1196,12 +1201,15 @@ def init_iwr6843(
     try:
         from .iwr6843 import Calibration
         from .iwr6843.monitor import (
+            TEE_BAND_DEFAULT_BINS,
             IWR6843CaptureMonitor,
             read_capture_config,
             tx_order_from_config,
         )
         from .iwr6843.runtime import IWR6843Runtime
 
+        if tee_band_bins is None:
+            tee_band_bins = TEE_BAND_DEFAULT_BINS
         configured_order = tx_order_from_config(config_path)
         try:
             capture_format = read_capture_config(config_path).capture_format or "iq16"
@@ -1236,6 +1244,7 @@ def init_iwr6843(
             self_trigger=self_trigger,
             tee_range_m=tee_range_m,
             tee_band_bins=tee_band_bins,
+            ball_snr=ball_snr,
         )
         if self_trigger is not None:
             logger.warning(
@@ -1281,6 +1290,7 @@ def init_iwr6843(
             "trigger_pin_bcm": trigger_pin,
             "tee_slant_range_m": tee_range_m,
             "tee_band_bins": tee_band_bins,
+            "ball_snr": ball_snr,
             "net_range_m": net_range_m,
             "flight": flight,
             "self_trigger": (
@@ -4637,13 +4647,27 @@ def environment_from_args(args) -> Environment:
 
 
 def _add_iwr6843_tee_band_argument(parser):
-    """Add the firmware tee band's total width (0: off, the firmware default)."""
+    """Add the firmware tee band's total width (0: off)."""
+    from .iwr6843.monitor import TEE_BAND_DEFAULT_BINS  # pylint: disable=import-outside-toplevel
+
     parser.add_argument(
         "--iwr6843-tee-band-bins",
         type=float,
-        default=0.0,
+        default=TEE_BAND_DEFAULT_BINS,
         help="Width in range bins of the tee band the club and ball trackers ignore, "
-        "placed on the noisiest bins near the tee (0 = off; experimental)",
+        f"placed on the noisiest bins near the tee (default: {TEE_BAND_DEFAULT_BINS:g}; "
+        "0 = off; experimental)",
+    )
+
+
+def _add_iwr6843_ball_snr_argument(parser):
+    """Add the firmware ball tracker's snr, apart from the trigger's."""
+    parser.add_argument(
+        "--iwr6843-ball-snr",
+        type=float,
+        default=None,
+        help="Ball tracker's target threshold as a multiple of its noise floor, 1..1e6, "
+        "separate from --iwr6843-self-trigger-snr (default: the firmware's, 1)",
     )
 
 
@@ -4924,22 +4948,22 @@ def main():
         "--iwr6843-self-trigger",
         action="store_true",
         help="Freeze the IWR ring when the firmware tracks the clubhead into the tee "
-        "and send S! to the OPS, instead of the sound-gate edge. The tee bin comes "
-        "from --iwr6843-tee-m",
+        "and send S! to the OPS, instead of the sound-gate edge. The bin it watches "
+        "is --iwr6843-self-trigger-bin",
     )
     parser.add_argument(
         "--iwr6843-self-trigger-bin",
         type=int,
         default=None,
-        help="Global range-FFT bin of the tee (default: from --iwr6843-tee-m). "
-        "Requires --iwr6843-self-trigger",
+        help="Global range-FFT bin the trigger watches, inside the cfg's first capture "
+        "window (default: 42, whatever --iwr6843-tee-m says). Requires --iwr6843-self-trigger",
     )
     parser.add_argument(
         "--iwr6843-self-trigger-snr",
         type=float,
         default=None,
         help="Clubhead candidate threshold as a multiple of the firmware's running "
-        "noise floor, at least 1 (default: 6). Requires --iwr6843-self-trigger",
+        "noise floor, at least 1 (default: 1). Requires --iwr6843-self-trigger",
     )
     parser.add_argument(
         "--iwr6843-onboard-metrics",
@@ -4995,6 +5019,7 @@ def main():
         help=f"Antenna-center to tee slant range in metres (default: {DEFAULT_TEE_RANGE_M})",
     )
     _add_iwr6843_tee_band_argument(parser)
+    _add_iwr6843_ball_snr_argument(parser)
     parser.add_argument(
         "--iwr6843-net-m",
         type=float,
@@ -5191,6 +5216,15 @@ def main():
         # "not <=" also refuses NaN.
         if not 0.0 <= args.iwr6843_tee_band_bins <= TEE_BAND_MAX_BINS:
             parser.error(f"--iwr6843-tee-band-bins must be 0..{TEE_BAND_MAX_BINS:g}")
+        if args.iwr6843_ball_snr is not None:
+            from .iwr6843.self_trigger import (  # pylint: disable=import-outside-toplevel
+                check_ball_snr,
+            )
+
+            try:
+                check_ball_snr(args.iwr6843_ball_snr)
+            except ValueError as error:
+                parser.error(f"--iwr6843-ball-snr must be {str(error).split('must be ', 1)[1]}")
     try:
         self_trigger_config = _self_trigger_config(args) if args.iwr6843 else None
     except (OSError, ValueError) as error:
@@ -5390,6 +5424,7 @@ def main():
             ball_detector=args.iwr6843_ball_detector,
             setup_poll_s=args.iwr6843_setup_poll_s,
             tee_band_bins=args.iwr6843_tee_band_bins,
+            ball_snr=args.iwr6843_ball_snr,
         ):
             calibration = iwr6843_runtime.calibration
             ball_speed_correction_distance_ft = args.iwr6843_tee_m * 3.28084

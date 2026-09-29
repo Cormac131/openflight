@@ -119,7 +119,7 @@ def test_defaults_are_a_wide_gate_a_fast_departure_and_six_launch_points(lib):
     assert cfg.core.gateBins == pytest.approx(6.0) and cfg.core.maxMisses == 1
     assert cfg.minDepartureMps == pytest.approx(10.0) and cfg.maxSpeedMps == pytest.approx(100.0)
     assert cfg.originGateBins == pytest.approx(8.0) and cfg.launchPoints == 6
-    assert cfg.minDepartureBins == pytest.approx(1.0) and cfg.snr == pytest.approx(3.0)
+    assert cfg.minDepartureBins == pytest.approx(1.0) and cfg.snr == pytest.approx(1.0)
 
 
 def test_unarmed_track_ignores_everything(lib):

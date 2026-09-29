@@ -43,6 +43,10 @@
  * return whose rate from the ball is at most this times the approach speed. */
 #define L3_TRACK_FOLLOW_MAX_RATIO 1.10F
 #define L3_TRACK_FOLLOW_UNKNOWN_APPROACH_MPS 70.0F  /* no approach measured: the fastest club (l3_impact_fit clubMaxMps) */
+/* A point taken beyond the band after impact (re-acquired, or re-emerged onto
+ * a track the band hid) is tentative: the next associated point must lie at
+ * least this far downrange of it, or the point is withdrawn. */
+#define L3_TRACK_TENTATIVE_ADVANCE_BINS 1.0F
 
 typedef struct {
     uint32_t frame;
@@ -130,6 +134,20 @@ enum {
     L3_TRACK_WHY_COUNT
 };
 
+/* The track as it was before a tentative point (see l3_track_follow), put
+ * back when the point is withdrawn. */
+typedef struct {
+    uint8_t  active;
+    uint8_t  following;
+    uint32_t misses;
+    uint32_t lastFrame;
+    float    lastBin;
+    float    velocityBinsPerFrame;
+    float    followBinsPerS;
+    int32_t  sameBin;
+    uint32_t sameBinCount;
+} l3_track_held_t;
+
 typedef struct {
     l3_track_cfg_t cfg;
     uint8_t  active;
@@ -149,6 +167,7 @@ typedef struct {
     int32_t  sameBin;             /* rounded bin of the newest point ... */
     uint32_t sameBinCount;        /* ... and how many consecutive points share it */
     uint8_t  following;           /* l3_track_follow has taken over (after impact) */
+    uint8_t  tentative;           /* the newest point awaits confirmation (held below) */
     float    followBinsPerS;      /* the club's fitted speed at impact: the follow's cap */
     /* The last released track's final bin and Doppler, which acquisition
      * avoids (see L3_TRACK_RELEASE_DOPPLER_TOL_MPS) until something else is
@@ -156,6 +175,7 @@ typedef struct {
     uint8_t  releasedValid;
     float    releasedBin;
     float    releasedDopplerMps;
+    l3_track_held_t held;         /* the track before its tentative point */
 } l3_club_track_t;
 
 void l3_track_cfg_defaults(l3_track_cfg_t *cfg);
@@ -177,6 +197,8 @@ typedef struct {
     float    ballBinsPerS;       /* the ball track's current rate, 0 when unknown */
     uint32_t ballClaimIndex;     /* this frame's ball target, L3_TRACK_NO_TARGET for none */
     uint32_t frameUs;            /* nominal frame period */
+    uint8_t  approachKnown;      /* 1: approachBinsPerS was measured (the delivery's
+                                  * speed); 0: it is the unknown-approach ceiling */
 } l3_follow_ctx_t;
 
 /* After impact: continue an active track by association alone -- never
@@ -200,8 +222,22 @@ typedef struct {
  *  - an inactive track is re-acquired from the strongest departing return
  *    beyond the band (the ball's bin without a band) whose rate from the ball
  *    since the impact time is positive, at most L3_TRACK_FOLLOW_MAX_RATIO
- *    times the approach speed, slower than the ball, and not the ball's
- *    target.
+ *    times the approach speed, slower than the ball, not the ball's target
+ *    and at least cfg.minConfidence;
+ *  - with the approach unknown (approachKnown 0: the approach is only the
+ *    ceiling) and no ball rate yet, nothing is re-acquired or re-emerges;
+ *  - a re-acquired or re-emerged point is TENTATIVE (track->tentative): kept
+ *    on the track, but confirmed only when the next associated point lies at
+ *    least L3_TRACK_TENTATIVE_ADVANCE_BINS downrange of it. When the next
+ *    point does not (that frame then takes nothing), or when the miss rules
+ *    would drop the track before a next point comes, the tentative point is
+ *    withdrawn -- popped from the ring, count and total back by one -- and
+ *    the track is as it was before it (track->held): inactive after a
+ *    re-acquisition, hidden and coasting after a re-emergence, the frames
+ *    since counted as misses. A static return beyond the band is thus never a
+ *    club point. Withdrawing a point from a full ring does not bring back the
+ *    oldest point its append overwrote. l3_fit_span_after leaves out a point
+ *    still tentative.
  * With NULL it only continues an active track and never acquires.
  * lastTargetIndex says which of this frame's targets it claimed. Returns 1
  * when a point was appended. */

@@ -220,3 +220,21 @@ def test_board_places_the_band_from_the_noise_map_until_frozen():
     assert "l3_band_noise_update(&gBandNoise," in self_trigger
     assert "gBandFrozen = 0U" in body("l3_trigRearm")
     assert "l3_band_around" not in SOURCE
+
+
+def test_ball_snr_is_a_track_cfg_sub_mode():
+    """The ball tracker's extraction snr is set apart from the trigger's."""
+    track_cfg = body("l3_cli_trackCfg")
+    assert 'strcmp(argv[1], "ballSnr") == 0' in track_cfg
+    assert "return l3_cli_trackCfgBallSnr(argc, argv);" in track_cfg
+    handler = body("l3_cli_trackCfgBallSnr")
+    assert "l3_parseFloats(argc, argv, 2, 1U, values) != 0" in handler
+    # 0 restores the firmware default; otherwise at least the floor. NaN refused.
+    assert "!(values[0] == 0.0F || values[0] >= 1.0F)" in handler
+    assert "gBallSnr = values[0];" in handler
+    assert "static float               gBallSnr;" in SOURCE
+
+
+def test_ball_extraction_uses_the_configured_ball_snr_else_the_default():
+    ball_track = body("l3_considerBallTrack")
+    assert "params.snr = (gBallSnr > 0.0F) ? gBallSnr : gBallTrackCfg.snr;" in ball_track

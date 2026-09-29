@@ -553,7 +553,9 @@ def test_ball_tracker_runs_the_whole_post_window_against_the_trigger_floor():
         "l3_obs_floor_update(&gBallFloor, gTrigCfg.stat, obs, count, L3_TRIG_FLOOR_SHIFT);"
         in consider
     )
-    assert "params.snr = gBallTrackCfg.snr;" in consider, "the ball is a weaker return"
+    assert "params.snr = (gBallSnr > 0.0F) ? gBallSnr : gBallTrackCfg.snr;" in consider, (
+        "the ball is a weaker return, with its own snr"
+    )
     assert "gBallFloor = 0.0F;" in _function("static void l3_trigRearm(")
     assert (
         "l3_ball_track_update_joint(&gBallTrack, targets, found, frameIndex, gPostTimestampUs,"

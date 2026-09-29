@@ -65,6 +65,7 @@ void l3_track_reset(l3_club_track_t *track)
     track->sameBin = 0;
     track->sameBinCount = 0U;
     track->following = 0U;
+    track->tentative = 0U;
     track->followBinsPerS = 0.0F;
     track->releasedValid = 0U;
     track->releasedBin = 0.0F;
@@ -170,6 +171,57 @@ static void l3_track_release(l3_club_track_t *track)
     l3_track_note(track, L3_TRACK_WHY_RELEASED);
 }
 
+/* Before a tentative point: remember the track as it is, to put it back if
+ * the point is withdrawn. */
+static void l3_track_hold(l3_club_track_t *track)
+{
+    l3_track_held_t *held = &track->held;
+
+    held->active = track->active;
+    held->following = track->following;
+    held->misses = track->misses;
+    held->lastFrame = track->lastFrame;
+    held->lastBin = track->lastBin;
+    held->velocityBinsPerFrame = track->velocityBinsPerFrame;
+    held->followBinsPerS = track->followBinsPerS;
+    held->sameBin = track->sameBin;
+    held->sameBinCount = track->sameBinCount;
+}
+
+/* Take back the tentative newest point: pop it from the ring and put the
+ * track back as it was before it; the withdrawn point's frame and the frames
+ * since count as misses. */
+static void l3_track_withdraw(l3_club_track_t *track)
+{
+    const l3_track_held_t *held = &track->held;
+    uint32_t since = track->misses + 1U;
+
+    track->next = (track->next + L3_TRACK_POINTS - 1U) % L3_TRACK_POINTS;
+    if (track->count > 0U) {
+        track->count--;
+    }
+    if (track->total > 0U) {
+        track->total--;
+    }
+    track->active = held->active;
+    track->following = held->following;
+    track->misses = held->misses + since;
+    track->lastFrame = held->lastFrame;
+    track->lastBin = held->lastBin;
+    track->velocityBinsPerFrame = held->velocityBinsPerFrame;
+    track->followBinsPerS = held->followBinsPerS;
+    track->sameBin = held->sameBin;
+    track->sameBinCount = held->sameBinCount;
+    track->tentative = 0U;
+    track->lastTargetIndex = L3_TRACK_NO_TARGET;
+}
+
+/* The newest held point's slot (meaningful only when count > 0). */
+static const l3_track_point_t *l3_track_newest(const l3_club_track_t *track)
+{
+    return &track->points[(track->next + L3_TRACK_POINTS - 1U) % L3_TRACK_POINTS];
+}
+
 /* Acquire the most confident target that clears the bar, preferring one that
  * reads as moving (a stationary body in the lane is often the strongest
  * return) and skipping one that looks like the last released return. With
@@ -224,14 +276,16 @@ static int32_t l3_track_acquire(l3_club_track_t *track, const l3_target_obs_t *t
 /* After impact: the club is a departing return beyond the band (or the
  * ball, without a band) whose rate from the ball at the impact time is
  * positive, no faster than it arrived (x L3_TRACK_FOLLOW_MAX_RATIO) and
- * slower than the ball, and not the ball's target; the strongest such
- * return. With a last point (from != NULL, an active track the band hid),
- * a return that left that point at the ball's rate or faster is refused as
- * well, as association refuses it. Returns its index, L3_TRACK_NO_TARGET for
- * none. Shared by re-acquisition and the hidden club's re-emergence. */
+ * slower than the ball, not the ball's target and at least minConfidence;
+ * the strongest such return. With a last point (from != NULL, an active track
+ * the band hid), a return that left that point at the ball's rate or faster
+ * is refused as well, as association refuses it. Nothing when the approach is
+ * unknown (only the ceiling bounds the club) and the ball has no rate yet.
+ * Returns its index, L3_TRACK_NO_TARGET for none. Shared by re-acquisition
+ * and the hidden club's re-emergence. */
 static uint32_t l3_track_pickBeyondBand(const l3_target_obs_t *targets, uint32_t n,
                                         uint32_t timestampUs, const l3_follow_ctx_t *ctx,
-                                        const l3_track_point_t *from)
+                                        const l3_track_point_t *from, float minConfidence)
 {
     float dtS = (float)(int32_t)(timestampUs - ctx->impactTimestampUs) * 1.0e-6F;
     float fromDtS = (from != NULL)
@@ -242,12 +296,16 @@ static uint32_t l3_track_pickBeyondBand(const l3_target_obs_t *targets, uint32_t
     uint32_t bestIndex = L3_TRACK_NO_TARGET;
     uint32_t i;
 
-    if (dtS <= 0.0F || ctx->approachBinsPerS <= 0.0F) {
+    if (dtS <= 0.0F || ctx->approachBinsPerS <= 0.0F ||
+        (!ctx->approachKnown && ctx->ballBinsPerS <= 0.0F)) {
         return L3_TRACK_NO_TARGET;
     }
     for (i = 0U; i < n; i++) {
         float rate = (targets[i].rangeBin - ctx->originBin) / dtS;
 
+        if (targets[i].confidence < minConfidence) {
+            continue;
+        }
         if (i == ctx->ballClaimIndex || targets[i].rangeBin <= edge || rate <= 0.0F ||
             rate > maxRate || (ctx->ballBinsPerS > 0.0F && rate >= ctx->ballBinsPerS)) {
             continue;
@@ -305,8 +363,8 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
     int32_t floorBin = l3_track_roundBin(track->lastBin);
     const l3_target_obs_t *best = NULL;
     float bestScore = 0.0F;
-    const l3_track_point_t *last =
-        &track->points[(track->next + L3_TRACK_POINTS - 1U) % L3_TRACK_POINTS];
+    const l3_track_point_t *last = l3_track_newest(track);
+    int32_t withdrawn = 0;
     uint32_t i;
 
     track->predictedBin = predicted;
@@ -370,15 +428,36 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
             track->lastTargetIndex = i;
         }
     }
-    if (best == NULL && following && ctx != NULL && ctx->bandValid &&
+    if (best != NULL && track->tentative &&
+        best->rangeBin - track->lastBin < L3_TRACK_TENTATIVE_ADVANCE_BINS) {
+        /* The point after a tentative one did not move on downrange: the
+         * tentative point was not a moving club. Take it back; this frame
+         * takes nothing. */
+        l3_track_withdraw(track);
+        if (!track->active) {
+            l3_track_note(track, L3_TRACK_WHY_DROPPED);
+            return 0;
+        }
+        best = NULL;
+        last = l3_track_newest(track);
+        withdrawn = 1;
+    }
+    if (best != NULL) {
+        track->tentative = 0U; /* confirmed, or never tentative */
+    }
+    if (best == NULL && !withdrawn && following && ctx != NULL && ctx->bandValid &&
         track->lastBin < ctx->bandHiBin) {
         /* The band hid the club and nothing is in the follow window: a return
          * beyond the band that re-acquisition would take is the club
          * re-emerging, however slowly it was fitted going in. */
-        uint32_t index = l3_track_pickBeyondBand(targets, n, timestampUs, ctx, last);
+        uint32_t index =
+            l3_track_pickBeyondBand(targets, n, timestampUs, ctx, last, cfg->minConfidence);
 
         if (index != L3_TRACK_NO_TARGET) {
-            /* As a re-acquisition: no frame-to-frame velocity across the gap. */
+            /* Tentative, as a re-acquisition is, and like one with no
+             * frame-to-frame velocity across the gap. */
+            l3_track_hold(track);
+            track->tentative = 1U;
             l3_track_append(track, &targets[index], 0.0F, 0.0F);
             /* The fit going in was the dwell, not the club's speed: follow
              * at the approach from here, as a re-acquired club does. */
@@ -399,6 +478,16 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
         if (following && l3_track_coasting_across_band(track, ctx, timestampUs, last)) {
             l3_track_note(track, L3_TRACK_WHY_COASTED);
             return 0;
+        }
+        if (track->misses > cfg->maxMisses && track->tentative) {
+            /* Nothing confirmed the tentative point before the miss rule
+             * would drop it: take it back and judge the track as it was. */
+            l3_track_withdraw(track);
+            if (track->active && following &&
+                l3_track_coasting_across_band(track, ctx, timestampUs, l3_track_newest(track))) {
+                l3_track_note(track, L3_TRACK_WHY_COASTED);
+                return 0;
+            }
         }
         if (track->misses > cfg->maxMisses) {
             track->active = 0U;
@@ -451,18 +540,23 @@ int32_t l3_track_update(l3_club_track_t *track, const l3_target_obs_t *targets, 
 }
 
 /* After impact with no track: the strongest departing return beyond the
- * band (l3_track_pickBeyondBand) starts a following track. */
+ * band (l3_track_pickBeyondBand) starts a following track, its first point
+ * tentative. */
 static int32_t l3_track_reacquire(l3_club_track_t *track, const l3_target_obs_t *targets,
                                   uint32_t n, uint32_t frame, uint32_t timestampUs,
                                   const l3_follow_ctx_t *ctx)
 {
-    uint32_t bestIndex = l3_track_pickBeyondBand(targets, n, timestampUs, ctx, NULL);
+    uint32_t bestIndex =
+        l3_track_pickBeyondBand(targets, n, timestampUs, ctx, NULL, track->cfg.minConfidence);
     const l3_target_obs_t *best;
 
     if (bestIndex == L3_TRACK_NO_TARGET) {
         return 0;
     }
     best = &targets[bestIndex];
+    /* Tentative until the next point moves on (l3_track_follow). */
+    l3_track_hold(track);
+    track->tentative = 1U;
     track->active = 1U;
     track->misses = 0U;
     track->following = 1U;

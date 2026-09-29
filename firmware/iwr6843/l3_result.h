@@ -67,6 +67,10 @@ enum {
 /* A warning, not evidence: the impact fit's tracks disagreed (verdict
  * inconsistent), so the impact time came from the sharpest track alone. */
 #define L3_QUALITY_IMPACT_UNCERTAIN     2048U
+/* A warning: the ball's launch speed was under L3_RESULT_BALL_OVER_APPROACH_MIN
+ * times the club's approach range rate, so the ball track is likely clutter
+ * or the club; its speed and launch angles are not to be used. */
+#define L3_QUALITY_BALL_SLOWER_THAN_CLUB 4096U
 
 enum {
     L3_RESULT_INVALID = 0,
@@ -80,6 +84,11 @@ enum {
 #define L3_RESULT_BALL_SPEED_MIN_MPS   5.0F
 #define L3_RESULT_BALL_SPEED_MAX_MPS   100.0F
 #define L3_RESULT_SMASH_MIN            0.8F
+/* A ball leaves faster than the club arrives. Against the approach's range
+ * rate (an underestimate of club speed) the 51 ball-visible captures of
+ * 2026-09-29 put every good ball track's launch speed (range-only on all of
+ * them) at 1.02-1.86x; 14 of 24 wrong ones were under 1. */
+#define L3_RESULT_BALL_OVER_APPROACH_MIN 1.0F
 #define L3_RESULT_SMASH_MAX            1.6F
 #define L3_RESULT_VLA_MIN_RAD          (-0.1745F)   /* -10 deg */
 #define L3_RESULT_VLA_MAX_RAD          1.0472F      /*  60 deg */

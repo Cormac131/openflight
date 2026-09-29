@@ -4,8 +4,12 @@
     {
       "name": "dump-viewer",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "python", "scripts/iwr6843/dump_viewer.py", "--no-browser", "--port", "5057"],
-      "port": 5057
+      "runtimeArgs": [
+        "run", "python", "scripts/iwr6843/dump_viewer.py", "--no-browser",
+        "--dir", "C:/Users/corma/Desktop/OF Sessions/iwr6843"
+      ],
+      "port": 5057,
+      "autoPort": true
     },
     {
       "name": "dump-viewer-trackman",

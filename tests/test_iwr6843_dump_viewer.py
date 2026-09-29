@@ -109,9 +109,11 @@ def test_options_reject_unknown_keys_and_bad_numbers():
         dv.ViewerOptions.from_mapping({"tee_bin": "forty"})
 
 
-def test_tee_bin_is_explicit_or_the_rounded_slant_range():
+def test_tee_bin_is_explicit_or_the_rounded_slant_range_when_cleared():
     assert dv.tee_bin_for(dv.ViewerOptions(tee_bin=12)) == 12
-    assert dv.tee_bin_for(dv.ViewerOptions(tee_range_m=1.845)) == 39  # 1.845 / 0.046875
+    assert (
+        dv.tee_bin_for(dv.ViewerOptions(tee_bin=None, tee_range_m=1.845)) == 39
+    )  # 1.845 / 0.046875
     assert dv.bin_width_m() == pytest.approx(6.0 / 128)
 
 
@@ -221,7 +223,8 @@ def test_analyze_is_strict_json_and_reports_a_failed_replay_in_place(monkeypatch
     assert data["n_frames"] == 4
     assert data["timestamps_ms"] == [0.0, 2.0, 4.0, 6.0]
     assert data["tee_bin"] == 25
-    assert data["freeze_frame"] is None  # no retention report before v8
+    # No retention report before v8: the plan's window switch (frame 2) is the freeze.
+    assert data["freeze_frame"] == 2
 
 
 def test_analyze_reports_the_retention_boundary_as_the_freeze(monkeypatch):
@@ -235,6 +238,21 @@ def test_analyze_reports_the_retention_boundary_as_the_freeze(monkeypatch):
     )
     data = dv.analyze_dump(_variable_dump())
     assert data["freeze_frame"] == 3
+
+
+def test_freeze_frame_without_retention_is_where_the_plan_switches_windows():
+    """Older captures (2026-08-24) carry no retention report; the capture
+    plan's first post-impact window is the frame the sound trigger froze on,
+    so "post = freeze frame" must still work on them."""
+    data = dv.analyze_dump(
+        _variable_dump(starts=(20, 20, 20, 32, 32, 47), counts=(16,) * 6), dv.ViewerOptions()
+    )
+    assert data["freeze_frame"] == 3
+
+
+def test_freeze_frame_is_unknown_for_a_single_window_capture():
+    data = dv.analyze_dump(_variable_dump(starts=(20,) * 4, counts=(16,) * 4), dv.ViewerOptions())
+    assert data["freeze_frame"] is None
 
 
 def test_raw_adc_dump_keeps_the_maps_when_the_firmware_path_refuses_it():
@@ -299,11 +317,42 @@ def test_a_whole_shot_carries_the_band_and_the_impact_fit():
     assert drawn >= 1
 
 
+def test_default_options_are_the_boards():
+    """Tee bin 42, trigger and ball snr 1 on the peak statistic, a 6-bin band."""
+    options = dv.ViewerOptions()
+    assert options.tee_bin == 42
+    assert options.snr == 1.0
+    assert options.stat == "peak"
+    assert options.band_bins == 6.0
+    assert options.ball_snr == 1.0
+    assert dv.tee_bin_for(options) == 42
+
+
 @needs_compiler
-def test_default_options_leave_the_band_off():
+def test_default_options_place_the_band():
     raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
     data = dv.analyze_dump(raw, dv.ViewerOptions(tee_bin=TEE_BIN, tee_range_m=TEE_RANGE_M))
-    assert data["firmware"]["band"] is None
+    assert data["firmware"]["band"] is not None
+
+
+@needs_compiler
+def test_band_zero_turns_the_band_off():
+    raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
+    options = dv.ViewerOptions(tee_bin=TEE_BIN, tee_range_m=TEE_RANGE_M, band_bins=0.0)
+    assert dv.analyze_dump(raw, options)["firmware"]["band"] is None
+
+
+def test_ball_snr_reaches_the_replay(monkeypatch):
+    seen = {}
+
+    def capture(_raw, config):
+        seen["config"] = config
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(dv.fr, "replay_dump", capture)
+    dv.analyze_dump(_variable_dump(), dv.ViewerOptions.from_mapping({"ball_snr": "4.5"}))
+    assert seen["config"].ball_snr == 4.5
+    assert seen["config"].snr == 1.0
 
 
 @needs_compiler
@@ -414,6 +463,19 @@ def test_server_lists_captures_recursively(client):
     body = client.get("/api/files").get_json()
     assert [f["path"] for f in body["files"]] == ["sub/a.l3dump"]
     assert body["files"][0]["bytes"] > 0
+
+
+def test_server_serves_the_default_options(client):
+    """The page fills its form from these, so the defaults live in one place."""
+    body = client.get("/api/defaults").get_json()
+    assert body == dataclasses.asdict(dv.ViewerOptions())
+    assert (body["tee_bin"], body["snr"], body["stat"], body["band_bins"]) == (42, 1.0, "peak", 6.0)
+
+
+def test_page_has_a_box_for_every_option(client):
+    page = client.get("/").data.decode()
+    for name in dataclasses.asdict(dv.ViewerOptions()):
+        assert f'id="{name}"' in page, name
 
 
 def test_server_serves_the_page(client):

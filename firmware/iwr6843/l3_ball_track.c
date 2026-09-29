@@ -25,7 +25,7 @@ void l3_ball_track_cfg_defaults(l3_ball_track_cfg_t *cfg)
     cfg->originGateBins = 8.0F;       /* the first post frame is at most ~5 bins out */
     cfg->minDepartureBins = 1.0F;     /* the impact echo sits at the origin itself */
     cfg->launchPoints = 6U;
-    cfg->snr = 3.0F;                  /* half the trigger's: the ball is weak and moving */
+    cfg->snr = 1.0F;                  /* the floor itself: the ball is weak and moving */
     cfg->useHypotheses = 0U;          /* decided by the recorded captures */
     cfg->skipClubClaim = 1U;
 #if L3_BALL_HYPOTHESES

@@ -10,7 +10,7 @@ void l3_impact_fit_cfg_defaults(l3_impact_fit_cfg_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
     cfg->binWidthM = 6.0F / 128.0F;
-    cfg->bandBins = 0.0F;         /* off; 6 bins is the ridge on the 2026-09-28 capture */
+    cfg->bandBins = 6.0F;         /* the ridge on the 2026-09-28 capture; 0 turns it off */
     cfg->fitPoints = 4U;          /* about 12 ms at 3 ms frames */
     cfg->minPoints = 3U;          /* a line and a residual */
     cfg->clubMinMps = 10.0F;
@@ -61,14 +61,17 @@ void l3_fit_span_after(const l3_club_track_t *track, uint32_t afterFrame, l3_fit
     l3_track_point_t point;
     uint32_t i;
 
+    /* A newest point still tentative (l3_track_follow) is not yet the club's. */
+    uint32_t held = (track->tentative && track->count > 0U) ? track->count - 1U : track->count;
+
     out->track = track;
-    out->first = track->count;
+    out->first = held;
     out->count = 0U;
-    for (i = 0U; i < track->count; i++) {
+    for (i = 0U; i < held; i++) {
         (void)l3_track_point(track, i, &point);
         if (point.frame > afterFrame) {
             out->first = i;
-            out->count = track->count - i;
+            out->count = held - i;
             return;
         }
     }

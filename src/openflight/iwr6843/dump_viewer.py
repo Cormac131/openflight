@@ -41,9 +41,9 @@ _POWER_FLOOR = 1.0
 class ViewerOptions:  # pylint: disable=too-many-instance-attributes
     """What the page lets you change before a run. None means "use the default"."""
 
-    tee_bin: int | None = None  # None: from tee_range_m
+    tee_bin: int | None = st.FIRMWARE_TRIGGER_DEFAULT_BIN  # None: from tee_range_m
     dest_bin: int | None = None
-    snr: float = fr.DEFAULT_SNR
+    snr: float = st.FIRMWARE_TRIGGER_DEFAULT_SNR  # the trigger's (triggerCfg)
     track_frames: int = fr.DEFAULT_TRACK_FRAMES
     stat: str = "peak"
     subbin: str = "parabolic"
@@ -56,11 +56,32 @@ class ViewerOptions:  # pylint: disable=too-many-instance-attributes
     py_hits: int = st.DEFAULT_HITS
     ball_hypotheses: bool | None = None  # the ball search; None: the firmware default
     joint_search: bool = False  # run l3_joint_search in parallel (host-only, viz)
-    band_bins: float | None = None  # the tee band's width, placed automatically; None: off
+    # The tee band's width, placed automatically; 0 turns it off.
+    band_bins: float | None = st.TEE_BAND_DEFAULT_BINS
+    ball_snr: float | None = st.FIRMWARE_BALL_DEFAULT_SNR  # the ball tracker's (trackCfg ballSnr)
 
     @classmethod
     def from_mapping(cls, raw: dict) -> ViewerOptions:
         """Build from query/JSON values; blank strings are "not set", unknown keys an error."""
+        return cls(**cls._parse(raw))
+
+    @classmethod
+    def for_recording(cls, raw: dict) -> ViewerOptions:
+        """Options to replay a recorded capture as the board ran it: what the
+        session log says (``raw``, as ``from_mapping``) over the settings the
+        recordings were made with (triggerCfg snr 6, ball snr 3, the tee bin
+        from the slant range, no tee band), not today's defaults."""
+        recorded = {
+            "tee_bin": None,
+            "snr": fr.DEFAULT_SNR,
+            "ball_snr": fr.DEFAULT_BALL_SNR,
+            "band_bins": 0.0,
+        }
+        return cls(**{**recorded, **cls._parse(raw)})
+
+    @classmethod
+    def _parse(cls, raw: dict) -> dict:
+        """The set values of ``raw`` converted to their field types."""
         known = {f.name: f for f in fields(cls)}
         unknown = sorted(set(raw) - set(known))
         if unknown:
@@ -88,7 +109,7 @@ class ViewerOptions:  # pylint: disable=too-many-instance-attributes
                 values[name] = float(value)
             else:
                 values[name] = str(value)
-        return cls(**values)
+        return values
 
 
 def bin_width_m(fft_size: int = fr.DEFAULT_FFT_SIZE) -> float:
@@ -245,6 +266,7 @@ def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOp
         ball_hypotheses=options.ball_hypotheses,
         joint_search=options.joint_search,
         band_bins=options.band_bins,
+        ball_snr=options.ball_snr,
     )
     result = fr.replay_dump(raw, config)
     n_tx = int(meta["n_tx"])
@@ -329,14 +351,13 @@ def analyze_dump(raw: bytes, options: ViewerOptions | None = None) -> dict:
         for k, v in meta.items()
         if k not in ("range_bin_starts", "range_bin_counts", "frame_time_offsets_us", "iq8_scales")
     }
-    retention = meta.get("retention") or {}
     return {
         "meta": _jsonable(header),
         "n_frames": int(meta["n_frames"]),
         "timestamps_ms": [t / 1000.0 for t in timestamps],
         "bin_width_m": width_m,
         # A saved capture's pre/post boundary: the frame the board froze on.
-        "freeze_frame": retention.get("pre_frames"),
+        "freeze_frame": fr.freeze_frame(meta),
         "tee_bin": tee_bin_for(options),
         "options": asdict(options),
         "maps": frame_maps(meta, cube),

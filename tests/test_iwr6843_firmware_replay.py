@@ -845,14 +845,36 @@ def test_the_fit_replaces_the_frozen_time_only_with_a_verdict(verdict, impact_us
     assert shot.impactTimestampUs == expected
 
 
-def test_an_uncertain_track_keeps_its_time_and_sigma_in_the_summary(lib):
-    """20260927 with the band on: the ball track reads a +-9.5 ms crossing,
-    over the cap; the summary shows it as uncertain with its numbers."""
+def test_an_uncertain_track_keeps_its_time_and_sigma_in_the_summary():
+    """An estimate over the sigma cap is shown as uncertain with its numbers."""
+    fit = fw.ImpactFit()
+    ball = fw.FIT_TRACK_NAMES.index("ball_out")
+    fit.track[ball].why = fw.FIT_WHY_NAMES.index("uncertain")
+    fit.track[ball].points = 3
+    fit.track[ball].timeUs = 5370.0
+    fit.track[ball].sigmaUs = 9514.0
+    fit.droppedTrack = len(fw.FIT_TRACK_NAMES)
+    summary = fr._impact_fit_summary(fit)  # pylint: disable=protected-access
+    track = summary.tracks["ball_out"]
+    assert track.why == "uncertain"
+    assert (track.time_us, track.sigma_us) == (5370.0, 9514.0)
+
+
+@pytest.mark.parametrize("band_bins", [None, 6.0])
+def test_a_trigger_stalled_on_a_standing_return_takes_the_approaching_club(lib, band_bins):
+    """20260927: a return standing at bin 44 held the trigger from frame 2 to
+    10, so the club was taken only at frame 11 and the fit came out
+    inconsistent (band off) or single-track with a +-9.5 ms ball (band on).
+    Stalled after L3_TRIG_STALL_FRAMES, it gives way to the club at frame 5,
+    which is followed in and fires from its own approach."""
     path, config = next(p for p in fr.recording_configs() if "20260927" in p[0].name)
-    result = fr.replay_file(path, replace(config, band_bins=6.0), lib=lib)
-    ball = result.impact_fit.tracks["ball_out"]
-    assert ball.why == "uncertain"
-    assert ball.sigma_us is not None and ball.sigma_us > 3000.0 and ball.time_us is not None
+    result = fr.replay_file(path, replace(config, band_bins=band_bins), lib=lib)
+    log = [result.trig.log[i] for i in range(min(result.trig.logCount, len(result.trig.log)))]
+    jumped = next(r for r in log if lib.l3_trig_why_name(r.why) == b"jumped")
+    assert (jumped.frame, jumped.bin) == (5, 29)
+    assert result.fired_frame == 12
+    assert result.impact_fit.verdict == "consistent"
+    assert result.impact_fit.tracks["ball_out"].why == "ok"
     assert result.launch.speed_mps < 60.0, "a two-angle ball track is radial only, never 339 m/s"
 
 

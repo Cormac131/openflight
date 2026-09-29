@@ -33,6 +33,32 @@ PHASES = (
     "away",
     "fired",
 )
+# The firmware trigger's ``triggerCfg`` defaults as the Pi sends them: the
+# global bin it watches (1.97 m on a 128-point FFT over 6 m; the tee distance
+# still places the geometry and the capture windows) and its threshold over
+# the running floor. The replay and the viewer start from the same values.
+FIRMWARE_TRIGGER_DEFAULT_BIN = 42
+FIRMWARE_TRIGGER_DEFAULT_SNR = 1.0
+# The ball tracker's own snr on the board (l3_ball_track_cfg_defaults), which
+# "trackCfg ballSnr 0" restores.
+FIRMWARE_BALL_DEFAULT_SNR = 1.0
+# The tee band's width the Pi sends by default ("trackCfg impactFit"):
+# l3_impact_fit_cfg_defaults', the ridge on the 2026-09-28 capture. 0: off.
+TEE_BAND_DEFAULT_BINS = 6.0
+# "trackCfg ballSnr"'s limit (L3_BALL_SNR_MAX in l3_dump.c).
+BALL_SNR_MAX = 1.0e6
+
+
+def check_ball_snr(snr: float) -> float:
+    """The ball tracker's snr as ``trackCfg ballSnr`` accepts it: 1..1e6.
+
+    Below 1 every bin would be a target; ``not`` in the test also refuses NaN.
+    """
+    if not 1.0 <= snr <= BALL_SNR_MAX:
+        raise ValueError(f"ball snr must be 1..{BALL_SNR_MAX:g}, got {snr}")
+    return float(snr)
+
+
 # Production ``triggerCfg`` defaults used with the wide profile.
 DEFAULT_LEVEL = 1000.0
 DEFAULT_HITS = 2

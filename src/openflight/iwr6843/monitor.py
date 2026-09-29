@@ -17,8 +17,12 @@ from openflight.gpio_factory import ensure_lgpio_pin_factory
 from openflight.iwr6843.driver import IWR6843Radar, UnsupportedCommand
 from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
 from openflight.iwr6843.self_trigger import (
+    FIRMWARE_TRIGGER_DEFAULT_BIN,
+    FIRMWARE_TRIGGER_DEFAULT_SNR,
     FLOOR_PAUSE_S,
     FLOOR_SAMPLE_S,
+    TEE_BAND_DEFAULT_BINS,
+    check_ball_snr,
     level_above_floor,
     tee_power_from_stats,
 )
@@ -115,21 +119,27 @@ def tee_global_bin(tee_range_m: float, config_path: str | Path, fft_size: int = 
     128-point FFT over 6 m). Raises when the tee falls outside the first
     capture window: the firmware would watch bins it never captures.
     """
+    absolute = int(round(tee_range_m / (RANGE_SPAN_M / fft_size)))
+    return check_first_window_bin(
+        absolute, config_path, f"tee at {tee_range_m:.2f} m (bin {absolute})"
+    )
+
+
+def check_first_window_bin(global_bin: int, config_path: str | Path, what: str = "") -> int:
+    """``global_bin`` when the cfg's first capture window holds it, else ValueError.
+
+    A trigger aimed outside that window would watch bins it never captures.
+    """
     summary = read_capture_config(config_path)
     if summary.first_window_start is None or summary.first_window_bins is None:
         raise ValueError(f"{config_path} has no phaseCaptureCfg")
-    absolute = int(round(tee_range_m / (RANGE_SPAN_M / fft_size)))
-    if (
-        not summary.first_window_start
-        <= absolute
-        < summary.first_window_start + summary.first_window_bins
-    ):
+    end = summary.first_window_start + summary.first_window_bins
+    if not summary.first_window_start <= global_bin < end:
         raise ValueError(
-            f"tee at {tee_range_m:.2f} m (bin {absolute}) is outside the first capture "
-            f"window, bins {summary.first_window_start}-"
-            f"{summary.first_window_start + summary.first_window_bins - 1}"
+            f"{what or f'bin {global_bin}'} is outside the first capture "
+            f"window, bins {summary.first_window_start}-{end - 1}"
         )
-    return absolute
+    return global_bin
 
 
 # Impact and ball windows start this many bins short of the tee, so the club's
@@ -202,7 +212,9 @@ def _pause(seconds: float) -> None:
 # A moving return short of the tee counts as a clubhead candidate at this
 # multiple of the firmware's running noise floor. The board's triggerLog
 # shows the snr real swings and idle frames reach; tune from that.
-SELF_TRIGGER_DEFAULT_SNR = 6.0
+SELF_TRIGGER_DEFAULT_SNR = FIRMWARE_TRIGGER_DEFAULT_SNR
+# The global bin the trigger watches without --iwr6843-self-trigger-bin.
+SELF_TRIGGER_DEFAULT_BIN = FIRMWARE_TRIGGER_DEFAULT_BIN
 # Frames a candidate must be tracked approaching before the gate may fire.
 SELF_TRIGGER_DEFAULT_TRACK_FRAMES = 2
 
@@ -352,7 +364,8 @@ class IWR6843CaptureMonitor:
         self_trigger: SelfTriggerConfig | None = None,
         onboard_tracking: bool = False,
         tee_range_m: float | None = None,
-        tee_band_bins: float = 0.0,
+        tee_band_bins: float = TEE_BAND_DEFAULT_BINS,
+        ball_snr: float | None = None,
     ):
         # "not <=" also refuses NaN.
         if not 0.0 <= tee_band_bins <= TEE_BAND_MAX_BINS:
@@ -361,9 +374,11 @@ class IWR6843CaptureMonitor:
             )
         # Width in range bins of the band near the ball that the firmware's
         # club and ball trackers ignore (placed by the firmware on the
-        # noisiest idle bins near the tee); 0 leaves the firmware's
-        # default (off) and sends nothing, so older firmware still starts.
+        # noisiest idle bins near the tee); 0 turns it off.
         self.tee_band_bins = float(tee_band_bins)
+        # The ball tracker's extraction snr, apart from the trigger's; None
+        # sends 0, the firmware's own default.
+        self.ball_snr = None if ball_snr is None else check_ball_snr(ball_snr)
         self.config_path = Path(config_path)
         # With the tee known, the impact and ball windows are placed on it
         # (tee_relative_config) instead of the cfg's fixed ones.
@@ -460,6 +475,12 @@ class IWR6843CaptureMonitor:
                 logger.info(
                     "[IWR6843] Firmware has no tee band (trackCfg impactFit); "
                     "nothing to clear with the band off"
+                )
+            # Always sent, the default (0) included, for the same reason.
+            if not self.radar.set_ball_snr(0.0 if self.ball_snr is None else self.ball_snr):
+                logger.info(
+                    "[IWR6843] Firmware has no ball snr setting (trackCfg ballSnr); "
+                    "it uses its own default"
                 )
             if onboard_track_config is not None:
                 self._configure_onboard_tracking(onboard_track_config)
@@ -903,13 +924,17 @@ class IWR6843CaptureMonitor:
 
 
 __all__ = [
+    "SELF_TRIGGER_DEFAULT_BIN",
     "SELF_TRIGGER_DEFAULT_SNR",
+    "TEE_BAND_DEFAULT_BINS",
+    "TEE_BAND_MAX_BINS",
     "SELF_TRIGGER_DEFAULT_TRACK_FRAMES",
     "SELF_TRIGGER_OFF_COMMAND",
     "CaptureConfigSummary",
     "IWR6843Capture",
     "IWR6843CaptureMonitor",
     "SelfTriggerConfig",
+    "check_first_window_bin",
     "measure_trigger_level",
     "read_capture_config",
     "tee_global_bin",

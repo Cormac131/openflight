@@ -199,6 +199,8 @@ QUALITY_FLAGS = {
     "smash_plausible": 512,
     "geometric_impact": 1024,
     "impact_uncertain": 2048,  # a warning: the impact fit's tracks disagreed
+    # a warning: the ball's launch was slower than the club's approach
+    "ball_slower_than_club": 4096,
 }
 
 # l3_iq8.h
@@ -235,8 +237,12 @@ TRACK_POINTS = 32
 TRACK_NO_TARGET = 0xFFFFFFFF
 # No approach measured at impact: the fastest club (l3_impact_fit clubMaxMps).
 TRACK_FOLLOW_UNKNOWN_APPROACH_MPS = 70.0
+# A tentative point is confirmed by the next point this far downrange of it.
+TRACK_TENTATIVE_ADVANCE_BINS = 1.0
 TRACK_WHY_NAMES = ("none", "acquired", "associated", "coasted", "dropped", "idle", "released")
 
+# A tentative point is confirmed by the next point this far downrange of it.
+TRACK_TENTATIVE_ADVANCE_BINS = 1.0
 # l3_joint_search.h
 JOINT_CLUB_BEAM = 4
 JOINT_BALL_BEAM = 4
@@ -543,8 +549,40 @@ class Delivery(ctypes.Structure):
     ]
 
 
+class TrackHeld(ctypes.Structure):
+    """``l3_track_held_t``: the track before its tentative point."""
+
+    _fields_ = [
+        ("active", ctypes.c_uint8),
+        ("following", ctypes.c_uint8),
+        ("misses", ctypes.c_uint32),
+        ("lastFrame", ctypes.c_uint32),
+        ("lastBin", ctypes.c_float),
+        ("velocityBinsPerFrame", ctypes.c_float),
+        ("followBinsPerS", ctypes.c_float),
+        ("sameBin", ctypes.c_int32),
+        ("sameBinCount", ctypes.c_uint32),
+    ]
+
+
 class ClubTrack(ctypes.Structure):
     """``l3_club_track_t``."""
+class TrackHeld(ctypes.Structure):
+    """``l3_track_held_t``: the track before its tentative point."""
+
+    _fields_ = [
+        ("active", ctypes.c_uint8),
+        ("following", ctypes.c_uint8),
+        ("misses", ctypes.c_uint32),
+        ("lastFrame", ctypes.c_uint32),
+        ("lastBin", ctypes.c_float),
+        ("velocityBinsPerFrame", ctypes.c_float),
+        ("followBinsPerS", ctypes.c_float),
+        ("sameBin", ctypes.c_int32),
+        ("sameBinCount", ctypes.c_uint32),
+    ]
+
+
 
     _fields_ = [
         ("cfg", TrackCfg),
@@ -564,10 +602,13 @@ class ClubTrack(ctypes.Structure):
         ("sameBin", ctypes.c_int32),
         ("sameBinCount", ctypes.c_uint32),
         ("following", ctypes.c_uint8),
+        ("tentative", ctypes.c_uint8),
         ("followBinsPerS", ctypes.c_float),
         ("releasedValid", ctypes.c_uint8),
+        ("tentative", ctypes.c_uint8),
         ("releasedBin", ctypes.c_float),
         ("releasedDopplerMps", ctypes.c_float),
+        ("held", TrackHeld),
     ]
 
 
@@ -583,9 +624,11 @@ class FollowCtx(ctypes.Structure):
         ("ballBinsPerS", ctypes.c_float),
         ("ballClaimIndex", ctypes.c_uint32),
         ("frameUs", ctypes.c_uint32),
+        ("approachKnown", ctypes.c_uint8),
     ]
 
 
+        ("approachKnown", ctypes.c_uint8),
 class ImpactCfg(ctypes.Structure):
     """``l3_impact_cfg_t``."""
 

@@ -7,7 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **IWR6843 defaults: trigger bin 42, trigger and ball snr 1, tee band 6.**
+  `--iwr6843-self-trigger-bin` defaults to 42 (1.97 m) instead of the bin of
+  `--iwr6843-tee-m`, and is checked against the cfg's first capture window;
+  `--iwr6843-self-trigger-snr` defaults to 1 (was 6);
+  `--iwr6843-tee-band-bins` defaults to 6 (was off) and the firmware's own
+  default band is 6; the firmware ball tracker's snr defaults to 1 (was 3).
+  The dump viewer starts from the same values (served from `/api/defaults`).
+  Replays of recorded captures (`firmware_replay`, `evaluate_iwr_tracking`)
+  keep the settings the recordings were made with: trigger snr 6, ball snr 3,
+  no band, the tee bin from the slant range. Rebuild and flash the firmware.
+
+### Fixed
+- **IWR6843 self-trigger stuck on a return standing near the tee.** The
+  trigger kept tracking whatever it saw first, so a static ridge or a hand at
+  the tee held it while the club approached, and the gate never fired (or
+  fired late). A track that has not approached at `minStepBins` per step
+  for `L3_TRIG_STALL_FRAMES` (4) sightings now gives way to the strongest
+  return short of it. Recording 20260927 now takes the club at frame 5 and its
+  impact fit is consistent.
+- **Dump viewer "post = freeze frame" on captures without a retention
+  report** uses the frame where the capture plan switches windows.
+
 ### Added
+- **`ball_slower_than_club` quality bit (4096).** The firmware flags a ball
+  whose launch speed is under the club's approach range rate; the Pi then
+  treats the onboard ball speed and launch angles as implausible (the club's
+  measurements stay trusted) and the shot is never `valid`. On the 51
+  ball-visible captures it flags 14 of 32 wrong ball tracks and none of the
+  18 good ones.
+- **Separate ball-tracker snr.** `--iwr6843-ball-snr` / `trackCfg ballSnr
+  <snr>` set the firmware ball tracker's threshold apart from the trigger's;
+  the viewer has a "ball snr" box.
 - **IWR6843 impact from the tracks either side of the tee band.** The
   firmware fits the club approaching, the club carrying on and the ball
   leaving as straight lines in range and fuses where they cross the ball

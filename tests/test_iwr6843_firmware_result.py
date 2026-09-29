@@ -41,6 +41,8 @@ def make_shot(lib, *, state="result", club_points=7, source=fw.SHOT_IMPACT_GEOME
     d = shot.delivery
     d.points = delivery.get("points", club_points)
     d.speedMps = delivery.get("speed", 40.0)
+    # The approach's range rate; 0 (unset) is "no approach to compare with".
+    d.radialSpeedMps = delivery.get("radial", 0.0)
     d.pathRad = delivery.get("path_deg", 2.0) * DEG
     d.attackRad = delivery.get("attack_deg", -3.0) * DEG
     d.residualM = delivery.get("residual", 0.01)
@@ -105,8 +107,9 @@ def quality(result) -> set[str]:
     return {name for name, bit in fw.QUALITY_FLAGS.items() if result.qualityFlags & bit}
 
 
-# Every flag a clean shot earns; impact_uncertain is a warning, never earned.
-GOOD_QUALITY = set(fw.QUALITY_FLAGS) - {"impact_uncertain"}
+# Every flag a clean shot earns; the warnings are never earned.
+WARNINGS = {"impact_uncertain", "ball_slower_than_club"}
+GOOD_QUALITY = set(fw.QUALITY_FLAGS) - WARNINGS
 
 
 def test_a_complete_shot_is_valid_with_every_core_metric_measured(lib):
@@ -452,7 +455,7 @@ def test_impact_uncertain_is_the_next_bit_after_geometric_impact():
 def test_an_inconsistent_impact_fit_marks_the_shot_impact_uncertain(lib):
     result = build_with_fit(lib, fit_with(lib, "inconsistent"))
     assert "impact_uncertain" in quality(result)
-    assert quality(result) == set(fw.QUALITY_FLAGS)  # nothing else is lost
+    assert quality(result) == GOOD_QUALITY | {"impact_uncertain"}  # nothing else is lost
 
 
 @pytest.mark.parametrize("verdict", ["none", "single_track", "consistent"])
@@ -507,3 +510,74 @@ def test_fit_track_indices_are_named_in_track_order():
     assert (fw.FIT_CLUB_IN, fw.FIT_CLUB_OUT, fw.FIT_BALL_OUT) == tuple(
         fw.FIT_TRACK_NAMES.index(n) for n in ("club_in", "club_out", "ball_out")
     )
+
+
+# --- the ball slower than the club's approach ---------------------------------
+#
+# 51 ball-visible captures (2026-09-29): every good ball track left at 1.02-1.86x
+# the club's approach range rate (launch speed as the board fits it, range-only
+# on every one of them); 14 of the 24 wrong ones with an approach were under 1.0x. The flag doubts the ball's speed
+# and launch angles, never the club's.
+
+
+def test_ball_slower_than_club_is_the_next_bit_after_impact_uncertain():
+    assert fw.QUALITY_FLAGS["ball_slower_than_club"] == fw.QUALITY_FLAGS["impact_uncertain"] << 1
+
+
+@pytest.mark.parametrize(
+    ("launch_mps", "flagged"), [(29.0, True), (29.9, True), (30.0, False), (45.0, False)]
+)
+def test_a_ball_slower_than_the_clubs_approach_is_flagged(lib, launch_mps, flagged):
+    result = build(lib, make_shot(lib, radial=30.0), make_ball(lib), make_launch(speed=launch_mps))
+    assert ("ball_slower_than_club" in quality(result)) is flagged
+
+
+def test_a_flagged_ball_is_never_a_valid_shot_but_the_club_stays_trusted(lib):
+    """Smash 34/36 sits inside the 0.8-1.6 window, so only the new flag acts."""
+    result = build(
+        lib, make_shot(lib, speed=36.0, radial=35.0), make_ball(lib), make_launch(speed=34.0)
+    )
+    assert fw.RESULT_VERDICT_NAMES[result.verdict] == "partial"
+    assert {"angles_plausible", "speeds_plausible", "club_track"} <= quality(result)
+
+
+def test_a_range_only_ball_is_compared_too(lib):
+    """The 51 captures' launches were all range-only (the angle fit rejected
+    its angles), and the evidence is on that speed: a 3D speed only reads higher."""
+    launch = make_launch(speed=20.0, angles=False)
+    result = build(lib, make_shot(lib, speed=36.0, radial=35.0), make_ball(lib), launch)
+    assert "ball_slower_than_club" in quality(result)
+
+
+@pytest.mark.parametrize("delivery", [{"radial": 0.0}, {"radial": 30.0, "valid": False}])
+def test_without_an_approach_nothing_is_compared(lib, delivery):
+    result = build(lib, make_shot(lib, **delivery), make_ball(lib), make_launch(speed=5.0 + 15.0))
+    assert "ball_slower_than_club" not in quality(result)
+
+
+def _parsed(lib, result):
+    buffer = ctypes.create_string_buffer(fw.RESULT_PACKET_BYTES)
+    lib.l3_result_serialize(ctypes.byref(result), buffer, fw.RESULT_PACKET_BYTES)
+    return shot_result.parse_packet(buffer.raw)
+
+
+def test_the_host_does_not_use_a_flagged_balls_speed_or_launch_angles(lib):
+    packet = _parsed(
+        lib,
+        build(
+            lib, make_shot(lib, speed=36.0, radial=35.0), make_ball(lib), make_launch(speed=34.0)
+        ),
+    )
+    assert "ball_slower_than_club" in packet.quality
+    for name in ("ball_speed", "vertical_launch", "horizontal_launch"):
+        assert packet[name].value is not None and not packet[name].usable, name
+    for name in ("club_speed", "club_path", "angle_of_attack"):
+        assert packet[name].usable, name
+
+
+def test_the_host_uses_an_unflagged_balls_launch_angles(lib):
+    packet = _parsed(
+        lib, build(lib, make_shot(lib, radial=30.0), make_ball(lib), make_launch(speed=45.0))
+    )
+    assert "ball_slower_than_club" not in packet.quality
+    assert packet["vertical_launch"].usable and packet["horizontal_launch"].usable
