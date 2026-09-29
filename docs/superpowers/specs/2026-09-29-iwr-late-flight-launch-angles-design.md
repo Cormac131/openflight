@@ -154,3 +154,41 @@ Replay the ball-visible OF Sessions captures with the calibration file.
 - Firmware and Pi must update together: old firmware on a new Pi warns and
   shows no onboard angles; a new board on an old Pi runs uncalibrated. The
   changelog says so.
+
+## Outcome (2026-09-29): stopped after Task 4
+
+Built (commits on feat/iwr-calcs):
+
+- Launch angles are fitted only from ball points at least `lateRangeM`
+  (0.6 m) past the ball; the speed keeps the early fit (Task 2).
+- The TDM branch for ball and ball-hypothesis angles is picked with the
+  fitted track rate instead of the two-point velocity; the measured lag-1
+  phase stays the loop rotor (Task 3, ruled "V3"). The continuous TDM mode
+  of Task 1 was removed: a continuous per-chirp correction from the fitted
+  rate biased the synthetic 12 deg launch to 18.5 deg.
+- The replay takes element calibration (`ReplayConfig.elem_phase_rad` /
+  `elem_gain`) and `late_range_m` (Task 3).
+- The Pi sends `trackCfg cal` and `trackCfg elem` from the calibration file
+  at every start (`board_calibration.py`); firmware without them warns and
+  its onboard launch angles are doubted for the session (Task 4).
+
+Measured on the 18 good ball tracks of the OF Sessions captures, replayed
+with the calibration file, against host LCMF-v1:
+
+| Variant | Tracks with launch angles | Median abs(VLA - LCMF) | Within 5 deg |
+|---|---|---|---|
+| 3D late fit (any TDM variant) | 0 / 18 | - | - |
+| Elevation-only late fit, 0.6 m | 3 / 18 | 2.3 deg | 2 / 3 |
+| Elevation-only late fit, 1.0 m | 8-9 / 18 | 6.2-6.4 deg | 2 / 8-9 |
+
+- In the late window the azimuth still scatters 15-50 deg (SD over the late
+  points) and the fitted positions' y residual is 0.2-1.7 m against the
+  0.094 m limit, so the 3D fit is rejected on every track.
+- Gate (median <= 3 deg and >= 70% within 5 deg): FAIL. Per-point
+  single-source angles do not give usable launch angles on these captures;
+  the host gets them only by fitting the whole trajectory with the two-ray
+  (direct + floor) model (LCMF-v1), which stays the launch-angle source.
+- Not done: `evaluate_iwr_tracking.py --angles`, the viewer's calibration
+  default, the `lateRangeM` sweep, the acceptance JSONs, the DATA_RAM check
+  for this plan's firmware changes. TrackMan: no labelled reference shots in
+  `tests/radar/datasets/`; not measured.

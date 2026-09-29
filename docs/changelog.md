@@ -18,6 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Replays of recorded captures (`firmware_replay`, `evaluate_iwr_tracking`)
   keep the settings the recordings were made with: trigger snr 6, ball snr 3,
   no band, the tee bin from the slant range. Rebuild and flash the firmware.
+- **IWR6843 onboard ball angles.** The firmware picks the TDM branch for
+  ball angles with the ball track's fitted range rate (the lag-1 phase
+  stays the loop rotor), and fits launch angles only from ball points at
+  least 0.6 m past the ball (`lateRangeM`); the launch speed keeps the early
+  points. On the recorded captures the onboard launch angles are still
+  rejected by the fit's residual check (azimuth noise), so the host's
+  LCMF-v1 stays the launch-angle source.
+- **The Pi sends the board its calibration.** At every start the monitor
+  sends `trackCfg cal` (tilt, range bias, horizontal phase reference) and
+  `trackCfg elem` (8 element phases and gains) from the same calibration
+  file the host uses, identity included so a restart clears stale values.
+  Firmware without these commands logs a warning and its onboard launch
+  angles are not used. Update the Pi and the firmware together; rebuild
+  `l3_dump.bin` before flashing.
 
 ### Fixed
 - **IWR6843 self-trigger stuck on a return standing near the tee.** The
