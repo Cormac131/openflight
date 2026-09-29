@@ -342,6 +342,12 @@ class ReplayConfig:
     # "trackCfg ballSnr": the ball tracker's extraction snr, apart from the
     # trigger's ``snr``; None is the recordings' (DEFAULT_BALL_SNR).
     ball_snr: float | None = None
+    # Element calibration ("trackCfg elem"), physical order: None is identity,
+    # as the recordings were made. board_calibration.replay_overrides fills it.
+    elem_phase_rad: tuple[float, ...] | None = None
+    elem_gain: tuple[float, ...] | None = None
+    # The ball tracker's late window for launch angles (lateRangeM); None: firmware default.
+    late_range_m: float | None = None
     # Firmware config constants (tunables.py) set over the defaults; applied last, so they win.
     overrides: Mapping[str, float] = field(default_factory=dict)
 
@@ -721,17 +727,31 @@ def _estimate_angles(
     hit: fw.TargetObs,
     radial_velocity_mps: float,
     chirp_period_s: float,
+    *,
+    track_rate_mps: float | None = None,
 ) -> tuple[fw.AngleObs | None, int]:
-    """One target's angles as the board would estimate them; (obs, flags)."""
+    """One target's angles as the board would estimate them; (obs, flags).
+
+    With ``track_rate_mps`` (the fitted range rate) the loops are summed with
+    the rotor and the TDM phase taken continuously from it, as the board does.
+    """
+    if track_rate_mps:
+        loop = lib.l3_angle_motion_phase(track_rate_mps, chirp_period_s * n_tx)
+        lag1_phase_rad = math.atan2(math.sin(loop), math.cos(loop))
+        radial_velocity_mps = track_rate_mps
+    else:
+        lag1_phase_rad = float(hit.dopplerPhaseRad)
     snapshot = channel_snapshot(
         cube,
         frame,
         int(hit.peakBin) - window_start,
         n_tx,
-        lag1_phase_rad=float(hit.dopplerPhaseRad),
+        lag1_phase_rad=lag1_phase_rad,
         radial_velocity_mps=radial_velocity_mps,
         chirp_period_s=chirp_period_s,
     )
+    if track_rate_mps:
+        snapshot.continuousTdm = 1
     obs = fw.AngleObs()
     if not lib.l3_angle_estimate(ctypes.byref(cal), ctypes.byref(snapshot), ctypes.byref(obs)):
         return None, 0
@@ -750,6 +770,10 @@ def _radar_cal(lib: ctypes.CDLL, config: ReplayConfig) -> fw.RadarCal:
     cal.azimuthOffsetRad = config.azimuth_offset_rad
     cal.elevationOffsetRad = math.radians(config.elevation_offset_deg)
     cal.rangeBiasM = config.range_bias_m
+    if config.elem_phase_rad is not None and config.elem_gain is not None:
+        for index, (phase, gain) in enumerate(zip(config.elem_phase_rad, config.elem_gain)):
+            if lib.l3_cal_set_element(ctypes.byref(cal), index, gain, phase) != 0:
+                raise ValueError(f"element {index}: gain must be positive, got {gain}")
     return cal
 
 
@@ -874,6 +898,11 @@ def replay_dump(
         raise ValueError(f"subbin must be one of {sorted(fw.SUBBIN_NAMES)}, got {config.subbin!r}")
     if config.ball_snr is not None:
         check_ball_snr(config.ball_snr)
+    if (config.elem_phase_rad is None) != (config.elem_gain is None) or (
+        config.elem_phase_rad is not None
+        and (len(config.elem_phase_rad) != 8 or len(config.elem_gain) != 8)
+    ):
+        raise ValueError("element calibration needs 8 element phases and 8 gains")
     tunables.check_overrides(config.overrides)
     n_tx = int(meta["n_tx"])
     loop_period_s = config.loop_period_s or same_tx_loop_period_s(n_tx)
@@ -953,6 +982,8 @@ def replay_dump(
         config.ball_tuning.apply(ball_cfg)
     # The board overrides only the extraction snr (gBallSnr); so does this.
     ball_cfg.snr = DEFAULT_BALL_SNR if config.ball_snr is None else config.ball_snr
+    if config.late_range_m is not None:
+        ball_cfg.lateRangeM = config.late_range_m
     tunables.apply_overrides(config.overrides, "ball", ball_cfg)
     ball_track = fw.BallTrack()
     lib.l3_ball_track_init(ctypes.byref(ball_track), ctypes.byref(ball_cfg))
@@ -1705,6 +1736,9 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
                     hit,
                     float(newest.radialVelocityMps),
                     chirp_period_s,
+                    track_rate_mps=(
+                        lib.l3_track_recent_rate(ctypes.byref(core)) * bin_width_m or None
+                    ),
                 )
                 if obs_angle is not None:
                     lib.l3_ball_track_set_angles(
@@ -1785,6 +1819,7 @@ def _hypothesis_angles(  # pylint: disable=too-many-arguments
             targets[hyp.lastTargetIndex],
             radial,
             chirp_period_s,
+            track_rate_mps=radial or None,
         )
         if obs_angle is not None:
             lib.l3_ball_hyps_set_angles(

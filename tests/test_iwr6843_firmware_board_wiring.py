@@ -238,3 +238,32 @@ def test_ball_snr_is_a_track_cfg_sub_mode():
 def test_ball_extraction_uses_the_configured_ball_snr_else_the_default():
     ball_track = body("l3_considerBallTrack")
     assert "params.snr = (gBallSnr > 0.0F) ? gBallSnr : gBallTrackCfg.snr;" in ball_track
+
+
+def test_ball_angles_use_the_ball_tracks_rate_continuously():
+    ball = body("l3_considerBallTrack")
+    # l3_track_recent_rate(&gBallTrack.core) already feeds the club follow;
+    # pin the angle use itself.
+    assert (
+        "float rateMps = l3_track_recent_rate(&gBallTrack.core) * gBallTrack.core.cfg.binWidthM;"
+        in ball
+    )
+    assert "l3_angle_motion_phase(rateMps, gTrigLoopPeriodS)" in ball
+    assert "snapshot.continuousTdm = 1U;" in ball
+
+
+def test_hypothesis_angles_use_their_fitted_rate_continuously():
+    ball = body("l3_considerBallTrack")
+    hyps = ball[ball.index("l3_ball_hyp_fit(") :]
+    assert "snapshot.continuousTdm = (radial != 0.0F) ? 1U : 0U;" in hyps
+
+
+def test_track_cfg_cal_and_elem_survive_trigger_cfg_and_sensor_start():
+    """Review focus 4: only l3_ensureRadarCal initialises gRadarCal, and only
+    when it has never been set; nothing else overwrites it."""
+    assert SOURCE.count("l3_cal_identity(&gRadarCal") == 1
+    ensure = body("l3_ensureRadarCal")
+    assert "if (gRadarCal.virtualElements == 0U) {" in ensure
+    for handler in ("l3_cli_triggerCfg", "l3_cli_sensorStart"):
+        assert "gRadarCal =" not in body(handler)
+        assert "memset(&gRadarCal" not in body(handler)
