@@ -5,12 +5,16 @@ Stop the kiosk first. It owns this UART.
 
 The command does not wait for the self-trigger. It snapshots whatever is in
 the rolling ring when the dump starts, which is the pre-trigger window unless
-a trigger has already frozen a longer movie. Swing, then run it immediately:
-the wide profile's pre-trigger ring is only a few frames long.
+a trigger has already frozen a longer movie. The wide profile's pre-trigger
+ring is only a few frames (~27 ms), so a timed cue is usually more useful
+than dumping after the fact.
 
     uv run python scripts/iwr6843/l3dump.py
     uv run python scripts/iwr6843/l3dump.py --out miss.l3dump
     uv run python scripts/iwr6843/l3dump.py --wait --count 5
+    uv run python scripts/iwr6843/l3dump.py --loop --out dumps/
+    uv run python scripts/iwr6843/l3dump.py --cue --count 5 --out dumps/
+    uv run python scripts/iwr6843/l3dump.py --loop --cue --out dumps/
 """
 
 from __future__ import annotations
@@ -68,33 +72,109 @@ def save_dump(raw: bytes, path: Path) -> dict:
     return metadata
 
 
+def pre_trigger_window_s(config_path: str) -> float | None:
+    """Configured pre-trigger duration from ``frameCfg`` and ``phaseCaptureCfg``, if present."""
+    period_ms: float | None = None
+    pre_frames: int | None = None
+    with open(config_path, encoding="utf-8") as handle:
+        for rawline in handle:
+            line = rawline.strip()
+            if not line or line.startswith("%"):
+                continue
+            parts = line.split()
+            if parts[0] == "frameCfg" and len(parts) >= 6:
+                period_ms = float(parts[5])
+            elif parts[0] == "phaseCaptureCfg" and len(parts) >= 4:
+                pre_frames = int(parts[3])
+    if period_ms is None or pre_frames is None:
+        return None
+    return pre_frames * period_ms / 1000.0
+
+
+def dump_label(sequence: int, count: int | None) -> str:
+    """Human label for the Nth dump in a finite or open-ended run."""
+    if count is None:
+        return f"dump {sequence}"
+    return f"dump {sequence}/{count}"
+
+
+def cue_swing(
+    sequence: int,
+    count: int | None,
+    countdown_s: float,
+    swing_delay_s: float,
+    *,
+    pause=time.sleep,
+    emit=print,
+) -> None:
+    """Countdown, call the swing, then wait ``swing_delay_s`` before the freeze."""
+    label = dump_label(sequence, count)
+    emit(f"{label}: get ready", flush=True)
+    steps = max(1, int(round(countdown_s)))
+    for remaining in range(steps, 0, -1):
+        emit(f"{remaining}...", flush=True)
+        pause(1.0)
+    emit("SWING!", flush=True)
+    if swing_delay_s > 0:
+        pause(swing_delay_s)
+
+
 def capture(
     radar: IWR6843Radar,
-    count: int,
+    count: int | None,
     settle_s: float,
     wait: bool,
+    cue: bool,
+    countdown_s: float,
+    swing_delay_s: float,
     out: Path | None,
     *,
     clock=datetime.now,
     pause=time.sleep,
     prompt=input,
+    emit=print,
 ) -> list[Path]:
-    """Dump ``count`` times. ``--wait`` freezes on Enter; otherwise each dump follows ``settle_s``."""
+    """Dump ``count`` times, or until Ctrl+C when ``count`` is None.
+
+    ``--cue`` counts down and calls SWING before each freeze. ``--wait`` freezes
+    on Enter. Otherwise each dump follows ``settle_s``.
+    """
     written: list[Path] = []
-    for sequence in range(1, count + 1):
-        if wait:
-            prompt(f"dump {sequence}/{count}: press Enter to freeze the ring ")
-        elif settle_s > 0:
-            pause(settle_s)
-        raw = radar.read_dump()
-        path = output_path(out, clock(), sequence)
-        metadata = save_dump(raw, path)
-        print(
-            f"wrote {path} ({len(raw)} bytes, {metadata['n_frames']} frames)",
-            flush=True,
-        )
-        written.append(path)
+    sequence = 0
+    try:
+        while count is None or sequence < count:
+            sequence += 1
+            if cue:
+                cue_swing(
+                    sequence,
+                    count,
+                    countdown_s,
+                    swing_delay_s,
+                    pause=pause,
+                    emit=emit,
+                )
+            elif wait:
+                prompt(f"{dump_label(sequence, count)}: press Enter to freeze the ring ")
+            elif settle_s > 0:
+                pause(settle_s)
+            raw = radar.read_dump()
+            path = output_path(out, clock(), sequence)
+            metadata = save_dump(raw, path)
+            emit(
+                f"wrote {path} ({len(raw)} bytes, {metadata['n_frames']} frames)",
+                flush=True,
+            )
+            written.append(path)
+    except KeyboardInterrupt:
+        emit(f"\nstopped after {len(written)} dumps", flush=True)
     return written
+
+
+def effective_count(loop: bool, count: int | None) -> int | None:
+    """Finite dump count, or None for an open-ended ``--loop`` run."""
+    if count is not None:
+        return count
+    return None if loop else 1
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -109,7 +189,17 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Destination .l3dump file, or a directory (default: the current directory)",
     )
-    parser.add_argument("--count", type=int, default=1, help="How many dumps to take")
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=None,
+        help="How many dumps to take (default: 1, or until Ctrl+C with --loop)",
+    )
+    parser.add_argument(
+        "--loop",
+        action="store_true",
+        help="Dump repeatedly until Ctrl+C (or until --count if set)",
+    )
     parser.add_argument(
         "--settle-s",
         type=float,
@@ -121,23 +211,64 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Wait for Enter before each dump instead of dumping on a timer",
     )
+    parser.add_argument(
+        "--cue",
+        action="store_true",
+        help="Countdown and call SWING before each dump, then freeze after --swing-delay-s",
+    )
+    parser.add_argument(
+        "--countdown-s",
+        type=float,
+        default=3.0,
+        help="Whole seconds counted down before SWING when --cue is set",
+    )
+    parser.add_argument(
+        "--swing-delay-s",
+        type=float,
+        default=0.4,
+        help="Seconds after SWING before freezing the ring",
+    )
     args = parser.parse_args(argv)
 
     error = port_name_error(args.port, sys.platform)
     if error:
         raise SystemExit(error)
-    if args.count < 1:
+    if args.wait and args.cue:
+        raise SystemExit("use --wait or --cue, not both")
+    if args.count is not None and args.count < 1:
         raise SystemExit("--count must be at least 1")
     if args.settle_s < 0:
         raise SystemExit("--settle-s must be >= 0")
-    if args.out is not None and args.out.suffix.lower() == ".l3dump" and args.count != 1:
-        raise SystemExit("--out as a file needs --count 1; pass a directory for several dumps")
+    if args.countdown_s <= 0:
+        raise SystemExit("--countdown-s must be > 0")
+    if args.swing_delay_s < 0:
+        raise SystemExit("--swing-delay-s must be >= 0")
+    count = effective_count(args.loop, args.count)
+    if args.out is not None and args.out.suffix.lower() == ".l3dump" and count != 1:
+        raise SystemExit("--out as a file needs a single dump; pass a directory for several")
 
     radar = IWR6843Radar(port=args.port)
     print(f"IWR6843 on {radar.port}", flush=True)
+    if args.cue:
+        window = pre_trigger_window_s(args.config)
+        if window is not None:
+            print(
+                f"pre-trigger ring ~{window * 1000:.0f} ms; "
+                f"swing on SWING, freeze {args.swing_delay_s:g}s later",
+                flush=True,
+            )
     try:
         radar.send_config(args.config)
-        capture(radar, args.count, args.settle_s, args.wait, args.out)
+        capture(
+            radar,
+            count,
+            args.settle_s,
+            args.wait,
+            args.cue,
+            args.countdown_s,
+            args.swing_delay_s,
+            args.out,
+        )
     finally:
         try:
             radar.stop_sensor()

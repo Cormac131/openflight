@@ -1,4 +1,4 @@
-"""Host ``l3dump`` snapshot: path, completeness, and the capture loop."""
+"""Host ``l3dump`` snapshot: path, completeness, cue, and the capture loop."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ sys.modules[spec.name] = l3dump
 spec.loader.exec_module(l3dump)
 
 WHEN = datetime(2026, 9, 30, 0, 5, 1, 123456)
+WIDE_CFG = "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
 
 
 def _raw() -> bytes:
@@ -59,6 +60,34 @@ def test_save_dump_writes_a_complete_capture(tmp_path):
     assert metadata["n_frames"] == 2
 
 
+def test_pre_trigger_window_reads_the_wide_profile():
+    assert l3dump.pre_trigger_window_s(WIDE_CFG) == pytest.approx(0.027)
+
+
+def test_effective_count_defaults_and_loop():
+    assert l3dump.effective_count(False, None) == 1
+    assert l3dump.effective_count(True, None) is None
+    assert l3dump.effective_count(True, 5) == 5
+    assert l3dump.effective_count(False, 3) == 3
+
+
+def test_cue_swing_counts_down_then_calls_swing():
+    lines: list[str] = []
+    slept: list[float] = []
+
+    l3dump.cue_swing(
+        1,
+        3,
+        countdown_s=3.0,
+        swing_delay_s=0.4,
+        pause=slept.append,
+        emit=lambda text, flush=False: lines.append(text),
+    )
+
+    assert lines == ["dump 1/3: get ready", "3...", "2...", "1...", "SWING!"]
+    assert slept == [1.0, 1.0, 1.0, 0.4]
+
+
 def test_capture_waits_for_enter_then_writes_each_dump(tmp_path):
     raw = _raw()
     prompts: list[str] = []
@@ -72,6 +101,9 @@ def test_capture_waits_for_enter_then_writes_each_dump(tmp_path):
         count=2,
         settle_s=5.0,
         wait=True,
+        cue=False,
+        countdown_s=3.0,
+        swing_delay_s=0.4,
         out=tmp_path,
         clock=lambda: WHEN,
         pause=lambda _seconds: pytest.fail("a waited dump must not sleep"),
@@ -89,9 +121,71 @@ def test_capture_waits_for_enter_then_writes_each_dump(tmp_path):
     assert written[0].read_bytes() == raw
 
 
+def test_capture_cues_then_freezes(tmp_path):
+    raw = _raw()
+    lines: list[str] = []
+    slept: list[float] = []
+
+    class Radar:
+        def read_dump(self) -> bytes:
+            return raw
+
+    written = l3dump.capture(
+        Radar(),
+        count=1,
+        settle_s=5.0,
+        wait=False,
+        cue=True,
+        countdown_s=2.0,
+        swing_delay_s=0.25,
+        out=tmp_path,
+        clock=lambda: WHEN,
+        pause=slept.append,
+        prompt=lambda _text: pytest.fail("cue mode must not prompt"),
+        emit=lambda text, flush=False: lines.append(text),
+    )
+
+    assert lines[:4] == ["dump 1/1: get ready", "2...", "1...", "SWING!"]
+    assert slept == [1.0, 1.0, 0.25]
+    assert written[0].name == "iwr6843_20260930_000501_123_001.l3dump"
+
+
+def test_capture_loop_stops_on_keyboard_interrupt(tmp_path):
+    raw = _raw()
+    calls = {"n": 0}
+
+    class Radar:
+        def read_dump(self) -> bytes:
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise KeyboardInterrupt
+            return raw
+
+    written = l3dump.capture(
+        Radar(),
+        count=None,
+        settle_s=0.0,
+        wait=False,
+        cue=False,
+        countdown_s=3.0,
+        swing_delay_s=0.4,
+        out=tmp_path,
+        clock=lambda: WHEN,
+        pause=lambda _seconds: None,
+        emit=lambda text, flush=False: None,
+    )
+
+    assert len(written) == 1
+
+
 def test_main_rejects_one_file_for_several_dumps():
-    with pytest.raises(SystemExit, match="--count 1"):
+    with pytest.raises(SystemExit, match="single dump"):
         l3dump.main(["--out", "miss.l3dump", "--count", "2"])
+
+
+def test_main_rejects_wait_with_cue():
+    with pytest.raises(SystemExit, match="--wait or --cue"):
+        l3dump.main(["--wait", "--cue"])
 
 
 def test_port_name_error_rejects_a_windows_name_on_the_pi():
