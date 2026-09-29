@@ -103,6 +103,11 @@ the club-typical value is used — see
 $170 \cdot v \cdot \sin(\text{LA})^{1.2}$ even when a measured value exists,
 keeping the measured number in `spin_rpm_measured` for offline scoring.
 
+Shot finalization in the server is the only place that writes
+`carry_spin_adjusted` for a live shot: the simulator when it can run, the
+spin table otherwise. The same committed number is what the kiosk shows and
+what the simulator connectors receive.
+
 ## Disabling it
 
 ```bash
