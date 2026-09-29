@@ -131,6 +131,37 @@ def test_strided_timestamps_are_honoured(lib):
     assert e.timeUs == pytest.approx(IMPACT_US, abs=2.0)
 
 
+LATE_BASE_US = 1_800_000_000  # ~30 minutes of uptime; exactly representable in float
+
+
+def shifted(samples, base_us):
+    """The samples with base_us added to every timestamp, wrapped to uint32."""
+    return [((t + base_us) % 2**32, r) for t, r in samples]
+
+
+def test_a_late_session_line_keeps_its_timing(lib):
+    # At 1.8e9 us a float's step is 128 us: converting each timestamp to float
+    # before subtracting smeared the 3 ms spacing. dt is taken in integers from
+    # the first point, so only the final absolute time is float-rounded. The
+    # crossing is placed on a float-representable time (first point + 3200 us)
+    # so the check is on the offset from the first point, to 2 us.
+    ball_t = (26_800, 29_800, 32_800, 35_800)  # crossing at 30 000 = first + 3200
+    # The first point lands on LATE_BASE_US; 3200 us is 25 float steps past it.
+    e = estimate(lib, BALL_OUT, shifted(line(60.0, ball_t), LATE_BASE_US - ball_t[0]))
+    assert e.why == WHY["ok"]
+    assert e.speedMps == pytest.approx(60.0, rel=1e-4)
+    assert abs((e.timeUs - LATE_BASE_US) - (IMPACT_US - ball_t[0])) <= 2.0
+
+
+def test_a_line_straddling_the_uint32_wrap_is_fitted(lib):
+    # Timestamps wrap at 2**32 us (~71.6 min); dt from the first point in
+    # int32 keeps the line straight across it.
+    base = 2**32 - 40_000  # the wrap falls between the 2nd and 3rd ball points
+    e = estimate(lib, BALL_OUT, shifted(line(60.0, BALL_OUT_T), base))
+    assert e.why == WHY["ok"]
+    assert e.speedMps == pytest.approx(60.0, rel=1e-4)
+
+
 def test_no_points_is_missing(lib):
     assert estimate(lib, CLUB_IN, []).why == WHY["missing"]
 

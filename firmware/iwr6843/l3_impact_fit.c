@@ -98,7 +98,7 @@ void l3_impact_fit_track(const l3_impact_fit_cfg_t *cfg, uint8_t which, l3_point
     uint32_t n;
     uint32_t first;
     uint32_t i;
-    float t0;
+    uint32_t firstUs;
     float tMean = 0.0F;
     float rMean = 0.0F;
     float stt = 0.0F;
@@ -128,13 +128,15 @@ void l3_impact_fit_track(const l3_impact_fit_cfg_t *cfg, uint8_t which, l3_point
         out->why = L3_FIT_WHY_MISSING;
         return;
     }
-    t0 = (float)point.timestampUs;
+    /* Every dt is an integer difference from the first point, wrap-safe at
+     * the uint32 us rollover and exact before the float conversion. */
+    firstUs = point.timestampUs;
     for (i = 0U; i < n; i++) {
         if (pointAt(ctx, first + i, &point) == 0) {
             out->why = L3_FIT_WHY_MISSING;
             return;
         }
-        t[i] = ((float)point.timestampUs - t0) * 1.0e-6F;
+        t[i] = (float)(int32_t)(point.timestampUs - firstUs) * 1.0e-6F;
         r[i] = point.rangeM;
         tMean += t[i];
         rMean += r[i];
@@ -178,7 +180,11 @@ void l3_impact_fit_track(const l3_impact_fit_cfg_t *cfg, uint8_t which, l3_point
     if (se < floorM) {
         se = floorM;
     }
-    out->timeUs = t0 + tk * 1.0e6F;
+    /* The crossing is solved relative to the first point; adding the integer
+     * base back stores an absolute time whose float step is 2^-23 of it (128 us
+     * at 1.8e9 us, about 30 minutes of uptime). Past the uint32 wrap it can
+     * exceed 2^32; l3_round_us folds it back. */
+    out->timeUs = (float)firstUs + tk * 1.0e6F;
     out->sigmaUs = se / v * 1.0e6F;
     if (!isfinite(out->timeUs) || !isfinite(out->sigmaUs)) {
         out->why = L3_FIT_WHY_NONFINITE;
