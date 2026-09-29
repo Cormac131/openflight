@@ -231,9 +231,19 @@ def test_ties_go_to_the_run_nearest_the_centre(lib):
     assert (band.loBin, band.hiBin) == (45.0, 49.0)
 
 
+def peaked(first_bin=20, size=53, peak=range(31, 36)):
+    values = [1.0] * size
+    for b in peak:  # global bins 51..55 with first bin 20
+        values[b] = 50.0
+    return values
+
+
 def test_without_history_the_band_is_centred(lib):
-    band = place(lib, noisy_map(lib, 20, [3.0] * 53, updates=7), centre=47.0, width=5.0)
+    values = peaked()
+    band = place(lib, noisy_map(lib, 20, values, updates=7), centre=47.0, width=5.0)
     assert (band.loBin, band.hiBin) == (45.0, 49.0)
+    band = place(lib, noisy_map(lib, 20, values, updates=8), centre=47.0, width=5.0)
+    assert (band.loBin, band.hiBin) == (51.0, 55.0)
 
 
 def test_width_wider_than_the_window_falls_back_to_centred(lib):
@@ -244,8 +254,30 @@ def test_width_wider_than_the_window_falls_back_to_centred(lib):
 
 def test_even_width_centred_is_deterministic(lib):
     # centred: lo = round(centre) - (width - 1) // 2 = 47 - 1
-    band = place(lib, noisy_map(lib, 20, [3.0] * 53, updates=0), centre=47.0, width=4.0)
+    band = place(lib, noisy_map(lib, 20, peaked(), updates=0), centre=47.0, width=4.0)
     assert (band.loBin, band.hiBin) == (46.0, 49.0)
+
+
+def test_search_window_is_clamped_to_the_map(lib):
+    # map covers global bins 40..50, narrower than 45 +/- 10; peak at its edge
+    values = [1.0] * 11
+    for b in range(6, 11):  # global 46..50
+        values[b] = 50.0
+    band = place(lib, noisy_map(lib, 40, values), centre=45.0, width=5.0)
+    assert (band.valid, band.loBin, band.hiBin) == (1, 46.0, 50.0)
+
+
+def test_noise_map_restarts_when_the_count_changes(lib):
+    noise = noisy_map(lib, 20, [5.0] * 10)
+    lib.l3_band_noise_update(ctypes.byref(noise), STAT, 20, obs_row([1.0] * 8), 8)
+    assert (noise.count, noise.updates) == (8, 1)
+    assert noise.avg[0] == pytest.approx(1.0)
+
+
+def test_empty_update_is_a_no_op(lib):
+    noise = noisy_map(lib, 20, [5.0] * 10)
+    lib.l3_band_noise_update(ctypes.byref(noise), STAT, 30, obs_row([1.0]), 0)
+    assert (noise.firstBin, noise.count, noise.updates) == (20, 10, 8)
 
 
 def test_zero_width_is_no_band(lib):
