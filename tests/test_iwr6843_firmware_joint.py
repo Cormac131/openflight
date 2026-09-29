@@ -350,6 +350,27 @@ def test_a_departing_ball_is_confirmed_with_resolved_speed(lib):
     assert sum(speeds) / len(speeds) == pytest.approx(45.0, rel=0.25)
 
 
+def test_joint_launch_reports_no_late_fit(lib):
+    """The joint search has no late window, so its launch carries the sentinel
+    (a zeroed lateFrom would read as "the late fit from track point 0")."""
+    tt = TwoTracks(
+        origin_bin=46.0,
+        gate_us=0,
+        club_mps=30.0,
+        ball_mps=45.0,
+        club_stat=9000.0,
+        ball_stat=1500.0,
+        frame_us=FRAME_US,
+        frames=16,
+    )
+    js = make_joint(lib)
+    arm(lib, js, club_seed(46.0, 30.0), GATE_US)
+    run(lib, js, _scene_frames(tt, lib))
+    launch = fw.Launch()
+    assert lib.l3_joint_launch(ctypes.byref(js), None, 0, ctypes.byref(launch)) == 1
+    assert launch.lateFrom == fw.LAUNCH_NO_LATE
+
+
 def test_confirmation_exempts_the_from_rest_first_point(lib):
     """Point 0 is the from-rest first touch (speed 0 by design) and must not
     fail the ballMinSpeedMps gate that applies to later points."""

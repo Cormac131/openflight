@@ -1163,10 +1163,8 @@ def test_replay_ball_angles_use_the_track_rate(lib, monkeypatch):
 
 def test_synthetic_shot_late_flight_vla_matches_its_launch(lib):
     """End to end: the synthesized 12 deg launch is read back from the late
-    points. The synthetic scene has no floor, so this pins the chain, not the
-    multipath fix. If the synthetic generator does not model the array phase
-    (the ball points carry no valid angles), report BLOCKED with that finding
-    rather than loosening the assertion."""
+    points. The synthetic scene has no floor, so this pins the chain (ball points
+    carry valid angles, the late window reads them), not the multipath fix."""
     raw = synth_shot_dump(ball_speed_ms=60.0, vla_deg=12.0, hla_deg=0.0, tee_range_m=TEE_RANGE_M, n_frames=24)
     result = replay_dump(raw, ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN, late_range_m=0.3), lib=lib)
     assert result.launch is not None and result.launch.vla_deg is not None

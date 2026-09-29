@@ -661,6 +661,13 @@ def test_launch_angles_come_from_the_late_points_when_the_early_ones_flip(lib):
     first = fw.TrackPoint()
     lib.l3_track_point(ctypes.byref(ball.track.core), launch.lateFrom, ctypes.byref(first))
     assert (first.rangeBin - ORIGIN_BIN) * BIN_M >= 0.6
+    # Control: the same points fitted over the early window only (which holds the
+    # flipped ones) do not recover the 14 deg, so the late window is what does.
+    early = fw.Delivery()
+    early_launch = fw.Launch()
+    lib.l3_track_delivery_range(ctypes.byref(ball.track.core), 0, 6, 6, ctypes.byref(early))
+    lib.l3_launch_from_delivery(ctypes.byref(early), IMPACT_US, ctypes.byref(early_launch))
+    assert not early_launch.vlaValid or abs(early_launch.vlaRad / DEG - 14.0) > 0.5
 
 
 def test_the_speed_is_still_the_early_fit(lib):
@@ -678,7 +685,7 @@ def test_the_speed_is_still_the_early_fit(lib):
 
 
 def test_a_short_flight_reports_speed_and_no_angles(lib):
-    """Review focus 1: 5 points at 45 m/s never reach 0.6 m with three of them."""
+    """A 5-point flight at 45 m/s never has three points 0.6 m past the ball: speed only."""
     ball, _ = fly(lib, speed=45.0, vla_deg=14.0, frames=5)
     used, launch = ball.launch()
     assert used > 0 and launch.speedValid

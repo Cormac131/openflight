@@ -3427,6 +3427,7 @@ static void l3_trigRearm(void)
     l3_shot_rearm(&gShot);
     l3_ball_track_reset(&gBallTrack);
     memset(&gLaunch, 0, sizeof(gLaunch));
+    gLaunch.lateFrom = L3_LAUNCH_NO_LATE;
     gTrigFireSource = 0U;
     gPostTimestampUs = 0U;
     gPostFramesScored = 0U;
@@ -3498,6 +3499,7 @@ static void l3_clubTrackConfigure(void)
     }
     l3_shot_init(&gShot, &gShotCfg);
     memset(&gLaunch, 0, sizeof(gLaunch));
+    gLaunch.lateFrom = L3_LAUNCH_NO_LATE;
 }
 
 /* The ball tracker acquires 1..originGateBins beyond its origin; with the

@@ -877,6 +877,7 @@ int32_t l3_joint_launch(const l3_joint_t *js, const l3_delivery_t *clubFit,
 {
     if (!js->ballConfirmed || js->ballCount < 2U) return 0;
     memset(out, 0, sizeof(*out));
+    out->lateFrom = L3_LAUNCH_NO_LATE;
     out->points = js->ballCount;
     float sumSpeed = 0.0F;
     uint32_t n = 0U;
