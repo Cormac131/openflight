@@ -469,12 +469,15 @@ const ann = { on: false, obj: "ball", labels: null, dirty: false };
 const annPoints = () => ann.labels[ann.obj].points;
 
 function annStatus(msg, bad) { const s = $("#ann-status"); s.textContent = msg; s.style.color = bad ? "#ff6b6b" : ""; }
+// Redraw the map and put the frame cursor back (renderMap rebuilds the shapes without it).
+function annRedraw() { if (!D) return; renderMap(); setFrame(frame); }
+const ANN_NEEDS_CAPTURE = "Annotate needs a capture from the list, not an upload";
 // Flask answers a malformed body with an HTML 400, so a failed JSON parse is not an error here.
 async function annBody(r) { try { return await r.json(); } catch (e) { return { error: "HTTP " + r.status }; } }
 const annCounts = () => `${ann.labels.ball.points.length} ball, ${ann.labels.club.points.length} club points`;
 
 async function annLoad() {
-  if (!current) { $("#annotate").checked = false; annStatus("Annotate needs a capture from the list, not an upload", true); return; }
+  if (!current) { $("#annotate").checked = false; annStatus(ANN_NEEDS_CAPTURE, true); return; }
   let r, body;
   try { r = await fetch("/api/labels?path=" + encodeURIComponent(current)); body = await annBody(r); }
   catch (e) { $("#annotate").checked = false; annStatus(String(e), true); return; }
@@ -486,13 +489,13 @@ async function annLoad() {
   $("#ann-min-cov").value = body.tolerances.min_coverage;
   $("#ann-notes").value = body.notes || "";
   annStatus(annCounts());
-  renderMap();
+  annRedraw();
 }
 
 function annOff() {
   if (ann.dirty && !confirm("Discard unsaved label changes?")) { $("#annotate").checked = true; return false; }
   ann.on = false; ann.labels = null; ann.dirty = false; $("#annBody").hidden = true; annStatus("");
-  if (D) renderMap();
+  annRedraw();
   return true;
 }
 
@@ -502,7 +505,7 @@ function annSet(frame, bin, remove) {
   pts.sort((a, b) => a.frame - b.frame);
   ann.labels[ann.obj].points = pts; ann.dirty = true;
   annStatus(annCounts() + " (unsaved)");
-  renderMap();
+  annRedraw();
 }
 
 function annClick(ev, el) {
@@ -514,7 +517,7 @@ function annClick(ev, el) {
 }
 
 async function annSave() {
-  if (!ann.labels) return;
+  if (!ann.labels || !current) { annStatus(ANN_NEEDS_CAPTURE, true); return; }
   const L = ann.labels;
   L.reviewed = $("#ann-reviewed").checked;
   L.tolerances = { range_bins: +$("#ann-range-tol").value, min_coverage: +$("#ann-min-cov").value, doppler_mps: null };
@@ -525,7 +528,7 @@ async function annSave() {
     body = await annBody(r);
   } catch (e) { annStatus(String(e), true); return; }
   if (!r.ok) { annStatus(body.error, true); return; }
-  ann.labels = body; ann.dirty = false; annStatus("saved"); renderMap();
+  ann.labels = body; ann.dirty = false; annStatus("saved"); annRedraw();
 }
 
 $("#annotate").addEventListener("change", (e) => (e.target.checked ? annLoad() : annOff()));
@@ -534,10 +537,12 @@ $("#ann-seed").addEventListener("click", () => {
   const F = fw(); if (!F || !ann.labels) return;
   const src = ann.obj === "ball" ? F.ball_points : F.points;
   ann.labels[ann.obj].points = src.map((p) => ({ frame: p.frame, range_bin: p.range_bin, doppler_mps: p.doppler_mps }));
-  ann.dirty = true; annStatus("seeded from firmware (unsaved)"); renderMap();
+  ann.dirty = true; annStatus("seeded from firmware (unsaved)"); annRedraw();
 });
-$("#ann-clear").addEventListener("click", () => { if (!ann.labels) return; ann.labels[ann.obj].points = []; ann.dirty = true; annStatus("cleared (unsaved)"); renderMap(); });
+$("#ann-clear").addEventListener("click", () => { if (!ann.labels) return; ann.labels[ann.obj].points = []; ann.dirty = true; annStatus("cleared (unsaved)"); annRedraw(); });
 $("#ann-save").addEventListener("click", annSave);
+["#ann-reviewed", "#ann-range-tol", "#ann-min-cov", "#ann-notes"].forEach((id) =>
+  $(id).addEventListener("input", () => { if (ann.on) ann.dirty = true; }));
 window.addEventListener("beforeunload", (e) => { if (ann.dirty) { e.preventDefault(); e.returnValue = ""; } });
 
 // ---------- range x time ----------
@@ -613,7 +618,7 @@ function renderMap() {
     });
   }
   base.pmap = shapes;
-  Plotly.react(el, traces, layout({ xaxis: axis("range (m)"), yaxis: axis("time (ms)"), shapes, margin: { l: 55, r: 10, t: 10, b: 40 } }), PLOT_CFG);
+  Plotly.react(el, traces, layout({ xaxis: axis("range (m)"), yaxis: axis("time (ms)"), shapes, uirevision: "map", margin: { l: 55, r: 10, t: 10, b: 40 } }), PLOT_CFG);
   if (!el._click) { el._click = true; el.on("plotly_click", (ev) => (ann.on ? annClick(ev, el) : setFrame(frameAt(ev.points[0].y)))); }
 }
 
@@ -816,6 +821,8 @@ drop.ondragleave = () => drop.classList.remove("over");
 drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); useUpload(e.dataTransfer.files[0]); };
 function useUpload(file) {
   if (!file) return;
+  if (ann.on && !annOff()) return;
+  $("#annotate").checked = false; annStatus(ANN_NEEDS_CAPTURE, true);
   upload = file; current = null; ctx = null; renderFiles(); resetForm();
   history.replaceState(null, "", "#");
   run(true);

@@ -631,3 +631,11 @@ def test_annotate_marks_are_not_the_ball_blue_reused_for_something_else(client):
     """The ball keeps its colour: labels use the object colours, no new blue."""
     page = client.get("/").data.decode()
     assert "ball label" in page and "club label" in page
+
+
+def test_upload_drops_annotate_and_map_keeps_zoom(client):
+    page = client.get("/").data.decode()
+    upload = page.split("function useUpload", 1)[1].split("loadFiles();", 1)[0]
+    assert "annOff()" in upload and "ANN_NEEDS_CAPTURE" in upload
+    assert 'uirevision: "map"' in page
+    assert "!current" in page.split("async function annSave", 1)[1][:200]
