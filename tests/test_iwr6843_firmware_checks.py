@@ -1305,10 +1305,10 @@ def test_arm_command_sends_the_snr_not_a_power_level():
 
 
 def test_trigger_watch_starts_at_the_configured_tee_not_short_of_the_ball():
-    """A ball at bin 37 (1.73 m) must not arm a watch that reaches back to bin 25."""
-    assert fc.trigger_watch(37, 34) == (3, 2)
-    ctx = _ctx(_trigger_radar(), observed_tee_bin=37)
-    assert fc.arm_command(ctx) == "triggerCfg 37 6.0 2 3 2"
+    """A ball past the configured tee arms a watch from the tee out to the ball."""
+    assert fc.trigger_watch(42, 40) == (2, 1)
+    ctx = _ctx(_trigger_radar(), observed_tee_bin=42)
+    assert fc.arm_command(ctx) == "triggerCfg 42 6.0 2 2 1"
 
 
 def test_detector_evidence_collects_trace_and_log_lines_and_skips_missing_commands():
@@ -1422,7 +1422,7 @@ def test_diagnosis_follows_the_log_counters_when_the_club_crossed_the_threshold(
     assert expected in _diagnose(evidence)
 
 
-def _ball_radar(*, ball_bin: int | None = 35, ball_power: float = 8650.0, baseline: float = 1000.0):
+def _ball_radar(*, ball_bin: int | None = 41, ball_power: float = 8650.0, baseline: float = 1000.0):
     """ball scan answers flat until the operator's second prompt, then a bump at ``ball_bin``
     (a global bin); ball status locks on that bin once the tee is occupied."""
     state = {"scans": 0, "occupied": False, "detector": False}
@@ -1477,7 +1477,7 @@ def test_ball_detect_section_needs_the_flag():
 
 
 def test_ball_detect_finds_the_ball_and_hands_the_swing_checks_its_bin():
-    radar, state = _ball_radar(ball_bin=35)
+    radar, state = _ball_radar(ball_bin=41)
     prompts: list[str] = []
 
     def prompt(text):
@@ -1490,21 +1490,21 @@ def test_ball_detect_finds_the_ball_and_hands_the_swing_checks_its_bin():
     assert [r.status for r in results] == ["PASS"] * 3, [(r.name, r.detail) for r in results]
     assert "Remove the ball" in prompts[0] and "1.575 m" in prompts[1]
     detail = results[1].detail
-    assert "expected_bin=34 detected_bin=35" in detail and "ratio=8.65x" in detail
-    assert "detected_range=1.64m" in detail and "setup=ideal: Ready" in detail
-    assert ctx.observed_tee_bin == 35
-    assert fc._tee_bin(ctx) == 35  # pylint: disable=protected-access
-    assert fc.arm_command(ctx).startswith("triggerCfg 35 ")
+    assert "expected_bin=40 detected_bin=41" in detail and "ratio=8.65x" in detail
+    assert "detected_range=1.92m" in detail and "setup=far:" in detail
+    assert ctx.observed_tee_bin == 41
+    assert fc._tee_bin(ctx) == 41  # pylint: disable=protected-access
+    assert fc.arm_command(ctx).startswith("triggerCfg 41 ")
     scans = [line for line in radar.ser.written if line.startswith("ball scan")]
     assert len(scans) == 2 * fc.DEFAULT_SCANS
-    assert scans[0] == "ball scan 34 7", "from the configured tee (bin 34) out 6 bins"
-    assert "firmware bin=35" in results[2].detail and "offset +0" in results[2].detail
+    assert scans[0] == "ball scan 40 7", "from the configured tee (bin 40) out 6 bins"
+    assert "firmware bin=41" in results[2].detail and "offset +0" in results[2].detail
     assert radar.ser.written[-1] == "ball cfg 0 0", "the detector is left off"
     assert "ball cfg 1 0" in radar.ser.written
 
 
 def test_ball_detect_without_a_clear_return_fails_with_the_numbers_and_keeps_the_expected_bin():
-    radar, state = _ball_radar(ball_bin=35, ball_power=1200.0)
+    radar, state = _ball_radar(ball_bin=41, ball_power=1200.0)
 
     def prompt(text):
         state["occupied"] = "Place a ball" in text
@@ -1516,18 +1516,18 @@ def test_ball_detect_without_a_clear_return_fails_with_the_numbers_and_keeps_the
     assert "ratio=1.20x" in results[1].detail
     assert results[2].status == "SKIP"
     assert ctx.observed_tee_bin is None
-    assert fc._tee_bin(ctx) == 34  # pylint: disable=protected-access
+    assert fc._tee_bin(ctx) == 38  # pylint: disable=protected-access
 
 
 def test_ball_detect_reports_a_detector_that_disagrees_with_the_scan():
-    radar, state = _ball_radar(ball_bin=35)
-    # The firmware's detector believes bin 40 while the scan says 35.
+    radar, state = _ball_radar(ball_bin=41)
+    # The firmware's detector believes bin 46 while the scan says 41.
     original = radar.ser._handler  # pylint: disable=protected-access
 
     def handler(line):
         reply = original(line)
         if line in ("ball", "ball status") and state["occupied"]:
-            return reply.replace(b"bin=35", b"bin=40")
+            return reply.replace(b"bin=41", b"bin=46")
         return reply
 
     radar.ser._handler = handler  # pylint: disable=protected-access
@@ -1697,7 +1697,7 @@ def test_host_replay_disagreement_fails(monkeypatch):
 
 def test_host_replay_runs_the_firmware_detector_on_the_bin_the_board_was_armed_with(monkeypatch):
     """Hardware run: the board was armed on the observed bin 37 while the host replayed
-    the computed bin 34 through an older detector, and disagreed on every real swing."""
+    the computed bin through an older detector, and disagreed on every real swing."""
     radar, _state = _swing_radar(_cube())
     seen: dict[str, ReplayConfig] = {}
 

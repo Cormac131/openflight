@@ -76,6 +76,10 @@
     <h1>L3 Dump Viewer</h1>
     <input type="search" id="filter" placeholder="Filter captures…">
     <div class="files" id="files"></div>
+    <div class="row">
+      <button id="hide" title="Hide this capture from the list">Hide</button>
+      <button id="show-hidden" hidden>Show hidden</button>
+    </div>
     <div class="drop" id="drop">Drop a .l3dump here or click to open</div>
     <input type="file" id="pick" accept=".l3dump" hidden>
 
@@ -215,7 +219,10 @@ async function loadDefaults() {
   resetForm();
 }
 
+const HIDDEN_KEY = "openflight.dumpViewer.hidden";
+const SETTINGS_PREFIX = "openflight.dumpViewer.settings:";
 let files = [], current = null, upload = null, D = null, ctx = null, frame = 0, playing = null;
+let filesRoot = "", keepSettings = false;
 let view3d = "mti", viewMap = "mti_db";
 const base = {};  // per-plot shapes without the frame cursor
 
@@ -235,20 +242,26 @@ const fmt = (v, d = 1) => (v == null ? "–" : Number(v).toFixed(d));
 async function loadFiles() {
   const r = await fetch("/api/files").then((r) => r.json());
   files = r.files;
+  filesRoot = r.root || "";
+  restoreForm();
   renderFiles();
   openFromHash();
 }
 function openFromHash() {
   const want = decodeURIComponent(location.hash.slice(1));
+  if (!want) return;
+  const hidden = hiddenPaths();
   const hit = files.find((f) => f.path === want) || files.find((f) => f.name === want);
-  if (hit && hit.path !== current) selectFile(hit.path);
+  if (!hit || hidden.has(hit.path) || hit.path === current) return;
+  selectFile(hit.path);
 }
 window.addEventListener("hashchange", openFromHash);
 function renderFiles() {
   const q = $("#filter").value.toLowerCase();
+  const hidden = hiddenPaths();
   const box = $("#files");
   box.innerHTML = "";
-  files.filter((f) => f.path.toLowerCase().includes(q)).forEach((f) => {
+  files.filter((f) => !hidden.has(f.path) && f.path.toLowerCase().includes(q)).forEach((f) => {
     const d = document.createElement("div");
     d.textContent = f.path;
     d.title = `${f.path} (${(f.bytes / 1024).toFixed(0)} KB)`;
@@ -256,15 +269,20 @@ function renderFiles() {
     d.onclick = () => selectFile(f.path);
     box.appendChild(d);
   });
+  const n = hidden.size;
+  const show = $("#show-hidden");
+  show.hidden = n === 0;
+  show.textContent = `Show hidden (${n})`;
 }
 async function selectFile(path) {
-  if (ann.on && !annOff()) return;
+  if (ann.on && !annOff()) return false;
   current = path; upload = null;
   history.replaceState(null, "", "#" + encodeURIComponent(path));
   renderFiles();
-  resetForm();
+  if (!keepSettings) resetForm();
   await run(true);
   if ($("#annotate").checked) annLoad();
+  return true;
 }
 function resetForm() {
   OPTS.forEach((k) => { const el = $("#" + k); if (el.type === "checkbox") el.checked = FORM_DEFAULTS[k]; else el.value = FORM_DEFAULTS[k]; });
@@ -281,6 +299,64 @@ function readForm() {
   OPTS.forEach((k) => { const el = $("#" + k); o[k] = el.type === "checkbox" ? el.checked : el.value; });
   return o;
 }
+function storageGet(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+function storageSet(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { return; }
+}
+function settingsKey() { return SETTINGS_PREFIX + filesRoot; }
+function saveForm() {
+  storageSet(settingsKey(), readForm());
+  keepSettings = true;
+}
+function restoreForm() {
+  const saved = storageGet(settingsKey());
+  if (!saved || typeof saved !== "object" || Array.isArray(saved)) return false;
+  resetForm();
+  applyDefaults(saved);
+  keepSettings = true;
+  return true;
+}
+function hiddenPaths() {
+  const all = storageGet(HIDDEN_KEY);
+  const list = all && typeof all === "object" ? all[filesRoot] : null;
+  return new Set(Array.isArray(list) ? list : []);
+}
+function setHidden(paths) {
+  const all = storageGet(HIDDEN_KEY);
+  const map = all && typeof all === "object" && !Array.isArray(all) ? all : {};
+  map[filesRoot] = [...paths];
+  storageSet(HIDDEN_KEY, map);
+}
+function nextVisible(path, hidden) {
+  const idx = files.findIndex((f) => f.path === path);
+  for (let i = idx + 1; i < files.length; i++) if (!hidden.has(files[i].path)) return files[i].path;
+  for (let i = idx - 1; i >= 0; i--) if (!hidden.has(files[i].path)) return files[i].path;
+  return null;
+}
+async function hideCurrent() {
+  if (!current) return;
+  const path = current;
+  const hidden = hiddenPaths();
+  hidden.add(path);
+  const next = nextVisible(path, hidden);
+  if (next) {
+    if (!await selectFile(next)) return;
+  } else if (ann.on && !annOff()) return;
+  setHidden(hidden);
+  if (!next) {
+    current = null;
+    upload = null;
+    history.replaceState(null, "", "#");
+  }
+  renderFiles();
+}
 
 // ---------- run ----------
 async function run(fresh) {
@@ -296,7 +372,10 @@ async function run(fresh) {
     } else {
       if (fresh) {
         ctx = await fetch("/api/context?path=" + encodeURIComponent(current)).then((r) => r.json());
-        if (ctx) applyDefaults(ctx.defaults);
+        if (ctx && !keepSettings) {
+          applyDefaults(ctx.defaults);
+          saveForm();
+        }
       }
       res = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: current, options: readForm() }) });
@@ -805,9 +884,11 @@ function renderDetails() {
 // ---------- wiring ----------
 $("#filter").oninput = renderFiles;
 $("#run").onclick = () => run(false);
-$("#reset").onclick = () => { resetForm(); if (ctx && !upload) applyDefaults(ctx.defaults); run(false); };
-$("#useFreeze").onclick = () => { if (D && D.freeze_frame != null) { $("#post_from_frame").value = D.freeze_frame; run(false); } };
-OPTS.forEach((k) => $("#" + k).addEventListener("change", () => { if ($("#auto").checked) run(false); }));
+$("#reset").onclick = () => { resetForm(); if (ctx && !upload) applyDefaults(ctx.defaults); saveForm(); run(false); };
+$("#useFreeze").onclick = () => { if (D && D.freeze_frame != null) { $("#post_from_frame").value = D.freeze_frame; saveForm(); run(false); } };
+OPTS.forEach((k) => $("#" + k).addEventListener("change", () => { saveForm(); if ($("#auto").checked) run(false); }));
+$("#hide").onclick = () => hideCurrent();
+$("#show-hidden").onclick = () => { setHidden(new Set()); renderFiles(); };
 $("#slider").oninput = (e) => setFrame(+e.target.value);
 $("#prev").onclick = () => setFrame(frame - 1);
 $("#next").onclick = () => setFrame(frame + 1);
@@ -839,7 +920,7 @@ function useUpload(file) {
   if (!file) return;
   if (ann.on && !annOff()) return;
   $("#annotate").checked = false; annStatus(ANN_NEEDS_CAPTURE, true);
-  upload = file; current = null; ctx = null; renderFiles(); resetForm();
+  upload = file; current = null; ctx = null; renderFiles(); if (!keepSettings) resetForm();
   history.replaceState(null, "", "#");
   run(true);
 }

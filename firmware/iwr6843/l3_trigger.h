@@ -37,8 +37,9 @@
 #define L3_TRIG_MAX_BINS          64U
 /* Global range-FFT bins (a 128-point FFT). */
 #define L3_TRIG_GLOBAL_BINS       128U
-/* Frames running a bin must hold a candidate to be a standing return. */
-#define L3_TRIG_STANDING_FRAMES   3U
+/* Frames running a bin must hold a candidate to be a standing return.
+ * Eight frames is ~24 ms at 3 ms: a club crosses a bin in about one. */
+#define L3_TRIG_STANDING_FRAMES   8U
 /* Flight-recorder depth: frames with a candidate or an active track. Idle
  * frames only count toward the next record's gap, so a missed swing stays
  * readable for as long as the player takes to ask for it. The board image
@@ -66,12 +67,13 @@
 /* A track held this many frames without approaching at minStepBins per frame
  * (a return standing near the tee: the ridge, a hand) has stalled: it could
  * never fire, so the strongest return short of it takes over (a jump).
- * Counted in the track's age (frames it was seen). */
-#define L3_TRIG_STALL_FRAMES      4U
+ * Counted in the track's age (frames it was seen). Eight frames is a return
+ * that has sat still, not a club that paused for a few frames. */
+#define L3_TRIG_STALL_FRAMES      8U
 /* A candidate more than this many bins ahead of the last one is a jump
- * (another scatterer), not the same target: 5 bins/frame is 78 m/s at
- * 4.7 cm bins and 3 ms frames, past the fastest club (70 m/s). */
-#define L3_TRIG_MAX_STEP_BINS     5U
+ * (another scatterer), not the same target: 8 bins/frame is 125 m/s at
+ * 4.7 cm bins and 3 ms frames. */
+#define L3_TRIG_MAX_STEP_BINS     8U
 /* Noise-floor smoothing: floor += (median - floor) / 2^shift each frame. */
 #define L3_TRIG_FLOOR_SHIFT       3U
 /* Residual-energy floor never falls below this, so snr stays finite. */

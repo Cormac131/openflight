@@ -21,6 +21,7 @@ from openflight.iwr6843.monitor import (
     SelfTriggerConfig,
     measure_trigger_level,
     read_capture_config,
+    self_trigger_bin,
     tee_global_bin,
 )
 from openflight.iwr6843.sparse import (
@@ -254,16 +255,18 @@ def stats_snapshot(ctx: Context) -> StatsSnapshot:
     return parse_snapshot(ctx.radar.stats())
 
 
+def expected_tee_bin(ctx: Context) -> int:
+    """The ball's global range bin for a tee tape from the enclosure front."""
+    from openflight.iwr6843.calibration import antenna_range_m
+
+    return tee_global_bin(antenna_range_m(ctx.tee_m), ctx.config)
+
+
 def _tee_bin(ctx: Context) -> int:
-    """The tee's capture-local bin: where ball-detect saw the ball, else where the range says."""
+    """Bin ``triggerCfg`` watches: the locked ball if known, else two short of the tee."""
     if ctx.observed_tee_bin is not None:
         return ctx.observed_tee_bin
-    return expected_tee_bin(ctx)
-
-
-def expected_tee_bin(ctx: Context) -> int:
-    """The global range bin ``--tee-m`` converts to, checked against this profile's window."""
-    return tee_global_bin(ctx.tee_m, ctx.config)
+    return self_trigger_bin(ctx.tee_m, ctx.config)
 
 
 def _disarm(ctx: Context) -> str:

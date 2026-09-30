@@ -13,18 +13,17 @@ import time
 from openflight.iwr6843.calibration import DEFAULT_TEE_RANGE_M
 from openflight.iwr6843.driver import TRIGGER_NOTICE, IWR6843Radar
 from openflight.iwr6843.monitor import (
+    DEFAULT_IWR6843_CONFIG,
     SELF_TRIGGER_DEFAULT_SNR,
     measure_trigger_level,
-    tee_global_bin,
+    self_trigger_bin,
 )
-
-_DEFAULT_CFG = "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", default=None)
-    parser.add_argument("--config", default=_DEFAULT_CFG)
+    parser.add_argument("--config", default=DEFAULT_IWR6843_CONFIG)
     parser.add_argument("--tee-m", type=float, default=DEFAULT_TEE_RANGE_M)
     parser.add_argument(
         "--snr",
@@ -37,7 +36,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    tee_bin = tee_global_bin(args.tee_m, args.config)
+    tee_bin = self_trigger_bin(args.tee_m, args.config)
     radar = IWR6843Radar(port=args.port)
     try:
         radar.send_config(args.config)

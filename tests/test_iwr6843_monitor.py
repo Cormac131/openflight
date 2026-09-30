@@ -6,6 +6,7 @@ import inspect
 import logging
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -15,6 +16,7 @@ import openflight.iwr6843.monitor as iwr_monitor
 from openflight.iwr6843.board_calibration import BoardCalibration
 from openflight.iwr6843.dump import pack_dump
 from openflight.iwr6843.monitor import (
+    DEFAULT_IWR6843_CONFIG,
     SELF_TRIGGER_DEFAULT_SNR,
     SELF_TRIGGER_OFF_COMMAND,
     TEE_BAND_DEFAULT_BINS,
@@ -26,6 +28,13 @@ from openflight.iwr6843.monitor import (
     tx_order_from_config,
 )
 from openflight.iwr6843.sparse import SparseCapture
+
+
+def test_default_iwr6843_config_is_adaptive16():
+    path = Path(DEFAULT_IWR6843_CONFIG)
+    assert path.name == "iwr6843_l3dump_adaptive_47f3ms_53bin_a16.cfg"
+    text = path.read_text(encoding="utf-8")
+    assert "captureFormat adaptive16" in text
 
 
 class FakeRadar:
@@ -916,6 +925,14 @@ def test_tee_global_bin_is_the_absolute_fft_bin_inside_the_first_window(tmp_path
     # 1.575 m / (6 m / 128) = bin 33.6 -> 34: global, not 34 - 20 = 14 as the
     # window offset. The firmware speaks global bins everywhere now.
     assert tee_global_bin(1.575, path) == 34
+
+
+def test_self_trigger_bin_is_two_short_of_the_ball_for_a_face_tape(tmp_path):
+    """Stock tee 1.575 m from the front → array 1.875 m → ball bin 40 → watch 38."""
+    from openflight.iwr6843.monitor import self_trigger_bin
+
+    path = _cfg(tmp_path, "phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1")
+    assert self_trigger_bin(1.575, path) == 38
 
 
 @pytest.mark.parametrize("tee_m", [0.5, 4.0])

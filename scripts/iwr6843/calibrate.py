@@ -19,7 +19,11 @@ from openflight.iwr6843.calibration_session import (
     parse_club,
     tilt_consistency_sweep,
 )
-from openflight.iwr6843.monitor import IWR6843CaptureMonitor, tx_order_from_config
+from openflight.iwr6843.monitor import (
+    DEFAULT_IWR6843_CONFIG,
+    IWR6843CaptureMonitor,
+    tx_order_from_config,
+)
 from openflight.iwr6843.runtime import IWR6843Runtime
 from openflight.iwr6843.shot import process_dump
 from openflight.rolling_buffer.monitor import RollingBufferMonitor
@@ -45,7 +49,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trigger-pin", type=int, default=17, help="BCM GPIO for sound trigger")
     parser.add_argument(
         "--cfg",
-        default="config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg",
+        default=DEFAULT_IWR6843_CONFIG,
         help="IWR6843 L3 dump cfg file",
     )
     parser.add_argument(

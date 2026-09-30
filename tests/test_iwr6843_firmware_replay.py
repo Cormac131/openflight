@@ -862,16 +862,16 @@ def test_an_uncertain_track_keeps_its_time_and_sigma_in_the_summary():
 
 @pytest.mark.parametrize("band_bins", [None, 6.0])
 def test_a_trigger_stalled_on_a_standing_return_takes_the_approaching_club(lib, band_bins):
-    """20260927: a return standing at bin 44 held the trigger from frame 2 to
-    10, so the club was taken only at frame 11 and the fit came out
-    inconsistent (band off) or single-track with a +-9.5 ms ball (band on).
-    Stalled after L3_TRIG_STALL_FRAMES, it gives way to the club at frame 5,
-    which is followed in and fires from its own approach."""
+    """20260927: a return standing at bin 44 held the trigger, so the club was
+    taken only at frame 11 and the fit came out inconsistent (band off) or
+    single-track with a +-9.5 ms ball (band on). Stalled after
+    L3_TRIG_STALL_FRAMES, it gives way to the club at frame 9, which is
+    followed in and fires from its own approach."""
     path, config = next(p for p in fr.recording_configs() if "20260927" in p[0].name)
     result = fr.replay_file(path, replace(config, band_bins=band_bins), lib=lib)
     log = [result.trig.log[i] for i in range(min(result.trig.logCount, len(result.trig.log)))]
     jumped = next(r for r in log if lib.l3_trig_why_name(r.why) == b"jumped")
-    assert (jumped.frame, jumped.bin) == (5, 29)
+    assert (jumped.frame, jumped.bin) == (9, 34)
     assert result.fired_frame == 12
     assert result.impact_fit.verdict == "consistent"
     assert result.impact_fit.tracks["ball_out"].why == "ok"

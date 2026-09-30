@@ -1122,10 +1122,9 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
     from .iwr6843.monitor import (
         SELF_TRIGGER_DEFAULT_SNR,
         SELF_TRIGGER_DEFAULT_TRACK_FRAMES,
-        SELF_TRIGGER_TEE_LEAD_BINS,
         SelfTriggerConfig,
         check_first_window_bin,
-        tee_global_bin,
+        self_trigger_bin,
     )
 
     tuning = [
@@ -1143,12 +1142,9 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
         return None
     bin_index = args.iwr6843_self_trigger_bin
     if bin_index is None:
-        # Just short of the ball, where the club reaches the gate as it is struck.
-        bin_index = (
-            tee_global_bin(_iwr6843_tee_range_m(args), args.iwr6843_config)
-            - SELF_TRIGGER_TEE_LEAD_BINS
-        )
-    check_first_window_bin(bin_index, args.iwr6843_config, f"self-trigger bin {bin_index}")
+        bin_index = self_trigger_bin(args.iwr6843_tee_m, args.iwr6843_config)
+    else:
+        check_first_window_bin(bin_index, args.iwr6843_config, f"self-trigger bin {bin_index}")
     snr = args.iwr6843_self_trigger_snr
     frames = args.iwr6843_self_trigger_frames
     return SelfTriggerConfig(
@@ -4721,6 +4717,7 @@ def main():
     import argparse  # pylint: disable=import-outside-toplevel
 
     from .iwr6843.calibration import DEFAULT_TEE_RANGE_M  # pylint: disable=import-outside-toplevel
+    from .iwr6843.monitor import DEFAULT_IWR6843_CONFIG  # pylint: disable=import-outside-toplevel
 
     parser = argparse.ArgumentParser(description="OpenFlight UI Server")
     parser.add_argument("--port", "-p", help="Serial port for radar")
@@ -4958,8 +4955,10 @@ def main():
     )
     parser.add_argument(
         "--iwr6843-config",
-        default="config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg",
-        help="TI RF config matching the flashed L3 firmware",
+        default=DEFAULT_IWR6843_CONFIG,
+        help="TI RF config matching the flashed L3 firmware "
+        "(default: adaptive16 47x3 ms; fall back with "
+        "--iwr6843-config config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg)",
     )
     parser.add_argument(
         "--iwr6843-cal",
@@ -5063,11 +5062,13 @@ def main():
         help="net clamps tracks at the net. range or course keeps returns past it "
         "and records the late-window looks (default: net)",
     )
+    from .iwr6843.calibration import DEFAULT_PITCH_DEG  # pylint: disable=import-outside-toplevel
+
     parser.add_argument(
         "--iwr6843-tilt-deg",
         type=float,
-        default=None,
-        help="Override mount tilt from the TI calibration JSON",
+        default=DEFAULT_PITCH_DEG,
+        help=f"Mount tilt in degrees (default: {DEFAULT_PITCH_DEG:g}; overrides the cal JSON)",
     )
     parser.add_argument(
         "--iwr6843-radar-height-m",

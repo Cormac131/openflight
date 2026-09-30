@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from openflight.iwr6843.monitor import tx_order_from_config
+from openflight.iwr6843.monitor import DEFAULT_IWR6843_CONFIG, tx_order_from_config
 from openflight.iwr6843.replay import (
     build_replay_calibration,
     input_from_dump,
@@ -36,7 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ball-height-m", type=float, default=0.040, help="Ball-center height")
     parser.add_argument(
         "--cfg",
-        default="config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg",
+        default=DEFAULT_IWR6843_CONFIG,
         help="Cfg used to infer TX order when --tx-order auto",
     )
     parser.add_argument(

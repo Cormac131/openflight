@@ -116,9 +116,9 @@ def tx_order_from_config(config_path: str | Path) -> str:
 def tee_global_bin(tee_range_m: float, config_path: str | Path, fft_size: int = 128) -> int:
     """The tee's global range-FFT bin, checked to lie in the cfg's first window.
 
-    The firmware speaks global bins everywhere (bin 34 is 1.59 m on a
-    128-point FFT over 6 m). Raises when the tee falls outside the first
-    capture window: the firmware would watch bins it never captures.
+    ``tee_range_m`` is range from the antenna array. Raises when the tee falls
+    outside the first capture window: the firmware would watch bins it never
+    captures.
     """
     absolute = int(round(tee_range_m / (RANGE_SPAN_M / fft_size)))
     return check_first_window_bin(
@@ -210,6 +210,9 @@ def _pause(seconds: float) -> None:
     time.sleep(seconds)
 
 
+# Default RF profile for the kiosk and live IWR scripts: adaptive16 keeps the
+# wide 53-bin IQ16 processing windows and retains a 141 ms movie (24/7/16).
+DEFAULT_IWR6843_CONFIG = "config/iwr6843_l3dump_adaptive_47f3ms_53bin_a16.cfg"
 # A moving return short of the tee counts as a clubhead candidate at this
 # multiple of the firmware's running noise floor. The board's triggerLog
 # shows the snr real swings and idle frames reach; tune from that.
@@ -224,6 +227,19 @@ SELF_TRIGGER_DEFAULT_TRACK_FRAMES = 2
 # bin: on 38 labelled swings the ball was best tracked 2 bins short of its rest
 # bin (470/552 ball points) and lost outright from 4-5 bins short.
 SELF_TRIGGER_TEE_LEAD_BINS = 2
+
+
+def self_trigger_bin(tee_from_front_m: float, config_path: str | Path, fft_size: int = 128) -> int:
+    """``triggerCfg`` bin for a tee tape from the enclosure front.
+
+    Adds the array depth, then aims ``SELF_TRIGGER_TEE_LEAD_BINS`` short of the
+    ball — the same default the kiosk uses without ``--iwr6843-self-trigger-bin``.
+    """
+    from openflight.iwr6843.calibration import antenna_range_m
+
+    ball = tee_global_bin(antenna_range_m(tee_from_front_m), config_path, fft_size)
+    watched = ball - SELF_TRIGGER_TEE_LEAD_BINS
+    return check_first_window_bin(watched, config_path, f"self-trigger bin {watched}")
 
 
 @dataclass(frozen=True)
@@ -954,6 +970,7 @@ class IWR6843CaptureMonitor:
 __all__ = [
     "SELF_TRIGGER_DEFAULT_BIN",
     "SELF_TRIGGER_TEE_LEAD_BINS",
+    "DEFAULT_IWR6843_CONFIG",
     "SELF_TRIGGER_DEFAULT_SNR",
     "TEE_BAND_DEFAULT_BINS",
     "TEE_BAND_MAX_BINS",
@@ -966,6 +983,7 @@ __all__ = [
     "check_first_window_bin",
     "measure_trigger_level",
     "read_capture_config",
+    "self_trigger_bin",
     "tee_global_bin",
     "tx_order_from_config",
 ]

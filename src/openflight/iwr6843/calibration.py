@@ -21,8 +21,14 @@ import numpy as np
 
 DEFAULT_CAL_PATH = "config/iwr6843_calibration_reference.json"
 
+# Mount tilt used when no session log or --iwr6843-tilt-deg supplies one;
+# 0 silently zeros VLA. Round number: per-board cal can override.
+DEFAULT_PITCH_DEG = 10.0
+
 
 # Antenna-center to tee slant range when the setup has not measured one.
+# Tape readings for the kiosk and scripts are from the enclosure front; add
+# ARRAY_DEPTH_M (or call antenna_range_m) before converting to a range bin.
 DEFAULT_TEE_RANGE_M = 1.575
 
 # Enclosure face to the antenna array. A tape measured from the face reads this

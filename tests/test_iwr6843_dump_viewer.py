@@ -75,6 +75,17 @@ def _variable_dump(
 # --- options ---------------------------------------------------------------
 
 
+def test_default_pitch_is_ten_degrees():
+    """The page's /api/defaults fill pitch from ViewerOptions; 0 silently zeros VLA."""
+    assert dv.ViewerOptions().pitch_deg == pytest.approx(10.0)
+
+
+def test_default_tee_and_dest_bins_are_thirty_eight():
+    options = dv.ViewerOptions()
+    assert options.tee_bin == 38
+    assert options.dest_bin == 38
+
+
 def test_options_coerce_form_strings_and_skip_blanks():
     options = dv.ViewerOptions.from_mapping(
         {
@@ -89,7 +100,7 @@ def test_options_coerce_form_strings_and_skip_blanks():
         }
     )
     assert options.tee_bin == 41
-    assert options.dest_bin is None
+    assert options.dest_bin == 38  # blank means unset → form default
     assert options.snr == 6.5
     assert options.stat == "energy"
     assert options.impact_armed is True
@@ -321,14 +332,15 @@ def test_a_whole_shot_carries_the_band_and_the_impact_fit():
 
 
 def test_default_options_are_the_boards():
-    """Tee bin 42, trigger and ball snr 1 on the peak statistic, a 6-bin band."""
+    """Tee and dest bin 38, trigger and ball snr 1 on the peak statistic, a 6-bin band."""
     options = dv.ViewerOptions()
-    assert options.tee_bin == 42
+    assert options.tee_bin == 38
+    assert options.dest_bin == 38
     assert options.snr == 1.0
     assert options.stat == "peak"
     assert options.band_bins == 6.0
     assert options.ball_snr == 1.0
-    assert dv.tee_bin_for(options) == 42
+    assert dv.tee_bin_for(options) == 38
 
 
 @needs_compiler
@@ -472,7 +484,14 @@ def test_server_serves_the_default_options(client):
     """The page fills its form from these, so the defaults live in one place."""
     body = client.get("/api/defaults").get_json()
     assert body == dataclasses.asdict(dv.ViewerOptions())
-    assert (body["tee_bin"], body["snr"], body["stat"], body["band_bins"]) == (42, 1.0, "peak", 6.0)
+    assert (body["tee_bin"], body["dest_bin"], body["snr"], body["stat"], body["band_bins"]) == (
+        38,
+        38,
+        1.0,
+        "peak",
+        6.0,
+    )
+    assert body["pitch_deg"] == pytest.approx(10.0)
 
 
 def test_page_has_a_box_for_every_option(client):
@@ -859,3 +878,32 @@ def test_the_page_says_when_no_session_log_was_found_even_with_manifest_options(
     page = client.get("/").data.decode()
     ctx = page.split("function renderCtx", 1)[1].split("function chip", 1)[0]
     assert "!c || !c.session_file" in ctx
+
+
+def test_hide_removes_the_open_dump_from_the_list_and_remembers_it(client):
+    """Hiding is a list filter for this served folder, remembered in the browser."""
+    page = client.get("/").data.decode()
+    assert 'id="hide"' in page and 'id="show-hidden"' in page
+    assert "openflight.dumpViewer.hidden" in page
+    render = page.split("function renderFiles()", 1)[1].split("async function selectFile", 1)[0]
+    assert "hidden.has(f.path)" in render
+    hide = page.split("async function hideCurrent()", 1)[1].split("async function run", 1)[0]
+    assert "setHidden" in hide and "selectFile" in hide and "filesRoot" in page
+    opening = page.split("function openFromHash()", 1)[1].split("function renderFiles", 1)[0]
+    assert "hidden.has" in opening
+
+
+def test_switching_dumps_keeps_the_firmware_form(client):
+    """Session defaults fill an empty form once; later dumps keep what is on screen."""
+    page = client.get("/").data.decode()
+    select = page.split("async function selectFile", 1)[1].split("function resetForm", 1)[0]
+    assert "if (!keepSettings) resetForm();" in select
+    run = page.split("async function run(fresh)", 1)[1].split("function ", 1)[0]
+    assert "if (ctx && !keepSettings)" in run
+    assert "saveForm()" in run
+    assert "openflight.dumpViewer.settings:" in page
+    load = page.split("async function loadFiles()", 1)[1].split("function openFromHash", 1)[0]
+    assert "restoreForm()" in load
+    reset = page.split('$("#reset").onclick', 1)[1].split('$("#useFreeze")', 1)[0]
+    assert "saveForm()" in reset
+    assert 'OPTS.forEach((k) => $("#" + k).addEventListener("change", () => { saveForm();' in page

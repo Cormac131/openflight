@@ -27,11 +27,13 @@ import numpy as np
 from openflight.iwr6843.calibration import DEFAULT_TEE_RANGE_M
 from openflight.iwr6843.driver import IWR6843Radar
 from openflight.iwr6843.firmware_checks import parse_trig
-from openflight.iwr6843.monitor import measure_trigger_level, tee_global_bin
+from openflight.iwr6843.monitor import (
+    DEFAULT_IWR6843_CONFIG,
+    measure_trigger_level,
+    self_trigger_bin,
+)
 from openflight.iwr6843.self_trigger import BallLeaveDetector, TriggerObservation, replay_dump
 from openflight.iwr6843.sparse import SparsePlan
-
-_DEFAULT_CFG = "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
 _QUIET_POLL_S = 2.0
 
 
@@ -400,7 +402,7 @@ def main() -> None:
         default=None,
         help="IWR6843 CLI device. Leave unset to probe /dev/ttyUSB*. On Windows pass COMx.",
     )
-    parser.add_argument("--config", default=_DEFAULT_CFG)
+    parser.add_argument("--config", default=DEFAULT_IWR6843_CONFIG)
     parser.add_argument("--tee-m", type=float, default=DEFAULT_TEE_RANGE_M)
     parser.add_argument(
         "--level",
@@ -414,7 +416,7 @@ def main() -> None:
     error = port_name_error(args.port, sys.platform)
     if error:
         raise SystemExit(error)
-    tee_bin = tee_global_bin(args.tee_m, args.config)
+    tee_bin = self_trigger_bin(args.tee_m, args.config)
     radar = IWR6843Radar(port=args.port)
     print(f"IWR6843 on {radar.port}. Stop the kiosk before swinging.", flush=True)
     try:

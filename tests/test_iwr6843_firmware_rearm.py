@@ -596,7 +596,11 @@ def test_sensor_start_resets_rearm_latency_and_the_counter_runs():
 
 def test_rearm_task_outranks_the_cli():
     """A stats or debug write on the CLI must not push the next HWA arm past the
-    inter-frame gap; the 2 ms profiles leave about 380 us after the chirps."""
+    inter-frame gap; the 2 ms profiles leave about 380 us after the chirps.
+    Detection sits between them: above the CLI, so that same write cannot reuse
+    a scratch slot before the self-trigger scores it, and below rearm."""
     source = FIRMWARE.read_text(encoding="utf-8")
 
-    assert "#define L3_HWA_REARM_TASK_PRIORITY (L3_CLI_TASK_PRIORITY + 1U)" in source
+    assert "#define L3_DETECT_TASK_PRIORITY (L3_CLI_TASK_PRIORITY + 1U)" in source
+    assert "#define L3_HWA_REARM_TASK_PRIORITY (L3_DETECT_TASK_PRIORITY + 1U)" in source
+    assert "#define L3_CTRL_TASK_PRIORITY (L3_HWA_REARM_TASK_PRIORITY + 1U)" in source

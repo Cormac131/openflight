@@ -33,11 +33,10 @@ PHASES = (
     "away",
     "fired",
 )
-# The firmware trigger's ``triggerCfg`` defaults as the Pi sends them: the
-# global bin it watches (1.97 m on a 128-point FFT over 6 m; the tee distance
-# still places the geometry and the capture windows) and its threshold over
-# the running floor. The replay and the viewer start from the same values.
-FIRMWARE_TRIGGER_DEFAULT_BIN = 42
+# The firmware trigger's ``triggerCfg`` defaults as the Pi sends them for the
+# stock setup (tee 1.575 m from the enclosure front → array 1.875 m → bin 40,
+# watched two bins short). The replay and the viewer start from the same values.
+FIRMWARE_TRIGGER_DEFAULT_BIN = 38
 FIRMWARE_TRIGGER_DEFAULT_SNR = 1.0
 # The ball tracker's own snr on the board (l3_ball_track_cfg_defaults), which
 # "trackCfg ballSnr 0" restores.

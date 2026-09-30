@@ -5,9 +5,9 @@ Stop the kiosk first. It owns this UART.
 
 The command does not wait for the self-trigger. It snapshots whatever is in
 the rolling ring when the dump starts, which is the pre-trigger window unless
-a trigger has already frozen a longer movie. The wide profile's pre-trigger
-ring is only a few frames (~27 ms), so a timed cue is usually more useful
-than dumping after the fact.
+a trigger has already frozen a longer movie. The adaptive profile keeps 24
+pre-trigger frames (~72 ms); a timed cue is still useful when you want the
+swing centred in that window.
 
     uv run python scripts/iwr6843/l3dump.py
     uv run python scripts/iwr6843/l3dump.py --out miss.l3dump
@@ -27,8 +27,7 @@ from pathlib import Path
 
 from openflight.iwr6843.driver import IWR6843Radar
 from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
-
-_DEFAULT_CFG = "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
+from openflight.iwr6843.monitor import DEFAULT_IWR6843_CONFIG
 
 
 def port_name_error(port: str | None, platform: str) -> str | None:
@@ -182,7 +181,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--port", default=None, help="CLI port. Leave unset to probe; on Windows pass COMx."
     )
-    parser.add_argument("--config", default=_DEFAULT_CFG)
+    parser.add_argument("--config", default=DEFAULT_IWR6843_CONFIG)
     parser.add_argument(
         "--out",
         type=Path,

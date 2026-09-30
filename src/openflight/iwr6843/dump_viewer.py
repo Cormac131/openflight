@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from openflight.iwr6843 import firmware_replay as fr, self_trigger as st
-from openflight.iwr6843.calibration import antenna_range_m
+from openflight.iwr6843.calibration import DEFAULT_PITCH_DEG, antenna_range_m
 from openflight.iwr6843.dump import is_range_snapshot, parse_dump, range_data
 from openflight.iwr6843.firmware_host import OBS_WAVELENGTH_M
 from openflight.iwr6843.shot import geometry_from_header
@@ -43,7 +43,7 @@ class ViewerOptions:  # pylint: disable=too-many-instance-attributes
     """What the page lets you change before a run. None means "use the default"."""
 
     tee_bin: int | None = st.FIRMWARE_TRIGGER_DEFAULT_BIN  # None: from tee_range_m
-    dest_bin: int | None = None
+    dest_bin: int | None = st.FIRMWARE_TRIGGER_DEFAULT_BIN
     snr: float = st.FIRMWARE_TRIGGER_DEFAULT_SNR  # the trigger's (triggerCfg)
     track_frames: int = fr.DEFAULT_TRACK_FRAMES
     stat: str = "peak"
@@ -51,7 +51,7 @@ class ViewerOptions:  # pylint: disable=too-many-instance-attributes
     post_from_frame: int | None = None
     impact_armed: bool = False
     stop_at_fire: bool = False
-    pitch_deg: float = 0.0
+    pitch_deg: float = DEFAULT_PITCH_DEG
     tee_range_m: float = st.DEFAULT_TEE_RANGE_M
     py_level: float = st.DEFAULT_LEVEL
     py_hits: int = st.DEFAULT_HITS
@@ -74,6 +74,7 @@ class ViewerOptions:  # pylint: disable=too-many-instance-attributes
         from the slant range, no tee band), not today's defaults."""
         recorded = {
             "tee_bin": None,
+            "dest_bin": None,
             "snr": fr.DEFAULT_SNR,
             "ball_snr": fr.DEFAULT_BALL_SNR,
             "band_bins": 0.0,

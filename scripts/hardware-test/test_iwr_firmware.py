@@ -28,9 +28,9 @@ sys.path.insert(0, "src")
 from openflight.iwr6843 import firmware_checks as fc  # noqa: E402
 from openflight.iwr6843.calibration import DEFAULT_TEE_RANGE_M  # noqa: E402
 from openflight.iwr6843.driver import IWR6843Radar  # noqa: E402
-from openflight.iwr6843.monitor import SELF_TRIGGER_DEFAULT_SNR  # noqa: E402
+from openflight.iwr6843.monitor import DEFAULT_IWR6843_CONFIG, SELF_TRIGGER_DEFAULT_SNR  # noqa: E402
 
-DEFAULT_CONFIG = "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
+DEFAULT_CONFIG = DEFAULT_IWR6843_CONFIG
 
 
 def port_name_error(port: str | None, platform: str) -> str | None:

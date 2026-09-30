@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from openflight.iwr6843.lcmf import LCMFResult, estimate_lcmf_v1
-from openflight.iwr6843.monitor import tx_order_from_config
+from openflight.iwr6843.monitor import DEFAULT_IWR6843_CONFIG, tx_order_from_config
 from openflight.iwr6843.recovery import (
     RecoveryPrior,
     find_recovery_candidates,
@@ -39,7 +39,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--cfg",
-        default="config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg",
+        default=DEFAULT_IWR6843_CONFIG,
     )
     parser.add_argument(
         "--tdm-sign-policy",

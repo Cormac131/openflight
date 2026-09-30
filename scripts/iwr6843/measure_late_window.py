@@ -15,6 +15,7 @@ import time
 from openflight.iwr6843.calibration import DEFAULT_TEE_RANGE_M
 from openflight.iwr6843.driver import IWR6843Radar
 from openflight.iwr6843.late_window import capture_late_window, plan_late_window
+from openflight.iwr6843.monitor import DEFAULT_IWR6843_CONFIG
 
 
 def main() -> None:
@@ -26,7 +27,7 @@ def main() -> None:
     parser.add_argument("--tee-m", type=float, default=DEFAULT_TEE_RANGE_M)
     parser.add_argument(
         "--restore-cfg",
-        default="config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg",
+        default=DEFAULT_IWR6843_CONFIG,
     )
     args = parser.parse_args()
     plan = plan_late_window(

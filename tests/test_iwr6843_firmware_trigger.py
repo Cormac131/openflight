@@ -538,7 +538,7 @@ def test_without_a_continuation_the_strongest_return_starts_a_new_track(lib):
 
 # Mirror L3_TRIG_STALL_FRAMES: sightings a track may hold without approaching at
 # minStepBins per frame before a return short of it may take over.
-STALL_FRAMES = 4
+STALL_FRAMES = 8
 
 
 def test_a_stalled_return_gives_way_to_a_club_approaching_short_of_it(lib):
@@ -1115,32 +1115,31 @@ def test_a_standing_return_is_not_acquired_again_after_the_track_is_lost(lib):
     assert det.records()[-1].bin == 10 and det.whys()[-1] == "acquired"
 
 
-# Mirror L3_TRIG_MAX_STEP_BINS: no club covers more than this between two 3 ms
-# frames (70 m/s is 4.5 bins at 4.7 cm bins).
-MAX_STEP_BINS = 5
+# Mirror L3_TRIG_MAX_STEP_BINS: 8 bins/frame is 125 m/s at 4.7 cm and 3 ms.
+MAX_STEP_BINS = 8
 
 
-def test_a_step_of_more_than_five_bins_is_not_the_same_target(lib):
-    """Capture 2026-08-24 12:35:56 #029: a track at bin 37 'advanced' to a
-    return 6 bins on in one frame (94 m/s) and fired the gate 8 frames early."""
-    det = detector(lib)
-    det.feed({9: CLUB})
-    det.feed({9 + MAX_STEP_BINS: CLUB})
+def test_a_step_of_more_than_eight_bins_is_not_the_same_target(lib):
+    """A step of one frame's limit still continues the track. One bin past it
+    is another scatterer and restarts. Both land short of the gate."""
+    det = detector(lib, approachBins=20)
+    det.feed({0: CLUB})
+    det.feed({MAX_STEP_BINS: CLUB})
     assert det.whys()[-1] == "advanced"
-    det2 = detector(lib)
-    det2.feed({9: CLUB})
-    det2.feed({9 + MAX_STEP_BINS + 1: CLUB})
+    det2 = detector(lib, approachBins=20)
+    det2.feed({0: CLUB})
+    det2.feed({MAX_STEP_BINS + 1: CLUB})
     assert det2.whys()[-1] == "jumped"
-    assert det2.trig.trackStartBin == 9 + MAX_STEP_BINS + 1
+    assert det2.trig.trackStartBin == MAX_STEP_BINS + 1
 
 
 def test_a_bridged_miss_lets_the_step_cover_the_missed_frames_ground(lib):
-    """A club moving 3 bins a frame that misses one frame is 6 bins on: the
-    same target, not a jump."""
-    det = detector(lib)
-    det.feed({8: CLUB})
+    """A miss lets the next frame cover that frame's ground too: past one
+    frame's step, still the same target, and still short of the gate."""
+    det = detector(lib, approachBins=20)
+    det.feed({0: CLUB})
     det.feed({})  # a missed frame, bridged
-    det.feed({8 + MAX_STEP_BINS + 2: CLUB})  # 7 bins on: over one frame's step, short of the gate
+    det.feed({MAX_STEP_BINS + 2: CLUB})
     assert det.whys()[-1] == "advanced"
 
 
