@@ -88,6 +88,15 @@ float l3_angle_chirp_phase(float lag1PhaseRad, uint32_t ntx, float radialVelocit
 /* Conventional beamforming on n (<= 8) elements already in physical order
  * and corrected. Returns the peak angle (radians, positive up) and the
  * peak-to-mean power ratio. */
+/* The elevation scan's steering rotors, one per grid step, depend only on
+ * the grid: computed once (the same sinf/cosf the scan used to call per
+ * step) so the scan does no transcendental. Idempotent; the board calls it
+ * before any task runs, and the scan calls it too for a host caller that
+ * did not. */
+void l3_angle_tables_init(void);
+/* The rotor of grid step (0..L3_ANGLE_GRID_STEPS-1): 0, or -1 (out
+ * untouched) off the grid. */
+int32_t l3_angle_steering_rotor(uint32_t step, l3_cpx_t *out);
 float l3_angle_bartlett(const l3_cpx_t *elements, uint32_t n, float *peakRatio);
 /* Both angles from a snapshot. Returns 1 when at least the elevation could be
  * estimated (two TX and at least two RX), else 0 with both flags clear.

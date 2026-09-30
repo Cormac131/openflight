@@ -614,6 +614,29 @@ that is refused or does not finish falls back to scoring in place. The
 probe line gains `dss_prep_us` (the gather, or the invalidate) and
 `gathered`; SCORE reports the same preparation as its `dss_inv_us`.
 
+#### A cheaper frame
+
+See `docs/development/iwr6843-firmware-architecture.md` for the whole
+pipeline. What changed, all with the replay's outcomes unchanged over every
+committed recording:
+
+- the ball detector updates every eighth frame (`L3_BALL_FRAMES_PER_UPDATE`;
+  `l3_ball_cfg_defaults_at` rescales its counts, rates and persistence
+  window to the same times) and estimates the ball's angle only when due
+  (`l3_ball_angle_due`: a new or moved lock, then every 20 updates)
+- the club's angle is queued, not estimated, on the decision path
+  (`l3_angle_queue.c`): a snapshot keyed by the point's timestamp, estimated
+  by `l3_angleTask` (priority 2, below the CLI; its stack and the queue in
+  HS-RAM). The task peeks, estimates unlocked and takes the job only if it
+  is still the oldest, so a fire frame's drain (after the freeze request,
+  before `l3_shotObserve`) never misses one. `triggerLog perf` prints
+  `angles queued= done= stale= failed= dropped= pending=`
+- `l3_angle_bartlett` reads its steering rotors from a table filled once
+  (`l3_angle_tables_init`, in HS-RAM: the program TCM is read-only on a
+  flashed board)
+- `l3_iq16_channel_stats` and the float paths read each sample once
+- `l3_channels.c` holds the four per-channel loops `l3_dump.c` had
+
 #### MSS memory
 
 The detect timing's buffers overflowed DATA_RAM by 1,568 B (`.myFiqStack`

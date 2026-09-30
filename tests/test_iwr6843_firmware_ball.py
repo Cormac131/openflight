@@ -8,11 +8,13 @@ compact rise at one bin, then leaving. Bins are global range-FFT bins.
 from __future__ import annotations
 
 import ctypes
-import shutil
+import re
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from openflight.iwr6843 import firmware_host as fw
 
 FIRMWARE_DIR = Path(__file__).parents[1] / "firmware" / "iwr6843"
 SOURCE = FIRMWARE_DIR / "l3_ball.c"
@@ -32,10 +34,19 @@ class Cfg(ctypes.Structure):
         ("stableUpdates", ctypes.c_uint32),
         ("goneFraction", ctypes.c_float),
         ("goneUpdates", ctypes.c_uint32),
+        ("framesPerUpdate", ctypes.c_uint32),
     ]
 
 
 REASONS = ["none", "no_delta", "too_wide", "unstable", "gone"]
+
+
+class AngleClock(ctypes.Structure):
+    _fields_ = [
+        ("valid", ctypes.c_uint8),
+        ("bin", ctypes.c_uint32),
+        ("age", ctypes.c_uint32),
+    ]
 
 
 class Ball(ctypes.Structure):
@@ -62,18 +73,25 @@ class Ball(ctypes.Structure):
         ("locks", ctypes.c_uint32),
         ("releases", ctypes.c_uint32),
         ("reasons", ctypes.c_uint32 * len(REASONS)),
+        ("buildRate", ctypes.c_float),
+        ("currentRate", ctypes.c_float),
+        ("backgroundRate", ctypes.c_float),
+        ("riseRate", ctypes.c_float),
+        ("historyUpdates", ctypes.c_uint32),
     ]
 
 
 @pytest.fixture(scope="module")
 def lib(tmp_path_factory):
-    compiler = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    # The shared finder: cc, gcc or clang, else the ziglang wheel's zig cc
+    # (a Windows checkout has no other; this module skipped there before).
+    compiler = fw.host_compiler_command()
     if compiler is None:
         pytest.skip("no C compiler for the firmware ball detector")
     out = tmp_path_factory.mktemp("l3_ball") / "l3_ball.so"
     subprocess.run(
         [
-            compiler,
+            *compiler,
             "-std=c99",
             "-Wall",
             "-Wextra",
@@ -108,6 +126,13 @@ def lib(tmp_path_factory):
     library.l3_ball_state_name.restype = ctypes.c_char_p
     library.l3_ball_reason_name.argtypes = [ctypes.c_uint8]
     library.l3_ball_reason_name.restype = ctypes.c_char_p
+    library.l3_ball_cfg_defaults_at.argtypes = [ctypes.POINTER(Cfg), ctypes.c_uint32]
+    library.l3_ball_angle_due.argtypes = [
+        ctypes.POINTER(Ball),
+        ctypes.POINTER(AngleClock),
+        ctypes.c_uint32,
+    ]
+    library.l3_ball_angle_due.restype = ctypes.c_int32
     library.l3_ball_persistence.argtypes = [ctypes.POINTER(Ball)]
     library.l3_ball_persistence.restype = ctypes.c_float
     library.l3_ball_confidence.argtypes = [ctypes.POINTER(Ball)]
@@ -126,10 +151,13 @@ BALL_POWER = 6.0e6  # bin 48 goes from 1e6 to 6e6: ratio 5
 
 
 class Lane:
-    def __init__(self, lib, **overrides):
+    def __init__(self, lib, *, frames_per_update: int | None = None, **overrides):
         self.lib = lib
         self.cfg = Cfg()
-        lib.l3_ball_cfg_defaults(ctypes.byref(self.cfg))
+        if frames_per_update is None:
+            lib.l3_ball_cfg_defaults(ctypes.byref(self.cfg))
+        else:
+            lib.l3_ball_cfg_defaults_at(ctypes.byref(self.cfg), frames_per_update)
         self.cfg.enabled = 1
         for name, value in overrides.items():
             setattr(self.cfg, name, value)
@@ -411,3 +439,174 @@ def test_a_rise_that_never_locks_is_learned_slowly_rather_than_never(lib):
     )
     lane.run(40000, extra=body)  # ~4 minutes
     assert lane.ball.background[35 - WINDOW_START] == pytest.approx(5.0e6, rel=0.05)
+
+
+# --- the cadence: updates every framesPerUpdate frames ------------------------
+#
+# The ball detector scanned the whole window's static power every second
+# frame, and once locked estimated the ball's angle every update (~1.6 ms on
+# the R4F), for a ball that does not move. Its counts and learning rates are
+# per update: l3_ball_cfg_defaults_at scales them so the time constants in
+# frames stay those of today's every-second-frame cadence.
+
+
+def test_the_defaults_are_todays_every_second_frame_cadence(lib):
+    cfg = Cfg()
+    lib.l3_ball_cfg_defaults(ctypes.byref(cfg))
+    assert (cfg.framesPerUpdate, cfg.buildUpdates, cfg.stableUpdates, cfg.goneUpdates) == (
+        2,
+        64,
+        12,
+        20,
+    )
+
+
+def test_a_slower_cadence_scales_the_counts_to_the_same_time(lib):
+    cfg = Cfg()
+    lib.l3_ball_cfg_defaults_at(ctypes.byref(cfg), 8)
+    assert (cfg.framesPerUpdate, cfg.buildUpdates, cfg.stableUpdates, cfg.goneUpdates) == (
+        8,
+        16,
+        3,
+        5,
+    )
+
+
+def test_a_cadence_of_zero_is_refused(lib):
+    cfg = Cfg()
+    lib.l3_ball_cfg_defaults(ctypes.byref(cfg))
+    cfg.enabled = 1
+    cfg.framesPerUpdate = 0
+    assert lib.l3_ball_cfg_check(ctypes.byref(cfg)) != 0
+
+
+def test_the_rates_at_todays_cadence_are_todays_constants(lib):
+    """Bit for bit the rates the update used as literals: 1/8 while building,
+    1/2^2 for the current power, 1/2^8 and 1/2^13 for the background."""
+    lane = Lane(lib)
+    assert (lane.ball.buildRate, lane.ball.currentRate) == (0.125, 0.25)
+    assert (lane.ball.backgroundRate, lane.ball.riseRate) == (1.0 / 256, 1.0 / 8192)
+    assert lane.ball.historyUpdates == 50
+
+
+def test_a_slower_cadence_compounds_each_rate_over_the_frames_it_spans(lib):
+    lane = Lane(lib, frames_per_update=8)
+    assert lane.ball.buildRate == pytest.approx(1 - (1 - 0.125) ** 4, rel=1e-6)
+    assert lane.ball.currentRate == pytest.approx(1 - (1 - 0.25) ** 4, rel=1e-6)
+    assert lane.ball.backgroundRate == pytest.approx(1 - (1 - 1 / 256) ** 4, rel=1e-6)
+    assert lane.ball.historyUpdates == 13  # the same ~50 x 2 frames
+
+
+def _milestones(lib, frames_per_update: int | None, place: int, remove: int, end: int):
+    """Frames (every frame counted; the lane updates on its own cadence) at
+    which the background is learned, the ball locks, and it is released."""
+    lane = Lane(lib, frames_per_update=frames_per_update)
+    every = lane.cfg.framesPerUpdate
+    learned = locked = released = None
+    for frame in range(end):
+        if frame % every:
+            continue
+        extra = {BALL_BIN: BALL_POWER} if place <= frame < remove else None
+        state = lane.update(extra=extra)
+        name = lib.l3_ball_state_name(state).decode()
+        if learned is None and name != "building":
+            learned = frame
+        if locked is None and name == "locked":
+            locked = frame
+        if locked is not None and frame >= remove and released is None and name != "locked":
+            released = frame
+    return learned, locked, released
+
+
+def test_a_slower_cadence_learns_locks_and_releases_at_about_the_same_frames(lib):
+    """Within two of the slower cadence's updates (16 frames, 48 ms) of
+    today's: a ball's placement and removal read the same in time."""
+    today = _milestones(lib, None, place=600, remove=1400, end=2000)
+    slower = _milestones(lib, 8, place=600, remove=1400, end=2000)
+    assert None not in today and None not in slower
+    for when, (a, b) in zip(("learned", "locked", "released"), zip(today, slower)):
+        assert abs(a - b) <= 16, (when, today, slower)
+
+
+def test_persistence_reads_its_window_at_any_cadence(lib):
+    lane = Lane(lib, frames_per_update=8)
+    lane.run(40)
+    lane.run(40, extra={BALL_BIN: BALL_POWER})
+    assert lane.locked_bin() == BALL_BIN
+    assert lib.l3_ball_persistence(ctypes.byref(lane.ball)) == pytest.approx(1.0)
+    buf = ctypes.create_string_buffer(256)
+    lib.l3_ball_format_debug(ctypes.byref(lane.ball), buf, len(buf))
+    assert "persistence=13/13" in buf.value.decode()
+
+
+# --- when the locked ball's angle is due -----------------------------------------
+#
+# The ball does not move: its angle (an l3_angle_estimate) is due on a new
+# lock, when the lock moves bin, and on a refresh interval; not every update.
+
+
+def _due(lib, lane: Lane, clock: AngleClock, refresh: int = 4) -> int:
+    return lib.l3_ball_angle_due(ctypes.byref(lane.ball), ctypes.byref(clock), refresh)
+
+
+def test_no_angle_is_due_without_a_lock(lib):
+    lane, clock = Lane(lib), AngleClock(valid=1, bin=48, age=2)
+    lane.run(10)
+    assert _due(lib, lane, clock) == 0
+    assert clock.valid == 0, "a lost lock forgets the last angle"
+
+
+def test_a_new_lock_is_due_then_waits_for_the_refresh(lib):
+    lane, clock = Lane(lib), AngleClock()
+    lane.run(70)
+    lane.run(20, extra={BALL_BIN: BALL_POWER})
+    assert lane.locked_bin() == BALL_BIN
+    assert _due(lib, lane, clock) == 1
+    assert (clock.valid, clock.bin) == (1, BALL_BIN)
+    assert [_due(lib, lane, clock) for _ in range(4)] == [0, 0, 0, 1]
+
+
+def test_a_lock_that_moved_bin_is_due_at_once(lib):
+    lane, clock = Lane(lib), AngleClock(valid=1, bin=BALL_BIN - 3, age=0)
+    lane.run(70)
+    lane.run(20, extra={BALL_BIN: BALL_POWER})
+    assert _due(lib, lane, clock) == 1
+    assert clock.bin == BALL_BIN
+
+
+# --- the board runs it on its cadence ----------------------------------------------
+
+
+def _board() -> str:
+    return (FIRMWARE_DIR / "l3_dump.c").read_text(encoding="utf-8")
+
+
+def _board_function(name: str) -> str:
+    source = _board()
+    body = source[source.index(name + "\n{") :]  # the definition, not the prototype
+    return body[: body.index("\n}\n")]
+
+
+def test_the_board_updates_the_detector_every_eighth_frame():
+    source = _board()
+    assert re.search(r"#define L3_BALL_FRAMES_PER_UPDATE\s+8U", source)
+    consider = _board_function("static void l3_considerBall(uint32_t slot)")
+    assert "(gPreFramesCaptured % gBallCfg.framesPerUpdate) != 0U" in consider
+    assert "(gPreFramesCaptured & 1U) != 0U" not in consider
+    assert "l3_ball_cfg_defaults_at(&cfg, L3_BALL_FRAMES_PER_UPDATE);" in source
+
+
+def test_the_board_estimates_the_balls_angle_only_when_due():
+    consider = _board_function("static void l3_considerBall(uint32_t slot)")
+    due = consider.index(
+        "l3_ball_angle_due(&gBall, &gBallAngleClock, L3_BALL_ANGLE_REFRESH_UPDATES)"
+    )
+    assert due < consider.index("l3_angle_estimate(")
+    assert re.search(r"#define L3_BALL_ANGLE_REFRESH_UPDATES\s+\d+U", _board())
+
+
+def test_a_new_ball_cfg_forgets_the_last_angle():
+    source = _board()
+    cfg = source[source.index("l3_ball_init(&gBall, &gBallCfg);") - 200 :]
+    cfg = cfg[: cfg.index(r'CLI_write("Done\n");')]
+    assert "memset(&gBallAngleClock, 0, sizeof(gBallAngleClock));" in cfg

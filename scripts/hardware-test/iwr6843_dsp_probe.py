@@ -14,7 +14,17 @@ Usage (stop the kiosk first; it owns the port)::
 
     uv run python scripts/hardware-test/iwr6843_dsp_probe.py
 
-Exit status 0 only when every ping answered and every probe matched.
+With ``--acceptance`` it then arms the self-trigger and runs the detector
+with the DSS scoring its bins, first in ``verify`` (both cores, compared)
+and then in ``dss``, ``--seconds`` each while you swing, and judges what
+the board reports (``dsp_link.evaluate_acceptance``): no verify mismatch or
+DSS failure, no fallback or latch, no dropped or stale frame, the detect
+task keeping up with the frames, no club angle dropped::
+
+    uv run python scripts/hardware-test/iwr6843_dsp_probe.py --acceptance --seconds 60
+
+Exit status 0 only when every ping answered, every probe matched and (with
+``--acceptance``) every check passed.
 """
 
 from __future__ import annotations
@@ -26,10 +36,62 @@ import time
 sys.path.insert(0, "src")
 
 from openflight.iwr6843.driver import IWR6843Radar  # noqa: E402
-from openflight.iwr6843.dsp_link import DspLinkError, summarize_probes  # noqa: E402
+from openflight.iwr6843.dsp_link import (  # noqa: E402
+    DspLinkError,
+    evaluate_acceptance,
+    summarize_probes,
+)
+from openflight.iwr6843.monitor import SelfTriggerConfig  # noqa: E402
 
 DEFAULT_CONFIG = "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg"
 SCAN_PLAN_BINS = 27  # the pre-impact scan plan (l3_scan.h)
+# The self-trigger at the kiosk's tee (1.70 m from the enclosure front: the
+# ball at bin 43, watched two bins short).
+DEFAULT_TRIGGER_BIN = 41
+DEFAULT_TRIGGER_SNR = 1.0
+
+
+def hold(radar: IWR6843Radar, seconds: float) -> int:
+    """Let the detector run for seconds, rearming it (l3release) after each
+    swing it fires on, as the kiosk does: fired, it freezes and scores
+    nothing more until released. Returns the swings it fired on."""
+    fired = 0
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        time.sleep(1.0)
+        if "latched=1" in radar.stats():
+            radar.release_sparse_freeze()
+            fired += 1
+    return fired
+
+
+def run_acceptance(radar: IWR6843Radar, args: argparse.Namespace) -> bool:
+    """Arm the self-trigger, run verify then dss while the operator swings,
+    and print each check. True when every one passed."""
+    trigger = SelfTriggerConfig(tee_bin=args.trigger_bin, snr=args.trigger_snr)
+    reply = radar.cmd(trigger.command, 2.0)
+    if "Error" in reply or "Done" not in reply:
+        print(f"FAIL acceptance: the self-trigger was refused: {reply.strip()}")
+        return False
+    print(f"acceptance: verify for {args.seconds:.0f} s: swing now")
+    radar.detect_core("verify")
+    print(f"  fired on {hold(radar, args.seconds)} swings")
+    verify = radar.detect_core()
+    print(f"acceptance: dss for {args.seconds:.0f} s: swing again")
+    radar.detect_core("dss")
+    print(f"  fired on {hold(radar, args.seconds)} swings")
+    dss = radar.detect_core()
+    checks = evaluate_acceptance(
+        verify=verify,
+        dss=dss,
+        timing=radar.detect_timing(),
+        stats_text=radar.stats(),
+        perf_text=radar.cmd("triggerLog perf", 2.0),
+    )
+    for check in checks:
+        print(f"  {'pass' if check.passed else 'FAIL'} {check.name}: {check.detail}")
+    radar.detect_core("mss")
+    return all(check.passed for check in checks)
 
 
 def main() -> int:
@@ -38,6 +100,12 @@ def main() -> int:
     parser.add_argument("--port", default=None, help="CLI serial port (default: auto-detect)")
     parser.add_argument("--repeats", type=int, default=20, help="pings and probes per size")
     parser.add_argument("--settle-s", type=float, default=1.0, help="seconds after sensorStart")
+    parser.add_argument(
+        "--acceptance", action="store_true", help="then run verify and dss while you swing"
+    )
+    parser.add_argument("--seconds", type=float, default=60.0, help="each acceptance phase")
+    parser.add_argument("--trigger-bin", type=int, default=DEFAULT_TRIGGER_BIN)
+    parser.add_argument("--trigger-snr", type=float, default=DEFAULT_TRIGGER_SNR)
     args = parser.parse_args()
 
     ok = True
@@ -101,6 +169,8 @@ def main() -> int:
                             f"mss_energy={probe.mss_energy} dss_energy={probe.dss_energy}"
                         )
                 ok = ok and summary.mismatches == 0
+            if args.acceptance and ok:
+                ok = run_acceptance(radar, args)
         except DspLinkError as exc:
             print(f"FAIL probe: {exc}")
             ok = False

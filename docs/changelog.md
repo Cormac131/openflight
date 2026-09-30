@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **IWR6843 detect pipeline made cheaper per frame, with the same answers.**
+  The ball detector scans every eighth frame instead of every second, its
+  counts and learning rates rescaled to the same times, and estimates the
+  locked ball's angle only on a new or moved lock and every ~0.5 s. The
+  club's angle left the decision path: the detect task queues the point's
+  channel snapshot and a low-priority angle task estimates it; a fire frame
+  drains the queue after the freeze request so the shot freezes every
+  angle. The angle scan's 161 steering rotors are a table filled once
+  (483 transcendentals an estimate before), and bin scoring reads each
+  sample from the frame once. The per-channel loops moved into a host-tested
+  module (`l3_channels.c`). Every committed recording replays with identical
+  fire frames, club points and angles, delivery, launch and shot. The ball
+  detector's host tests, which had been skipping on machines without cc or
+  gcc, now build with the bundled compiler. `iwr6843_dsp_probe.py
+  --acceptance` runs `verify` then `dss` while you swing and judges them.
+  Needs a firmware rebuild and reflash.
 - **IWR6843 DSS: frames gathered into L2 before scoring.** Scoring in place
   the DSS read L3 one scattered sample at a time through a 16 KB L1D: 48 us
   a bin, 2.1x the R4F. It now copies just the window of bins a request

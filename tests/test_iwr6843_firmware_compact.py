@@ -272,21 +272,25 @@ def test_the_adaptive_profile_asks_for_the_compact_format_and_its_retain_widths(
 
 
 def test_iq16_frames_take_the_exact_integer_statistics_path():
+    """The board's residual is l3_channels_residual (l3_channels.c, host
+    tested in test_iwr6843_firmware_channels.py): IQ16 goes to the exact
+    integer scoring the DSS runs too, the float path stays for IQ8."""
     residual = _function("static void l3_verticalResidual(")
-    assert "if (cb == 2U && loops <= L3_IQ16_MAX_LOOPS) {" in residual
-    # The IQ16 path is the scoring the DSS runs too (l3_bin_score.c, unit
-    # tested in test_iwr6843_firmware_dsp.py), on the exact integer stats.
-    assert "l3_bin_score_iq16(" in residual
-    assert "perLoop);" in residual[residual.index("l3_bin_score_iq16(") :]
+    assert "l3_channels_residual(&frame, localBin, perLoop, obs);" in residual
+    channels = (FIRMWARE.parent / "l3_channels.c").read_text(encoding="utf-8")
+    body = channels[channels.index("void l3_channels_residual(") :]
+    body = body[: body.index("\n}\n")]
+    assert "if (frame->cb == 2U) {" in body
+    assert "l3_bin_score_iq16(" in body
+    assert "perLoop);" in body[body.index("l3_bin_score_iq16(") :]
+    assert body.index("if (frame->cb == 2U)") < body.index(
+        "float im = (xIm[loop] - meanIm) * frame->scale;"
+    ), "the float path stays for IQ8"
     score = (FIRMWARE.parent / "l3_bin_score.c").read_text(encoding="utf-8")
     assert "l3_iq16_bin_stats_init(&bin, loops);" in score
     assert "l3_iq16_channel_stats(words, loops, loopStrideWords, &channel)" in score
-    assert residual.index("if (cb == 2U") < residual.index(
-        "(l3_ringComponent(sample, cb) - meanIm) * scale;"
-    ), "the float path stays for IQ8"
-    assert '#include "l3_iq16_stats.h"' in _source()
     makefile = (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
-    assert "l3_iq16_stats.c" in makefile
+    assert "l3_iq16_stats.c" in makefile and "l3_channels.c" in makefile
 
 
 def test_the_sub_bin_estimator_is_configurable_and_reaches_both_extractions():

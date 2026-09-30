@@ -85,6 +85,44 @@ float l3_angle_chirp_phase(float lag1PhaseRad, uint32_t ntx, float radialVelocit
     return best;
 }
 
+/* The steering rotors, in the MSS's HS-RAM section on the board
+ * (mss_linker.cmd .hsramMss): DATA_RAM is full, and the program TCM is
+ * mapped read-only on a flashed board. */
+#if defined(__TI_COMPILER_VERSION__)
+#define L3_ANGLE_TABLE_SECTION __attribute__((section(".hsramMss")))
+#else
+#define L3_ANGLE_TABLE_SECTION
+#endif
+static l3_cpx_t gSteering[L3_ANGLE_GRID_STEPS] L3_ANGLE_TABLE_SECTION;
+static volatile uint8_t gSteeringReady = 0U;
+
+void l3_angle_tables_init(void)
+{
+    uint32_t step;
+
+    if (gSteeringReady) {
+        return;
+    }
+    for (step = 0U; step < L3_ANGLE_GRID_STEPS; step++) {
+        float theta = ((float)step - (float)(L3_ANGLE_GRID_STEPS - 1U) / 2.0F) *
+                      L3_ANGLE_GRID_STEP_RAD;
+        float phaseStep = -L3_ANGLE_PI * sinf(theta);
+
+        gSteering[step] = l3_angle_phasor(phaseStep);
+    }
+    gSteeringReady = 1U;
+}
+
+int32_t l3_angle_steering_rotor(uint32_t step, l3_cpx_t *out)
+{
+    if (step >= L3_ANGLE_GRID_STEPS || out == NULL) {
+        return -1;
+    }
+    l3_angle_tables_init();
+    *out = gSteering[step];
+    return 0;
+}
+
 float l3_angle_bartlett(const l3_cpx_t *elements, uint32_t n, float *peakRatio)
 {
     float power[L3_ANGLE_GRID_STEPS];
@@ -97,11 +135,9 @@ float l3_angle_bartlett(const l3_cpx_t *elements, uint32_t n, float *peakRatio)
     if (n > L3_ANGLE_MAX_VIRTUAL) {
         n = L3_ANGLE_MAX_VIRTUAL;
     }
+    l3_angle_tables_init();
     for (step = 0U; step < L3_ANGLE_GRID_STEPS; step++) {
-        float theta = ((float)step - (float)(L3_ANGLE_GRID_STEPS - 1U) / 2.0F) *
-                      L3_ANGLE_GRID_STEP_RAD;
-        float phaseStep = -L3_ANGLE_PI * sinf(theta);
-        l3_cpx_t rotor = l3_angle_phasor(phaseStep);
+        l3_cpx_t rotor = gSteering[step];
         l3_cpx_t weight;
         l3_cpx_t sum;
         uint32_t m;

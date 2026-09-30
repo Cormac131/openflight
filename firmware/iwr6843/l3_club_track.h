@@ -290,6 +290,10 @@ int32_t l3_track_set_point_angles(l3_club_track_t *track, uint32_t index, float 
                                   float elevationRad, uint8_t anglesValid);
 /* Point index 0 is the oldest held. Returns 0 when out of range. */
 int32_t l3_track_point(const l3_club_track_t *track, uint32_t index, l3_track_point_t *out);
+/* The index (0 oldest) of the point with timestampUs: 1, or 0 when no held
+ * point has it (a reset, or rolled off the history). */
+int32_t l3_track_find_point(const l3_club_track_t *track, uint32_t timestampUs,
+                            uint32_t *index);
 /* The delivery from the newest maxPoints points (at least 3). Returns the
  * points used, 0 when too few; out is fully written either way. */
 uint32_t l3_track_delivery(const l3_club_track_t *track, uint32_t maxPoints, l3_delivery_t *out);

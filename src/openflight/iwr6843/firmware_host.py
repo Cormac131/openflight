@@ -51,6 +51,8 @@ HOST_SOURCES = (
     "l3_retain.c",
     "l3_iq16_stats.c",
     "l3_bin_score.c",
+    "l3_channels.c",
+    "l3_angle_queue.c",
     "l3_dsp_ipc.c",
     "l3_detect_core.c",
     "l3_timing.c",
@@ -382,6 +384,46 @@ class AngleSnapshot(ctypes.Structure):
         ("lag1PhaseRad", ctypes.c_float),
         ("radialVelocityMps", ctypes.c_float),
         ("chirpPeriodS", ctypes.c_float),
+    ]
+
+
+# l3_angle_queue.h
+L3_ANGLE_QUEUE_DEPTH = 12
+
+
+class AngleJob(ctypes.Structure):
+    """``l3_angle_job_t``: a club point's snapshot, keyed by its timestamp."""
+
+    _fields_ = [("timestampUs", ctypes.c_uint32), ("snapshot", AngleSnapshot)]
+
+
+class AngleQueue(ctypes.Structure):
+    """``l3_angle_queue_t``: the club's pending angles."""
+
+    _fields_ = [
+        ("jobs", AngleJob * L3_ANGLE_QUEUE_DEPTH),
+        ("head", ctypes.c_uint32),
+        ("count", ctypes.c_uint32),
+        ("queued", ctypes.c_uint32),
+        ("done", ctypes.c_uint32),
+        ("stale", ctypes.c_uint32),
+        ("failed", ctypes.c_uint32),
+        ("dropped", ctypes.c_uint32),
+    ]
+
+
+class ChannelFrame(ctypes.Structure):
+    """``l3_channel_frame_t``: a detect frame for the per-channel loops."""
+
+    _fields_ = [
+        ("base", ctypes.POINTER(ctypes.c_uint8)),
+        ("binCount", ctypes.c_uint32),
+        ("cb", ctypes.c_uint32),
+        ("scale", ctypes.c_float),
+        ("ntx", ctypes.c_uint32),
+        ("nrx", ctypes.c_uint32),
+        ("loops", ctypes.c_uint32),
+        ("loopPeriodS", ctypes.c_float),
     ]
 
 
@@ -1683,6 +1725,37 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_angle_snapshot_init": ([_P(AngleSnapshot), _U32, _U32], None),
     "l3_angle_motion_phase": ([_F32, _F32], _F32),
     "l3_angle_chirp_phase": ([_F32, _U32, _F32, _F32], _F32),
+    # l3_angle_queue.h
+    "l3_angle_queue_size": ([], _U32),
+    "l3_angle_job_size": ([], _U32),
+    "l3_angle_queue_init": ([_P(AngleQueue)], None),
+    "l3_angle_queue_push": ([_P(AngleQueue), _U32, _P(AngleSnapshot)], ctypes.c_int32),
+    "l3_angle_queue_pop": ([_P(AngleQueue), _P(AngleJob)], ctypes.c_int32),
+    "l3_angle_queue_pending": ([_P(AngleQueue)], _U32),
+    "l3_angle_queue_peek": ([_P(AngleQueue), _P(AngleJob)], ctypes.c_int32),
+    "l3_angle_queue_finish": (
+        [_P(AngleQueue), _P(AngleJob), ctypes.c_int32, _P(AngleObs), _P(ClubTrack)],
+        ctypes.c_int32,
+    ),
+    "l3_angle_queue_apply": (
+        [_P(AngleQueue), _P(RadarCal), _P(AngleJob), _P(ClubTrack), _P(AngleObs)],
+        ctypes.c_int32,
+    ),
+    "l3_track_find_point": ([_P(ClubTrack), _U32, _P(ctypes.c_uint32)], ctypes.c_int32),
+    # l3_channels.h
+    "l3_channels_valid": ([_P(ChannelFrame), _U32], ctypes.c_int32),
+    "l3_channels_residual": (
+        [_P(ChannelFrame), _U32, _P(ctypes.c_float), _P(BinObs)],
+        None,
+    ),
+    "l3_channels_static_power": ([_P(ChannelFrame), _U32, _U32], ctypes.c_float),
+    "l3_channels_snapshot": (
+        [_P(ChannelFrame), _U32, ctypes.c_float, ctypes.c_float, _P(AngleSnapshot)],
+        None,
+    ),
+    "l3_channels_snapshot_static": ([_P(ChannelFrame), _U32, _P(AngleSnapshot)], None),
+    "l3_angle_tables_init": ([], None),
+    "l3_angle_steering_rotor": ([_U32, _P(Cpx)], ctypes.c_int32),
     "l3_angle_bartlett": ([_P(Cpx), _U32, _P(_F32)], _F32),
     "l3_angle_estimate": ([_P(RadarCal), _P(AngleSnapshot), _P(AngleObs)], ctypes.c_int32),
     "l3_angle_format": ([_P(AngleObs), *_TEXT], ctypes.c_int32),

@@ -723,6 +723,21 @@ int32_t l3_track_point(const l3_club_track_t *track, uint32_t index, l3_track_po
     return 1;
 }
 
+int32_t l3_track_find_point(const l3_club_track_t *track, uint32_t timestampUs,
+                            uint32_t *index)
+{
+    uint32_t oldest = (track->next + L3_TRACK_POINTS - track->count) % L3_TRACK_POINTS;
+    uint32_t i;
+
+    for (i = 0U; i < track->count; i++) {
+        if (track->points[(oldest + i) % L3_TRACK_POINTS].timestampUs == timestampUs) {
+            *index = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int32_t l3_track_set_point_angles(l3_club_track_t *track, uint32_t index, float azimuthRad,
                                   float elevationRad, uint8_t anglesValid)
 {

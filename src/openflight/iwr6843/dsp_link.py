@@ -448,3 +448,134 @@ def parse_detect_timing(text: str) -> DetectTiming | None:
         stats=stats,
         timeline=timeline,
     )
+
+
+# --- the board acceptance run --------------------------------------------------------
+#
+# scripts/hardware-test/iwr6843_dsp_probe.py --acceptance: after the probe,
+# the detector scores in ``verify`` (both cores, compared) and then in ``dss``
+# while the operator swings; these judge what the board then reports.
+
+_HEALTH = re.compile(
+    r"^detect dropped=(?P<dropped>\d+) stale=(?P<stale>\d+) notice_dropped=(?P<notice>\d+) "
+    r"shed=(?P<shed>\d+) stale_read=(?P<stale_read>\d+)\s*$",
+    re.MULTILINE,
+)
+_ANGLES = re.compile(
+    r"^angles queued=(?P<queued>\d+) done=(?P<done>\d+) stale=(?P<stale>\d+) "
+    r"failed=(?P<failed>\d+) dropped=(?P<dropped>\d+) pending=(?P<pending>\d+)\s*$",
+    re.MULTILINE,
+)
+
+
+@dataclass(frozen=True)
+class DetectHealth:
+    """The ``detect ...`` line of ``stats``: frames the detect task lost."""
+
+    dropped: int
+    stale: int
+    notice_dropped: int
+    shed: int
+    stale_read: int
+
+
+@dataclass(frozen=True)
+class AngleQueueStatus:
+    """The ``angles ...`` line of ``triggerLog perf``: the club's pending
+    angles (l3_angle_queue.h)."""
+
+    queued: int
+    done: int
+    stale: int
+    failed: int
+    dropped: int
+    pending: int
+
+
+@dataclass(frozen=True)
+class AcceptanceCheck:
+    name: str
+    passed: bool
+    detail: str
+
+
+def parse_detect_health(text: str) -> DetectHealth | None:
+    match = _HEALTH.search(text)
+    if match is None:
+        return None
+    return DetectHealth(
+        dropped=int(match.group("dropped")),
+        stale=int(match.group("stale")),
+        notice_dropped=int(match.group("notice")),
+        shed=int(match.group("shed")),
+        stale_read=int(match.group("stale_read")),
+    )
+
+
+def parse_angle_queue(text: str) -> AngleQueueStatus | None:
+    match = _ANGLES.search(text)
+    if match is None:
+        return None
+    return AngleQueueStatus(**{name: int(value) for name, value in match.groupdict().items()})
+
+
+def evaluate_acceptance(
+    *,
+    verify: DetectCoreStatus,
+    dss: DetectCoreStatus,
+    timing: DetectTiming | None,
+    stats_text: str,
+    perf_text: str,
+) -> list[AcceptanceCheck]:
+    """Each acceptance check with its verdict. A line the board did not
+    report (an older image) fails its check: nothing passes unseen."""
+    health = parse_detect_health(stats_text)
+    angles = parse_angle_queue(perf_text)
+    service = None if timing is None else timing.stats.get("service")
+    return [
+        AcceptanceCheck(
+            "verify_scored", verify.verify > 0, f"{verify.verify} frames scored on both cores"
+        ),
+        AcceptanceCheck(
+            "verify_mismatches",
+            verify.mismatches == 0,
+            f"{verify.mismatches} mismatches (first: {verify.first_mismatch})",
+        ),
+        AcceptanceCheck("verify_failures", verify.failures == 0, f"{verify.failures} DSS failures"),
+        AcceptanceCheck("dss_scored", dss.dss > 0, f"{dss.dss} frames scored on the DSS"),
+        AcceptanceCheck(
+            "dss_fallbacks", dss.fallbacks == 0, f"{dss.fallbacks} fell back to the MSS"
+        ),
+        AcceptanceCheck(
+            "dss_not_latched",
+            not dss.latched and dss.active == "dss",
+            f"active={dss.active} latched={dss.latched} latches={dss.latches}",
+        ),
+        AcceptanceCheck(
+            "detect_dropped_stale",
+            health is not None
+            and health.dropped == 0
+            and health.stale == 0
+            and health.stale_read == 0,
+            "no detect line in stats"
+            if health is None
+            else f"dropped={health.dropped} stale={health.stale} stale_read={health.stale_read}",
+        ),
+        AcceptanceCheck(
+            "keeps_up",
+            timing is not None and timing.keeps_up,
+            "no timing"
+            if timing is None
+            else (
+                f"service mean {service.mean if service else '?'} us of {timing.budget_us}, "
+                f"{timing.margin_negative} slot overruns"
+            ),
+        ),
+        AcceptanceCheck(
+            "angles_not_dropped",
+            angles is not None and angles.dropped == 0,
+            "no angles line in triggerLog perf"
+            if angles is None
+            else f"queued={angles.queued} done={angles.done} dropped={angles.dropped}",
+        ),
+    ]

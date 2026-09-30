@@ -279,6 +279,16 @@ def test_overlong_request_drain_outlasts_a_four_times_oversized_request():
     assert "4U * cap" not in read_line
 
 
+def _channels(signature: str) -> str:
+    """A function of l3_channels.c, the per-channel loops the board calls
+    (host tested in test_iwr6843_firmware_channels.py)."""
+    source = (Path(__file__).parents[1] / "firmware" / "iwr6843" / "l3_channels.c").read_text(
+        encoding="utf-8"
+    )
+    body = source[source.index(signature) :]
+    return body[: body.index("\n}\n")]
+
+
 def test_trigger_log_serves_the_raw_input_trace_and_its_clear():
     """A missed swing must be readable: trace and clear ride the existing command."""
     source = _source()
@@ -291,7 +301,10 @@ def test_trigger_log_serves_the_raw_input_trace_and_its_clear():
     assert "l3_trig_format_maxhold(&gTrig, index, 8U" in trace
     assert "l3_trig_format_trace(&entry" in trace
     assert "tableEntry[19]" not in source, "the CLI table is at the SDK's command limit"
-    assert "obs->loop0 = loopPower[0];" in _function("static void l3_verticalResidual(")
+    assert "l3_channels_residual(&frame, localBin, perLoop, obs);" in _function(
+        "static void l3_verticalResidual("
+    )
+    assert "obs->loop0 = loopPower[0];" in _channels("void l3_channels_residual(")
 
 
 def test_sensor_stop_takes_a_self_trigger_freeze_instead_of_closing_over_it():
@@ -306,7 +319,10 @@ def test_sensor_stop_takes_a_self_trigger_freeze_instead_of_closing_over_it():
 def test_tee_scan_reports_static_power_the_trigger_never_sees():
     """A stationary ball is exactly what MTI removes; ball scan reads it back raw."""
     source = _source()
-    static = _function("static float l3_verticalStaticPower(")
+    assert "l3_channels_static_power(&frame, localBin, loopStep);" in _function(
+        "static float l3_verticalStaticPower("
+    )
+    static = _channels("float l3_channels_static_power(")
     scan = _function("static int32_t l3_ballScan(")
 
     assert "meanIm" not in static and "meanRe" not in static, "no mean subtraction: static power"
@@ -385,18 +401,17 @@ def test_loop_period_for_doppler_comes_from_the_accepted_profile():
 
 
 def test_loop_means_are_computed_once_per_bin():
-    residual = _function("static void l3_verticalResidual(")
+    residual = _channels("void l3_channels_residual(")
 
     # One pass accumulates the mean, a second applies it: two loop-index
-    # loops per (tx, rx), never a mean loop nested inside the output loop.
-    # The other two are the per-loop init and the final peak/copy pass.
+    # loops per (tx, rx) over the channel's copy, never a mean loop nested
+    # inside the output loop. The other two are the per-loop init and the
+    # final peak/copy pass.
     assert "meanLoop" not in residual
-    assert len(re.findall(r"for \(loop = 0U; loop < loops; loop\+\+\)", residual)) == 4
+    assert len(re.findall(r"for \(loop = 0U; loop < frame->loops; loop\+\+\)", residual)) == 4
     # IQ8 rings hold int8 pairs times a per-frame scale; both read alike,
-    # through the detect frame that says where the samples are.
-    assert "uint32_t cb = source->cb;" in residual
-    assert "float scale = source->scale;" in residual
-    assert "(l3_ringComponent(sample, cb) - meanIm) * scale;" in residual
+    # through the frame that says where the samples are.
+    assert "float im = (xIm[loop] - meanIm) * frame->scale;" in residual
     # The sparse rows and the trigger share that one pass.
     assert "l3_verticalResidual(&frame, localBin, out, NULL);" in _function(
         "static void l3_verticalPowerLoops("
@@ -404,11 +419,17 @@ def test_loop_means_are_computed_once_per_bin():
 
 
 def test_residual_walks_loops_by_stride_instead_of_recomputing_indices():
-    residual = _function("static void l3_verticalResidual(")
+    residual = _channels("void l3_channels_residual(")
+    read = _channels("static void l3_channels_read(")
 
     assert "l3_iq16Sample" not in residual
-    assert "uint32_t loopStride = ntx * N_RX * binCount * 2U * cb;" in residual
-    assert residual.count("sample += loopStride;") == 2
+    assert "return frame->ntx * frame->nrx * frame->binCount * 2U * frame->cb;" in _channels(
+        "static uint32_t l3_channels_loop_stride("
+    )
+    # One strided walk a channel (the frame is uncached L3 on the R4F): the
+    # mean and the residual both come from the copy it makes.
+    assert "l3_channels_read(" in residual and "sample += loopStride;" not in residual
+    assert read.count("sample += loopStride;") == 1
     # Energy, strongest loop and the Doppler autocorrelation come from the
     # same pass; no second walk over the samples.
     for field in ("obs->energy = energy;", "obs->peak = peak;", "obs->r1Re = r1Re;"):
@@ -455,40 +476,45 @@ def test_geometry_sources_are_built_and_included():
     assert "#include <math.h>" in source
 
 
-def test_angles_are_estimated_for_the_associated_target_only():
-    """One channel snapshot and one estimate per frame, for the target the
-    club track appended, with the track's range-rate resolving the TDM alias."""
+def test_angles_are_queued_for_the_associated_target_only():
+    """One channel snapshot per frame, for the target the club track appended,
+    with the track's range-rate resolving the TDM alias, queued by the point's
+    timestamp for the angle task (l3_angle_queue.h): no estimate on the
+    decision path, and never shed when behind."""
     consider = _function("static void l3_considerSelfTrigger(")
 
     assert "gClubTrack.lastTargetIndex < found &&" in consider
-    # Shed when the detect task is behind (l3_scan.h): the fire does not use it.
-    assert "gClubTrack.count > 1U && !gDetectBehind &&" in consider
+    assert "gClubTrack.count > 1U &&" in consider
+    assert "gClubTrack.count > 1U && !gDetectBehind" not in consider
     assert "const l3_target_obs_t *hit = &targets[gClubTrack.lastTargetIndex];" in consider
     assert (
         "l3_channelSnapshot(&frame, (uint32_t)hit->peakBin - frame.binStart,\n"
         "                               hit->dopplerPhaseRad, newest.radialVelocityMps, &snapshot);"
     ) in consider
-    assert "l3_angle_estimate(&gRadarCal, &snapshot, &gLastAngle)" in consider
-    assert (
-        "l3_track_set_angles(&gClubTrack, gLastAngle.azimuthRad,\n"
-        "                                          gLastAngle.elevationRad, flags);"
-    ) in consider
+    assert "l3_angleQueuePush(newest.timestampUs, &snapshot);" in consider
+    assert "l3_angle_estimate(" not in consider
     assert consider.index("l3_track_update(&gClubTrack") < consider.index("l3_channelSnapshot(")
 
 
 def test_channel_snapshot_sums_loops_coherently_with_the_lag1_phase_unwound():
-    snapshot = _function("static void l3_channelSnapshot(")
+    assert "l3_channels_snapshot(&frame, localBin, lag1PhaseRad, radialVelocityMps, out);" in (
+        _function("static void l3_channelSnapshot(")
+    )
+    snapshot = _channels("void l3_channels_snapshot(")
+    begin = _channels("static void l3_channels_snapshot_begin(")
 
-    assert "float stepIm = -sinf(lag1PhaseRad);" in snapshot
+    assert "stepIm = -sinf(lag1PhaseRad);" in snapshot
     assert "sumRe += re * rotRe - im * rotIm;" in snapshot
     assert "sumIm += re * rotIm + im * rotRe;" in snapshot
-    assert "l3_angle_snapshot_init(out, ntx, N_RX);" in snapshot
-    assert (
-        "out->chirpPeriodS = (ntx > 0U) ? (gTrigLoopPeriodS / (float)ntx) : 45.0e-6F;" in snapshot
+    assert "l3_angle_snapshot_init(out, frame->ntx, frame->nrx);" in begin
+    assert "out->chirpPeriodS = frame->loopPeriodS / (float)frame->ntx;" in begin
+    assert "frame.loopPeriodS = gTrigLoopPeriodS;" in _function(
+        "static l3_channel_frame_t l3_channelFrame("
     )
     # Every TX, unlike the vertical residual: TX1 carries the azimuth.
-    assert "if (ntx == 3U && tx == 1U)" not in snapshot
-    assert snapshot.count("sample += loopStride;") == 2
+    assert "l3_channels_vertical(" not in snapshot
+    # Each channel read once (l3_channels_read), then mean and unwind.
+    assert "l3_channels_read(" in snapshot and "sample += loopStride;" not in snapshot
 
 
 def test_the_ball_position_and_delivery_are_kept_every_frame_for_the_shot():
@@ -743,11 +769,18 @@ def test_adaptive_windows_apply_between_shots_from_the_locked_ball():
 
 def test_the_locked_ball_gets_its_own_direction_from_the_static_return():
     ball = _function("static void l3_considerBall(")
-    snapshot = _function("static void l3_channelSnapshotStatic(")
+    assert "l3_channels_snapshot_static(&frame, localBin, out);" in _function(
+        "static void l3_channelSnapshotStatic("
+    )
+    snapshot = _channels("void l3_channels_snapshot_static(")
     status = _function("static int32_t l3_cli_ball(")
 
-    assert "out->lag1PhaseRad = 0.0F;" in snapshot and "out->radialVelocityMps = 0.0F;" in snapshot
-    assert "sumIm += l3_ringComponent(sample, cb) * scale;" in snapshot and "meanIm" not in snapshot
+    # No Doppler to unwind: the output starts zeroed (lag-1 phase and
+    # velocity 0) and the raw samples are summed, no mean removed.
+    assert "memset(out, 0, sizeof(*out));" in snapshot
+    assert "lag1PhaseRad" not in snapshot and "radialVelocityMps" not in snapshot
+    assert "sumIm += l3_channels_component(sample, frame->cb) * frame->scale;" in snapshot
+    assert "meanIm" not in snapshot
     assert "l3_channelSnapshotStatic(&frame, ballBin - frame.binStart, &snapshot);" in ball
     assert "gBallAngle.elevationPeakRatio >=" in ball
     assert "L3_BALL_ANGLE_MIN_PEAK_RATIO" in ball
@@ -764,9 +797,11 @@ def test_every_ring_reader_handles_iq8_samples_with_the_frame_scale():
         "static void l3_channelSnapshotStatic(",
     ):
         body = _function(name)
-        assert "const uint8_t *frame = source->base;" in body, name
-        assert "uint32_t cb = source->cb;" in body and "float scale = source->scale;" in body, name
+        assert "l3_channel_frame_t frame = l3_channelFrame(source);" in body, name
         assert "(const int16_t *)&g_ring" not in body, name
+    frame = _function("static l3_channel_frame_t l3_channelFrame(")
+    assert "frame.base = source->base;" in frame
+    assert "frame.cb = source->cb;" in frame and "frame.scale = source->scale;" in frame
     ring = _function("static l3_detect_frame_t l3_ringFrameOf(")
     assert (
         "frame.cb = l3_ringComponentBytes();" in ring
@@ -774,7 +809,7 @@ def test_every_ring_reader_handles_iq8_samples_with_the_frame_scale():
     )
     scale = _function("static float l3_ringScale(")
     assert "return (float)gFrameIq8Scale[slot];" in scale
-    component = _function("static float l3_ringComponent(")
+    component = _channels("static float l3_channels_component(")
     assert "return (float)*(const int8_t *)component;" in component
     assert source.count("l3_ringComponentBytes()") >= 2
 

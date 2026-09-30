@@ -1,5 +1,6 @@
 /* IWR6843 ball-placement detector. See l3_ball.h. */
 #include <stdio.h>
+#include <math.h>
 #include <string.h>
 
 #include "l3_ball.h"
@@ -20,6 +21,41 @@ void l3_ball_cfg_defaults(l3_ball_cfg_t *cfg)
     cfg->stableUpdates = 12U;   /* ~70 ms in place before READY */
     cfg->goneFraction = 0.3F;
     cfg->goneUpdates = 20U;     /* ~120 ms gone before release: longer than acquisition */
+    cfg->framesPerUpdate = L3_BALL_BASE_FRAMES_PER_UPDATE;
+}
+
+/* A count of base-cadence updates as updates at framesPerUpdate: the same
+ * time, rounded up, at least 1. */
+static uint32_t l3_ball_scale_count(uint32_t count, uint32_t framesPerUpdate)
+{
+    uint32_t frames = count * L3_BALL_BASE_FRAMES_PER_UPDATE;
+    uint32_t scaled = (frames + framesPerUpdate - 1U) / framesPerUpdate;
+
+    return (scaled == 0U) ? 1U : scaled;
+}
+
+void l3_ball_cfg_defaults_at(l3_ball_cfg_t *cfg, uint32_t framesPerUpdate)
+{
+    l3_ball_cfg_defaults(cfg);
+    if (framesPerUpdate == 0U) {
+        framesPerUpdate = L3_BALL_BASE_FRAMES_PER_UPDATE;
+    }
+    cfg->buildUpdates = l3_ball_scale_count(cfg->buildUpdates, framesPerUpdate);
+    cfg->stableUpdates = l3_ball_scale_count(cfg->stableUpdates, framesPerUpdate);
+    cfg->goneUpdates = l3_ball_scale_count(cfg->goneUpdates, framesPerUpdate);
+    cfg->framesPerUpdate = framesPerUpdate;
+}
+
+/* A per-update rate at the base cadence, compounded over the base updates
+ * one update now spans: 1 - (1 - rate)^(framesPerUpdate / base). Exactly
+ * rate at the base cadence. */
+static float l3_ball_rate(float rate, uint32_t framesPerUpdate)
+{
+    if (framesPerUpdate == L3_BALL_BASE_FRAMES_PER_UPDATE) {
+        return rate;
+    }
+    return 1.0F - powf(1.0F - rate,
+                       (float)framesPerUpdate / (float)L3_BALL_BASE_FRAMES_PER_UPDATE);
 }
 
 int32_t l3_ball_cfg_check(const l3_ball_cfg_t *cfg)
@@ -27,7 +63,8 @@ int32_t l3_ball_cfg_check(const l3_ball_cfg_t *cfg)
     if (!(cfg->minRatio > 0.0F)) {
         return -1;
     }
-    if (cfg->buildUpdates == 0U || cfg->stableUpdates == 0U || cfg->goneUpdates == 0U) {
+    if (cfg->buildUpdates == 0U || cfg->stableUpdates == 0U || cfg->goneUpdates == 0U ||
+        cfg->framesPerUpdate == 0U) {
         return -1;
     }
     if (!(cfg->goneFraction > 0.0F) || cfg->goneFraction >= 1.0F) {
@@ -38,9 +75,40 @@ int32_t l3_ball_cfg_check(const l3_ball_cfg_t *cfg)
 
 void l3_ball_init(l3_ball_t *ball, const l3_ball_cfg_t *cfg)
 {
+    uint32_t fpu = (cfg->framesPerUpdate == 0U) ? L3_BALL_BASE_FRAMES_PER_UPDATE
+                                                : cfg->framesPerUpdate;
+    uint32_t history;
+
     memset(ball, 0, sizeof(*ball));
     ball->cfg = *cfg;
     ball->state = cfg->enabled ? L3_BALL_STATE_BUILDING : L3_BALL_STATE_OFF;
+    ball->buildRate = l3_ball_rate(0.125F, fpu);
+    ball->currentRate = l3_ball_rate(1.0F / (float)(1U << L3_BALL_CURRENT_SHIFT), fpu);
+    ball->backgroundRate = l3_ball_rate(1.0F / (float)(1U << L3_BALL_BACKGROUND_SHIFT), fpu);
+    ball->riseRate = l3_ball_rate(1.0F / (float)(1U << L3_BALL_RISE_SHIFT), fpu);
+    /* The same span of frames, rounded to the nearest update, within the mask. */
+    history = (L3_BALL_HISTORY * L3_BALL_BASE_FRAMES_PER_UPDATE + fpu / 2U) / fpu;
+    ball->historyUpdates = (history == 0U) ? 1U : (history > 64U) ? 64U : history;
+}
+
+int32_t l3_ball_angle_due(const l3_ball_t *ball, l3_ball_angle_clock_t *clock,
+                          uint32_t refreshUpdates)
+{
+    uint32_t bin = 0U;
+
+    if (!l3_ball_locked(ball, &bin)) {
+        clock->valid = 0U;
+        clock->age = 0U;
+        return 0;
+    }
+    if (!clock->valid || clock->bin != bin || clock->age + 1U >= refreshUpdates) {
+        clock->valid = 1U;
+        clock->bin = bin;
+        clock->age = 0U;
+        return 1;
+    }
+    clock->age++;
+    return 0;
 }
 
 static void l3_ball_restart(l3_ball_t *ball, uint32_t windowStartBin, uint32_t count)
@@ -184,14 +252,14 @@ uint8_t l3_ball_update(l3_ball_t *ball, uint32_t windowStartBin, const float *po
             ball->current[i] = power[i];
             ball->background[i] = power[i];
         } else {
-            ball->current[i] += (power[i] - ball->current[i]) / (float)(1U << L3_BALL_CURRENT_SHIFT);
+            ball->current[i] += (power[i] - ball->current[i]) * ball->currentRate;
         }
     }
 
     if (ball->state == L3_BALL_STATE_BUILDING) {
         for (i = 0U; i < count; i++) {
             /* Learn fast while building: nothing is being protected yet. */
-            ball->background[i] += (ball->current[i] - ball->background[i]) * 0.125F;
+            ball->background[i] += (ball->current[i] - ball->background[i]) * ball->buildRate;
         }
         if (ball->updates >= cfg->buildUpdates) {
             ball->state = L3_BALL_STATE_WAITING;
@@ -211,16 +279,16 @@ uint8_t l3_ball_update(l3_ball_t *ball, uint32_t windowStartBin, const float *po
         uint32_t globalBin = windowStartBin + i;
         uint32_t hold = (ball->state == L3_BALL_STATE_LOCKED) ? ball->ballBin
                         : (ball->state == L3_BALL_STATE_CANDIDATE) ? ball->candidateBin : 0U;
-        uint32_t shift = L3_BALL_BACKGROUND_SHIFT;
+        float rate = ball->backgroundRate;
 
         if (ball->state != L3_BALL_STATE_WAITING &&
             globalBin + L3_BALL_HOLD_BINS >= hold && globalBin <= hold + L3_BALL_HOLD_BINS) {
             continue;
         }
         if (l3_ball_ratioAt(ball, i) >= L3_BALL_RISE_FRACTION * cfg->minRatio) {
-            shift = L3_BALL_RISE_SHIFT;
+            rate = ball->riseRate;
         }
-        ball->background[i] += (ball->current[i] - ball->background[i]) / (float)(1U << shift);
+        ball->background[i] += (ball->current[i] - ball->background[i]) * rate;
     }
 
     if (ball->state == L3_BALL_STATE_LOCKED) {
@@ -326,14 +394,16 @@ float l3_ball_ratio(const l3_ball_t *ball)
 
 float l3_ball_persistence(const l3_ball_t *ball)
 {
-    uint64_t mask = ball->history & ((((uint64_t)1U) << L3_BALL_HISTORY) - 1U);
+    uint32_t window = (ball->historyUpdates == 0U) ? L3_BALL_HISTORY : ball->historyUpdates;
+    uint64_t mask = (window >= 64U) ? ball->history
+                                    : (ball->history & ((((uint64_t)1U) << window) - 1U));
     uint32_t seen = 0U;
 
     while (mask != 0U) {
         seen += (uint32_t)(mask & 1U);
         mask >>= 1;
     }
-    return (float)seen / (float)L3_BALL_HISTORY;
+    return (float)seen / (float)window;
 }
 
 float l3_ball_confidence(const l3_ball_t *ball)
@@ -423,11 +493,11 @@ int32_t l3_ball_format_debug(const l3_ball_t *ball, char *out, uint32_t cap)
 {
     char centroidText[16];
     char persistText[16];
-    uint32_t seen = (uint32_t)(l3_ball_persistence(ball) * (float)L3_BALL_HISTORY + 0.5F);
+    uint32_t window = (ball->historyUpdates == 0U) ? L3_BALL_HISTORY : ball->historyUpdates;
+    uint32_t seen = (uint32_t)(l3_ball_persistence(ball) * (float)window + 0.5F);
 
     l3_ball_fmt2(ball->centroid, centroidText, sizeof(centroidText));
-    (void)snprintf(persistText, sizeof(persistText), "%u/%u", (unsigned)seen,
-                   (unsigned)L3_BALL_HISTORY);
+    (void)snprintf(persistText, sizeof(persistText), "%u/%u", (unsigned)seen, (unsigned)window);
     return snprintf(out, cap,
                     "balldbg updates=%u candidate=%u/%u centroid=%s width=%u persistence=%s "
                     "no_delta=%u too_wide=%u unstable=%u gone=%u",

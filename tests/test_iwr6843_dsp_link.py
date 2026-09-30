@@ -257,3 +257,140 @@ def test_the_speedup_counts_the_gather_against_the_dss():
     assert summary.dss_total_us_median == 275
     assert summary.speedup == pytest.approx(1971 / 275)
     assert summary.gathered == 1
+
+
+# --- the board acceptance run (scripts/hardware-test/iwr6843_dsp_probe.py) -------------
+
+from openflight.iwr6843.dsp_link import (  # noqa: E402
+    DetectCoreStatus,
+    DetectTiming,
+    TimingStat,
+    evaluate_acceptance,
+    parse_angle_queue,
+    parse_detect_health,
+)
+
+STATS = "frames=900 wraps=0 active=1\ndetect dropped=0 stale=0 notice_dropped=0 shed=3 stale_read=0\nDone\n"
+PERF = "perf frames=900\nangles queued=40 done=38 stale=1 failed=1 dropped=0 pending=0\nDone\n"
+
+
+def core(**overrides) -> DetectCoreStatus:
+    fields = dict(
+        requested="verify",
+        active="verify",
+        latched=False,
+        mss=0,
+        dss=0,
+        verify=400,
+        ineligible=0,
+        failures=0,
+        fallbacks=0,
+        streak=0,
+        latches=0,
+        mismatches=0,
+        dss_inv_us_last=30,
+        dss_inv_us_max=40,
+        dss_score_us_last=300,
+        dss_score_us_max=400,
+        first_mismatch=None,
+    )
+    fields.update(overrides)
+    return DetectCoreStatus(**fields)
+
+
+def timing(mean: int = 1800, negative: int = 0) -> DetectTiming:
+    return DetectTiming(
+        frames=900,
+        budget_us=3000,
+        over_budget=0,
+        depth_max=1,
+        ring=24,
+        margin_last_us=60000,
+        margin_min_us=50000,
+        margin_negative=negative,
+        stats={"service": TimingStat(count=900, last=mean, min=100, mean=mean, max=2900)},
+        timeline=(),
+    )
+
+
+def verdict(**kwargs):
+    args = dict(
+        verify=core(),
+        dss=core(requested="dss", active="dss", verify=0, dss=400),
+        timing=timing(),
+        stats_text=STATS,
+        perf_text=PERF,
+    )
+    args.update(kwargs)
+    return {check.name: check for check in evaluate_acceptance(**args)}
+
+
+def test_the_detect_health_line_is_parsed():
+    health = parse_detect_health(STATS)
+    assert (health.dropped, health.stale, health.stale_read, health.shed) == (0, 0, 0, 3)
+
+
+def test_the_angle_queue_line_is_parsed():
+    queue = parse_angle_queue(PERF)
+    assert (queue.queued, queue.done, queue.stale, queue.failed, queue.dropped, queue.pending) == (
+        40,
+        38,
+        1,
+        1,
+        0,
+        0,
+    )
+
+
+def test_a_clean_run_passes_every_check():
+    checks = verdict()
+    assert all(check.passed for check in checks.values()), [
+        (c.name, c.detail) for c in checks.values() if not c.passed
+    ]
+    assert set(checks) == {
+        "verify_scored",
+        "verify_mismatches",
+        "verify_failures",
+        "dss_scored",
+        "dss_fallbacks",
+        "dss_not_latched",
+        "detect_dropped_stale",
+        "keeps_up",
+        "angles_not_dropped",
+    }
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "failing"),
+    [
+        ({"verify": core(verify=0)}, "verify_scored"),
+        ({"verify": core(mismatches=2)}, "verify_mismatches"),
+        ({"verify": core(failures=1)}, "verify_failures"),
+        ({"dss": core(requested="dss", active="dss", verify=0, dss=0)}, "dss_scored"),
+        (
+            {"dss": core(requested="dss", active="dss", verify=0, dss=400, fallbacks=3)},
+            "dss_fallbacks",
+        ),
+        ({"dss": core(requested="dss", active="mss", latched=True, dss=10)}, "dss_not_latched"),
+        ({"stats_text": STATS.replace("stale_read=0", "stale_read=2")}, "detect_dropped_stale"),
+        ({"timing": timing(mean=3200)}, "keeps_up"),
+        ({"timing": timing(negative=1)}, "keeps_up"),
+        (
+            {"perf_text": PERF.replace("dropped=0 pending", "dropped=4 pending")},
+            "angles_not_dropped",
+        ),
+    ],
+)
+def test_each_failure_fails_its_own_check_only(kwargs, failing):
+    checks = verdict(**kwargs)
+    assert not checks[failing].passed
+    assert [n for n, c in checks.items() if not c.passed] == [failing]
+    assert checks[failing].detail
+
+
+def test_missing_board_lines_fail_rather_than_pass():
+    """An older image without the health or angle lines is not a pass."""
+    checks = verdict(stats_text="frames=1\nDone\n", perf_text="perf frames=0\nDone\n", timing=None)
+    assert not checks["detect_dropped_stale"].passed
+    assert not checks["angles_not_dropped"].passed
+    assert not checks["keeps_up"].passed

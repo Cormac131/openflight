@@ -38,7 +38,11 @@
 #define L3_BALL_RISE_SHIFT 13U
 /* Static power under this is treated as this, so ratios stay finite. */
 #define L3_BALL_POWER_MIN 1.0F
-/* Updates of history behind the persistence figure (a 64-bit mask). */
+/* The cadence the counts, rates and history below were chosen for: an
+ * update every second frame (l3_ball_cfg_defaults). */
+#define L3_BALL_BASE_FRAMES_PER_UPDATE 2U
+/* Updates of history behind the persistence figure at that cadence (a 64-bit
+ * mask; l3_ball_init scales it to the same frames at another). */
 #define L3_BALL_HISTORY 50U
 /* Contrast counts as full confidence from this ratio up. */
 #define L3_BALL_FULL_RATIO 4.0F
@@ -69,6 +73,10 @@ typedef struct {
     uint32_t stableUpdates;   /* candidate updates in place before locking */
     float    goneFraction;    /* ball delta below this fraction of the lock = gone */
     uint32_t goneUpdates;     /* consecutive gone updates before releasing */
+    /* Frames between updates. The counts above and the learning rates are
+     * per update; l3_ball_cfg_defaults_at scales them so their time in
+     * frames stays that of the every-second-frame defaults. */
+    uint32_t framesPerUpdate;
 } l3_ball_cfg_t;
 
 typedef struct {
@@ -95,9 +103,27 @@ typedef struct {
     uint32_t locks;
     uint32_t releases;
     uint32_t reasons[L3_BALL_REASON_COUNT];
+    /* Per-update rates at this cadence (l3_ball_init): the every-second-
+     * frame constants compounded over framesPerUpdate / 2 of their steps. */
+    float    buildRate;       /* background, while building (1/8) */
+    float    currentRate;     /* current power (1/2^L3_BALL_CURRENT_SHIFT) */
+    float    backgroundRate;  /* background, elsewhere (1/2^L3_BALL_BACKGROUND_SHIFT) */
+    float    riseRate;        /* background of a risen bin (1/2^L3_BALL_RISE_SHIFT) */
+    uint32_t historyUpdates;  /* updates behind the persistence figure */
 } l3_ball_t;
 
+/* When the locked ball's angle is due (l3_ball_angle_due). */
+typedef struct {
+    uint8_t  valid;           /* an angle was estimated for this lock */
+    uint32_t bin;             /* the locked bin it was estimated at */
+    uint32_t age;             /* updates since */
+} l3_ball_angle_clock_t;
+
+/* The every-second-frame defaults (framesPerUpdate 2). */
 void l3_ball_cfg_defaults(l3_ball_cfg_t *cfg);
+/* The defaults for an update every framesPerUpdate frames (0 reads as 2):
+ * each count scaled to the same time, rounded up, at least 1. */
+void l3_ball_cfg_defaults_at(l3_ball_cfg_t *cfg, uint32_t framesPerUpdate);
 int32_t l3_ball_cfg_check(const l3_ball_cfg_t *cfg);
 void l3_ball_init(l3_ball_t *ball, const l3_ball_cfg_t *cfg);
 /* One update: power[i] is the static power of global bin firstBin + i.
@@ -107,7 +133,13 @@ uint8_t l3_ball_update(l3_ball_t *ball, uint32_t firstBin, const float *power, u
 int32_t l3_ball_locked(const l3_ball_t *ball, uint32_t *bin);
 /* Ratio of the locked ball's delta to its background, 0 when not locked. */
 float l3_ball_ratio(const l3_ball_t *ball);
-/* Fraction of the last L3_BALL_HISTORY updates that saw a ball, 0..1. */
+/* 1 when the locked ball's angle is due: a new lock, a lock that moved bin,
+ * or refreshUpdates updates since the last; the clock then restarts at
+ * this bin. Counts an update otherwise. Not locked: 0, and the clock
+ * forgets (the next lock is due at once). Call once per update. */
+int32_t l3_ball_angle_due(const l3_ball_t *ball, l3_ball_angle_clock_t *clock,
+                          uint32_t refreshUpdates);
+/* Fraction of the last historyUpdates updates that saw a ball, 0..1. */
 float l3_ball_persistence(const l3_ball_t *ball);
 /* 0..1 from contrast, width, persistence and range stability; 0 unless locked. */
 float l3_ball_confidence(const l3_ball_t *ball);

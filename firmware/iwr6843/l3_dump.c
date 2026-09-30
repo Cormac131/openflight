@@ -69,6 +69,8 @@
 #include "l3_iq8.h"
 #include "l3_iq16_stats.h"
 #include "l3_bin_score.h"
+#include "l3_channels.h"
+#include "l3_angle_queue.h"
 #include "l3_dsp_ipc.h"
 #include "l3_detect_core.h"
 #include "l3_timing.h"
@@ -89,6 +91,9 @@
  * lower-priority tasks to run, and a priority-4 snapshot loop starved l3dump
  * so the host only saw the echoed 7-byte "l3dump\n" command. */
 #define L3_SNAPSHOT_TASK_PRIORITY 1
+/* The club's angles off the decision path (l3_angle_queue.h): below the CLI
+ * and the notices, so it runs in the spare time a frame leaves. */
+#define L3_ANGLE_TASK_PRIORITY 2U
 /* Above the CLI, so a polled stats or debug write cannot hold a scratch slot
  * past its reuse. A stats reply is ~825 B; at 1,041,667 baud that is ~7.9 ms,
  * about 3 frames at 3 ms, and with detection below the CLI every such poll
@@ -430,6 +435,14 @@ static uint32_t          gAngleEstimates;
  * point on boresight. Valid while the beamformer's peak stands clear. */
 static l3_angle_obs_t    gBallAngle;
 static uint8_t           gBallAngleValid;
+/* The ball detector's cadence (l3_ball.h framesPerUpdate): a ball on its
+ * tee does not move, so its static scan runs every eighth frame (24 ms),
+ * its counts and rates scaled to the same times as before. Its angle is
+ * estimated on a new or moved lock and refreshed every
+ * L3_BALL_ANGLE_REFRESH_UPDATES updates (~0.5 s), not every update. */
+#define L3_BALL_FRAMES_PER_UPDATE      8U
+#define L3_BALL_ANGLE_REFRESH_UPDATES  20U
+static l3_ball_angle_clock_t gBallAngleClock;
 #define L3_BALL_ANGLE_MIN_PEAK_RATIO 3.0F
 /* The range-only impact's configuration ("trackCfg impact <horizonS>"). */
 static l3_impact_cfg_t   gImpactCfg;
@@ -493,6 +506,12 @@ static uint32_t            gShotId;
 #define L3_HSRAM_DIAG __attribute__((section(".hsramMss")))
 
 static l3_profile_t        gProfile L3_HSRAM_DIAG;
+/* The club's pending angles and the angle task's stack, in HS-RAM too:
+ * MSS-only, and DATA_RAM (the heap included) is full. */
+#define L3_ANGLE_TASK_STACK_BYTES 2048U
+static l3_angle_queue_t gAngleQueue L3_HSRAM_DIAG;
+static uint8_t gAngleTaskStack[L3_ANGLE_TASK_STACK_BYTES] L3_HSRAM_DIAG;
+static Semaphore_Handle gAngleSemaphore = NULL;
 static uint8_t             gProfileReady;
 /* Which core scores a frame's bins (l3_detect_core.h: "trackCfg
  * detectCore"), and when each frame was acquired, taken, scored and decided
@@ -2978,14 +2997,6 @@ static float l3_ringScale(uint32_t slot)
     return 1.0F;
 }
 
-static float l3_ringComponent(const uint8_t *component, uint32_t bytes)
-{
-    if (bytes == 1U) {
-        return (float)*(const int8_t *)component;
-    }
-    return (float)*(const int16_t *)(const void *)component;
-}
-
 /* The slot's frame as stored in the ring (the retained window). */
 static l3_detect_frame_t l3_ringFrameOf(uint32_t slot)
 {
@@ -3050,101 +3061,34 @@ static int32_t l3_detectFrameStale(const l3_detect_frame_t *frame)
     return 0;
 }
 
+/* A detect frame as the per-channel loops read it (l3_channels.h). */
+static l3_channel_frame_t l3_channelFrame(const l3_detect_frame_t *source)
+{
+    l3_channel_frame_t frame;
+
+    frame.base = source->base;
+    frame.binCount = source->binCount;
+    frame.cb = source->cb;
+    frame.scale = source->scale;
+    frame.ntx = (gCapturePlan.loops == 0U) ? 0U
+                                           : gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
+    frame.nrx = N_RX;
+    frame.loops = gCapturePlan.loops;
+    frame.loopPeriodS = gTrigLoopPeriodS;
+    return frame;
+}
+
 /* Burst-MTI residual of one bin over every loop of a frame, summed over the
- * vertical TX pair (TX0 and TX2 of three) and all RX. Each (tx, rx) loop
- * mean is computed once, so a bin costs O(loops), not O(loops^2). perLoop[]
- * (gCapturePlan.loops values) receives the residual power of each loop; obs
- * receives the residual energy integrated over every loop and the lag-1
- * loop autocorrelation the trigger reads Doppler from. Either may be NULL. */
+ * vertical TX pair (TX0 and TX2 of three) and all RX (l3_channels.c).
+ * perLoop[] (gCapturePlan.loops values) receives each loop's residual
+ * power; obs the residual energy and the lag-1 loop autocorrelation the
+ * trigger reads Doppler from. Either may be NULL. */
 static void l3_verticalResidual(const l3_detect_frame_t *source, uint32_t localBin,
                                 float *perLoop, l3_trig_obs_t *obs)
 {
-    const uint8_t *frame = source->base;
-    uint32_t binCount = source->binCount;
-    uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
-    uint32_t loops = gCapturePlan.loops;
-    uint32_t cb = source->cb;
-    float scale = source->scale;
-    /* The same (tx, rx) one loop later is ntx chirps on: N_RX * binCount
-     * complex samples per chirp, two components each. */
-    uint32_t loopStride = ntx * N_RX * binCount * 2U * cb;
-    /* Per-loop power summed over channels, for the rows and the peak. */
-    float loopPower[L3_MAX_LOOPS];
-    float energy = 0.0F;
-    float peak = 0.0F;
-    float r1Re = 0.0F;
-    float r1Im = 0.0F;
-    uint32_t tx;
-    uint32_t loop;
+    l3_channel_frame_t frame = l3_channelFrame(source);
 
-    for (loop = 0U; loop < loops; loop++) {
-        loopPower[loop] = 0.0F;
-    }
-    if (cb == 2U && loops <= L3_IQ16_MAX_LOOPS) {
-        /* IQ16: exact integer statistics, the code the DSS runs too
-         * (l3_bin_score.c), so the two cores' answers agree bit for bit. */
-        l3_bin_obs_t scored = {0.0F, 0.0F, 0.0F, 0.0F, 0.0F};
-
-        (void)l3_bin_score_iq16((const int16_t *)(const void *)frame, binCount, localBin, ntx,
-                                N_RX, loops, &scored, perLoop);
-        if (obs != NULL) {
-            *obs = scored;
-        }
-        return;
-    }
-    for (tx = 0U; tx < ntx; tx++) {
-        uint32_t rx;
-        if (ntx == 3U && tx == 1U) {
-            continue;
-        }
-        for (rx = 0U; rx < N_RX; rx++) {
-            const uint8_t *base = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U * cb];
-            const uint8_t *sample = base;
-            float meanIm = 0.0F;
-            float meanRe = 0.0F;
-            float prevIm = 0.0F;
-            float prevRe = 0.0F;
-
-            for (loop = 0U; loop < loops; loop++) {
-                meanIm += l3_ringComponent(sample, cb);
-                meanRe += l3_ringComponent(sample + cb, cb);
-                sample += loopStride;
-            }
-            meanIm /= (float)loops;
-            meanRe /= (float)loops;
-            sample = base;
-            for (loop = 0U; loop < loops; loop++) {
-                float im = (l3_ringComponent(sample, cb) - meanIm) * scale;
-                float re = (l3_ringComponent(sample + cb, cb) - meanRe) * scale;
-                float power = im * im + re * re;
-                sample += loopStride;
-                energy += power;
-                loopPower[loop] += power;
-                if (loop > 0U) {
-                    /* residual[loop] * conj(residual[loop - 1]) */
-                    r1Re += re * prevRe + im * prevIm;
-                    r1Im += im * prevRe - re * prevIm;
-                }
-                prevIm = im;
-                prevRe = re;
-            }
-        }
-    }
-    for (loop = 0U; loop < loops; loop++) {
-        if (perLoop != NULL) {
-            perLoop[loop] = loopPower[loop];
-        }
-        if (loopPower[loop] > peak) {
-            peak = loopPower[loop];
-        }
-    }
-    if (obs != NULL) {
-        obs->energy = energy;
-        obs->peak = peak;
-        obs->loop0 = loopPower[0];
-        obs->r1Re = r1Re;
-        obs->r1Im = r1Im;
-    }
+    l3_channels_residual(&frame, localBin, perLoop, obs);
 }
 
 /* The DSS side of l3_scoreSpans, with the detect link further down. */
@@ -3245,145 +3189,33 @@ static void l3_verticalPowerLoops(uint32_t slot, uint32_t localBin, float *out)
     l3_verticalResidual(&frame, localBin, out, NULL);
 }
 
-/* Static (non-MTI) power of one bin: mean |I + jQ|^2 per complex sample over
- * every loopStep-th loop of the vertical TX pair and all RX. The residual above removes
- * exactly this, so it is the view of a stationary ball on the tee that the
- * trigger never sees; teeScan reports it so a ball's presence and range bin
- * can be proved before any swing is judged. Diagnostic only. */
+/* Static (non-MTI) power of one bin (l3_channels.c): the view of a
+ * stationary ball on the tee that the trigger's residual removes. */
 static float l3_verticalStaticPower(const l3_detect_frame_t *source, uint32_t localBin,
                                     uint32_t loopStep)
 {
-    const uint8_t *frame = source->base;
-    uint32_t binCount = source->binCount;
-    uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
-    uint32_t loops = gCapturePlan.loops;
-    uint32_t cb = source->cb;
-    float scale = source->scale;
-    uint32_t loopStride = ntx * N_RX * binCount * 2U * cb * loopStep;
-    float total = 0.0F;
-    uint32_t samples = 0U;
-    uint32_t tx;
+    l3_channel_frame_t frame = l3_channelFrame(source);
 
-    for (tx = 0U; tx < ntx; tx++) {
-        uint32_t rx;
-        if (ntx == 3U && tx == 1U) {
-            continue;
-        }
-        for (rx = 0U; rx < N_RX; rx++) {
-            const uint8_t *sample = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U * cb];
-            uint32_t loop;
-            /* loopStep > 1 subsamples the loops: a static target does not
-             * change between them, and the ball detector runs every frame. */
-            for (loop = 0U; loop < loops; loop += loopStep) {
-                float im = l3_ringComponent(sample, cb) * scale;
-                float re = l3_ringComponent(sample + cb, cb) * scale;
-                total += im * im + re * re;
-                sample += loopStride;
-                samples++;
-            }
-        }
-    }
-    return (samples > 0U) ? (total / (float)samples) : 0.0F;
+    return l3_channels_static_power(&frame, localBin, loopStep);
 }
 
-/* One target's antenna channels at localBin of slot, for angle estimation:
- * each (tx, rx) is its burst-MTI residual summed coherently over the loops
- * with the target's per-loop Doppler phase (the lag-1 phase the observation
- * layer measured) unwound, so the loops add in phase and only the TDM chirp
- * offsets between the TX blocks remain for l3_angle_estimate to remove. */
+/* One target's antenna channels at localBin for angle estimation, its
+ * per-loop Doppler phase unwound (l3_channels.c). */
 static void l3_channelSnapshot(const l3_detect_frame_t *source, uint32_t localBin, float lag1PhaseRad,
                                float radialVelocityMps, l3_angle_snapshot_t *out)
 {
-    const uint8_t *frame = source->base;
-    uint32_t binCount = source->binCount;
-    uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
-    uint32_t loops = gCapturePlan.loops;
-    uint32_t cb = source->cb;
-    float scale = source->scale;
-    uint32_t loopStride = ntx * N_RX * binCount * 2U * cb;
-    float stepRe = cosf(lag1PhaseRad);
-    float stepIm = -sinf(lag1PhaseRad);
-    uint32_t tx;
+    l3_channel_frame_t frame = l3_channelFrame(source);
 
-    l3_angle_snapshot_init(out, ntx, N_RX);
-    out->lag1PhaseRad = lag1PhaseRad;
-    out->radialVelocityMps = radialVelocityMps;
-    out->chirpPeriodS = (ntx > 0U) ? (gTrigLoopPeriodS / (float)ntx) : 45.0e-6F;
-    for (tx = 0U; tx < out->ntx; tx++) {
-        uint32_t rx;
-        for (rx = 0U; rx < out->nrx; rx++) {
-            const uint8_t *base = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U * cb];
-            const uint8_t *sample = base;
-            float meanIm = 0.0F;
-            float meanRe = 0.0F;
-            float sumRe = 0.0F;
-            float sumIm = 0.0F;
-            float rotRe = 1.0F;   /* exp(-j * loop * lag1) */
-            float rotIm = 0.0F;
-            uint32_t loop;
-
-            for (loop = 0U; loop < loops; loop++) {
-                meanIm += l3_ringComponent(sample, cb);
-                meanRe += l3_ringComponent(sample + cb, cb);
-                sample += loopStride;
-            }
-            meanIm /= (float)loops;
-            meanRe /= (float)loops;
-            sample = base;
-            for (loop = 0U; loop < loops; loop++) {
-                float im = (l3_ringComponent(sample, cb) - meanIm) * scale;
-                float re = (l3_ringComponent(sample + cb, cb) - meanRe) * scale;
-                float nextRe = rotRe * stepRe - rotIm * stepIm;
-                float nextIm = rotRe * stepIm + rotIm * stepRe;
-
-                sumRe += re * rotRe - im * rotIm;
-                sumIm += re * rotIm + im * rotRe;
-                rotRe = nextRe;
-                rotIm = nextIm;
-                sample += loopStride;
-            }
-            out->channel[tx * out->nrx + rx].re = sumRe;
-            out->channel[tx * out->nrx + rx].im = sumIm;
-        }
-    }
+    l3_channels_snapshot(&frame, localBin, lag1PhaseRad, radialVelocityMps, out);
 }
 
-/* The same channels for a STATIC target (the ball on its tee): the raw
- * samples summed over the loops, no mean removed and no Doppler to unwind,
- * so the TX blocks differ only by their fixed phases and the beamformer
- * reads the target's direction. */
+/* The same channels for a STATIC target (the ball on its tee), raw
+ * (l3_channels.c). */
 static void l3_channelSnapshotStatic(const l3_detect_frame_t *source, uint32_t localBin, l3_angle_snapshot_t *out)
 {
-    const uint8_t *frame = source->base;
-    uint32_t binCount = source->binCount;
-    uint32_t ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
-    uint32_t loops = gCapturePlan.loops;
-    uint32_t cb = source->cb;
-    float scale = source->scale;
-    uint32_t loopStride = ntx * N_RX * binCount * 2U * cb;
-    uint32_t tx;
+    l3_channel_frame_t frame = l3_channelFrame(source);
 
-    l3_angle_snapshot_init(out, ntx, N_RX);
-    out->lag1PhaseRad = 0.0F;
-    out->radialVelocityMps = 0.0F;
-    out->chirpPeriodS = (ntx > 0U) ? (gTrigLoopPeriodS / (float)ntx) : 45.0e-6F;
-    for (tx = 0U; tx < out->ntx; tx++) {
-        uint32_t rx;
-        for (rx = 0U; rx < out->nrx; rx++) {
-            const uint8_t *sample = &frame[((tx * N_RX + rx) * binCount + localBin) * 2U * cb];
-            float sumRe = 0.0F;
-            float sumIm = 0.0F;
-            uint32_t loop;
-
-            for (loop = 0U; loop < loops; loop++) {
-                sumIm += l3_ringComponent(sample, cb) * scale;
-                sumRe += l3_ringComponent(sample + cb, cb) * scale;
-                sample += loopStride;
-            }
-            out->channel[tx * out->nrx + rx].re = sumRe;
-            out->channel[tx * out->nrx + rx].im = sumIm;
-        }
-    }
+    l3_channels_snapshot_static(&frame, localBin, out);
 }
 
 /* --- CLI notices from the detect task ----------------------------------------
@@ -3666,7 +3498,8 @@ static void l3_considerBall(uint32_t slot)
     uint32_t ticks;
 
     if (gBall.state == L3_BALL_STATE_OFF || gCapturePlan.loops == 0U ||
-        (gPreFramesCaptured & 1U) != 0U) {
+        gBallCfg.framesPerUpdate == 0U ||
+        (gPreFramesCaptured % gBallCfg.framesPerUpdate) != 0U) {
         return;
     }
     if (count > L3_BALL_MAX_BINS) {
@@ -3683,19 +3516,26 @@ static void l3_considerBall(uint32_t slot)
     }
     (void)l3_ball_update(&gBall, frame.binStart, power, count);
     {
-        /* The locked ball's direction from its static return. */
+        /* The locked ball's direction from its static return: when due (a
+         * new or moved lock, or the refresh), else the last one stands. */
         uint32_t ballBin;
 
-        if (l3_ball_locked(&gBall, &ballBin) && ballBin >= frame.binStart &&
-            ballBin - frame.binStart < count) {
-            static l3_angle_snapshot_t snapshot;
+        if (l3_ball_angle_due(&gBall, &gBallAngleClock, L3_BALL_ANGLE_REFRESH_UPDATES)) {
+            if (l3_ball_locked(&gBall, &ballBin) && ballBin >= frame.binStart &&
+                ballBin - frame.binStart < count) {
+                static l3_angle_snapshot_t snapshot;
 
-            l3_channelSnapshotStatic(&frame, ballBin - frame.binStart, &snapshot);
-            gBallAngleValid = (uint8_t)(l3_angle_estimate(&gRadarCal, &snapshot, &gBallAngle) &&
-                                        gBallAngle.elevationValid &&
-                                        gBallAngle.elevationPeakRatio >=
-                                            L3_BALL_ANGLE_MIN_PEAK_RATIO);
-        } else {
+                l3_channelSnapshotStatic(&frame, ballBin - frame.binStart, &snapshot);
+                gBallAngleValid =
+                    (uint8_t)(l3_angle_estimate(&gRadarCal, &snapshot, &gBallAngle) &&
+                              gBallAngle.elevationValid &&
+                              gBallAngle.elevationPeakRatio >= L3_BALL_ANGLE_MIN_PEAK_RATIO);
+            } else {
+                /* Locked outside this frame's window: try again next update. */
+                gBallAngleValid = 0U;
+                gBallAngleClock.valid = 0U;
+            }
+        } else if (!l3_ball_locked(&gBall, &ballBin)) {
             gBallAngleValid = 0U;
         }
     }
@@ -3976,6 +3816,68 @@ static uint32_t l3_preImpactClubTargets(const l3_trig_obs_t *obs, uint32_t windo
 /* Per completed pre-trigger slot: reduce the watch region to one observation
  * per bin and hand it to the detector. The detect task passes the slot it
  * popped, so a slow read does not score a frame the ring has reused. */
+/* --- the club's pending angles (l3_angle_queue.h) ---------------------------
+ * Pushed by the detect task, drained by the angle task below it; a fire
+ * frame drains on the detect task. Task_disable serialises the queue: the
+ * angle task holds it only to peek and to finish, never over an estimate. */
+static void l3_angleQueuePush(uint32_t timestampUs, const l3_angle_snapshot_t *snapshot)
+{
+    UInt key = Task_disable();
+
+    (void)l3_angle_queue_push(&gAngleQueue, timestampUs, snapshot);
+    Task_restore(key);
+    if (gAngleSemaphore != NULL) {
+        Semaphore_post(gAngleSemaphore);
+    }
+}
+
+/* On the detect task, at a fire: every pending angle now. The angle task
+ * cannot hold the queue meanwhile (it is below this task and holds it only
+ * with scheduling off); a job it was estimating is superseded. */
+static void l3_angleQueueDrain(void)
+{
+    static l3_angle_job_t job;
+    l3_angle_obs_t obs;
+
+    while (l3_angle_queue_pop(&gAngleQueue, &job)) {
+        if (l3_angle_queue_apply(&gAngleQueue, &gRadarCal, &job, &gClubTrack, &obs) == 1) {
+            gLastAngle = obs;
+            gAngleEstimates++;
+        }
+    }
+}
+
+static void l3_angleTask(UArg arg0, UArg arg1)
+{
+    static l3_angle_job_t job;
+
+    (void)arg0;
+    (void)arg1;
+    while (1) {
+        Semaphore_pend(gAngleSemaphore, BIOS_WAIT_FOREVER);
+        while (1) {
+            l3_angle_obs_t obs;
+            int32_t estimated;
+            int32_t have;
+            UInt key;
+
+            key = Task_disable();
+            have = l3_angle_queue_peek(&gAngleQueue, &job);
+            Task_restore(key);
+            if (!have) {
+                break;
+            }
+            estimated = l3_angle_estimate(&gRadarCal, &job.snapshot, &obs);
+            key = Task_disable();
+            if (l3_angle_queue_finish(&gAngleQueue, &job, estimated, &obs, &gClubTrack) == 1) {
+                gLastAngle = obs;
+                gAngleEstimates++;
+            }
+            Task_restore(key);
+        }
+    }
+}
+
 static void l3_considerSelfTrigger(uint32_t slot)
 {
     l3_detect_frame_t frame = l3_detectFrameOf(slot);
@@ -4122,32 +4024,24 @@ static void l3_considerSelfTrigger(uint32_t slot)
                 }
             }
         }
-        /* Behind, the angle estimate (~1.6 ms) is shed: the fire does not use it. */
+        /* The club's angles leave the decision path (the fire uses range
+         * only; l3_angle_queue.h): the associated target's channels are taken
+         * now, while the frame is valid, and queued for the angle task by the
+         * point's timestamp; a fire frame drains the queue. Never shed when
+         * behind: the snapshot is cheap next to the estimate, and every point
+         * keeps its angle. The track's range-rate velocity resolves the TDM
+         * alias, so a track's first point (no range rate yet) stays
+         * range-only. */
         if (appended && gClubTrack.lastTargetIndex < found &&
-            gClubTrack.count > 1U && !gDetectBehind &&
+            gClubTrack.count > 1U &&
             l3_track_point(&gClubTrack, gClubTrack.count - 1U, &newest)) {
-            /* Angles for the associated target only: one estimate per frame.
-             * The track's range-rate velocity resolves the TDM alias, so the
-             * first point of a track (no range rate yet) stays range-only. */
             static l3_angle_snapshot_t snapshot;
             const l3_target_obs_t *hit = &targets[gClubTrack.lastTargetIndex];
 
             ticks = Cycleprofiler_getTimeStamp();
             l3_channelSnapshot(&frame, (uint32_t)hit->peakBin - frame.binStart,
                                hit->dopplerPhaseRad, newest.radialVelocityMps, &snapshot);
-            if (l3_angle_estimate(&gRadarCal, &snapshot, &gLastAngle)) {
-                uint8_t flags = 0U;
-
-                if (gLastAngle.azimuthValid) {
-                    flags |= L3_OBS_ANGLE_AZIMUTH;
-                }
-                if (gLastAngle.elevationValid) {
-                    flags |= L3_OBS_ANGLE_ELEVATION;
-                }
-                (void)l3_track_set_angles(&gClubTrack, gLastAngle.azimuthRad,
-                                          gLastAngle.elevationRad, flags);
-                gAngleEstimates++;
-            }
+            l3_angleQueuePush(newest.timestampUs, &snapshot);
             l3_profileStage(L3_PROF_ANGLE, ticks);
         }
         /* The delivery and the ball position every frame: the destination bin
@@ -4196,6 +4090,24 @@ static void l3_considerSelfTrigger(uint32_t slot)
     /* The club rules, else the ball leaving: each dates its own impact. */
     fired = (ranged || left) ? 1 : 0;
     impactUs = ranged ? gRangeImpact.impactTimestampUs : gLeave.impactTimestampUs;
+    if (fired) {
+        key = Hwi_disable();
+        gHwaFreezeRequested = 1U;
+        gPostCaptureStarted = 0U;
+        gPostFramesCaptured = 0U;
+        gPostFramesObserved = 0U;
+        gActiveFrameShouldKeep = 1U;
+        gSelfTriggerLatched = 1U;
+        gHwaFreezeRequests++;
+        Hwi_restore(key);
+        gDetectEvent.flags |= (uint8_t)L3_TIMING_FLAG_FIRED;
+        /* The notice first: the host's S! waits on it, the debug line does not. */
+        l3_queueNotice("Triggered\n");
+        /* Then every pending club angle, so the shot freezes them with the
+         * trajectory, and the delivery again from them. */
+        l3_angleQueueDrain();
+        (void)l3_track_delivery(&gClubTrack, 8U, &gDelivery);
+    }
     l3_shotObserve(teeBin, fired, impactUs);
     if (left && gBallTrack.armed) {
         /* The fallback fired (the club's rule may have too, as late): the
@@ -4207,18 +4119,6 @@ static void l3_considerSelfTrigger(uint32_t slot)
         l3_noteTrigger(gClubTrack.active ? 7U : 5U, gTrig.floor);
         return;
     }
-    key = Hwi_disable();
-    gHwaFreezeRequested = 1U;
-    gPostCaptureStarted = 0U;
-    gPostFramesCaptured = 0U;
-    gPostFramesObserved = 0U;
-    gActiveFrameShouldKeep = 1U;
-    gSelfTriggerLatched = 1U;
-    gHwaFreezeRequests++;
-    Hwi_restore(key);
-    gDetectEvent.flags |= (uint8_t)L3_TIMING_FLAG_FIRED;
-    /* The notice first: the host's S! waits on it, the debug line does not. */
-    l3_queueNotice("Triggered\n");
     l3_noteTrigger(9U, gTrig.floor);
 }
 
@@ -5493,6 +5393,11 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         } else {
             CLI_write("perf frames=0 (no frame scored yet)\n");
         }
+        CLI_write("angles queued=%u done=%u stale=%u failed=%u dropped=%u pending=%u\n",
+                  (unsigned)gAngleQueue.queued, (unsigned)gAngleQueue.done,
+                  (unsigned)gAngleQueue.stale, (unsigned)gAngleQueue.failed,
+                  (unsigned)gAngleQueue.dropped,
+                  (unsigned)l3_angle_queue_pending(&gAngleQueue));
         (void)l3_adaptive_format(&gAdaptiveCfg, &gAdaptiveWindows, line, sizeof(line));
         CLI_write("%s applied=%u\n", line, (unsigned)gAdaptiveApplied);
         l3_writeDetectTiming(line, sizeof(line), 0U);
@@ -5708,7 +5613,7 @@ static int32_t l3_cli_ball(int32_t argc, char *argv[])
         char *end;
         uint32_t waited = 0U;
 
-        l3_ball_cfg_defaults(&cfg);
+        l3_ball_cfg_defaults_at(&cfg, L3_BALL_FRAMES_PER_UPDATE);
         value = strtoul(argv[2], &end, 10);
         if (*end != '\0' || value > 1UL) {
             CLI_write("Error: ball cfg enable\n");
@@ -5759,6 +5664,7 @@ static int32_t l3_cli_ball(int32_t argc, char *argv[])
         }
         gBallCfg = cfg;
         l3_ball_init(&gBall, &gBallCfg);
+        memset(&gBallAngleClock, 0, sizeof(gBallAngleClock));
         gTrigDestBall = 0U;
         gTrigFallbackFrames = 0U;
         CLI_write("Done\n");
@@ -6371,6 +6277,8 @@ static void l3_initTask(UArg arg0, UArg arg1)
      * these before their lazy init. */
     memset(&gProfile, 0, sizeof(gProfile));
     memset(&gTiming, 0, sizeof(gTiming));
+    /* The angle scan's steering rotors, before any task can estimate. */
+    l3_angle_tables_init();
 
     /* Starts the R4F PMU cycle counter behind Cycleprofiler_getTimeStamp. */
     Cycleprofiler_init();
@@ -6521,6 +6429,19 @@ static void l3_initTask(UArg arg0, UArg arg1)
     taskParams.priority = L3_DETECT_TASK_PRIORITY;
     taskParams.stackSize = 3U * 1024U;
     Task_create(l3_detectTask, &taskParams, NULL);
+    l3_angle_queue_init(&gAngleQueue);
+    semaphoreParams.mode = Semaphore_Mode_BINARY;
+    gAngleSemaphore = Semaphore_create(0, &semaphoreParams, NULL);
+    semaphoreParams.mode = Semaphore_Mode_COUNTING;
+    if (gAngleSemaphore != NULL) {
+        /* No angle task (no semaphore): the fire frame's drain still gets
+         * every angle into the shot. */
+        Task_Params_init(&taskParams);
+        taskParams.priority = L3_ANGLE_TASK_PRIORITY;
+        taskParams.stack = gAngleTaskStack;
+        taskParams.stackSize = sizeof(gAngleTaskStack);
+        Task_create(l3_angleTask, &taskParams, NULL);
+    }
     gNoticeSemaphore = Semaphore_create(0, &semaphoreParams, NULL);
     if (gNoticeSemaphore == NULL) {
         return;

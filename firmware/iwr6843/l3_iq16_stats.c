@@ -6,6 +6,10 @@
 int32_t l3_iq16_channel_stats(const int16_t *samples, uint32_t loops, uint32_t strideWords,
                               l3_iq16_channel_stats_t *out)
 {
+    /* One read of each strided sample (on the R4F the frame is uncached L3):
+     * the loop mean and the residuals both come from this copy. */
+    int32_t xIm[L3_IQ16_MAX_LOOPS];
+    int32_t xRe[L3_IQ16_MAX_LOOPS];
     int32_t sumIm = 0;
     int32_t sumRe = 0;
     int32_t prevIm = 0;
@@ -20,17 +24,18 @@ int32_t l3_iq16_channel_stats(const int16_t *samples, uint32_t loops, uint32_t s
     out->loops = loops;
     sample = samples;
     for (loop = 0U; loop < loops; loop++) {
-        sumIm += (int32_t)sample[0];
-        sumRe += (int32_t)sample[1];
+        xIm[loop] = (int32_t)sample[0];
+        xRe[loop] = (int32_t)sample[1];
+        sumIm += xIm[loop];
+        sumRe += xRe[loop];
         sample += strideWords;
     }
     out->sumIm = sumIm;
     out->sumRe = sumRe;
-    sample = samples;
     for (loop = 0U; loop < loops; loop++) {
         /* Residual scaled by loops: exact in int32 (|x| < 2^15, loops <= 16). */
-        int32_t im = (int32_t)loops * (int32_t)sample[0] - sumIm;
-        int32_t re = (int32_t)loops * (int32_t)sample[1] - sumRe;
+        int32_t im = (int32_t)loops * xIm[loop] - sumIm;
+        int32_t re = (int32_t)loops * xRe[loop] - sumRe;
         int64_t power = (int64_t)im * im + (int64_t)re * re;
 
         out->loopPower[loop] = power;
@@ -42,7 +47,6 @@ int32_t l3_iq16_channel_stats(const int16_t *samples, uint32_t loops, uint32_t s
         }
         prevIm = im;
         prevRe = re;
-        sample += strideWords;
     }
     return 0;
 }

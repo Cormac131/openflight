@@ -81,6 +81,7 @@ class _KioskSwing:
     pre_scored_max: int  # most bins scored on one armed pre-impact frame
     post_scored_max: int  # most bins scored on one post-impact frame
     launch_mps: float | None  # the replayed launch's radial speed; None: no launch
+    pre_snapshots_max: int = 0  # most club snapshots queued on one pre-impact frame
 
 
 def _labelled_radial_mps(raw: bytes, labels) -> float:
@@ -123,6 +124,10 @@ def _kiosk_swings() -> tuple[_KioskSwing, ...]:
                 ),
                 post_scored_max=max(
                     (f.scored_bins for f in result.frames if fired is not None and f.frame > fired),
+                    default=0,
+                ),
+                pre_snapshots_max=max(
+                    (f.angle_snapshots for f in result.frames if fired is None or f.frame <= fired),
                     default=0,
                 ),
                 # Radial, as the labels are range only: the 3D speed also
@@ -262,3 +267,31 @@ def test_every_armed_frame_scores_within_the_boards_budget():
         f"bins scored per frame over {PRE_IMPACT_BIN_BUDGET} before impact or "
         f"{POST_IMPACT_BIN_BUDGET} after (dump, pre max, post max): {over[:5]}"
     )
+
+
+# The club's angle estimate (~1.6 ms before the steering table) left the
+# decision path: a pre-impact frame takes at most one channel snapshot (the
+# associated target's) and queues it for the angle task (l3_angle_queue.h).
+PRE_IMPACT_SNAPSHOT_BUDGET = 1
+
+
+@needs_compiler
+def test_a_pre_impact_frame_queues_at_most_one_club_snapshot():
+    over = [
+        (s.name, s.pre_snapshots_max)
+        for s in _kiosk_swings()
+        if s.pre_snapshots_max > PRE_IMPACT_SNAPSHOT_BUDGET
+    ]
+    assert over == [], f"club snapshots per pre-impact frame over the budget: {over[:5]}"
+    assert any(s.pre_snapshots_max == 1 for s in _kiosk_swings()), "a club is tracked somewhere"
+
+
+def test_the_replays_pre_impact_path_queues_the_club_angle_and_never_estimates_it():
+    """The replay mirrors the board: no angle estimate on the decision path."""
+    import inspect  # pylint: disable=import-outside-toplevel
+
+    # replay_dump is the pre-impact loop; post-impact frames (whose ball
+    # angles stay inline, as on the board) are _replay_post_frame's.
+    source = inspect.getsource(fr.replay_dump)
+    assert "l3_angle_queue_push(" in source
+    assert "_estimate_angles(" not in source

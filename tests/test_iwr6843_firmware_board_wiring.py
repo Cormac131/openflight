@@ -411,9 +411,11 @@ def test_band_off_scores_only_the_trigger_region():
     assert "club = region;" in self_trigger[region : region + 200]
 
 
-def test_behind_the_detect_task_sheds_the_ball_detector_the_map_chunk_and_angles():
+def test_behind_the_detect_task_sheds_the_ball_detector_and_the_map_chunk():
     """A newer frame landed before this one was taken: skip what the trigger's
-    fire does not need, so the backlog drains and the CLI gets its time."""
+    fire does not need, so the backlog drains and the CLI gets its time. The
+    club's angle is no longer shed: it left the decision path (a queued
+    snapshot, l3_angle_queue.h), and every point keeps it."""
     task = body("l3_detectTask")
     behind = task.index("gDetectBehind = ((uint32_t)(gPreFramesCaptured - epoch) >= 1U) ? 1U : 0U;")
     shed = task.index("if (!gDetectBehind) {", behind)
@@ -422,8 +424,8 @@ def test_behind_the_detect_task_sheds_the_ball_detector_the_map_chunk_and_angles
     assert behind < shed < ball < trigger
     assert "gDetectShed++;" in task
     self_trigger = body("l3_considerSelfTrigger")
-    angles = self_trigger.index("gClubTrack.count > 1U && !gDetectBehind &&")
-    assert angles < self_trigger.index("l3_channelSnapshot(&frame, (uint32_t)hit->peakBin")
+    assert "if (!gClubTrack.active && !gDetectBehind) {" in self_trigger, "the map chunk"
+    assert "gClubTrack.count > 1U && !gDetectBehind" not in self_trigger, "angles never shed"
 
 
 def test_impact_freezes_the_post_floor_from_the_fallbacks_median():

@@ -526,6 +526,9 @@ class ReplayFrame:
     # Range bins the board scores (l3_verticalResidual) on this frame: its
     # cost is ~73 us a bin (triggerLog perf, 2026-09-30) against a 3 ms frame.
     scored_bins: int = 0
+    # Club channel snapshots queued on this frame's decision path for the
+    # angle task (l3_angle_queue.h), where the angle estimate used to run.
+    angle_snapshots: int = 0
 
 
 @dataclass(frozen=True)
@@ -738,6 +741,29 @@ def _estimate_angles(
     return obs, flags
 
 
+def drain_angle_queue(
+    lib: ctypes.CDLL, queue: fw.AngleQueue, cal: fw.RadarCal, track: fw.ClubTrack
+) -> AngleSummary | None:
+    """Every pending club angle onto its point (``l3_angleQueueDrain``); the
+    summary of the last one applied, or None when none was."""
+    job = fw.AngleJob()
+    applied = None
+    while lib.l3_angle_queue_pop(ctypes.byref(queue), ctypes.byref(job)):
+        obs = fw.AngleObs()
+        if (
+            lib.l3_angle_queue_apply(
+                ctypes.byref(queue),
+                ctypes.byref(cal),
+                ctypes.byref(job),
+                ctypes.byref(track),
+                ctypes.byref(obs),
+            )
+            == 1
+        ):
+            applied = _angle_summary(obs)
+    return applied
+
+
 def _radar_cal(lib: ctypes.CDLL, config: ReplayConfig) -> fw.RadarCal:
     cal = fw.RadarCal()
     lib.l3_cal_identity(ctypes.byref(cal), fw.CAL_MAX_VIRTUAL)
@@ -905,6 +931,9 @@ def replay_dump(
     tunables.apply_overrides(config.overrides, "club", track_cfg)
     track = fw.ClubTrack()
     lib.l3_track_init(ctypes.byref(track), ctypes.byref(track_cfg))
+    # The club's pending angles (l3_angle_queue.h), as the board queues them.
+    angle_queue = fw.AngleQueue()
+    lib.l3_angle_queue_init(ctypes.byref(angle_queue))
 
     impact_cfg = fw.ImpactCfg()
     lib.l3_impact_cfg_defaults(ctypes.byref(impact_cfg))
@@ -1270,28 +1299,30 @@ def replay_dump(
                         )
         track_bin = None
         angle = None
+        angle_snapshots = 0
         newest = fw.TrackPoint()
         if appended and track.lastTargetIndex < found and track.count > 1:
-            # As the board does: angles for the associated target only, the
+            # As the board does: the associated target's channels, queued by
+            # the point's timestamp for the angle task (l3_angle_queue.h), the
             # track's range-rate resolving the TDM alias, so a track's first
-            # point (no range rate yet) stays range-only.
+            # point (no range rate yet) stays range-only. The replay drains at
+            # once, as a board whose angle task is idle; a fire drains anyway.
             lib.l3_track_point(ctypes.byref(track), track.count - 1, ctypes.byref(newest))
-            obs_angle, flags = _estimate_angles(
-                lib,
-                cal,
+            hit = targets[track.lastTargetIndex]
+            snapshot = channel_snapshot(
                 cube,
                 frame,
-                window_start,
+                int(hit.peakBin) - window_start,
                 n_tx,
-                targets[track.lastTargetIndex],
-                float(newest.radialVelocityMps),
-                chirp_period_s,
+                lag1_phase_rad=float(hit.dopplerPhaseRad),
+                radial_velocity_mps=float(newest.radialVelocityMps),
+                chirp_period_s=chirp_period_s,
             )
-            if obs_angle is not None:
-                lib.l3_track_set_angles(
-                    ctypes.byref(track), obs_angle.azimuthRad, obs_angle.elevationRad, flags
-                )
-                angle = _angle_summary(obs_angle)
+            lib.l3_angle_queue_push(
+                ctypes.byref(angle_queue), int(newest.timestampUs), ctypes.byref(snapshot)
+            )
+            angle_snapshots = 1
+            angle = drain_angle_queue(lib, angle_queue, cal, track)
         if appended:
             lib.l3_track_point(ctypes.byref(track), track.count - 1, ctypes.byref(newest))
             points.append(_point_summary(newest))
@@ -1388,6 +1419,7 @@ def replay_dump(
                 fw.IMPACT_WHY_NAMES[impact.why],
                 fw.SHOT_STATE_NAMES[shot.state],
                 scored_bins=scored_bins,
+                angle_snapshots=angle_snapshots,
             )
         )
 

@@ -246,3 +246,19 @@ def test_asymmetric_neighbours_move_both_estimators_the_same_way(lib):
         params = fw.ObsParams(fw.STAT_PEAK, 6.0, 135e-6, mode)
         assert _extract(lib, params, symmetric, out) == 1
         assert out[0].rangeBin == pytest.approx(29.0, abs=1e-4)
+
+
+def test_each_sample_is_read_from_the_frame_once():
+    """The frame is strided and, on the R4F, uncached L3: the loop mean and
+    the residuals come from one read of each sample (a local copy), not two
+    passes over the frame. The arithmetic is unchanged; the tests above pin
+    its results."""
+    from pathlib import Path  # pylint: disable=import-outside-toplevel
+
+    source = (Path(__file__).parents[1] / "firmware" / "iwr6843" / "l3_iq16_stats.c").read_text(
+        encoding="utf-8"
+    )
+    body = source[source.index("int32_t l3_iq16_channel_stats(") :]
+    body = body[: body.index("\n}\n")]
+    assert body.count("sample += strideWords;") == 1
+    assert body.count("sample[0]") == 1 and body.count("sample[1]") == 1
