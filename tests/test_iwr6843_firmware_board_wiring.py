@@ -366,10 +366,17 @@ def test_globals_for_the_scan_plan():
 
 
 def test_a_span_is_scored_once_per_frame_into_the_frames_local_bins():
-    score = body("l3_scoreSpan")
-    assert "uint32_t local = bin - frame->binStart;" in score
-    assert "l3_verticalResidual(frame, local, NULL, &obs[local]);" in score
-    assert "(scored[local >> 5U] & (1UL << (local & 31U))) == 0U" in score
+    """The plan's global spans become the frame's local bins, and each bin is
+    scored once through the span scorer both cores share (bit-map dedupe:
+    host tested in test_iwr6843_firmware_dsp_score)."""
+    score = body("l3_scoreSpans")
+    assert "l3_dsp_spans_localize(frame->binStart, frame->binCount, spans, n, local);" in score
+    assert "uint32_t scored[L3_DSP_BITMAP_WORDS] = { 0U, 0U };" in score
+    mss = body("l3_mssScoreSpans")
+    assert "l3_dsp_spans_score(local, n, frame->binCount, l3_mssScorer," in mss
+    assert "l3_verticalResidual((const l3_detect_frame_t *)ctx, localBin, NULL, out);" in body(
+        "l3_mssScorer"
+    )
 
 
 def test_the_band_is_placed_before_the_plan_and_the_trigger_reads_its_clipped_region():
@@ -386,8 +393,9 @@ def test_the_band_is_placed_before_the_plan_and_the_trigger_reads_its_clipped_re
     assert place < plan < stale < observe < helper
     # Every scored bin is a span's; nothing scores the window.
     assert self_trigger.count("l3_verticalResidual(") == 0
-    for span in ("&region", "&club", "&leave", "&chunk"):
-        assert f"l3_scoreSpan(&frame, {span}, obs, scored);" in self_trigger
+    for k, span in enumerate(("region", "club", "leave", "chunk")):
+        assert f"plan[{k}] = {span};" in self_trigger
+    assert self_trigger.count("l3_scoreSpans(&frame, plan, 4U, obs);") == 1
 
 
 def test_an_idle_frame_that_is_not_behind_refreshes_a_band_interior_chunk():
@@ -434,7 +442,7 @@ def test_after_impact_the_ball_tracker_scores_the_post_spans_against_the_frozen_
     post = ball_track.index("l3_scan_post(&gScanCfg, frame.binStart, count, &gBand,")
     assert "&ballSpan, &clubSpan);" in ball_track[post : post + 400]
     merge = ball_track.index("spans = l3_scan_merge(ballSpan, clubSpan, merged);", post)
-    score = ball_track.index("l3_scoreSpan(&frame, &merged[k], obs, scored);", merge)
+    score = ball_track.index("l3_scoreSpans(&frame, merged, spans, obs);", merge)
     extract = ball_track.index(
         "found += l3_obs_extract(&params, frameIndex, gPostTimestampUs, merged[k].first,", score
     )

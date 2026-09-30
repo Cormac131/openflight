@@ -135,7 +135,8 @@ The self-trigger is armed and tuned over the CLI:
 
 ```text
 triggerCfg <globalBin> <snr> <on> [approach past stat]
-triggerLog [trace|track|shot|result|perf|clear]
+triggerLog [trace|track|shot|result|perf|timing|clear]
+trackCfg detectCore [mss|dss|verify]
 trackCfg cal <pitchDeg> <yawDeg> <rollDeg> <azOffsetRad> <elOffsetDeg> <rangeBiasM>
 trackCfg elem <index> <phaseRad> <gain>
 trackCfg impact <horizonS> [endM]
@@ -524,7 +525,9 @@ format miss the club.
 
 `triggerLog perf` prints per-stage counts, last, mean and maximum in
 microseconds (residual, trigger, extraction, club track, angle, impact, ball
-detector, ball tracker) from `l3_profile.c` and the R4F cycle counter. That
+detector, ball tracker, and `dspwait`, the part of the residual the MSS
+spent blocked on the DSS, which the frame total does not count twice) from
+`l3_profile.c` and the R4F cycle counter. That
 is the evidence for moving a stage to the HWA or DSP; nothing is moved until
 the numbers say which. `captureCfg adaptive 1 <approachBins> <marginBins>`
 lets `l3_adaptive.c` move the plan's windows to the locked ball between
@@ -557,6 +560,76 @@ Phase 0 proves the link before anything moves:
 
 Frames in the compact formats' processing scratch live in MSS DATA_RAM,
 which the DSS cannot read, so those formats stay on the MSS path.
+
+#### Detect timing (step 2)
+
+`l3_timing.c` stamps every frame the detect task finishes with the R4F cycle
+counter: `acquired` (the HWA/EDMA stored it and it was queued; the stamp
+travels in the detect queue), `dequeued`, `scoreStart`/`scoreEnd`, and
+`decided` (the trigger decided and the slot was released). It keeps two
+deadlines apart, because they are different things:
+
+- **throughput**: `service` (dequeued -> decided) must average below the
+  frame interval (`budget_us`, the frame period); `over_budget` counts the
+  frames whose service did not
+- **latency**: `latency` (acquired -> decided) may exceed the interval as
+  long as the frame's ring slot is not reused first. `slot reuse margin` =
+  (ring - 2) x interval - latency; `margin_min_us` is the tightest seen and
+  `margin_negative` the frames that ran past it
+
+`triggerLog perf` prints the summary and each statistic (wait, score,
+service, latency, arrival) after the per-stage lines; `triggerLog timing`
+adds the last 16 frames' timelines (`slot`, `epoch`, `core`, each duration,
+queue `depth`, flags `post|behind|stale|fired`). Timing starts over with
+each `sensorStart` and each `trackCfg detectCore <core>`.
+
+A slot is checked for reuse when the detect task pops it and **again after
+it has been read** (`l3_detectFrameStale`): a read that straddled the writer
+reaching the slot is discarded and counted as `stale_read` in `stats`.
+
+#### DSS bin scoring (steps 3-4)
+
+`trackCfg detectCore mss|dss|verify` chooses which core scores the
+detector's bins; the observation -> tracker -> trigger path stays on the
+MSS, unchanged. Every scan-plan read goes through `l3_scoreSpans`, one call
+a frame, so both cores are always asked for exactly the same bins:
+
+- `l3_dsp_spans_localize` turns the plan's global spans into the frame's
+  local bins; `l3_dsp_spans_score` scores each once (both cores run it)
+- `SCORE` (`l3_dsp_ipc.h`) carries the frame's L3 offset, geometry, up to
+  four spans and the queue epoch. The DSS invalidates the whole frame
+  (timed apart from the scoring), runs `l3_dsp_serve`, writes the
+  observations to the result block in HS-RAM at `0x7400` (1320 B, below the
+  boot status at `0x7F00`), writes it back out of its cache, and only then
+  replies. The mailbox reply is the signal; the data is in HS-RAM
+- the MSS copies the block and accepts it only for its own request (magic,
+  seq, epoch, and a count that matches the bins marked:
+  `l3_dsp_result_check`), then merges it (`l3_dsp_result_merge`)
+- `dss`: the detect task blocks on the reply (the CLI and notices run
+  meanwhile) for at most 6 ms, two frames. A DSS that fails a frame has the
+  MSS score it (a `fallback`); three in a row latch the MSS until the core is
+  chosen again, and queue the notice `dsp detect latched to mss`
+- `verify`: the request goes first, the MSS scores the same bins while the
+  DSS does, then the two are compared bit for bit
+  (`l3_dsp_result_compare`); the MSS's are used. A frame costs about what it
+  did before, so it can stay on through real swings. Never latches
+- only an IQ16 ring frame in L3 can go to the DSS: `dss` and `verify` are
+  refused for any other capture or without the link, and a frame that is
+  not one (the format changed since) goes to the MSS as `ineligible`, as
+  does a frame that finds the link held by a CLI `dsp` command (the detect
+  task never waits for it)
+
+The `detect core=...` line (printed by `trackCfg detectCore`, `triggerLog
+perf` and `triggerLog timing`) has the counts, the latch, the DSS's
+invalidate and scoring microseconds (last/max), and the first verify
+mismatch as `slot:bin:field`. `IWR6843Radar.detect_core()` and
+`detect_timing()` parse them (`openflight.iwr6843.dsp_link`).
+
+Acceptance on the board, after `trackCfg dsp probe` shows repeated
+`match=1`: an armed session in `verify` through real swings with
+`mismatches=0` and `failures=0`; then `dss` with the same swings firing,
+`fallbacks=0`, `dropped=0 stale=0 stale_read=0` in `stats`, and `timing
+service` mean well below `budget_us`.
 
 ### Hardware-gated work
 
@@ -860,6 +933,8 @@ matching host-parser change and regression tests in the same commit.
 | `firmware/iwr6843/l3_ball_track.c`, `l3_ball_track.h` | Post-impact ball tracker and launch fit (ball speed, HLA, VLA) |
 | `firmware/iwr6843/l3_result.c`, `l3_result.h` | Measurements with confidence, shot validation, the versioned result packet |
 | `firmware/iwr6843/l3_profile.c`, `l3_profile.h` | Per-stage cycle counters for `triggerLog perf` |
+| `firmware/iwr6843/l3_timing.c`, `l3_timing.h` | Per-frame detect timing: latency, throughput and slot reuse margin (`triggerLog timing`) |
+| `firmware/iwr6843/l3_detect_core.c`, `l3_detect_core.h` | Which core scores a frame's bins, fallbacks and the latch (`trackCfg detectCore`) |
 | `firmware/iwr6843/l3_adaptive.c`, `l3_adaptive.h` | Capture windows that follow the locked ball between shots |
 | `firmware/iwr6843/l3_text.c`, `l3_text.h` | Integer-only fixed-point text for the CLI |
 | `firmware/iwr6843/l3_ball.c`, `l3_ball.h` | Ball placement detector: static background, compact-reflector appearance, confidence (host-testable, no hardware) |

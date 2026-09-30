@@ -5,7 +5,8 @@
 #include "l3_profile.h"
 
 static const char *const kStageNames[L3_PROF_STAGE_COUNT] = {
-    "residual", "trigger", "extract", "clubtrack", "angle", "impact", "balldetect", "balltrack"
+    "residual", "trigger", "extract", "clubtrack", "angle", "impact", "balldetect", "balltrack",
+    "dspwait"
 };
 
 void l3_profile_init(l3_profile_t *profile, uint32_t ticksPerUs)
@@ -75,6 +76,9 @@ uint32_t l3_profile_frame_us(const l3_profile_t *profile)
     uint32_t stage;
 
     for (stage = 0U; stage < L3_PROF_STAGE_COUNT; stage++) {
+        if (stage == L3_PROF_DSP_WAIT) {
+            continue; /* inside residual: counted there already */
+        }
         total += l3_profile_mean_us(profile, stage);
     }
     return total;

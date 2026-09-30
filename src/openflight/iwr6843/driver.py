@@ -584,6 +584,30 @@ class IWR6843Radar:
         line = "trackCfg dsp probe" if bins is None else f"trackCfg dsp probe {bins}"
         return parse_dsp_probe(self.cmd(line, 2.0))
 
+    def detect_core(self, core: str | None = None):
+        """``trackCfg detectCore [mss|dss|verify]``: which core scores the
+        detector's bins (``dsp_link.DetectCoreStatus``). With ``core``,
+        choose it first: that clears a latch and starts the counts and the
+        detect timing over. dss and verify need an IQ16 ring and the DSS
+        link; a refusal raises ``DspLinkError``."""
+        from .dsp_link import (  # pylint: disable=import-outside-toplevel
+            DETECT_CORES,
+            parse_detect_core,
+        )
+
+        if core is not None and core not in DETECT_CORES:
+            raise ValueError(f"core must be one of {DETECT_CORES}, got {core!r}")
+        line = "trackCfg detectCore" if core is None else f"trackCfg detectCore {core}"
+        return parse_detect_core(self.cmd(line, 2.0))
+
+    def detect_timing(self):
+        """``triggerLog timing``: the detect core, the detect timing and the
+        last frames' timelines (``dsp_link.DetectTiming``, None before any
+        frame was decided)."""
+        from .dsp_link import parse_detect_timing  # pylint: disable=import-outside-toplevel
+
+        return parse_detect_timing(self.cmd("triggerLog timing", 2.0))
+
     def ball_status(self) -> str:
         """The ball-placement detector's state line; parse with ``tee_scan.parse_ball_status``."""
         return self.cmd("ball status", 2.0)

@@ -43,6 +43,23 @@ def test_profile_accumulates_count_last_mean_and_max_per_stage(lib):
     assert summary == "perf frames=1 total=350us clock=200"
 
 
+def test_the_dss_wait_is_shown_but_not_added_to_the_frame_twice(lib):
+    """dspwait is the MSS blocked on the DSS inside the residual stage: the
+    frame total already counts it there."""
+    p = profile(lib)
+    lib.l3_profile_add(ctypes.byref(p), STAGE["residual"], 200 * 400)
+    lib.l3_profile_add(ctypes.byref(p), STAGE["dspwait"], 200 * 350)
+    assert lib.l3_profile_frame_us(ctypes.byref(p)) == 400
+    text = fw.c_text(lib.l3_profile_format, ctypes.byref(p), STAGE["dspwait"])
+    assert text == "perf dspwait n=1 last=350 mean=350 max=350"
+
+
+def test_dspwait_is_the_last_stage():
+    """Appended, so every earlier stage keeps its index in "triggerLog perf"."""
+    assert fw.PROFILE_STAGE_NAMES[-1] == "dspwait"
+    assert fw.PROFILE_STAGE_NAMES.index("balltrack") == 7
+
+
 def test_profile_sum_saturates_and_marks_the_mean(lib):
     p = profile(lib, ticks_per_us=1)
     lib.l3_profile_add(ctypes.byref(p), STAGE["trigger"], 0xFFFFFFF0)

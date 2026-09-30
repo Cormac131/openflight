@@ -21,5 +21,12 @@ SECTIONS
     systemHeap   : {} > DATA_RAM
     .l3ring      : {} > L3_RAM
     .dataScratch : {} > DATA_RAM
+    /* MSS-only diagnostics (timing, profile, CLI line buffers; see
+     * L3_HSRAM_DIAG in l3_dump.c): DATA_RAM is full. HS-RAM's lower 29 KB
+     * is unused by the MSS; its top 3 KB holds the DSS's words (SCORE result
+     * 0x7400, the probe word 0x7E00, the status 0x7F00), reserved below so
+     * a growing .hsramMss fails this link instead of overwriting them. */
+    .hsramDss    : { . += 0x00000C00; } > 0x52087400
+    .hsramMss    : {} > HS_RAM
 }
 /*----------------------------------------------------------------------------*/

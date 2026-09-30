@@ -70,6 +70,8 @@
 #include "l3_iq16_stats.h"
 #include "l3_bin_score.h"
 #include "l3_dsp_ipc.h"
+#include "l3_detect_core.h"
+#include "l3_timing.h"
 #include "l3_retain.h"
 #include "compact_iq16.h"
 #include "l3_profile.h"
@@ -486,8 +488,25 @@ static uint8_t             gShotResultReady;
 static uint32_t            gShotId;
 /* Per-stage cycle counts ("triggerLog perf") and the adaptive capture
  * windows applied between shots from the locked ball bin. */
-static l3_profile_t        gProfile;
+/* MSS-only diagnostics live in HS-RAM (mss_linker.cmd .hsramMss): DATA_RAM
+ * is full. Not zeroed at load like .bss, so l3_initTask clears them. */
+#define L3_HSRAM_DIAG __attribute__((section(".hsramMss")))
+
+static l3_profile_t        gProfile L3_HSRAM_DIAG;
 static uint8_t             gProfileReady;
+/* Which core scores a frame's bins (l3_detect_core.h: "trackCfg
+ * detectCore"), and when each frame was acquired, taken, scored and decided
+ * (l3_timing.h: "triggerLog perf" and "triggerLog timing"). gDetectEvent is
+ * the frame the detect task is on; gDetectRingEpoch its queue epoch, which
+ * l3_detectFrameStale checks again once the frame has been read (POST: a
+ * post-impact slot, never reused while frozen, or no frame at all). */
+static l3_detect_core_t    gDetectCore;
+static uint8_t             gDetectCoreReady;
+static l3_timing_t         gTiming L3_HSRAM_DIAG;
+static uint8_t             gTimingReady;
+static l3_timing_event_t   gDetectEvent;
+static uint32_t            gDetectRingEpoch = 0xFFFFFFFFU; /* L3_DETECT_POST_EPOCH */
+static volatile uint32_t   gDetectStaleAfterRead;
 static l3_adaptive_cfg_t   gAdaptiveCfg;
 static l3_adaptive_windows_t gAdaptiveWindows;
 static uint32_t            gAdaptiveApplied;
@@ -1397,7 +1416,8 @@ static void l3_publishDetectFrame(uint32_t slot, uint32_t epoch)
     if (gCapturePlan.preFrames == 0U) {
         return;
     }
-    if (l3detect_publish(&gDetectQueue, (uint16_t)slot, epoch) != 0) {
+    if (l3detect_publish(&gDetectQueue, (uint16_t)slot, epoch, Cycleprofiler_getTimeStamp()) !=
+        0) {
         return;
     }
     if (gDetectSemaphore != NULL) {
@@ -3003,16 +3023,26 @@ static l3_detect_frame_t l3_detectFrameOf(uint32_t slot)
     return l3_ringFrameOf(slot);
 }
 
-/* 1 when the scratch a detect frame was read from has been handed back to
- * the HWA (or completed another frame) since: the observations just
- * computed from it may mix two frames and must not drive a decision. */
+/* 1, counted, when what a detect frame was read from has been rewritten
+ * since it was taken: the observations just computed from it may mix two
+ * frames and must not drive a decision. Its ring slot, when the writer
+ * reached it during the read (checked again with the rule the detect task
+ * popped it by, detect_queue.h); or the scratch it was read from, when that
+ * was handed back to the HWA (or completed another frame). */
 static int32_t l3_detectFrameStale(const l3_detect_frame_t *frame)
 {
+    if (gDetectRingEpoch != L3_DETECT_POST_EPOCH &&
+        !l3detect_slot_live(gDetectRingEpoch, gPreFramesCaptured, gCapturePlan.preFrames)) {
+        gDetectStaleAfterRead++;
+        gDetectEvent.flags |= (uint8_t)L3_TIMING_FLAG_STALE;
+        return 1;
+    }
 #ifdef L3_RING_IQ8
-    if (frame->scratch != L3_SCRATCH_NONE) {
-        return (gScratchBusy[frame->scratch] || gScratchFrame[frame->scratch] != frame->epoch)
-                   ? 1
-                   : 0;
+    if (frame->scratch != L3_SCRATCH_NONE &&
+        (gScratchBusy[frame->scratch] || gScratchFrame[frame->scratch] != frame->epoch)) {
+        gDetectScratchStale++;
+        gDetectEvent.flags |= (uint8_t)L3_TIMING_FLAG_STALE;
+        return 1;
     }
 #else
     (void)frame;
@@ -3117,25 +3147,91 @@ static void l3_verticalResidual(const l3_detect_frame_t *source, uint32_t localB
     }
 }
 
-/* Score a span's global bins into obs[] at the frame's local bins, each once
- * a frame: the scan plan's spans (l3_scan.h) overlap. scored is a 64-bit mask
- * (two words) of the local bins already scored this frame. */
-static void l3_scoreSpan(const l3_detect_frame_t *frame, const l3_span_t *span,
-                         l3_trig_obs_t *obs, uint32_t *scored)
+/* The DSS side of l3_scoreSpans, with the detect link further down. */
+static void l3_dspScoreSpans(const l3_detect_frame_t *frame, const l3_span_t *local, uint32_t n,
+                             l3_trig_obs_t *obs, uint32_t *scored, uint32_t route);
+static int32_t l3_dspLinkTryLock(void);
+static void l3_dspLinkUnlock(void);
+
+/* The detector's observation array and the DSS's result block are the same
+ * size: every local bin one can hold, the other can. */
+typedef char l3_dsp_bins_match_trigger[(L3_DSP_MAX_BINS == L3_TRIG_MAX_BINS) ? 1 : -1];
+
+/* The MSS's own scorer for l3_dsp_spans_score: whatever the frame's format. */
+static int32_t l3_mssScorer(void *ctx, uint32_t localBin, l3_bin_obs_t *out)
 {
-    uint32_t bin;
+    l3_verticalResidual((const l3_detect_frame_t *)ctx, localBin, NULL, out);
+    return 0;
+}
 
-    for (bin = span->first; bin < span->first + span->count; bin++) {
-        uint32_t local = bin - frame->binStart;
+static void l3_mssScoreSpans(const l3_detect_frame_t *frame, const l3_span_t *local,
+                             uint32_t n, l3_trig_obs_t *obs, uint32_t *scored)
+{
+    (void)l3_dsp_spans_score(local, n, frame->binCount, l3_mssScorer, (void *)frame, obs,
+                             scored);
+}
 
-        if (local >= L3_TRIG_MAX_BINS || local >= frame->binCount) {
-            continue;
-        }
-        if ((scored[local >> 5U] & (1UL << (local & 31U))) == 0U) {
-            l3_verticalResidual(frame, local, NULL, &obs[local]);
-            scored[local >> 5U] |= (uint32_t)(1UL << (local & 31U));
-        }
+/* A frame the DSS can score: IQ16 in the L3 ring (the compact formats' detect
+ * frames are in MSS scratch; IQ8 is not what the shared scorer reads). */
+static uint8_t l3_dspFrameEligible(const l3_detect_frame_t *frame)
+{
+    uintptr_t base = (uintptr_t)frame->base;
+    uint32_t ntx = (gCapturePlan.loops == 0U) ? 0U
+                                              : gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
+
+    return (uint8_t)(frame->scratch == L3_SCRATCH_NONE && frame->cb == 2U &&
+                     gCapturePlan.loops > 0U && gCapturePlan.loops <= L3_IQ16_MAX_LOOPS &&
+                     ntx > 0U && ntx <= L3_BIN_SCORE_MAX_TX &&
+                     base >= SOC_XWR68XX_MSS_L3RAM_BASE_ADDRESS &&
+                     base < SOC_XWR68XX_MSS_L3RAM_BASE_ADDRESS + L3_TOTAL_BYTES);
+}
+
+static void l3_detectCoreEnsure(void)
+{
+    if (!gDetectCoreReady) {
+        l3_detect_core_init(&gDetectCore);
+        gDetectCoreReady = 1U;
     }
+}
+
+/* The scan plan's spans (GLOBAL bins) of a frame, each bin scored once into
+ * obs[local] on the core l3_detect_core routes the frame to: the MSS, the
+ * DSS, or both at once to compare (verify). Every scan-plan read goes
+ * through here in one call per frame, so the two cores are always asked
+ * for exactly the same bins and the DSS costs one round trip a frame. */
+static void l3_scoreSpans(const l3_detect_frame_t *frame, const l3_span_t *spans, uint32_t n,
+                          l3_trig_obs_t *obs)
+{
+    l3_span_t local[L3_DSP_MAX_SPANS];
+    uint32_t scored[L3_DSP_BITMAP_WORDS] = { 0U, 0U };
+    uint32_t nLocal = l3_dsp_spans_localize(frame->binStart, frame->binCount, spans, n, local);
+    uint8_t eligible = 0U;
+    uint32_t route;
+
+    if (nLocal == 0U) {
+        return;
+    }
+    l3_detectCoreEnsure();
+    gDetectEvent.scoreStart = Cycleprofiler_getTimeStamp();
+    /* The link is shared with the CLI's dsp commands: a frame that finds it
+     * busy goes to the MSS as ineligible, not as a DSS failure. */
+    if (gDetectCore.active != L3_DETECT_CORE_MSS && l3_dspFrameEligible(frame) &&
+        l3_dspLinkTryLock() == 0) {
+        eligible = 1U;
+    }
+    route = l3_detect_core_route(&gDetectCore, eligible);
+    gDetectEvent.core = (uint8_t)route;
+    if (route == L3_DETECT_CORE_MSS) {
+        if (eligible) {
+            l3_dspLinkUnlock();
+        }
+        l3_mssScoreSpans(frame, local, nLocal, obs, scored);
+    } else {
+        l3_dspScoreSpans(frame, local, nLocal, obs, scored, route);
+        l3_dspLinkUnlock();
+    }
+    gDetectEvent.scoreEnd = Cycleprofiler_getTimeStamp();
+    gDetectEvent.flags |= (uint8_t)L3_TIMING_FLAG_SCORED;
 }
 
 /* l3sparse's per-loop residual power rows. */
@@ -3582,7 +3678,6 @@ static void l3_considerBall(uint32_t slot)
         power[bin] = l3_verticalStaticPower(&frame, bin, 4U);
     }
     if (l3_detectFrameStale(&frame)) {
-        gDetectScratchStale++;
         gBallBusy = 0U;
         return;
     }
@@ -3643,7 +3738,6 @@ static void l3_considerBallTrack(uint32_t slot)
     l3_track_point_t newest;
     uint32_t count = frame.binCount;
     uint32_t found;
-    uint32_t bin;
     uint32_t frameIndex;
     uint32_t ticks;
     int32_t ballAppended;
@@ -3678,7 +3772,6 @@ static void l3_considerBallTrack(uint32_t slot)
                            gClubTrack.velocityBinsPerFrame *
                                (float)(frameIndex - gClubTrack.lastFrame)
                      : 0.0F;
-        uint32_t scored[2] = { 0U, 0U };
         l3_span_t ballSpan;
         l3_span_t clubSpan;
         l3_span_t merged[2];
@@ -3688,11 +3781,8 @@ static void l3_considerBallTrack(uint32_t slot)
         l3_scan_post(&gScanCfg, frame.binStart, count, &gBand, ball->active, ballPredicted,
                      clubLive, clubPredicted, &ballSpan, &clubSpan);
         spans = l3_scan_merge(ballSpan, clubSpan, merged);
-        for (k = 0U; k < spans; k++) {
-            l3_scoreSpan(&frame, &merged[k], obs, scored);
-        }
+        l3_scoreSpans(&frame, merged, spans, obs);
         if (l3_detectFrameStale(&frame)) {
-            gDetectScratchStale++;
             gTrigBusy = 0U;
             return;
         }
@@ -3703,11 +3793,12 @@ static void l3_considerBallTrack(uint32_t slot)
                                     gBallFloor, &targets[found], L3_OBS_MAX_TARGETS - found);
         }
     } else {
-        for (bin = 0U; bin < count; bin++) {
-            l3_verticalResidual(&frame, bin, NULL, &obs[bin]);
-        }
+        l3_span_t whole;
+
+        whole.first = frame.binStart;
+        whole.count = count;
+        l3_scoreSpans(&frame, &whole, 1U, obs);
         if (l3_detectFrameStale(&frame)) {
-            gDetectScratchStale++;
             gTrigBusy = 0U;
             return;
         }
@@ -3893,7 +3984,7 @@ static void l3_considerSelfTrigger(uint32_t slot)
     uint32_t first;
     uint32_t count;
     uint32_t windowCount;
-    uint32_t scored[2] = { 0U, 0U };
+    l3_span_t plan[4];
     l3_span_t region;
     l3_span_t club;
     l3_span_t leave;
@@ -3968,14 +4059,14 @@ static void l3_considerSelfTrigger(uint32_t slot)
         memset(&leave, 0, sizeof(leave));
     }
     ticks = Cycleprofiler_getTimeStamp();
-    l3_scoreSpan(&frame, &region, obs, scored);
-    l3_scoreSpan(&frame, &club, obs, scored);
-    l3_scoreSpan(&frame, &leave, obs, scored);
-    l3_scoreSpan(&frame, &chunk, obs, scored);
+    plan[0] = region;
+    plan[1] = club;
+    plan[2] = leave;
+    plan[3] = chunk;
+    l3_scoreSpans(&frame, plan, 4U, obs);
     l3_profileStage(L3_PROF_RESIDUAL, ticks);
     if (l3_detectFrameStale(&frame)) {
-        /* The scratch went back to the HWA before this read finished. */
-        gDetectScratchStale++;
+        /* The slot or scratch was rewritten before this read finished. */
         gTrigBusy = 0U;
         l3_noteTrigger(1U, 0.0F);
         return;
@@ -4125,12 +4216,30 @@ static void l3_considerSelfTrigger(uint32_t slot)
     gSelfTriggerLatched = 1U;
     gHwaFreezeRequests++;
     Hwi_restore(key);
+    gDetectEvent.flags |= (uint8_t)L3_TIMING_FLAG_FIRED;
     /* The notice first: the host's S! waits on it, the debug line does not. */
     l3_queueNotice("Triggered\n");
     l3_noteTrigger(9U, gTrig.floor);
 }
 
 #ifdef HWA_CHAINED_SNAPSHOT_RING
+static void l3_timingEnsure(void)
+{
+    if (!gTimingReady) {
+        l3_timing_init(&gTiming, gCpuClock / 1000000U, gFramePeriodUs, gCapturePlan.preFrames);
+        gTimingReady = 1U;
+    }
+}
+
+/* The detect task is done with the frame: its slot is released. */
+static void l3_detectFinish(void)
+{
+    gDetectRingEpoch = L3_DETECT_POST_EPOCH; /* nothing to re-check between frames */
+    gDetectEvent.decided = Cycleprofiler_getTimeStamp();
+    l3_timingEnsure();
+    l3_timing_record(&gTiming, &gDetectEvent);
+}
+
 static void l3_detectTask(UArg arg0, UArg arg1)
 {
     (void)arg0;
@@ -4138,19 +4247,32 @@ static void l3_detectTask(UArg arg0, UArg arg1)
     while (1) {
         uint16_t queuedSlot = 0U;
         uint32_t epoch = 0U;
+        uint32_t stamp = 0U;
+        uint32_t waiting;
 
         Semaphore_pend(gDetectSemaphore, BIOS_WAIT_FOREVER);
-        if (!l3detect_pop(&gDetectQueue, &queuedSlot, &epoch)) {
+        if (!l3detect_pop(&gDetectQueue, &queuedSlot, &epoch, &stamp)) {
             continue;
         }
+        waiting = l3detect_depth(&gDetectQueue);
+        memset(&gDetectEvent, 0, sizeof(gDetectEvent));
+        gDetectEvent.slot = queuedSlot;
+        gDetectEvent.epoch = epoch;
+        gDetectEvent.acquired = stamp;
+        gDetectEvent.dequeued = Cycleprofiler_getTimeStamp();
+        gDetectEvent.depth = (uint8_t)((waiting > 255U) ? 255U : waiting);
         if (epoch == L3_DETECT_POST_EPOCH && queuedSlot >= gCapturePlan.preFrames) {
+            gDetectEvent.flags = (uint8_t)L3_TIMING_FLAG_POST;
             l3_considerBallTrack(queuedSlot);
+            l3_detectFinish();
             continue;
         }
         if (!l3detect_slot_live(epoch, gPreFramesCaptured, gCapturePlan.preFrames)) {
             gDetectStale++;
             continue;
         }
+        /* The readers check the slot again once they have read it. */
+        gDetectRingEpoch = epoch;
         /* Behind: a newer frame landed before this one was taken. Shed what
          * the trigger's fire does not need (the ball detector here, the map
          * chunk and the club's angles in the trigger) so the backlog drains
@@ -4159,9 +4281,11 @@ static void l3_detectTask(UArg arg0, UArg arg1)
         if (!gDetectBehind) {
             l3_considerBall(queuedSlot);
         } else {
+            gDetectEvent.flags |= (uint8_t)L3_TIMING_FLAG_BEHIND;
             gDetectShed++;
         }
         l3_considerSelfTrigger(queuedSlot);
+        l3_detectFinish();
     }
 }
 #endif
@@ -4346,7 +4470,7 @@ int32_t l3_cli_sparse(int32_t argc, char *argv[])
     char request[L3_SPARSE_REQUEST_MAX];
     static uint16_t cellFrames[L3_SPARSE_REQUEST_MAX / 4U];
     static uint16_t cellBins[L3_SPARSE_REQUEST_MAX / 4U];
-    static float powerRow[L3_MAX_LOOPS * L3_RING_MAX_BINS];
+    static float powerRow[L3_MAX_LOOPS * L3_RING_MAX_BINS] L3_HSRAM_DIAG;
     char *cursor;
     char *next;
     int32_t lineStatus;
@@ -4606,12 +4730,24 @@ static int32_t l3_cli_trackCfgImpact(int32_t argc, char *argv[])
 /* --- the MSS <-> DSS detect link (l3_dsp_ipc.h) ------------------------------
  * Phase 0 of moving the detect task to the DSS: dspPing, and dspProbe, which
  * scores the newest pre-impact ring frame on both cores with the same code
- * and compares. The DSS clocks at 600 MHz. */
-#define L3_DSP_REPLY_TIMEOUT_TICKS 100U /* ms: a DSS that never answers fails the command */
+ * and compares. Then SCORE: the live detector's bins (l3_scoreSpans), on
+ * the core "trackCfg detectCore" chooses (l3_detect_core.h). The DSS clocks
+ * at 600 MHz.
+ *
+ * Two 3-ms frames is as long as the detect task waits for an answer (BIOS
+ * ticks are 1 ms): a DSS that does not answer costs that frame the wait and
+ * the MSS's own scoring, and three in a row latch the MSS. The CLI's
+ * commands wait as long per read. One request is in flight at a time:
+ * gDspLinkLock is held across each exchange by the CLI and the detect task
+ * both, and the detect task never waits for it. */
+#define L3_DSP_REPLY_TIMEOUT_TICKS 6U /* ms: two 3-ms frames */
 #define L3_DSS_CLOCK_MHZ 600U
 #define L3_DSP_STALE_REPLIES 3U
+/* The detect line with every counter at its widest and a mismatch: ~300. */
+#define L3_DETECT_LINE_BYTES 320U
 
 static Mbox_Handle gDspLink = NULL;
+static Semaphore_Handle gDspLinkLock = NULL;
 static uint32_t gDspSeq = 0U;
 
 static void l3_dspLinkOpen(void)
@@ -4631,16 +4767,49 @@ static void l3_dspLinkOpen(void)
     gDspLink = Mailbox_open(MAILBOX_TYPE_DSS, &cfg, &errCode);
     if (errCode != 0) {
         gDspLink = NULL;
+        return;
+    }
+    {
+        Semaphore_Params lockParams;
+
+        Semaphore_Params_init(&lockParams);
+        lockParams.mode = Semaphore_Mode_BINARY;
+        gDspLinkLock = Semaphore_create(1, &lockParams, NULL);
+    }
+    if (gDspLinkLock == NULL) {
+        gDspLink = NULL; /* unguarded, the CLI and the detect task could interleave */
     }
 }
 
-/* Send request, wait for the reply with its sequence number. A reply to an
- * earlier request that timed out may still be queued: skip up to a few.
- * Returns 0, or -1 with no link, a failed write, or no matching reply. */
-static int32_t l3_dspExchange(l3_dsp_request_t *request, l3_dsp_reply_t *reply)
+/* 0 with the link held, or -1: no link, or someone else is using it. */
+static int32_t l3_dspLinkTryLock(void)
 {
-    uint32_t attempt;
+    if (gDspLink == NULL || gDspLinkLock == NULL) {
+        return -1;
+    }
+    return Semaphore_pend(gDspLinkLock, BIOS_NO_WAIT) ? 0 : -1;
+}
 
+static void l3_dspLinkUnlock(void)
+{
+    if (gDspLinkLock != NULL) {
+        Semaphore_post(gDspLinkLock);
+    }
+}
+
+/* The CLI's hold on the link: waits out a frame the detect task is on. */
+static int32_t l3_dspLinkLock(void)
+{
+    if (gDspLink == NULL || gDspLinkLock == NULL) {
+        return -1;
+    }
+    return Semaphore_pend(gDspLinkLock, 4U * L3_DSP_REPLY_TIMEOUT_TICKS) ? 0 : -1;
+}
+
+/* Send a request with the next sequence number. 0, or -1 with no link or a
+ * failed write. The caller holds the link. */
+static int32_t l3_dspSend(l3_dsp_request_t *request)
+{
     if (gDspLink == NULL) {
         return -1;
     }
@@ -4648,6 +4817,19 @@ static int32_t l3_dspExchange(l3_dsp_request_t *request, l3_dsp_reply_t *reply)
     request->seq = ++gDspSeq;
     if (Mailbox_write(gDspLink, (const uint8_t *)request, sizeof(*request)) !=
         (int32_t)sizeof(*request)) {
+        return -1;
+    }
+    return 0;
+}
+
+/* Wait for the reply to request. A reply to an earlier request that timed
+ * out may still be queued: skip up to a few. 0, or -1 with no link or no
+ * matching reply. The caller holds the link. */
+static int32_t l3_dspAwait(const l3_dsp_request_t *request, l3_dsp_reply_t *reply)
+{
+    uint32_t attempt;
+
+    if (gDspLink == NULL) {
         return -1;
     }
     for (attempt = 0U; attempt < L3_DSP_STALE_REPLIES; attempt++) {
@@ -4662,6 +4844,97 @@ static int32_t l3_dspExchange(l3_dsp_request_t *request, l3_dsp_reply_t *reply)
         }
     }
     return -1;
+}
+
+/* The CLI's round trip: hold the link, send, wait. */
+static int32_t l3_dspExchange(l3_dsp_request_t *request, l3_dsp_reply_t *reply)
+{
+    int32_t status;
+
+    if (l3_dspLinkLock() != 0) {
+        return -1;
+    }
+    status = l3_dspSend(request);
+    if (status == 0) {
+        status = l3_dspAwait(request, reply);
+    }
+    l3_dspLinkUnlock();
+    return status;
+}
+
+/* SCORE's result block in HS-RAM, at the MSS's address for it. */
+static const volatile l3_dsp_result_t *l3_dspResultBlock(void)
+{
+    return (const volatile l3_dsp_result_t *)(SOC_XWR68XX_MSS_HSRAM_BASE_ADDRESS +
+                                              L3_DSP_RESULT_HSRAM_OFFSET);
+}
+
+/* l3_scoreSpans on the DSS (route dss) or on both cores at once (verify),
+ * the link held. dss: the DSS's observations are used; a DSS that fails the
+ * frame has the MSS score it (a fallback). verify: the SCORE request goes
+ * first so the DSS works while the MSS scores the same bins, then the two
+ * are compared bit for bit and the MSS's are used whatever the DSS did. */
+static void l3_dspScoreSpans(const l3_detect_frame_t *frame, const l3_span_t *local, uint32_t n,
+                             l3_trig_obs_t *obs, uint32_t *scored, uint32_t route)
+{
+    /* Static: the detect task's stack is small; only this task uses it. */
+    static l3_dsp_result_t result;
+    l3_dsp_request_t request;
+    l3_dsp_reply_t reply;
+    uint32_t outcome = L3_DETECT_OUTCOME_FAILED;
+    uint32_t bin = 0U;
+    uint32_t field = 0U;
+    uint32_t ticks;
+    uint32_t k;
+    int32_t sent;
+
+    memset(&request, 0, sizeof(request));
+    memset(&result, 0, sizeof(result));
+    request.cmd = L3_DSP_CMD_SCORE;
+    request.frameOffset = (uint32_t)((uintptr_t)frame->base - SOC_XWR68XX_MSS_L3RAM_BASE_ADDRESS);
+    request.binCount = frame->binCount;
+    request.ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
+    request.loops = gCapturePlan.loops;
+    request.epoch = gDetectEvent.epoch;
+    request.nSpans = n;
+    for (k = 0U; k < n; k++) {
+        request.spanFirst[k] = local[k].first;
+        request.spanCount[k] = local[k].count;
+    }
+    sent = l3_dspSend(&request);
+    if (route == L3_DETECT_CORE_VERIFY) {
+        l3_mssScoreSpans(frame, local, n, obs, scored);
+    }
+    ticks = Cycleprofiler_getTimeStamp();
+    if (sent == 0 && l3_dspAwait(&request, &reply) == 0) {
+        /* A snapshot: checked and read from one copy, not live HS-RAM. */
+        memcpy(&result, (const void *)l3_dspResultBlock(), sizeof(result));
+        if (l3_dsp_result_check(&result, request.seq, request.epoch) == L3_DSP_OK) {
+            outcome = L3_DETECT_OUTCOME_OK;
+        }
+    }
+    l3_profileStage(L3_PROF_DSP_WAIT, ticks);
+    if (route == L3_DETECT_CORE_VERIFY) {
+        if (outcome == L3_DETECT_OUTCOME_OK &&
+            !l3_dsp_result_compare(&result, obs, scored, &bin, &field)) {
+            outcome = L3_DETECT_OUTCOME_MISMATCH;
+            l3_detect_core_note_mismatch(&gDetectCore, gDetectEvent.slot, bin, field);
+        }
+    } else if (outcome == L3_DETECT_OUTCOME_OK) {
+        (void)l3_dsp_result_merge(&result, obs, scored);
+    } else {
+        gDetectEvent.core = (uint8_t)L3_TIMING_CORE_FALLBACK;
+        l3_mssScoreSpans(frame, local, n, obs, scored);
+    }
+    if (outcome == L3_DETECT_OUTCOME_FAILED) {
+        result.invCycles = 0U;
+        result.scoreCycles = 0U;
+    }
+    if (l3_detect_core_report(&gDetectCore, route, outcome, result.invCycles,
+                              result.scoreCycles) != 0) {
+        /* No "Error": the host fails any command whose reply carries one. */
+        l3_queueNotice("dsp detect latched to mss\n");
+    }
 }
 
 /* The DSS's boot status (l3_dsp_ipc.h), read from HS-RAM: where a DSS that
@@ -4832,6 +5105,51 @@ static int32_t l3_cli_trackCfgDsp(int32_t argc, char *argv[])
     return -1;
 }
 
+/* Timing starts over with each session (the plan's ring and frame interval
+ * may have changed) and with each core chosen, so an A/B run's numbers are
+ * its own. */
+static void l3_timingRestart(void)
+{
+    gTimingReady = 0U;
+    gDetectStaleAfterRead = 0U;
+}
+
+/* "trackCfg detectCore [mss|dss|verify]": which core scores the detector's
+ * bins (l3_detect_core.h). Bare, or after a change, the detect line. dss and
+ * verify need an IQ16 ring and the DSS link. Choosing a core clears a latch
+ * and starts the counts and the timing over. A trackCfg sub-mode: the CLI
+ * table is at the SDK's CLI_MAX_CMD. */
+static int32_t l3_cli_trackCfgDetectCore(int32_t argc, char *argv[])
+{
+    static char line[L3_DETECT_LINE_BYTES] L3_HSRAM_DIAG;
+    uint32_t which;
+
+    l3_detectCoreEnsure();
+    if (argc == 3) {
+        uint8_t eligible = (uint8_t)(l3_ringComponentBytes() == 2U && !l3_captureCompactsIq16() &&
+                                     gDspLink != NULL);
+
+        if (l3_detect_core_parse(argv[2], &which) != 0) {
+            CLI_write("Error: trackCfg detectCore mss|dss|verify\n");
+            return -1;
+        }
+        if (l3_detect_core_set(&gDetectCore, which, eligible) != 0) {
+            CLI_write("Error: detectCore %s needs %s\n", argv[2],
+                      (gDspLink == NULL) ? "the DSS link (trackCfg dsp status)"
+                                         : "an IQ16 ring (captureFormat iq16)");
+            return -1;
+        }
+        l3_detect_core_reset_counts(&gDetectCore);
+        l3_timingRestart();
+    } else if (argc != 2) {
+        CLI_write("Error: trackCfg detectCore [mss|dss|verify]\n");
+        return -1;
+    }
+    (void)l3_detect_core_format(&gDetectCore, L3_DSS_CLOCK_MHZ, line, sizeof(line));
+    CLI_write("%s\n", line);
+    return 0;
+}
+
 /* "trackCfg impactFit <bandBins>": the tee band's total width in range bins
  * (l3_band.h), placed on the noisiest idle bins near the tee; 0 for no band. A sub-mode, not a command of its own: the CLI
  * table is at the SDK's CLI_MAX_CMD. Kept across triggerCfg and sensorStart;
@@ -4895,6 +5213,9 @@ static int32_t l3_cli_trackCfg(int32_t argc, char *argv[])
     }
     if (argc >= 2 && strcmp(argv[1], "dsp") == 0) {
         return l3_cli_trackCfgDsp(argc, argv);
+    }
+    if (argc >= 2 && strcmp(argv[1], "detectCore") == 0) {
+        return l3_cli_trackCfgDetectCore(argc, argv);
     }
     if (argc >= 2 && strcmp(argv[1], "ballSnr") == 0) {
         return l3_cli_trackCfgBallSnr(argc, argv);
@@ -5060,7 +5381,39 @@ static void l3_writeTriggerTrace(char *line, uint32_t cap)
     }
 }
 
-/* CLI "triggerLog [trace|track|shot|result|perf|clear]". Bare: the
+/* The detect core's line, the timing summary and each timing statistic;
+ * with timeline, every kept frame's timeline, oldest first. line is the
+ * caller's (static) buffer, wide enough for the timing lines (~170); the
+ * detect line has its own. */
+static void l3_writeDetectTiming(char *line, uint32_t cap, uint8_t timeline)
+{
+    static char detect[L3_DETECT_LINE_BYTES] L3_HSRAM_DIAG;
+    uint32_t index;
+
+    l3_detectCoreEnsure();
+    (void)l3_detect_core_format(&gDetectCore, L3_DSS_CLOCK_MHZ, detect, sizeof(detect));
+    CLI_write("%s\n", detect);
+    if (!gTimingReady) {
+        CLI_write("timing frames=0 (no frame decided yet)\n");
+        return;
+    }
+    (void)l3_timing_format_summary(&gTiming, line, cap);
+    CLI_write("%s\n", line);
+    for (index = 0U; index < L3_TIMING_STAT_COUNT; index++) {
+        (void)l3_timing_format_stat(&gTiming, index, line, cap);
+        CLI_write("%s\n", line);
+    }
+    if (timeline) {
+        l3_timing_event_t event;
+
+        for (index = 0U; l3_timing_event(&gTiming, index, &event) == 0; index++) {
+            (void)l3_timing_format_event(&gTiming, &event, line, cap);
+            CLI_write("%s\n", line);
+        }
+    }
+}
+
+/* CLI "triggerLog [trace|track|shot|result|perf|timing|clear]". Bare: the
  * self-trigger front end's floor and threshold, then its configuration.
  * "track" prints the club track that fires; "trace" the raw-input trace
  * (see above); "clear" empties the trace and its maxima without touching
@@ -5069,7 +5422,7 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
 {
     /* Static, not on the CLI task's small stack. Must hold at least
      * L3_RESULT_PACKET_BYTES + 1 for the "result" packet's first half. */
-    static char line[192];
+    static char line[192] L3_HSRAM_DIAG;
     uint32_t index;
 
     if (argc == 2 && strcmp(argv[1], "clear") == 0) {
@@ -5139,6 +5492,13 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         }
         (void)l3_adaptive_format(&gAdaptiveCfg, &gAdaptiveWindows, line, sizeof(line));
         CLI_write("%s applied=%u\n", line, (unsigned)gAdaptiveApplied);
+        l3_writeDetectTiming(line, sizeof(line), 0U);
+        CLI_write("Done\n");
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "timing") == 0) {
+        /* The detect core and the timing, then the last frames' timelines. */
+        l3_writeDetectTiming(line, sizeof(line), 1U);
         CLI_write("Done\n");
         return 0;
     }
@@ -5207,7 +5567,7 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         return 0;
     }
     if (argc != 1) {
-        CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|cal|clear]\n");
+        CLI_write("Error: triggerLog [trace|track|shot|result|perf|timing|frames|cal|clear]\n");
         return -1;
     }
     /* The front end's floor and arming; "track" has the club track, which
@@ -5310,7 +5670,7 @@ static int32_t l3_ballScan(uint32_t first, uint32_t count)
  * the reasons acquisition did not lock. */
 static int32_t l3_cli_ball(int32_t argc, char *argv[])
 {
-    static char line[192];
+    static char line[192] L3_HSRAM_DIAG;
 
     if (argc == 1 || (argc == 2 && strcmp(argv[1], "status") == 0)) {
         (void)l3_ball_format_status(&gBall, line, sizeof(line));
@@ -5485,7 +5845,7 @@ static int32_t l3_cli_stats(int32_t argc, char *argv[])
               (unsigned)gCalibStatus, (unsigned)gRfFaults);
 #endif
     {
-        static char ballLine[192];
+        static char ballLine[192] L3_HSRAM_DIAG;
         (void)l3_ball_format_status(&gBall, ballLine, sizeof(ballLine));
         CLI_write("%s\n", ballLine);
     }
@@ -5498,11 +5858,12 @@ static int32_t l3_cli_stats(int32_t argc, char *argv[])
               (unsigned)gSelfTriggerLatched,
               (unsigned)gTriggerEnabled);
 #ifdef HWA_CHAINED_SNAPSHOT_RING
-    CLI_write("detect dropped=%u stale=%u notice_dropped=%u shed=%u\n",
+    CLI_write("detect dropped=%u stale=%u notice_dropped=%u shed=%u stale_read=%u\n",
               (unsigned)gDetectQueue.dropped,
               (unsigned)gDetectStale,
               (unsigned)gNoticeDropped,
-              (unsigned)gDetectShed);
+              (unsigned)gDetectShed,
+              (unsigned)gDetectStaleAfterRead);
 #ifdef L3_RING_IQ8
     if (l3_captureCompactsIq16()) {
         static char retainLine[96];
@@ -5899,6 +6260,7 @@ static int32_t l3_cli_sensorStart(int32_t argc, char *argv[])
     gActiveFrameIsPost = 0U;
     gActiveFrameShouldKeep = 1U;
     l3_resetDetectQueue();
+    l3_timingRestart();
     /* A new session starts untriggered: a latch or enable left by a host that
      * died mid-shot must not freeze or self-trigger this one. triggerCfg
      * re-enables it. */
@@ -6001,6 +6363,11 @@ static void l3_initTask(UArg arg0, UArg arg1)
     int32_t               errCode;
 
     (void)arg0; (void)arg1;
+
+    /* HS-RAM is not zeroed at load like .bss, and triggerLog perf may format
+     * these before their lazy init. */
+    memset(&gProfile, 0, sizeof(gProfile));
+    memset(&gTiming, 0, sizeof(gTiming));
 
     /* Starts the R4F PMU cycle counter behind Cycleprofiler_getTimeStamp. */
     Cycleprofiler_init();
@@ -6242,7 +6609,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
         "ball [status] | ball scan <firstBin> <count> | ball cfg <enable> <follow> [...]";
     cliCfg.tableEntry[18].cmdHandlerFxn = l3_cli_ball;
     cliCfg.tableEntry[17].cmd           = "triggerLog";
-    cliCfg.tableEntry[17].helpString    = "triggerLog [trace|track|shot|result|perf|frames|cal|clear]: floor, trace, club, shot, result, perf, stored frames, calibration";
+    cliCfg.tableEntry[17].helpString    = "triggerLog [trace|track|shot|result|perf|timing|frames|cal|clear]: floor, trace, club, shot, result, perf, detect timing, stored frames, calibration";
     cliCfg.tableEntry[17].cmdHandlerFxn = l3_cli_triggerLog;
     CLI_open(&cliCfg);
 }
