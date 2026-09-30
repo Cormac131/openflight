@@ -14,14 +14,15 @@ startup, use the [IWR6843 Operator Guide](../iwr6843/index.md).
 
 ## Current Release
 
-One firmware image supports multiple runtime capture profiles (see
-[Choose A Capture Profile](#choose-a-capture-profile) below). Flash the image
-once, then choose a profile by passing its `.cfg` to OpenFlight.
+One firmware image supports two runtime capture profiles. Flash the image once,
+then choose a profile by passing its `.cfg` to OpenFlight.
 
 | Component | Current value |
 |---|---|
 | Flash image | `firmware/releases/l3_dump_configurable_capture_20260818.bin` |
-| Runtime configs | See [Choose A Profile](../iwr6843/index.md#choose-a-profile) |
+| Default config | `config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` |
+| Dense config | `config/iwr6843_l3dump_dense_36f2ms_53bin_iq8.cfg` |
+| Dense/wide-late config | `config/iwr6843_l3dump_dense_36f2ms_53bin_iq8_wide_late.cfg` |
 | Reference calibration | `config/iwr6843_calibration_reference.json` |
 | Native build | `make -C firmware build-native` |
 | Container build | `make -C firmware docker-build` |
@@ -37,14 +38,41 @@ sha256sum firmware/releases/l3_dump_configurable_capture_20260818.bin
 
 ## Choose A Capture Profile
 
-The full set of runtime capture profiles (config file, frame count, spacing,
-payload size, and when to use each) is maintained in one place:
-[Choose A Profile](../iwr6843/index.md#choose-a-profile) in the IWR6843
-Operator Guide. This firmware doc previously kept its own copy of that table;
-it went stale (two new profiles landed there and were never mirrored here), so
-this section now points at that single source of truth instead of duplicating
-it. All profiles use 3 TX, 4 RX, 12 TDM loops, and 128 acquired ADC samples.
-Changing profiles does not require reflashing.
+| Profile | Wide/default | Dense/advanced | Dense/wide-late experimental |
+|---|---:|---:|---:|
+| Config | `iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` | `iwr6843_l3dump_dense_36f2ms_53bin_iq8.cfg` | `iwr6843_l3dump_dense_36f2ms_53bin_iq8_wide_late.cfg` |
+| Frames | 24 | 36 | 36 |
+| Frame spacing | 3 ms | 2 ms | 2 ms |
+| Movie duration | 72 ms | 72 ms | 72 ms |
+| Saved bins per frame | 53 | 53 | 53 |
+| Stored sample format | IQ16 | Fixed-scale IQ8 | Fixed-scale IQ8 |
+| Payload bytes | 732,672 | 549,504 | 549,504 |
+| Primary goal | Robust ball flight | Dense impact sampling | Isolate late-window coverage |
+
+Use **wide/default** unless you are deliberately testing dense impact data. Its
+53-bin windows tolerate more variation in tee distance, launch speed, and setup
+geometry, while IQ16 retains the HWA output without quantization. Hardware tests
+held the requested 3 ms cadence without RF or HWA faults. In an August 9
+TrackMan session, its live inclinometer-adjusted LCMF output covered all 59
+matched 9-iron and 7-iron shots with 0.86 degree MAE, 0.70 degree P50, and 1.75
+degree P90 absolute error.
+
+Use **dense/advanced** to test whether 2 ms temporal sampling improves impact
+and launch measurements. It preserves the same 53-bin range span as the wide
+profile and uses fixed-scale IQ8 so all 36 frames fit in L3. Its EDMA packing
+path sustained 99.9911% HWA frame coverage in hardware cadence testing, with
+zero IQ8 overruns or EDMA errors. The 53-bin dense profile still needs
+source-of-truth TrackMan validation; horizontal launch and club metrics remain
+experimental.
+
+The dense/wide-late profile keeps the dense profile's cadence, precision, and
+payload size, but keeps all ball-phase frames in bins 47-99. The standard dense
+profile shifts its final six ball frames outward to bins 64-116. Comparing the
+two profiles isolates late-window placement without changing IQ precision or
+timing.
+
+All profiles use 3 TX, 4 RX, 12 TDM loops, 128 acquired ADC samples, and the
+same 72 ms capture duration. Changing profiles does not require reflashing.
 
 The supported normal-TX profiles use a fixed positive TDM sign. This physical
 registration keeps the full eight-element vertical channel aligned with OPS
@@ -65,13 +93,6 @@ RF chirp
   -> header, timing/window metadata, scale table, and IQ payload stream to Pi
   -> firmware rearms the ring for the next shot
 ```
-
-The leave detector does not run in the rearm task. A finished pre-trigger slot is
-published once its samples are in the ring: immediately for IQ16, and after the
-IQ8 pack for the dense profile. A lower-priority task then reads that slot while
-the accelerator writes the next frame. `stats` adds `detect dropped` and
-`detect stale` when that queue falls behind or the slot has already been reused.
-The launch-angle fit still runs on the Pi after the frozen movie is transferred.
 
 The saved bins remain complex I/Q so the host retains phase for vertical and
 horizontal direction of arrival. Every frame carries its absolute range-window
@@ -130,7 +151,7 @@ matching host-parser change and regression tests in the same commit.
 | `firmware/releases/` | The single checked-in, validated flash image |
 | `firmware/flash_iwr6843.py` | Pi-compatible IWR6843 ROM bootloader client |
 | `config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` | Default wide IQ16 capture profile |
-| `config/iwr6843_l3dump_dense_45f2ms_53bin_iq8.cfg` | Dense IQ8 capture profile with a 54 ms ball phase |
+| `config/iwr6843_l3dump_dense_36f2ms_53bin_iq8.cfg` | Dense IQ8 capture profile |
 | `config/iwr6843_l3dump_dense_36f2ms_53bin_iq8_wide_late.cfg` | Experimental dense IQ8 capture with the wide late-flight window |
 | `src/openflight/iwr6843/dump.py` | Python decoder and executable format reference |
 
@@ -231,10 +252,8 @@ sysconfig-1.10.0_2163-setup.run
 xdctools_3_61_00_16_core_linux.zip
 ```
 
-The current application is MSS/R4F-only, but the SDK install now also enables
-the C674x DSP compiler (`cl6x`) and the DSPLIB/MATHLIB C674x libraries for the
-in-progress on-chip DSS solve; the build container is correspondingly larger
-(roughly +440 MB) than a strictly R4F-only image would be.
+The application is MSS/R4F-only; it does not require the C674x DSP compiler or
+DSP libraries.
 
 Verify the installer set:
 
@@ -257,9 +276,6 @@ The resulting layout is:
 
 ```text
 /opt/ti/sdk/mmwave_sdk_03_06_02_00-LTS
-/opt/ti/sdk/ti-cgt-c6000_8.3.3
-/opt/ti/sdk/dsplib_c674x_3_4_0_0
-/opt/ti/sdk/mathlib_c674x_3_1_2_1
 /opt/ti/cgt-arm/ti-cgt-arm_20.2.7.LTS
 /opt/ti/bios/bios_6_73_01_01
 /opt/ti/xdc/xdctools_3_61_00_16_core
@@ -435,11 +451,9 @@ IQ16 bytes = TX x loops x frames x RX x saved bins x 4
 IQ8 bytes  = TX x loops x frames x RX x saved bins x 2
 ```
 
-The result must fit within 786,432 L3 bytes; the linker places `.l3ring` in
-`L3_RAM` and fails the build if it overflows. The IQ16 ping/pong frame
-scratch (`g_iq16FrameScratch`) lives in the `.dataScratch` section in
-`DATA_RAM`, not in L3 — it no longer competes with the capture ring for L3
-space.
+The result must fit within 786,432 L3 bytes along with any variant-specific L3
+scratch sections. The linker places `.l3ring` and `.l3scratch` in `L3_RAM` and
+fails the build if they overflow.
 
 The firmware rejects invalid windows, frame plans, and L3 budgets at
 `sensorStart`. The dense IQ8 profile also has only about 380 microseconds
@@ -466,9 +480,7 @@ uv run pytest \
 Also check:
 
 1. The `.cfg` matches all compile-time capture geometry.
-2. The map file keeps `.l3ring` occupying all of `L3_RAM` (0 unused) and
-   `.dataScratch` inside `DATA_RAM`, with `DATA_RAM` unused staying above the
-   16,384 B floor.
+2. The map file keeps `.l3ring` and `.l3scratch` inside L3.
 3. The first static capture has the expected version, dimensions, frame period,
    per-frame window table, and total byte count.
 4. Repeated dump/rearm cycles work without resetting the board.

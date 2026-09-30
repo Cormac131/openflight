@@ -2,9 +2,6 @@ INSTALLER_DIR ?= ti_installers
 TI_ROOT ?= /opt/ti
 MMWAVE_SDK_INSTALL_PATH ?= $(TI_ROOT)/sdk/mmwave_sdk_03_06_02_00-LTS/packages
 R4F_CODEGEN_INSTALL_PATH ?= $(TI_ROOT)/cgt-arm/ti-cgt-arm_20.2.7.LTS
-# C6000 (C674x/DSS) codegen, installed alongside the mmWave SDK rather than
-# as its own top-level installer -- see openflight-iwr-sdk's Dockerfile.
-C674_CODEGEN_INSTALL_PATH ?= $(TI_ROOT)/sdk/ti-cgt-c6000_8.3.3
 XDC_INSTALL_PATH ?= $(TI_ROOT)/xdc/xdctools_3_61_00_16_core
 BIOS_INSTALL_PATH ?= $(TI_ROOT)/bios/bios_6_73_01_01/packages
 SYSCONFIG_INSTALL_PATH ?= $(TI_ROOT)/sysconfig
@@ -26,7 +23,6 @@ BUILD_ENV := \
 	DOWNLOAD_FROM_CCS=yes \
 	MMWAVE_SDK_INSTALL_PATH=$(MMWAVE_SDK_INSTALL_PATH) \
 	R4F_CODEGEN_INSTALL_PATH=$(R4F_CODEGEN_INSTALL_PATH) \
-	C674_CODEGEN_INSTALL_PATH=$(C674_CODEGEN_INSTALL_PATH) \
 	XDC_INSTALL_PATH=$(XDC_INSTALL_PATH) \
 	BIOS_INSTALL_PATH=$(BIOS_INSTALL_PATH) \
 	XWR68XX_RADARSS_IMAGE_BIN=$(XWR68XX_RADARSS_IMAGE_BIN)
@@ -109,7 +105,7 @@ probe-installers-native: check-installers
 install-ti-tools-native: check-installers
 	sudo mkdir -p "$(TI_ROOT)/sdk" "$(TI_ROOT)/cgt-arm" "$(TI_ROOT)/bios" "$(TI_ROOT)/xdc" "$(SYSCONFIG_INSTALL_PATH)"
 	chmod +x "$(SDK_INSTALLER)" "$(R4F_INSTALLER)" "$(BIOS_INSTALLER)" "$(SYSCONFIG_INSTALLER)"
-	sudo "$(SDK_INSTALLER)" --mode unattended --prefix "$(TI_ROOT)/sdk" --disable-components TI_CGT_ARM,DSPLIB_C64Px,XDCtools,SYS_BIOS
+	sudo "$(SDK_INSTALLER)" --mode unattended --prefix "$(TI_ROOT)/sdk" --disable-components TI_CGT_C6000,TI_CGT_ARM,DSPLIB_C64Px,DSPLIB_C674x,MATHLIB_C674x,XDCtools,SYS_BIOS
 	sudo "$(R4F_INSTALLER)" --mode unattended --prefix "$(TI_ROOT)/cgt-arm"
 	sudo "$(BIOS_INSTALLER)" --mode unattended --prefix "$(TI_ROOT)/bios"
 	sudo "$(SYSCONFIG_INSTALLER)" --mode unattended --prefix "$(SYSCONFIG_INSTALL_PATH)"
@@ -132,7 +128,7 @@ check-tools:
 	for dir in "$(MMWAVE_SDK_INSTALL_PATH)" "$(BIOS_INSTALL_PATH)"; do \
 		if [ ! -d "$$dir" ]; then echo "ERROR: missing directory $$dir"; fail=1; fi; \
 	done; \
-	for exe in "$(R4F_CODEGEN_INSTALL_PATH)/bin/armcl" "$(C674_CODEGEN_INSTALL_PATH)/bin/cl6x" "$(XDC_INSTALL_PATH)/xdc"; do \
+	for exe in "$(R4F_CODEGEN_INSTALL_PATH)/bin/armcl" "$(XDC_INSTALL_PATH)/xdc"; do \
 		if [ ! -x "$$exe" ]; then echo "ERROR: missing executable $$exe"; fail=1; fi; \
 	done; \
 	if [ ! -f "$(XWR68XX_RADARSS_IMAGE_BIN)" ]; then \
@@ -149,7 +145,7 @@ check-tools:
 
 build-native: check-tools
 	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" cleanApp
-	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" bin L3_VARIANT_DEFS="--define=N_TX=3 --define=ENABLE_HWA_SMOKE=1 --define=SNAPSHOT_DUMP=1 --define=HWA_CHAINED_SNAPSHOT_RING=1 --define=HYBRID_CADENCE_CAPTURE=1 --define=L3_RING_IQ8=1 --define=L3_IQ8_EDMA_PACK=1"
+	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" bin L3_VARIANT_DEFS="--define=N_TX=3 --define=ENABLE_HWA_SMOKE=1 --define=SNAPSHOT_DUMP=1 --define=HWA_CHAINED_SNAPSHOT_RING=1 --define=CONFIGURABLE_CAPTURE=1 --define=HYBRID_CADENCE_CAPTURE=1 --define=L3_RING_IQ8=1 --define=L3_IQ8_EDMA_PACK=1"
 	mkdir -p "$(RELEASE_DIR)"
 	cp "$(FIRMWARE_DIR)/l3_dump.bin" "$(RELEASE_DIR)/$(RELEASE_NAME)"
 	sha256sum "$(RELEASE_DIR)/$(RELEASE_NAME)"

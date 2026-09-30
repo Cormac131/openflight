@@ -477,13 +477,56 @@ def test_release_reports_the_firmware_error_text():
         radar.release_sparse_freeze()
 
 
-def test_release_on_firmware_without_the_command_raises():
-    serial = _CliSerial(b"'l3release' is not recognized as a CLI command\n")
+class _PreReleaseFirmwareSerial(FakeSparseSerial):
+    """Firmware without l3release: rejects it, then plays one l3sparse exchange."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._held = bytes(self._buffer)
+        self._buffer.clear()
+
+    def write(self, data: bytes) -> None:
+        if data == b"l3release\n":
+            self.written.append(data)
+            self._buffer += b"'l3release' is not recognized as a CLI command\n"
+            return
+        if data == b"l3sparse\n":
+            self._buffer += self._held
+        super().write(data)
+
+
+def test_release_on_firmware_without_the_command_falls_back_to_empty_sparse():
+    cube = _cube(n_tx=2)
+    serial = _PreReleaseFirmwareSerial(cube=cube, n_tx=2, summary=vertical_loop_power(cube, n_tx=2))
     radar = _radar(serial)
     radar._trigger_pending = b""
 
-    with pytest.raises(RuntimeError, match="no l3release"):
-        radar.release_sparse_freeze()
+    radar.release_sparse_freeze()
+
+    assert serial.written == [b"l3release\n", b"l3sparse\n", b"cells 0\n"]
+    assert serial.requested_cells == []
+
+
+def test_release_fallback_raises_when_l3sparse_is_also_missing():
+    serial = _PreReleaseFirmwareSerial(
+        cube=None, n_tx=2, summary=None, before_power=b"'l3sparse' is not recognized\n"
+    )
+    radar = _radar(serial)
+    radar._trigger_pending = b""
+
+    with pytest.raises(RuntimeError, match="not released"):
+        radar.release_sparse_freeze(timeout_s=0.5)
+
+
+def test_release_fallback_raises_when_l3sparse_errors_before_the_freeze():
+    serial = _PreReleaseFirmwareSerial(
+        cube=None, n_tx=2, summary=None, before_power=b"l3sparse\nError: not frozen\n"
+    )
+    radar = _radar(serial)
+    radar._trigger_pending = b""
+
+    with pytest.raises(RuntimeError, match="not released"):
+        radar.release_sparse_freeze(timeout_s=0.5)
 
 
 # --- runtime planner ---------------------------------------------------------------

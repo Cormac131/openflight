@@ -55,28 +55,6 @@ def test_read_line_drains_an_overlong_line_instead_of_stopping_mid_line():
     assert "L3_SPARSE_REQUEST_TIMEOUT_MS" in read_line
 
 
-def test_release_rearms_without_reading_a_cell_line():
-    """A second CLI line cannot sit in the one-byte SCI receiver during the power dump."""
-    release = _function("static int32_t l3_cli_release(")
-
-    assert "l3_readLine" not in release
-    assert "l3_awaitFrozenRing()" in release
-    assert release.index("l3_awaitFrozenRing()") < release.index("l3_sparseRearm()")
-    assert 'tableEntry[16].cmd           = "l3release"' in _source()
-
-
-def test_blank_line_before_the_cell_request_is_not_a_missing_request():
-    """A stray CR/LF left in the FIFO must not reject the real cells line."""
-    sparse = _function("int32_t l3_cli_sparse(")
-    read_line = _function("static int32_t l3_readLine(")
-
-    assert "return L3_READLINE_EMPTY;" in read_line
-    retry = sparse.index("lineStatus == L3_READLINE_EMPTY")
-    missing = sparse.index('CLI_write("Error: sparse cell request missing')
-    assert retry < missing
-    assert sparse.count("l3_readLine(request") == 2
-
-
 def test_slice_count_is_the_number_of_cells_actually_parsed():
     sparse = _function("int32_t l3_cli_sparse(")
 
@@ -86,29 +64,13 @@ def test_slice_count_is_the_number_of_cells_actually_parsed():
     assert parsed < header < count
 
 
-def test_self_trigger_reads_a_finished_slot_beside_capture():
-    """Detection runs after the slot is stored, not inside the HWA rearm task."""
-    rearm = _function("static void l3_hwaRearmTask")
-    detect = _function("static void l3_detectTask")
-    done = _function("static void l3_hwaOutputDoneCB")
-    packed = _function("static void l3_iq8EdmaDoneCB")
-    stats = _function("static int32_t l3_cli_stats")
-
-    assert "l3_considerSelfTrigger" not in rearm
-    assert "l3_considerSelfTrigger(queuedSlot)" in detect
-    assert "l3detect_slot_live" in detect
-    assert "l3_publishDetectFrame" in done
-    assert "l3_publishDetectFrame" in packed
-    assert 'CLI_write("detect dropped=%u stale=%u\\n"' in stats
-
-
 def test_trigger_peak_tracks_bin_zero_with_an_explicit_flag():
     consider = _function("static void l3_considerSelfTrigger(")
 
     assert "gTriggerPeakBin != 0U" not in consider
     assert consider.count("gTriggerHavePeak") >= 3
     assert "gTriggerHavePeak = 0U;" in _function("static void l3_clearTriggerMotion(")
-    assert "l3_clearTriggerMotion();" in _function("static int32_t l3_cli_triggerCfg(")
+    assert "gTriggerHavePeak = 0U;" in _function("static int32_t l3_cli_triggerCfg(")
 
 
 def test_loop_means_are_computed_once_per_bin():

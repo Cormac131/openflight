@@ -326,9 +326,14 @@ class IWR6843Radar:
         self._discard_before_readback()
         reply = self.cmd("l3release", timeout_s)
         if "not recognized" in reply:
-            raise RuntimeError(
-                "IWR6843 has no l3release; flash the current firmware to clear a self-trigger"
-            )
+            # Firmware older than l3release: rearm by asking l3sparse for no cells.
+            try:
+                exchange = self._sparse_exchange(lambda _summary: SparsePlan(cells=()), timeout_s)
+            except UnsupportedCommand:
+                exchange = None
+            if exchange is None:
+                raise RuntimeError("IWR6843 rejected l3sparse; the frozen ring was not released")
+            return
         if "Error" in reply or "Done" not in reply:
             detail = reply.strip() or "no acknowledgement"
             raise RuntimeError(f"IWR6843 did not release the frozen ring: {detail}")

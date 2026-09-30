@@ -12,7 +12,7 @@ fallback rather than tuning around it.
 
 Usage:
     uv run python scripts/hardware-test/iwr6843_cadence_soak.py \\
-        --config config/iwr6843_l3dump_dense_51f2ms_53bin_iq8.cfg \\
+        --config config/iwr6843_l3dump_dense_36f2ms_53bin_iq8.cfg \\
         --frames 50000
     uv run python scripts/hardware-test/iwr6843_cadence_soak.py \\
         --config config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg \\
