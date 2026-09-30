@@ -41,6 +41,7 @@ nav = [
       "iwr6843/calibration.md",
       "iwr6843/troubleshooting.md",
       "iwr6843/low-confidence-recovery.md",
+      "iwr6843/golfer-clutter.md",
     ] },
     "build/inclinometer.md",
     "build/battery.md",

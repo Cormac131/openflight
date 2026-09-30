@@ -187,6 +187,8 @@ React UI (WebSocket) ──► Flask Server ──► RollingBufferMonitor ─�
 - `iwr6843/iq8_emulation.py`, `ab_compare.py`, `baseline.py` - firmware-exact IQ8 emulation, the IQ16-vs-IQ8 A/B and the baseline dataset extractor
 - `iwr6843/ops_compare.py`, `angle_validation.py`, `confidence_calibration.py`, `datasets.py` - OPS and reference validation statistics and confidence calibration
 - `iwr6843/impact_eval.py` - impact-fit evaluation over replayed captures (method A vs the method C comparator)
+- `iwr6843/clutter_map.py`, `association.py`, `clutter_bench.py`, `impact_bridge.py`, `beamforming.py` - host-only golfer-clutter harness: pre-swing clutter map, kinematic club/ball tracker, benchmark, impact bridged across the hotspot, Bartlett vs Capon
+- `iwr6843/rig_experiments.py`, `radome.py` - orientation/enclosure experiment matrices and the radar-front window and hood calculator
 - `environment.py`, `delivery.py` - air density for the flight model; inferred face angle, smash and plausibility gates
 - `inclinometer.py` - LIS3DH accelerometer tilt compensation service
 - `sim/` - Simulator connectors (OpenGolfSim, GSPro, E6 Connect, Garmin) and network transports

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **IWR6843 golfer-clutter robustness harness (host-only).** A benchmark
+  (`clutter_bench`, `scripts/analysis/evaluate_iwr_clutter.py`) scores every
+  change on the same recorded dumps: hotspot power, club points into and
+  through it, first ball frame, track runs, false detections, SCR and label
+  coverage. It covers:
+  - a pre-swing clutter map of the MTI residual power (`clutter_map`,
+    `ReplayConfig.clutter`, median or EMA, frozen once a plausible club
+    approach appears);
+  - a kinematic host tracker in which power is 5 % of the association score,
+    with clutter probability and shot-state field of view (`association`);
+  - Bartlett vs Capon angle spectra (`beamforming`);
+  - impact bridged across the hotspot (`impact_bridge`);
+  - orientation and enclosure experiment matrices (`rig_experiments`);
+  - a radome and hood calculator (`radome`);
+  - parametric OpenSCAD radar-front and carrier prototypes
+    (`cad/iwr6843-rf-front`).
+
+  The firmware and the board are unchanged. See
+  `docs/iwr6843/golfer-clutter.md`.
+
 ### Fixed
 - **IWR6843 self-trigger recognised no swings: the club track fires it now.**
   The range gate in `l3_trigger.c` fired from its own short track entering a
