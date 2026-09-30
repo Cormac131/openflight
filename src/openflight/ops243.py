@@ -1592,7 +1592,8 @@ class OPS243Radar:
         full_response = "".join(response_lines) if response_lines else ""
 
         if not full_response:
-            logger.info("[OPS] Hardware trigger: no data received within %.0fs", timeout)
+            # Debug: the trigger strategy reports the timeout itself.
+            logger.debug("[OPS] Hardware trigger: no data received within %.0fs", timeout)
         else:
             logger.info(
                 "[OPS] Hardware trigger: %d bytes in %.1fs",

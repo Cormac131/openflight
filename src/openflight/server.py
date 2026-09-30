@@ -1159,6 +1159,14 @@ def _ops_pre_trigger_segments(args) -> int:
     return _DEFAULT_OPS_PRE_TRIGGER_SEGMENTS
 
 
+def _ops_trigger_kwargs(args) -> dict:
+    """The OPS trigger's settings: its pre-trigger, and what fires it (for its logs)."""
+    return {
+        "pre_trigger_segments": _ops_pre_trigger_segments(args),
+        "source": "iwr6843" if args.iwr6843_self_trigger else "sound",
+    }
+
+
 def init_iwr6843(
     *,
     port: str | None,
@@ -5367,8 +5375,7 @@ def main():
         print("Raw radar readings display ENABLED - signed speed values will be shown")
 
     # Start the monitor
-    # Build trigger-specific kwargs (pre_trigger_segments always passed)
-    trigger_kwargs = {"pre_trigger_segments": _ops_pre_trigger_segments(args)}
+    trigger_kwargs = _ops_trigger_kwargs(args)
     swing_speed_kwargs = {
         "trigger_threshold_mph": args.swing_speed_threshold,
         "max_speed_mph": None if args.swing_speed_max <= 0 else args.swing_speed_max,

@@ -537,6 +537,95 @@ class TestTriggerFactory:
             create_trigger("invalid_type")
 
 
+class TestTriggerSourceLogging:
+    """With --iwr6843-self-trigger the IWR drives the OPS with S!: the OPS side
+    still waits on its serial port as for the sound gate, but its logs name
+    the IWR self-trigger, and the idle 30 s wait-and-timeout lines, which
+    say nothing, are debug only."""
+
+    @staticmethod
+    def _radar(response):
+        radar = MagicMock()
+        radar.wait_for_hardware_trigger.return_value = response
+        radar.last_hardware_trigger_first_byte_timestamp = None
+        return radar
+
+    @staticmethod
+    def _messages(caplog, level):
+        return [r.getMessage() for r in caplog.records if r.levelno >= level]
+
+    def test_an_idle_self_trigger_wait_logs_nothing_above_debug(self, caplog):
+        import logging
+
+        caplog.set_level(logging.DEBUG, logger="openflight")
+        trigger = SoundTrigger(source="iwr6843")
+
+        assert trigger.wait_for_trigger(self._radar(""), MagicMock(), timeout=30.0) is None
+
+        assert self._messages(caplog, logging.INFO) == []
+        assert not any("sound" in m.lower() for m in self._messages(caplog, logging.DEBUG))
+
+    def test_a_self_trigger_capture_names_the_iwr_not_the_sound_gate(self, caplog):
+        import logging
+
+        caplog.set_level(logging.DEBUG, logger="openflight")
+        processor = MagicMock()
+        processor.parse_capture.return_value = None
+        trigger = SoundTrigger(source="iwr6843")
+
+        trigger.wait_for_trigger(self._radar('{"I": [1]}'), processor, timeout=30.0)
+
+        messages = self._messages(caplog, logging.DEBUG)
+        assert any("IWR6843 self-trigger fired" in m for m in messages)
+        assert any("IWR6843 self-trigger parse failed" in m for m in messages)
+        assert not any("sound" in m.lower() for m in messages)
+
+    def test_the_sound_gate_keeps_its_wording(self, caplog):
+        import logging
+
+        caplog.set_level(logging.INFO, logger="openflight")
+        trigger = SoundTrigger()
+
+        trigger.wait_for_trigger(self._radar(""), MagicMock(), timeout=30.0)
+
+        messages = self._messages(caplog, logging.INFO)
+        assert any("Waiting for sound trigger" in m for m in messages)
+        assert any("Sound trigger timeout" in m for m in messages)
+
+    def test_an_unknown_source_is_refused(self):
+        with pytest.raises(ValueError, match="source"):
+            SoundTrigger(source="laser")
+
+    def test_the_factory_passes_the_source_through(self):
+        assert create_trigger("sound", source="iwr6843").source == "iwr6843"
+
+    def test_the_ops_idle_timeout_is_debug_only(self, caplog):
+        """The trigger reports the timeout; the driver's copy said it twice."""
+        import logging
+
+        from openflight.ops243 import OPS243Radar
+
+        class SilentSerial:
+            is_open = True
+            in_waiting = 0
+
+            def reset_input_buffer(self):
+                pass
+
+            def read(self, byte_count):
+                del byte_count
+                return b""
+
+        caplog.set_level(logging.DEBUG, logger="ops243")
+        radar = OPS243Radar(port="/dev/null")
+        radar.serial = SilentSerial()
+
+        assert radar.wait_for_hardware_trigger(timeout=0.05) == ""
+
+        assert not any("no data received" in m for m in self._messages(caplog, logging.INFO))
+        assert any("no data received" in m for m in self._messages(caplog, logging.DEBUG))
+
+
 class TestSoundTriggerTimestampPropagation:
     """Tests for hardware trigger timestamp propagation."""
 

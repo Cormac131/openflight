@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that would have fired first. `triggerLog track` gains a `leave` line. Needs
   a firmware rebuild and reflash.
 
+### Changed
+- **Self-trigger mode no longer logs sound-trigger lines.** With
+  `--iwr6843-self-trigger` the OPS log lines name the IWR6843 self-trigger,
+  and the idle wait and its 30 s timeout, which said nothing, are debug only.
+  The OPS driver's own copy of that timeout is debug in both modes.
+
 ### Fixed
 - **A failed IWR6843 dump left the board frozen, so no later swing fired.**
   After an `l3dump` that answered 18 bytes nothing released or restarted the

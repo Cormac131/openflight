@@ -5404,6 +5404,20 @@ class TestSelfTriggerCli:
         assert server_module._ops_pre_trigger_segments(_self_trigger_args(**overrides)) == expected
 
     @pytest.mark.parametrize(
+        ("overrides", "source"),
+        [({}, "sound"), ({"iwr6843_self_trigger": True}, "iwr6843")],
+    )
+    def test_ops_trigger_kwargs_name_the_trigger_source(self, overrides, source):
+        """The OPS logs name what fired it: the sound gate or the IWR self-trigger."""
+        kwargs = server_module._ops_trigger_kwargs(_self_trigger_args(**overrides))
+        assert kwargs == {
+            "pre_trigger_segments": server_module._ops_pre_trigger_segments(
+                _self_trigger_args(**overrides)
+            ),
+            "source": source,
+        }
+
+    @pytest.mark.parametrize(
         ("argv", "message"),
         [
             (["--iwr6843", "--iwr6843-self-trigger-bin", "3"], "requires --iwr6843-self-trigger"),

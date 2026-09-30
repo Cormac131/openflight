@@ -336,6 +336,11 @@ class SoundTrigger(TriggerStrategy):
 
     """
 
+    # What starts the OPS dump, and so what the logs call it: the SEN-14262
+    # gate on HOST_INT, or the IWR6843 self-trigger sending S! (the OPS side
+    # waits on its port the same way for both).
+    SOURCE_LABELS = {"sound": "Sound trigger", "iwr6843": "IWR6843 self-trigger"}
+
     CLOCK_SYNC_SAMPLES = 36
     CLOCK_SYNC_MAX_ROLLOVER_UNCERTAINTY_MS = 40.0
     CLOCK_SYNC_MAX_TIMEOUT_READ_MS = 50.0
@@ -344,6 +349,7 @@ class SoundTrigger(TriggerStrategy):
     def __init__(
         self,
         pre_trigger_segments: int = 12,
+        source: str = "sound",
     ):
         """
         Initialize sound trigger.
@@ -354,8 +360,17 @@ class SoundTrigger(TriggerStrategy):
                 Default 12 gives ~51ms pre-trigger, ~85ms post-trigger.
                 NOTE: This is passed to enter_rolling_buffer_mode() by the caller.
                 The trigger does NOT configure rolling buffer mode itself.
+            source: What fires the dump, a key of SOURCE_LABELS. With
+                "iwr6843" the idle wait and its timeout (every ``timeout``
+                seconds with nothing happening) are logged at debug.
         """
         super().__init__(pre_trigger_segments=pre_trigger_segments)
+        if source not in self.SOURCE_LABELS:
+            raise ValueError(
+                f"Unknown trigger source: {source!r}. Valid: {sorted(self.SOURCE_LABELS)}"
+            )
+        self.source = source
+        self.label = self.SOURCE_LABELS[source]
 
     @staticmethod
     def _clock_sync_last_read_host_time(clock_sync: dict) -> Optional[float]:
@@ -575,7 +590,10 @@ class SoundTrigger(TriggerStrategy):
         output, causing the radar to dump its rolling buffer automatically.
         We just block on serial read waiting for the I/Q data to arrive.
         """
-        logger.info("[TRIGGER] Waiting for sound trigger (timeout=%.0fs)...", timeout)
+        idle_level = logging.INFO if self.source == "sound" else logging.DEBUG
+        logger.log(
+            idle_level, "[TRIGGER] Waiting for %s (timeout=%.0fs)...", self.label.lower(), timeout
+        )
 
         response = radar.wait_for_hardware_trigger(
             timeout=timeout,
@@ -584,11 +602,11 @@ class SoundTrigger(TriggerStrategy):
         )
 
         if not response:
-            logger.info("[TRIGGER] Sound trigger timeout — no hardware trigger received")
+            logger.log(idle_level, "[TRIGGER] %s timeout — no trigger received", self.label)
             return None
 
         response_len = len(response)
-        logger.info("[TRIGGER] Sound trigger fired, %d bytes received", response_len)
+        logger.info("[TRIGGER] %s fired, %d bytes received", self.label, response_len)
         first_byte_timestamp = getattr(
             radar,
             "last_hardware_trigger_first_byte_timestamp",
@@ -611,7 +629,9 @@ class SoundTrigger(TriggerStrategy):
 
         if not capture:
             radar.rearm_rolling_buffer(self.pre_trigger_segments)
-            logger.warning("[TRIGGER] Sound trigger parse failed (%d bytes received)", response_len)
+            logger.warning(
+                "[TRIGGER] %s parse failed (%d bytes received)", self.label, response_len
+            )
             self._append_diagnostic(
                 accepted=False,
                 reason="parse_failed",
@@ -633,8 +653,9 @@ class SoundTrigger(TriggerStrategy):
             # next real swing isn't missed.
             radar.rearm_rolling_buffer(self.pre_trigger_segments)
             logger.info(
-                "[TRIGGER] Sound trigger rejected — no outbound speed >= %.0f mph "
+                "[TRIGGER] %s rejected — no outbound speed >= %.0f mph "
                 "(peak=%.1f mph, %d readings)",
+                self.label,
                 self.MIN_VALID_OUTBOUND_MPH,
                 summary["peak_outbound_mph"],
                 summary["total_readings"],
@@ -657,8 +678,8 @@ class SoundTrigger(TriggerStrategy):
 
         if capture.trigger_timestamp is not None and capture.first_byte_timestamp is not None:
             logger.info(
-                "[TRIGGER] Sound trigger wall time %.3f "
-                "(source=%s, first byte %.3f, post-trigger %.1fms)",
+                "[TRIGGER] %s wall time %.3f (source=%s, first byte %.3f, post-trigger %.1fms)",
+                self.label,
                 capture.trigger_timestamp,
                 capture.trigger_timestamp_source or "unknown",
                 capture.first_byte_timestamp,
@@ -666,7 +687,8 @@ class SoundTrigger(TriggerStrategy):
             )
 
         logger.info(
-            "[TRIGGER] Sound trigger accepted — peak %.1f mph, %d outbound readings",
+            "[TRIGGER] %s accepted — peak %.1f mph, %d outbound readings",
+            self.label,
             summary["valid_peak_outbound_mph"],
             summary["valid_outbound_count"],
         )
