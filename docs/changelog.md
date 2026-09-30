@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `geometry_armed` and `geometric_frame` (the viewer its checkbox, the A/B
   compare its row). The `geometry` source bit and the `geometric_impact`
   quality bit stay reserved for older result packets.
+- **The host ball-leave detector** (`BallLeaveDetector` and its replay in
+  `self_trigger.py`). It replayed a firmware trigger that no longer exists and
+  only fed the dump viewer's "host trigger" panel, which is gone with it
+  (`py_level` and `py_hits` options too). `self_trigger.py` keeps the shared
+  self-trigger defaults and the empty-lane floor sample the monitor arms with.
+  The old C leave-detector harness, `tests/test_iwr6843_trigger_firmware.py`,
+  had skipped every case since `l3_trigger.c` replaced it; its two
+  `l3_dump.c` checks moved to `test_iwr6843_firmware_sparse.py`.
 
 ### Changed
 - **IWR6843 tee and net distances are measured from the enclosure front; the

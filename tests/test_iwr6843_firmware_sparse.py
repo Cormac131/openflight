@@ -787,3 +787,20 @@ def test_iq8_quantisation_in_the_firmware_is_the_shared_module():
     assert "l3_iq8_quantize_scale(src[word], scale)" in write
     makefile = (FIRMWARE.parent / "makefile").read_text(encoding="utf-8")
     assert "l3_iq8.c" in makefile
+
+
+def test_sensor_start_forgets_every_trigger_from_the_previous_session():
+    """A latch or enable left over from a crashed host would freeze or self-trigger the new one."""
+    start = _function("static int32_t l3_cli_sensorStart(")
+
+    assert "gSelfTriggerLatched = 0U;" in start
+    assert "gTriggerEnabled = 0U;" in start
+    assert "gTriggerPhase = 0U;" in start
+    assert "l3_trigRearm();" in start
+
+
+def test_trigger_cfg_resets_the_front_end_after_the_in_flight_frame():
+    trigger_cfg = _function("static int32_t l3_cli_triggerCfg(")
+
+    assert "l3_trig_init(&gTrig" in trigger_cfg
+    assert "while (gTrigBusy && waited" in trigger_cfg

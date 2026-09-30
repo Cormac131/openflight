@@ -9,11 +9,10 @@ without a browser:
   exact ``l3_verticalResidual`` observations the R4F scores, so the colours
   on the page are the numbers the trigger saw;
 * the firmware verdicts come from :func:`firmware_replay.replay_dump`, the
-  compiled ``l3_*.c`` trigger, club track, impact, shot and ball tracker;
-* the host ball-leave detector comes from :func:`self_trigger.replay_dump`.
+  compiled ``l3_*.c`` trigger, club track, impact, shot and ball tracker.
 
-A failure in one of the replays (no C compiler, a raw-ADC dump the firmware
-path cannot take) is reported in the result instead of hiding the rest.
+A failure in the replay (no C compiler, a raw-ADC dump the firmware path
+cannot take) is reported in the result instead of hiding the rest.
 """
 
 from __future__ import annotations
@@ -30,7 +29,6 @@ from openflight.iwr6843 import firmware_replay as fr, self_trigger as st
 from openflight.iwr6843.calibration import DEFAULT_PITCH_DEG, antenna_range_m
 from openflight.iwr6843.dump import is_range_snapshot, parse_dump, range_data
 from openflight.iwr6843.firmware_host import OBS_WAVELENGTH_M
-from openflight.iwr6843.shot import geometry_from_header
 from openflight.iwr6843.tracking import RANGE_SPAN_M, same_tx_loop_period_s
 
 _TRIGGER_CFG = re.compile(r"triggerCfg\s+(\d+)\s+([0-9.]+)\s+(\d+)")
@@ -51,8 +49,6 @@ class ViewerOptions:  # pylint: disable=too-many-instance-attributes
     stop_at_fire: bool = False
     pitch_deg: float = DEFAULT_PITCH_DEG
     tee_range_m: float = st.DEFAULT_TEE_RANGE_M
-    py_level: float = st.DEFAULT_LEVEL
-    py_hits: int = st.DEFAULT_HITS
     ball_hypotheses: bool | None = None  # the ball search; None: the firmware default
     joint_search: bool = False  # run l3_joint_search in parallel (host-only, viz)
     # The tee band's width, placed automatically; 0 turns it off.
@@ -311,30 +307,6 @@ def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOp
     }
 
 
-def python_trigger_section(
-    raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOptions
-) -> dict:
-    """The host ball-leave detector over the capture, and the loop-0 power it thresholds."""
-    observations = st.replay_dump(
-        raw,
-        tee_range_m=antenna_range_m(options.tee_range_m),
-        level=options.py_level,
-        hits=options.py_hits,
-    )
-    geometry = geometry_from_header(meta)
-    fired = next((o.frame for o in observations if o.fired), None)
-    power = st.loop0_vertical_power(range_data(meta, cube), int(meta["n_tx"]))
-    return {
-        "tee_bin": int(round(antenna_range_m(options.tee_range_m) / geometry.range_res_m)),
-        "level": options.py_level,
-        "hits": options.py_hits,
-        "approach_bins": st.APPROACH_BINS,
-        "fired_frame": fired,
-        "observations": [_jsonable(asdict(o)) for o in observations],
-        "loop0_db": [[_finite(v) for v in _db(row)] for row in power],
-    }
-
-
 def _guarded(builder, *args) -> dict:
     try:
         return {"ok": True, **builder(*args)}
@@ -365,7 +337,6 @@ def analyze_dump(raw: bytes, options: ViewerOptions | None = None) -> dict:
         "options": asdict(options),
         "maps": frame_maps(meta, cube),
         "firmware": _guarded(firmware_section, raw, meta, cube, options),
-        "python_trigger": _guarded(python_trigger_section, raw, meta, cube, options),
     }
 
 
@@ -488,7 +459,6 @@ __all__ = [
     "firmware_section",
     "frame_maps",
     "parse_trigger_cfg",
-    "python_trigger_section",
     "session_context",
     "tee_bin_for",
 ]

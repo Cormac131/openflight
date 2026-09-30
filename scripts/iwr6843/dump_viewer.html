@@ -10,7 +10,7 @@
   :root {
     --bg: #0e1116; --panel: #161b22; --panel2: #1c232d; --line: #2a323d;
     --text: #d6dde6; --muted: #8b97a6; --accent: #4dabf7;
-    --gate: #ff6b6b; --py: #868e96; --freeze: #ffd43b; --geo: #b197fc;
+    --gate: #ff6b6b; --freeze: #ffd43b; --geo: #b197fc;
     --club: #69db7c; --ball: #339af0; --target: #adb5bd;
     --joint-ball: #f03e3e; --joint-club: #a9e34b;
   }
@@ -96,19 +96,13 @@
       <label>sub-bin <select id="subbin"><option>parabolic</option><option>centroid</option></select></label>
       <label>post from frame <input type="number" id="post_from_frame" placeholder="gate"></label>
       <label>pitch (deg) <input type="number" id="pitch_deg" step="0.1"></label>
+      <label>tee range (m) <input type="number" id="tee_range_m" step="0.01"></label>
       <label>band bins <input type="number" id="band_bins" step="0.5" min="0" placeholder="0 = off"></label>
       <label>ball search <select id="ball_hypotheses"><option value="">firmware default</option><option value="true">hypotheses</option><option value="false">legacy</option></select></label>
       <label class="chk"><input type="checkbox" id="stop_at_fire"> stop at fire</label>
       <label class="chk"><input type="checkbox" id="joint_search"> joint search</label>
     </div>
     <div class="row"><button id="useFreeze" title="Treat the recorded freeze as impact so the ball tracker runs from it">post = freeze frame</button></div>
-
-    <h2>Host ball-leave trigger</h2>
-    <div class="form">
-      <label>tee range (m) <input type="number" id="tee_range_m" step="0.01"></label>
-      <label>level <input type="number" id="py_level" step="100"></label>
-      <label>hits <input type="number" id="py_hits"></label>
-    </div>
 
     <div class="row">
       <button class="primary" id="run">Run</button>
@@ -171,7 +165,7 @@
         <div id="ptime" class="plot" style="height:300px"></div>
       </div>
       <div class="card">
-        <div class="card-h"><h3>State lanes</h3><span class="hint">firmware state machines and the host detector's phase, per frame</span></div>
+        <div class="card-h"><h3>State lanes</h3><span class="hint">firmware state machines, per frame</span></div>
         <div id="plane" class="plot" style="height:230px"></div>
       </div>
       <div class="card">
@@ -199,13 +193,13 @@
 const $ = (s) => document.querySelector(s);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const C = {};
-["gate", "py", "freeze", "geo", "club", "ball", "target", "text", "muted", "line", "panel", "bg",
+["gate", "freeze", "geo", "club", "ball", "target", "text", "muted", "line", "panel", "bg",
   "joint-ball", "joint-club"]
   .forEach((k) => (C[k] = css("--" + k)));
 C.jball = C["joint-ball"]; C.jclub = C["joint-club"];
 const OPTS = ["tee_bin", "dest_bin", "snr", "ball_snr", "stat", "subbin",
   "post_from_frame", "pitch_deg", "band_bins", "stop_at_fire", "tee_range_m",
-  "py_level", "py_hits", "ball_hypotheses", "joint_search"];
+  "ball_hypotheses", "joint_search"];
 // The form's defaults are ViewerOptions' (GET /api/defaults): one place for them.
 const FORM_DEFAULTS = {};
 async function loadDefaults() {
@@ -396,15 +390,12 @@ const binM = (b) => b * D.bin_width_m;
 const col = (b) => Math.round(b) - D.maps.bin0;  // global bin -> grid column
 const xAxisM = () => [...Array(D.maps.width - D.maps.bin0).keys()].map((i) => binM(D.maps.bin0 + i));
 const fw = () => (D.firmware.ok ? D.firmware : null);
-const py = () => (D.python_trigger.ok ? D.python_trigger : null);
 function fwFrame(f) { const F = fw(); return F ? F.frames.find((x) => x.frame === f) : null; }
 function events() {
   const ev = [];
   if (D.freeze_frame != null) ev.push({ f: D.freeze_frame, name: "board freeze (pre/post)", color: C.freeze, dash: "solid" });
   const F = fw();
   if (F && F.fired_frame != null) ev.push({ f: F.fired_frame, name: "C trigger fired", color: C.gate, dash: "solid" });
-  const P = py();
-  if (P && P.fired_frame != null) ev.push({ f: P.fired_frame, name: "host trigger fired", color: C.py, dash: "dash" });
   return ev;
 }
 function frameAt(t) {
@@ -412,14 +403,6 @@ function frameAt(t) {
   D.timestamps_ms.forEach((x, i) => { if (Math.abs(x - t) < Math.abs(D.timestamps_ms[best] - t)) best = i; });
   return best;
 }
-function pyLoop0Global(f) {  // host loop-0 power (dB) on the global-bin axis
-  const P = py(); if (!P) return null;
-  const row = new Array(D.maps.width - D.maps.bin0).fill(null);
-  const s = D.maps.starts[f], n = D.maps.counts[f];
-  for (let i = 0; i < n && i < P.loop0_db[f].length; i++) row[col(s + i)] = P.loop0_db[f][i];
-  return row;
-}
-
 // ---------- render ----------
 function renderAll() {
   $("#content").hidden = true; $("#panels").hidden = false;
@@ -444,7 +427,7 @@ function chip(color, label, value) {
   return `<span class="chip">${color ? `<span class="dot" style="background:${color}"></span>` : ""}${label} <b>${value}</b></span>`;
 }
 function renderChips() {
-  const m = D.meta, F = fw(), P = py();
+  const m = D.meta, F = fw();
   const at = (f) => (f == null ? "no fire" : `frame ${f} · ${fmt(T(f))} ms`);
   const out = [
     chip(null, "v" + m.version, `fmt ${m.sample_fmt}`),
@@ -453,7 +436,6 @@ function renderChips() {
   if (m.retention) out.push(chip(null, "retention", `${m.retention.reason} ${m.retention.pre_frames}/${m.retention.planned_frames}`));
   if (D.freeze_frame != null) out.push(chip(C.freeze, "freeze", at(D.freeze_frame)));
   out.push(F ? chip(C.gate, "C trigger", at(F.fired_frame)) : chip(C.gate, "C trigger", `<span class="err">${D.firmware.error}</span>`));
-  out.push(P ? chip(C.py, "host trigger", at(P.fired_frame)) : chip(C.py, "host", `<span class="err">${D.python_trigger.error}</span>`));
   if (F) {
     out.push(chip(C.club, "club pts", `${F.points.length} · run ${F.longest_run} · ${fmt(F.speed_mps)} m/s`));
     if (F.delivery) out.push(chip(C.club, "delivery", `${fmt(F.delivery.speed_mps)} m/s path ${fmt(F.delivery.path_deg)}° aoa ${fmt(F.delivery.attack_deg)}°`));
@@ -649,7 +631,7 @@ function renderMap() {
     customdata: y.map(() => x.map((_, i) => D.maps.bin0 + i)),
   }];
   const shapes = [];
-  const F = fw(), P = py();
+  const F = fw();
   if (F) {
     const wx = [], wy = [];
     F.frames.forEach((fr) => { if (fr.count > 0) { wx.push(binM(fr.first_bin), binM(fr.first_bin + fr.count - 1), null); wy.push(T(fr.frame), T(fr.frame), null); } });
@@ -687,16 +669,9 @@ function renderMap() {
         y0: F.impact_fit.impact_us / 1000, y1: F.impact_fit.impact_us / 1000, line: { color: "#ffd43b", width: 2 } });
     }
   }
-  if (P) {
-    const px = [], pyy = [];
-    P.observations.forEach((o) => { if (o.have_peak && o.phase !== "fired") { px.push(binM(D.maps.starts[o.frame] + o.peak_bin)); pyy.push(T(o.frame)); } });
-    traces.push({ type: "scatter", mode: "markers", name: "host approach peak", x: px, y: pyy, marker: { symbol: "x-thin", size: 9, line: { width: 2, color: C.py } },
-      hovertemplate: "host approach peak %{x:.3f} m<extra></extra>" });
-  }
   const vline = (b, color, dash) => shapes.push({ type: "line", xref: "x", yref: "paper", x0: binM(b), x1: binM(b), y0: 0, y1: 1, line: { color, width: 1.5, dash } });
   vline(D.tee_bin, "#ffffff", "dash");
   if (F && F.config.dest_bin != null) vline(F.config.dest_bin, C.ball, "dash");
-  if (P && P.tee_bin !== D.tee_bin) vline(P.tee_bin, C.py, "dot");
   events().forEach((e) => shapes.push({ type: "line", xref: "paper", yref: "y", x0: 0, x1: 1, y0: T(e.f), y1: T(e.f), line: { color: e.color, width: 2, dash: e.dash } }));
   if (ann.on && ann.labels) {
     [["ball", C.ball, "ball label"], ["club", C.club, "club label"]].forEach(([obj, color, label]) => {
@@ -716,7 +691,7 @@ function renderMap() {
 // ---------- timeline ----------
 function renderTimeline() {
   const el = $("#ptime");
-  const F = fw(), P = py();
+  const F = fw();
   const traces = [];
   if (F) {
     const fr = F.frames;
@@ -727,15 +702,6 @@ function renderTimeline() {
       y: fr.map((f) => db(f.floor * F.config.snr)), line: { color: C.gate, width: 1.5, dash: "dash" }, hovertemplate: "%{y:.1f} dB<extra>C threshold</extra>" });
     traces.push({ type: "scatter", mode: "lines", name: "C floor", x: fr.map((f) => T(f.frame)), y: fr.map((f) => db(f.floor)),
       line: { color: C.gate, width: 1, dash: "dot" }, opacity: 0.6, hovertemplate: "%{y:.1f} dB<extra>C floor</extra>" });
-  }
-  if (P) {
-    const ob = P.observations;
-    traces.push({ type: "scatter", mode: "lines+markers", name: "host tee loop-0", x: ob.map((o) => T(o.frame)), y: ob.map((o) => db(o.tee)),
-      line: { color: C.py, width: 2 }, marker: { size: 5 }, text: ob.map((o) => o.phase), hovertemplate: "%{y:.1f} dB · %{text}<extra>host tee</extra>" });
-    traces.push({ type: "scatter", mode: "lines+markers", name: "host approach/departure", x: ob.map((o) => T(o.frame)), y: ob.map((o) => db(o.approach)),
-      line: { color: "#74c0fc", width: 1.5 }, marker: { size: 4, symbol: "triangle-up" }, hovertemplate: "%{y:.1f} dB<extra>host approach</extra>" });
-    traces.push({ type: "scatter", mode: "lines", name: `host level ${P.level}`, x: [T(0), T(D.n_frames - 1)], y: [db(P.level), db(P.level)],
-      line: { color: C.py, width: 1.5, dash: "dash" }, hoverinfo: "name" });
   }
   const shapes = events().map((e) => ({ type: "line", xref: "x", yref: "paper", x0: T(e.f), x1: T(e.f), y0: 0, y1: 1, line: { color: e.color, width: 2, dash: e.dash } }));
   const annotations = events().map((e, i) => ({ x: T(e.f), y: 1, yref: "paper", yanchor: "bottom", text: e.name, showarrow: false, font: { color: e.color, size: 10 }, yshift: (i % 2) * 11 }));
@@ -758,7 +724,7 @@ function stateColor(s) {
 }
 function renderLanes() {
   const el = $("#plane");
-  const F = fw(), P = py();
+  const F = fw();
   const lanes = [];
   if (F) {
     lanes.push(["C trigger", F.frames.map((f) => [f.frame, f.fired ? "fired" : "idle"])]);
@@ -767,7 +733,6 @@ function renderLanes() {
     lanes.push(["ball track", F.frames.map((f) => [f.frame, f.ball_why])]);
     if (F.frames.some((f) => f.retain)) lanes.push(["retain", F.frames.map((f) => [f.frame, f.retain ? f.retain.why : "none"])]);
   }
-  if (P) lanes.push(["host phase", P.observations.map((o) => [o.frame, o.phase])]);
   const dt = D.n_frames > 1 ? (T(D.n_frames - 1) - T(0)) / (D.n_frames - 1) : 1;
   const bars = {};
   lanes.forEach(([lane, seq]) => {
@@ -814,13 +779,11 @@ function setFrame(f) {
 function renderProfile() {
   const el = $("#pprof");
   const x = xAxisM();
-  const F = fw(), P = py(), fr = fwFrame(frame);
+  const F = fw(), fr = fwFrame(frame);
   const traces = [
     { type: "scatter", mode: "lines", name: "MTI energy", x, y: D.maps.mti_db[frame], line: { color: "#f76707", width: 2 }, connectgaps: false },
     { type: "scatter", mode: "lines", name: "static", x, y: D.maps.static_db[frame], line: { color: "#868e96", width: 1.5 }, connectgaps: false },
   ];
-  const loop0 = pyLoop0Global(frame);
-  if (loop0) traces.push({ type: "scatter", mode: "lines", name: "host loop-0", x, y: loop0, line: { color: C.py, width: 1.5 }, connectgaps: false });
   const shapes = [{ type: "line", xref: "x", yref: "paper", x0: binM(D.tee_bin), x1: binM(D.tee_bin), y0: 0, y1: 1, line: { color: "#ffffff", dash: "dash", width: 1 } }];
   if (fr && fr.count > 0) {
     shapes.push({ type: "rect", xref: "x", yref: "paper", x0: binM(fr.first_bin - 0.5), x1: binM(fr.first_bin + fr.count - 0.5), y0: 0, y1: 1, fillcolor: "rgba(255,255,255,.06)", line: { width: 0 } });
@@ -831,10 +794,6 @@ function renderProfile() {
       text: fr.targets.map((t) => `snr ${t.snr.toFixed(1)} v ${t.doppler_mps.toFixed(1)} coh ${t.coherence.toFixed(2)}`), hovertemplate: "%{text}<extra>target</extra>" });
     const mark = (bin, name, color) => bin != null && traces.push({ type: "scatter", mode: "markers", name, x: [binM(bin)], y: [D.maps.mti_db[frame][col(bin)]], marker: { size: 12, color, symbol: "diamond" } });
     mark(fr.track_bin, "club point", C.club); mark(fr.ball_bin, "ball point", C.ball);
-  }
-  if (P) {
-    const lv = db(P.level);
-    traces.push({ type: "scatter", mode: "lines", name: "host level", x: [binM(P.tee_bin - P.approach_bins), binM(P.tee_bin + P.approach_bins)], y: [lv, lv], line: { color: C.py, dash: "dot", width: 1.5 } });
   }
   Plotly.react(el, traces, layout({ xaxis: axis("range (m)", { range: [binM(D.maps.starts[frame] - 1), binM(D.maps.starts[frame] + D.maps.counts[frame])] }),
     yaxis: axis("dB"), shapes, legend: { orientation: "h", y: -0.25 } }), PLOT_CFG);
@@ -856,8 +815,7 @@ function renderRangeDoppler() {
 }
 
 function renderDetails() {
-  const fr = fwFrame(frame), P = py();
-  const o = P ? P.observations.find((x) => x.frame === frame) : null;
+  const fr = fwFrame(frame);
   const rows = [];
   rows.push(["window", `bins ${D.maps.starts[frame]}–${D.maps.starts[frame] + D.maps.counts[frame] - 1} (${D.maps.counts[frame]})`]);
   if (fr) {
@@ -868,7 +826,6 @@ function renderDetails() {
     if (fr.delivery) rows.push(["delivery", `${fmt(fr.delivery.speed_mps)} m/s (radial ${fmt(fr.delivery.radial_speed_mps)}) path ${fmt(fr.delivery.path_deg)}° aoa ${fmt(fr.delivery.attack_deg)}° · ${fr.delivery.points} pts`]);
     if (fr.retain) rows.push(["retain", `${fr.retain.why} [${fr.retain.start}, ${fr.retain.start + fr.retain.bins}) ${fr.retain.priority}${fr.retain.covered === false ? " · MISSED point" : ""}`]);
   } else if (D.firmware.ok) rows.push(["C trigger", "not replayed (stopped at fire)"]);
-  if (o) rows.push(["host", `${o.phase} · tee ${fmt(db(o.tee))} dB · approach ${fmt(db(o.approach))} dB · peak bin ${o.have_peak ? D.maps.starts[frame] + o.peak_bin : "–"}`]);
   let html = `<table>${rows.map(([k, v]) => `<tr><th style="width:110px">${k}</th><td>${v}</td></tr>`).join("")}</table>`;
   if (fr && fr.targets.length) {
     html += `<table style="margin-top:6px"><tr><th>target</th><th>range bin</th><th>range m</th><th>snr</th><th>v (m/s)</th><th>coherence</th><th>confidence</th></tr>` +

@@ -6,9 +6,9 @@
 Serves a local page with a range x time x power surface, the range-time map
 with the trigger's watch window and the tracks, trigger timelines against
 their thresholds, state lanes and a per-frame inspector. Every run replays
-the compiled firmware modules (``firmware_replay``) and the host ball-leave
-detector (``self_trigger``) with the options set on the page; the session
-log that saved a capture, when one is next to it, fills those options in.
+the compiled firmware modules (``firmware_replay``) with the options set on
+the page; the session log that saved a capture, when one is next to it, fills
+those options in.
 """
 
 from __future__ import annotations

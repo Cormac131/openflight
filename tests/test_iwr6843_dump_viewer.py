@@ -239,7 +239,7 @@ def test_analyze_is_strict_json_and_reports_a_failed_replay_in_place(monkeypatch
     data = dv.analyze_dump(_variable_dump(), dv.ViewerOptions(tee_bin=25, tee_range_m=1.2))
     json.dumps(data, allow_nan=False)
     assert data["firmware"] == {"ok": False, "error": "RuntimeError: no host C compiler"}
-    assert data["python_trigger"]["ok"] is True
+    assert "python_trigger" not in data, "the host ball-leave detector was removed"
     assert data["n_frames"] == 4
     assert data["timestamps_ms"] == [0.0, 2.0, 4.0, 6.0]
     assert data["tee_bin"] == 25
@@ -612,8 +612,14 @@ def test_the_ball_is_blue_and_nothing_else_uses_that_blue():
     assert "#339af0" not in others.values(), others
 
 
-def test_host_approach_peaks_are_grey_not_blue():
-    assert _css_tokens()["py"].lower() == "#868e96"
+def test_the_page_has_no_host_ball_leave_panel():
+    """The host ball-leave detector was removed (2026-09-30)."""
+    html = (Path(__file__).parents[1] / "scripts" / "iwr6843" / "dump_viewer.html").read_text(
+        encoding="utf-8"
+    )
+    assert "py" not in _css_tokens()
+    for gone in ("python_trigger", "py_level", "py_hits", "Host ball-leave"):
+        assert gone not in html, gone
 
 
 # --- labels ------------------------------------------------------------------
