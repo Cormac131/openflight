@@ -4038,6 +4038,12 @@ static void l3_considerSelfTrigger(uint32_t slot)
     fired = (ranged || left) ? 1 : 0;
     impactUs = ranged ? gRangeImpact.impactTimestampUs : gLeave.impactTimestampUs;
     l3_shotObserve(teeBin, fired, impactUs);
+    if (left && gBallTrack.armed) {
+        /* The fallback fired (the club's rule may have too, as late): the
+         * ball is already too smeared to acquire, so its two points start
+         * the flight. */
+        (void)l3_ball_track_seed(&gBallTrack, &gLeave.startTarget, &gLeave.stepTarget);
+    }
     if (!fired) {
         l3_noteTrigger(gClubTrack.active ? 7U : 5U, gTrig.floor);
         return;

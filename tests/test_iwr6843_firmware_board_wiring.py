@@ -325,3 +325,17 @@ def test_track_cfg_cal_and_elem_survive_trigger_cfg_and_sensor_start():
     for handler in ("l3_cli_triggerCfg", "l3_cli_sensorStart"):
         assert "gRadarCal =" not in body(handler)
         assert "memset(&gRadarCal" not in body(handler)
+
+
+def test_a_fallback_fire_seeds_the_ball_tracker_with_the_balls_two_points():
+    """After the fallback's late fire the ball is too smeared for the tracker to
+    acquire; its own two points start the flight, right after the arm. The
+    club's approach-end rule may fire on the same frame (20260809_114519): the
+    fallback's points are the ball whichever rule dates impact."""
+    self_trigger = body("l3_considerSelfTrigger")
+    observe = self_trigger.index("l3_shotObserve(teeBin, fired, impactUs);")
+    seed = self_trigger.index(
+        "(void)l3_ball_track_seed(&gBallTrack, &gLeave.startTarget, &gLeave.stepTarget);"
+    )
+    guard = self_trigger.rindex("if (left && gBallTrack.armed) {", 0, seed)
+    assert observe < guard < seed < self_trigger.index("if (!fired) {")

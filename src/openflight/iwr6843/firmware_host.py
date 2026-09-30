@@ -606,6 +606,8 @@ class Leave(ctypes.Structure):
         ("startUs", ctypes.c_uint32),
         ("speedMps", ctypes.c_float),
         ("impactTimestampUs", ctypes.c_uint32),
+        ("startTarget", TargetObs),
+        ("stepTarget", TargetObs),
         ("counters", ctypes.c_uint32 * len(LEAVE_WHY_NAMES)),
     ]
 
@@ -1490,6 +1492,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_ball_track_init": ([_P(BallTrack), _P(BallTrackCfg)], None),
     "l3_ball_track_reset": ([_P(BallTrack)], None),
     "l3_ball_track_arm": ([_P(BallTrack), _F32, _P(Vec3), _U32], None),
+    "l3_ball_track_seed": ([_P(BallTrack), _P(TargetObs), _P(TargetObs)], ctypes.c_int32),
     "l3_ball_track_update": ([_P(BallTrack), _P(TargetObs), _U32, _U32, _U32], ctypes.c_int32),
     "l3_ball_track_update_joint": (
         [_P(BallTrack), _P(TargetObs), _U32, _U32, _U32, _U32],

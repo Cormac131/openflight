@@ -15,6 +15,10 @@ void l3_ball_track_cfg_defaults(l3_ball_track_cfg_t *cfg)
     memset(cfg, 0, sizeof(*cfg));
     l3_track_cfg_defaults(&cfg->core);
     cfg->core.gateBins = 6.0F;        /* a 70 m/s ball moves ~4.5 bins per 3 ms frame */
+    /* A departing ball smears within a frame: its first points read 0.04-0.13
+     * on the labelled swings, and at the club's 0.2 the follow-through was
+     * taken instead. The second point's range rate refuses slow returns. */
+    cfg->core.minConfidence = 0.05F;
     cfg->core.maxMisses = 1U;
     /* The club rules (ascending bins, at most two per bin) describe the
      * approach; the ball tracker has its own departure tests. */
@@ -87,6 +91,54 @@ static int32_t l3_ball_track_note(l3_ball_track_t *track, uint8_t why, int32_t a
     track->why = why;
     track->counters[why]++;
     return appended;
+}
+
+/* The second point's range rate must be a ball's; the core is reset when not. */
+static int32_t l3_ball_track_confirm(l3_ball_track_t *track)
+{
+    l3_track_point_t newest;
+
+    (void)l3_track_point(&track->core, track->core.count - 1U, &newest);
+    if (newest.radialVelocityMps < track->cfg.minDepartureMps) {
+        l3_track_reset(&track->core);
+        return l3_ball_track_note(track, L3_BALL_TRACK_WHY_TOO_SLOW, 0);
+    }
+    if (newest.radialVelocityMps > track->cfg.maxSpeedMps) {
+        l3_track_reset(&track->core);
+        return l3_ball_track_note(track, L3_BALL_TRACK_WHY_TOO_FAST, 0);
+    }
+    track->confirmed = 1U;
+    return l3_ball_track_note(track, L3_BALL_TRACK_WHY_CONFIRMED, 1);
+}
+
+int32_t l3_ball_track_seed(l3_ball_track_t *track, const l3_target_obs_t *first,
+                           const l3_target_obs_t *second)
+{
+    const l3_target_obs_t *pair[2];
+    float gateBins = track->core.cfg.gateBins;
+    uint32_t k;
+
+    if (!track->armed || track->done || track->confirmed) {
+        return 0;
+    }
+    pair[0] = first;
+    pair[1] = second;
+    l3_track_reset(&track->core);
+    /* Known to be the ball: neither the frame-counted gate nor the
+     * acquisition's confidence may refuse the pair (as l3_ball_track_adopt). */
+    track->core.cfg.gateBins = 1.0e9F;
+    for (k = 0U; k < 2U; k++) {
+        l3_target_obs_t point = *pair[k];
+
+        point.confidence = 1.0F;
+        if (!l3_track_update(&track->core, &point, 1U, point.frame, point.timestampUs)) {
+            track->core.cfg.gateBins = gateBins;
+            l3_track_reset(&track->core);
+            return l3_ball_track_note(track, L3_BALL_TRACK_WHY_NO_CANDIDATE, 0);
+        }
+    }
+    track->core.cfg.gateBins = gateBins;
+    return l3_ball_track_confirm(track);
 }
 
 /* The core's gate around its prediction for this frame. */
@@ -179,19 +231,7 @@ static int32_t l3_ball_track_step(l3_ball_track_t *track, const l3_target_obs_t 
         return l3_ball_track_note(track, L3_BALL_TRACK_WHY_ACQUIRED, 1);
     }
     if (!track->confirmed) {
-        l3_track_point_t newest;
-
-        (void)l3_track_point(&track->core, track->core.count - 1U, &newest);
-        if (newest.radialVelocityMps < track->cfg.minDepartureMps) {
-            l3_track_reset(&track->core);
-            return l3_ball_track_note(track, L3_BALL_TRACK_WHY_TOO_SLOW, 0);
-        }
-        if (newest.radialVelocityMps > track->cfg.maxSpeedMps) {
-            l3_track_reset(&track->core);
-            return l3_ball_track_note(track, L3_BALL_TRACK_WHY_TOO_FAST, 0);
-        }
-        track->confirmed = 1U;
-        return l3_ball_track_note(track, L3_BALL_TRACK_WHY_CONFIRMED, 1);
+        return l3_ball_track_confirm(track);
     }
     return l3_ball_track_note(track, L3_BALL_TRACK_WHY_TRACKED, 1);
 }

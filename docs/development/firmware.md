@@ -175,7 +175,11 @@ only for 10 frames after the club track came within 10 bins of the band, a
 start from nothing must have had no return within a bin of it on the frame
 before (a standing ridge beyond a band set short of the ball always does), and
 the step must be a ball's speed. Impact is dated by running the two points back
-to the band's centre. It fires about two frames after launch; at the kiosk's
+to the band's centre. By then the departing ball is too smeared for the ball
+tracker to start on, so the fallback's two points seed the flight
+(`l3_ball_track_seed`), whichever rule dated impact; the ball tracker's own
+first point needs only confidence 0.05 (the club tracker's 0.2 let the club's
+follow-through be taken as the ball). It fires about two frames after launch; at the kiosk's
 settings it fires every labelled swing, none more than three frames late.
 `triggerLog track` prints a `leave` line after the `range impact` line.
 

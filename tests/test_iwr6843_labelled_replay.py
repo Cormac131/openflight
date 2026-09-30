@@ -11,11 +11,13 @@ baseline. To accept a deliberate change run
 from __future__ import annotations
 
 import functools
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
+import numpy as np
 import pytest
 
 from openflight.iwr6843 import firmware_host as fw, firmware_replay as fr, label_scoring as ls
+from openflight.iwr6843.dump import parse_dump
 from openflight.iwr6843.monitor import SELF_TRIGGER_TEE_LEAD_BINS
 from openflight.iwr6843.self_trigger import FIRMWARE_TRIGGER_DEFAULT_SNR, TEE_BAND_DEFAULT_BINS
 
@@ -68,23 +70,61 @@ def _kiosk_config(config: fr.ReplayConfig, ball_bin: int) -> fr.ReplayConfig:
     )
 
 
+@dataclass(frozen=True)
+class _KioskSwing:
+    """One labelled swing replayed at the kiosk's settings."""
+
+    name: str
+    offset: int | None  # fired frame - labelled launch frame; None: never fired
+    by_leave: bool  # the ball-leave fallback fired it
+    labelled_mps: float  # the labelled ball's radial speed at launch
+    launch_mps: float | None  # the replayed launch's radial speed; None: no launch
+
+
+def _labelled_radial_mps(raw: bytes, labels) -> float:
+    """Median step of the first six labelled ball points, in m/s at the dump's
+    frame period: robust to one misclicked point (20260809_114539's first
+    point is 4 bins off its flight)."""
+    period_s = float(np.median(np.diff(fr.frame_timestamps_us(parse_dump(raw)[0])))) * 1e-6
+    points = labels.ball[:6]
+    steps = [
+        (b.range_bin - a.range_bin) / (b.frame - a.frame)
+        for a, b in zip(points, points[1:])
+        if b.frame > a.frame
+    ]
+    return float(np.median(steps)) * fr.RANGE_SPAN_M / fr.DEFAULT_FFT_SIZE / period_s
+
+
 @functools.cache
-def _kiosk_fire_offsets() -> tuple[tuple[str, int | None], ...]:
-    """(dump, fired frame - labelled launch frame, None when it never fired)
-    for every labelled swing replayed at the kiosk's settings. The ball's bin
-    is its first labelled point (the tape a correctly measured tee gives), the
+def _kiosk_swings() -> tuple[_KioskSwing, ...]:
+    """Every labelled swing replayed at the kiosk's settings. The ball's bin is
+    its first labelled point (the tape a correctly measured tee gives), the
     launch frame that point's frame."""
     judged = []
     for path, config, labels in _RECORDINGS:
         if not labels.ball:
             continue
+        raw = path.read_bytes()
         launch = labels.ball[0]
-        result = fr.replay_dump(
-            path.read_bytes(), _kiosk_config(config, int(round(launch.range_bin)))
+        result = fr.replay_dump(raw, _kiosk_config(config, int(round(launch.range_bin))))
+        fired = result.fired_frame
+        judged.append(
+            _KioskSwing(
+                name=path.name,
+                offset=None if fired is None else fired - launch.frame,
+                by_leave=fired is not None and result.leave_frame == fired,
+                labelled_mps=_labelled_radial_mps(raw, labels),
+                # Radial, as the labels are range only: the 3D speed also
+                # carries the angle fit (20260824_111428: 60 m/s over three
+                # points at confidence 0.02, radial 50 against 47 labelled).
+                launch_mps=None if result.launch is None else result.launch.radial_speed_mps,
+            )
         )
-        offset = None if result.fired_frame is None else result.fired_frame - launch.frame
-        judged.append((path.name, offset))
     return tuple(judged)
+
+
+def _kiosk_fire_offsets() -> tuple[tuple[str, int | None], ...]:
+    return tuple((swing.name, swing.offset) for swing in _kiosk_swings())
 
 
 @needs_compiler
@@ -124,3 +164,44 @@ def test_every_labelled_swing_fires_at_the_kiosk_settings_before_the_ball_is_los
         f"never fired: {unfired}; fired more than {LATEST_FIRE_FRAMES} frames after "
         f"launch: {too_late}"
     )
+
+
+# A launch this far off the labelled radial speed is not the ball. The club's
+# follow-through steps out at up to ~34 m/s on the labels; the ball leaves at
+# 40-56 m/s.
+LAUNCH_TOLERANCE = 0.25
+
+
+def _launch_verdict(swing: _KioskSwing) -> str:
+    if swing.launch_mps is None:
+        return "none"
+    off = abs(swing.launch_mps - swing.labelled_mps)
+    return "good" if off <= LAUNCH_TOLERANCE * swing.labelled_mps else "wrong"
+
+
+@needs_compiler
+def test_no_labelled_swing_reports_the_club_as_the_ball_at_the_kiosk_settings():
+    """A slow return confirmed as the ball is the club's follow-through: at the
+    kiosk's settings 20260809_110338 and 20260824_111428 reported ~21 m/s."""
+    wrong = [
+        (s.name, round(s.labelled_mps, 1), round(s.launch_mps, 1))
+        for s in _kiosk_swings()
+        if _launch_verdict(s) == "wrong"
+    ]
+    assert wrong == [], f"launch off the labelled speed (labelled, reported): {wrong}"
+
+
+@needs_compiler
+def test_a_swing_the_ball_leaving_fired_gets_its_launch():
+    """After the fallback's late fire the ball is already 4-6 bins out and too
+    smeared (confidence 0.0-0.17) for the tracker to start on it, so the club's
+    follow-through was taken instead. The fallback's own two points are the
+    ball: the tracker starts from them."""
+    rescued = [s for s in _kiosk_swings() if s.by_leave]
+    assert len(rescued) >= 5
+    bad = [
+        (s.name, _launch_verdict(s), round(s.labelled_mps, 1), s.launch_mps)
+        for s in rescued
+        if _launch_verdict(s) != "good"
+    ]
+    assert bad == [], f"fallback-fired swings without a good launch: {bad}"

@@ -715,3 +715,107 @@ def test_the_late_window_is_measured_from_the_origin(lib):
     far = fly(lib, speed=45.0, vla_deg=14.0, frames=14, ball=Ball(lib, lateRangeM=3.0))[0]
     assert near.launch()[1].lateFrom < 6
     assert far.launch()[1].lateFrom == fw.LAUNCH_NO_LATE
+
+
+# --- seeded from the ball-leave fallback ---------------------------------------
+#
+# The fallback (l3_leave.c) fires about two frames after launch, having seen
+# the ball step outward at a ball's speed. By the first post frame the ball is
+# 4-6 bins out and too smeared (confidence 0.0-0.17) for the tracker to start
+# on it, so its own two points start the flight instead.
+
+
+def seed(ball, first, second) -> int:
+    return ball.lib.l3_ball_track_seed(
+        ctypes.byref(ball.track), ctypes.byref(first), ctypes.byref(second)
+    )
+
+
+def test_a_seeded_flight_is_confirmed_and_tracking_carries_on_at_any_confidence(lib):
+    ball = Ball(lib)
+    ball.arm()
+    # 2.8 bins a 3 ms frame: ~44 m/s.
+    assert seed(ball, target(7, 50.0, confidence=0.02), target(8, 52.8, confidence=0.0)) == 1
+    assert ball.track.confirmed == 1 and ball.track.core.count == 2
+    assert ball.why == "confirmed"
+    assert ball.update(9, [target(9, 55.6, confidence=0.0)])
+    assert ball.why == "tracked" and ball.track.core.count == 3
+
+
+def test_a_seeded_flight_gives_a_launch_from_the_seed_on(lib):
+    ball = Ball(lib)
+    ball.arm()
+    seed(ball, target(7, 50.0), target(8, 52.8))
+    ball.update(9, [target(9, 55.6)])
+    used, launch = ball.launch()
+    assert used == 3
+    assert launch.speedMps == pytest.approx(2.8 * BIN_M / (FRAME_US * 1e-6), rel=0.02)
+
+
+def test_seeding_needs_an_armed_track(lib):
+    ball = Ball(lib)
+    assert seed(ball, target(7, 50.0), target(8, 52.8)) == 0
+    assert ball.track.core.count == 0 and ball.track.confirmed == 0
+
+
+@pytest.mark.parametrize(("second_bin", "why"), [(50.1, "tooslow"), (50.0 + 7.0, "toofast")])
+def test_a_seed_still_passes_the_departure_speed_checks(lib, second_bin, why):
+    """0.1 bins a frame is ~1.6 m/s; 7 bins a frame ~109 m/s."""
+    ball = Ball(lib)
+    ball.arm()
+    assert seed(ball, target(7, 50.0), target(8, second_bin)) == 0
+    assert ball.why == why
+    assert ball.track.core.count == 0 and ball.track.confirmed == 0
+
+
+def test_seeding_a_confirmed_flight_does_nothing(lib):
+    ball, _ = fly(lib, frames=3)
+    count = ball.track.core.count
+    assert seed(ball, target(20, 60.0), target(21, 62.8)) == 0
+    assert ball.track.core.count == count
+
+
+# --- a smeared ball starts a flight --------------------------------------------
+#
+# A departing ball moves a few bins within a frame, so its return is smeared:
+# on the labelled swings its first points after the fire read confidence
+# 0.04-0.13, under the core's 0.2, and the club's follow-through (0.9) was
+# taken as the ball a few frames later (20260809_110338, 20260824_111428,
+# ~21 m/s reported for ~46). The range rate the second point must show is
+# what refuses slow things; the ball tracker's first point needs little
+# confidence.
+
+
+def test_the_ball_trackers_first_point_needs_little_confidence(lib):
+    cfg = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
+    assert cfg.core.minConfidence == pytest.approx(0.05)
+    club = fw.TrackCfg()
+    lib.l3_track_cfg_defaults(ctypes.byref(club))
+    assert club.minConfidence == pytest.approx(0.2), "the club tracker is unchanged"
+
+
+def test_a_smeared_departing_ball_is_acquired_and_confirmed(lib):
+    ball = Ball(lib)
+    ball.arm()
+    assert ball.update(8, [target(8, 49.5, confidence=0.06)])
+    assert ball.why == "acquired"
+    assert ball.update(9, [target(9, 52.3, confidence=0.04)])
+    assert ball.why == "confirmed"
+
+
+def test_a_smeared_slow_return_never_becomes_a_flight(lib):
+    """Creeping 0.3 bins a frame (~5 m/s): never offered past the departure
+    band beyond its first point, it coasts and is dropped, never confirmed."""
+    ball = Ball(lib)
+    ball.arm()
+    for frame in range(8, 14):
+        ball.update(frame, [target(frame, 49.5 + 0.3 * (frame - 8), confidence=0.06)])
+        assert ball.track.confirmed == 0, frame
+
+
+def test_noise_under_the_floor_confidence_does_not_start_a_flight(lib):
+    ball = Ball(lib)
+    ball.arm()
+    assert not ball.update(8, [target(8, 49.5, confidence=0.02)])
+    assert ball.why == "nocandidate"

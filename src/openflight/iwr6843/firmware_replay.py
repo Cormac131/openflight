@@ -1313,6 +1313,18 @@ def replay_dump(
             )
             if joint is not None:
                 _joint_arm_from_track(lib, joint, track, shot_in.impactTimestampUs)
+        if fired and left and ball_track.armed:
+            # l3_considerSelfTrigger: the fallback's late fire (the club's rule
+            # may have fired too) seeds the flight with the ball's two points.
+            if lib.l3_ball_track_seed(
+                ctypes.byref(ball_track),
+                ctypes.byref(leave.startTarget),
+                ctypes.byref(leave.stepTarget),
+            ):
+                for index in range(ball_track.core.count):
+                    point = fw.TrackPoint()
+                    lib.l3_track_point(ctypes.byref(ball_track.core), index, ctypes.byref(point))
+                    ball_points.append(_point_summary(point))
         frames.append(
             ReplayFrame(
                 frame,

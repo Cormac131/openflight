@@ -96,6 +96,14 @@ void l3_ball_track_reset(l3_ball_track_t *track);
 /* IMPACT: start looking for a ball leaving originBin (global) at origin. */
 void l3_ball_track_arm(l3_ball_track_t *track, float originBin, const l3_vec3_t *origin,
                        uint32_t impactTimestampUs);
+/* Start the flight from two points already known to be the ball (the
+ * ball-leave fallback's, l3_leave.h): after its late fire the departing ball
+ * is too smeared for the tracker to acquire, but once a flight exists it is
+ * followed at any confidence. The pair still passes the departure checks
+ * (minDepartureMps, maxSpeedMps). Returns 1 when the flight was seeded and
+ * confirmed; 0 unarmed, already confirmed, done, or refused. */
+int32_t l3_ball_track_seed(l3_ball_track_t *track, const l3_target_obs_t *first,
+                           const l3_target_obs_t *second);
 /* One post-impact frame's targets. Returns 1 when a point was appended. */
 int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targets, uint32_t n,
                              uint32_t frame, uint32_t timestampUs);

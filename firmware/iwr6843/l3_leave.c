@@ -122,6 +122,7 @@ static uint8_t l3_leave_start(l3_leave_t *leave, const l3_target_obs_t *nearest,
     leave->started = 1U;
     leave->startBin = nearest->rangeBin;
     leave->startUs = nearest->timestampUs;
+    leave->startTarget = *nearest;
     return L3_LEAVE_WHY_STARTED;
 }
 
@@ -164,6 +165,7 @@ static uint8_t l3_leave_step(l3_leave_t *leave, const l3_target_obs_t *targets, 
 
                 leave->fired = 1U;
                 leave->speedMps = speed;
+                leave->stepTarget = targets[i];
                 leave->impactTimestampUs = leave->startUs - l3_round_us(backS * 1.0e6F);
                 return L3_LEAVE_WHY_FIRED;
             }

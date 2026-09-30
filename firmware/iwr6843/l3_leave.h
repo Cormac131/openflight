@@ -73,6 +73,8 @@ typedef struct {
     uint32_t  startUs;
     float     speedMps;           /* the step that fired */
     uint32_t  impactTimestampUs;  /* the line run back to the rest bin, when fired */
+    l3_target_obs_t startTarget;  /* the ball's two points, to seed the ball tracker */
+    l3_target_obs_t stepTarget;
     uint32_t  counters[L3_LEAVE_WHY_COUNT];
 } l3_leave_t;
 

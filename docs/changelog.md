@@ -18,15 +18,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   there the frame before. Replayed at the kiosk's settings every one of the 34
   labelled swings now fires, none more than three frames after launch (30
   within two, from 27); the fallback decides 7, never ahead of a club rule
-  that would have fired first. `triggerLog track` gains a `leave` line. On the
-  four rescued swings (the 2 ms profile) the ball tracker still misses the
-  ball after the late fire: its first point must be at least 0.2 confident and
-  within 8 bins of the band, and 4-6 bins out the departing ball reads
-  0.0-0.17, so the club's follow-through is taken instead (17-19 m/s where an
-  impact placed at launch gives 42-45; one swing gets no ball either way).
-  Needs a firmware rebuild and reflash.
+  that would have fired first. `triggerLog track` gains a `leave` line. Needs
+  a firmware rebuild and reflash.
 
 ### Fixed
+- **IWR6843 ball tracker took the club's follow-through as the ball.** A
+  departing ball smears within a frame: after a fire its first points read
+  confidence 0.04-0.17, under the 0.2 the core needs to start a track, so a
+  few frames later the club's follow-through (0.9) was acquired and confirmed
+  (17-22 m/s reported for 42-47 m/s swings, on the four ball-leave rescues and
+  two club-fired swings; two more got no launch). Two changes:
+  - `l3_ball_track_seed`: a ball-leave fire starts the flight from the
+    fallback's own two points (it saw the ball step out at a ball's speed),
+    whichever rule dated impact; the pair still passes the departure checks
+  - the ball tracker's first point needs confidence 0.05 (the club tracker
+    keeps 0.2); the second point's range rate still refuses slow returns
+  Replayed at the kiosk's settings every labelled swing now reports a radial
+  launch speed within 25% of the labelled one (was 28 of 34, 4 wrong, 2
+  none), and with impact placed at launch 34 of 34 (was 33, 1 none). A speed floor was tried first and
+  dropped: good first steps read as low as 16 m/s and the follow-through as
+  high as 34, and it would refuse chips. On 20260824_111428 the 3D speed is
+  still inflated by a three-point angle fit (60 m/s, radial 50 for 47
+  labelled). Needs a firmware rebuild and reflash.
+
 - **IWR6843 self-trigger still missed swings on the kiosk: it now also fires
   when the club's approach ends near the ball.** The club track's crossing of
   the ball's range was checked with the manifest's hand-set tee bins (about 5

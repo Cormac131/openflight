@@ -368,3 +368,25 @@ def test_a_ball_leaving_the_ridge_is_new_and_fires(lib):
     frame(lib, state, 10, 46.8)  # just beyond the edge, nothing near it before
     assert state.why == WHY["started"]
     assert frame(lib, state, 11, 49.6) == 1
+
+
+# --- the ball's two points, for the tracker ------------------------------------
+
+
+def test_a_fire_keeps_its_two_targets_for_the_ball_tracker(lib):
+    """l3_ball_track_seed starts the flight from them (the tracker cannot start
+    on the ball 4-6 bins out after this late fire)."""
+    state = leave(lib)
+    frame(lib, state, 10, 38.0, 47.0)
+    assert frame(lib, state, 11, 39.0, 49.8) == 1
+    first, second = state.startTarget, state.stepTarget
+    assert (first.rangeBin, first.timestampUs) == (pytest.approx(47.0), 30_000)
+    assert (second.rangeBin, second.timestampUs) == (pytest.approx(49.8), 33_000)
+
+
+def test_a_restart_keeps_the_newest_start_target(lib):
+    state = leave(lib)
+    frame(lib, state, 10, 47.0)
+    frame(lib, state, 11, 47.2)
+    assert state.startTarget.rangeBin == pytest.approx(47.2)
+    assert state.startTarget.timestampUs == 33_000
