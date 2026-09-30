@@ -26,6 +26,8 @@ uint32_t l3_dsp_status_size(void)
 static const char *l3_dsp_stage_name(uint32_t stage)
 {
     switch (stage) {
+    case L3_DSP_STAGE_RESET:
+        return "reset";
     case L3_DSP_STAGE_MAIN:
         return "main";
     case L3_DSP_STAGE_SOC:
@@ -61,6 +63,36 @@ int32_t l3_dsp_status_format(const l3_dsp_status_t *status, char *out, uint32_t 
                              (status->stage & L3_DSP_STAGE_FAILED) != 0U ? " FAILED" : "",
                              (int)status->errCode, (unsigned)status->heartbeat,
                              (unsigned)status->served);
+}
+
+uint32_t l3_dsp_hw_size(void)
+{
+    return (uint32_t)sizeof(l3_dsp_hw_t);
+}
+
+int32_t l3_dsp_hw_format(const l3_dsp_hw_t *hw, char *out, uint32_t cap)
+{
+    char stage[24];
+
+    if ((hw->gpreg & L3_DSP_GPREG_TAG_MASK) != L3_DSP_GPREG_TAG) {
+        (void)snprintf(stage, sizeof(stage), "none(%08x)", (unsigned)hw->gpreg);
+    } else {
+        uint32_t code = hw->gpreg & 0xFFU;
+        const char *name = l3_dsp_stage_name(code & ~L3_DSP_STAGE_FAILED);
+
+        if (name != NULL) {
+            (void)snprintf(stage, sizeof(stage), "%s%s", name,
+                           (code & L3_DSP_STAGE_FAILED) != 0U ? "!FAILED" : "");
+        } else {
+            (void)snprintf(stage, sizeof(stage), "%u", (unsigned)code);
+        }
+    }
+    return (int32_t)snprintf(out, cap,
+                             "dsp hw gpreg_stage=%s halt=%u power=%u stc=%u "
+                             "esm=%08x,%08x,%08x,%08x hsram=%s",
+                             stage, (unsigned)hw->halt, (unsigned)hw->power, (unsigned)hw->stc,
+                             (unsigned)hw->esm[0], (unsigned)hw->esm[1], (unsigned)hw->esm[2],
+                             (unsigned)hw->esm[3], hw->hsramOk != 0U ? "ok" : "BAD");
 }
 
 uint32_t l3_dsp_frame_bytes(uint32_t ntx, uint32_t nrx, uint32_t binCount, uint32_t loops)

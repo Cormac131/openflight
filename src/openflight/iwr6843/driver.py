@@ -566,6 +566,13 @@ class IWR6843Radar:
 
         return parse_dsp_status(self.cmd("trackCfg dsp status", 2.0))
 
+    def dsp_hw(self):
+        """``trackCfg dsp hw``: the DSS's halt, power, ESM and mirrored stage
+        as the MSS reads them (``dsp_link.DspHw``)."""
+        from .dsp_link import parse_dsp_hw  # pylint: disable=import-outside-toplevel
+
+        return parse_dsp_hw(self.cmd("trackCfg dsp hw", 2.0))
+
     def dsp_probe(self, bins: int | None = None):
         """``trackCfg dsp probe [bins]``: the newest ring frame scored on the MSS
         and the DSS, timed and compared (``dsp_link.DspProbe``). Needs a

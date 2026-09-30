@@ -66,7 +66,24 @@ typedef struct {
 #define L3_DSP_STAGE_TASK     3U  /* BIOS started the link task */
 #define L3_DSP_STAGE_MAILBOX  4U  /* Mailbox_init returned */
 #define L3_DSP_STAGE_LINK     5U  /* Mailbox_open returned: serving */
+#define L3_DSP_STAGE_RESET    0x10U /* xdc Reset hook: before cinit and BIOS */
 #define L3_DSP_STAGE_FAILED   0x80U /* or'd in: the stage failed, see errCode */
+
+/* The DSS mirrors its stage into DSSREG DSSGPREG0 (MSS 0x50000400, DSS
+ * 0x02000400), tagged so a reset value is not read as a stage: a second
+ * channel for when HS-RAM shows nothing. */
+#define L3_DSP_GPREG_TAG      0xD5500000U
+#define L3_DSP_GPREG_TAG_MASK 0xFFFFFF00U
+
+/* The DSS as the MSS sees it, without the DSS's help. */
+typedef struct {
+    uint32_t gpreg;   /* DSSGPREG0 */
+    uint32_t halt;    /* GEMPWRSMCFG4 PWRSMLRSTHALT: 1 = held in local reset */
+    uint32_t power;   /* GEMPWRSMCFG3 bits 19:18: 3 = powered up */
+    uint32_t stc;     /* ROM self-test (STC) ran on the DSS */
+    uint32_t esm[4];  /* ESMSR1..3 and ESMSR4: error flags, DSS errors included */
+    uint32_t hsramOk; /* an MSS write to HS-RAM read back */
+} l3_dsp_hw_t;
 
 typedef struct {
     uint32_t magic;
@@ -83,6 +100,11 @@ uint32_t l3_dsp_frame_bytes(uint32_t ntx, uint32_t nrx, uint32_t binCount, uint3
 /* L3_DSP_OK, or why the request must not run against an L3 of l3Bytes. */
 uint32_t l3_dsp_request_check(const l3_dsp_request_t *request, uint32_t l3Bytes);
 uint32_t l3_dsp_status_size(void);
+uint32_t l3_dsp_hw_size(void);
+/* "dsp hw gpreg_stage=<name>[!FAILED] halt=H power=P stc=S
+ * esm=XXXXXXXX,XXXXXXXX,XXXXXXXX,XXXXXXXX hsram=ok|BAD"; an untagged
+ * register prints as none(XXXXXXXX). Returns the characters written. */
+int32_t l3_dsp_hw_format(const l3_dsp_hw_t *hw, char *out, uint32_t cap);
 /* "dsp status stage=<name>[ FAILED] err=E beats=B served=S", or, without the
  * magic (NULL too), "dsp status stage=never_booted magic=XXXXXXXX".
  * Returns the characters written, as snprintf. */

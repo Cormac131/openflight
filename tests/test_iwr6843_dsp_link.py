@@ -13,9 +13,11 @@ import pytest
 
 from openflight.iwr6843.driver import IWR6843Radar
 from openflight.iwr6843.dsp_link import (
+    DspHw,
     DspLinkError,
     DspProbe,
     DspStatus,
+    parse_dsp_hw,
     parse_dsp_pong,
     parse_dsp_probe,
     parse_dsp_status,
@@ -163,3 +165,55 @@ def test_the_driver_asks_for_the_status():
     radar = _Radar("dsp status stage=link_open err=0 beats=3 served=1\nDone\n")
     assert radar.dsp_status().served == 1
     assert radar.sent[0][0] == "trackCfg dsp status"
+
+
+HW = (
+    "dsp hw gpreg_stage=reset halt=0 power=3 stc=1 "
+    "esm=00000000,20000000,00000000,00000000 hsram=ok\nDone\n"
+)
+
+
+def test_the_dss_hardware_line_is_parsed():
+    hw = parse_dsp_hw(HW)
+    assert hw == DspHw(
+        gpreg_stage="reset",
+        halt=0,
+        power=3,
+        stc=1,
+        esm=(0x0, 0x20000000, 0x0, 0x0),
+        hsram_ok=True,
+    )
+    assert hw.powered and not hw.halted
+
+
+def test_an_untagged_register_and_a_bad_hs_ram_are_parsed():
+    hw = parse_dsp_hw(
+        HW.replace("gpreg_stage=reset", "gpreg_stage=none(00000000)").replace(
+            "hsram=ok", "hsram=BAD"
+        )
+    )
+    assert hw.gpreg_stage == "none(00000000)" and not hw.hsram_ok
+
+
+def test_a_failed_register_stage_is_kept_verbatim():
+    assert parse_dsp_hw(HW.replace("=reset", "=soc_init!FAILED")).gpreg_stage == "soc_init!FAILED"
+
+
+def test_the_hw_line_is_found_after_a_failed_ping():
+    text = (
+        "dsp status stage=never_booted magic=00000000\n"
+        + HW.replace("Done\n", "")
+        + ("Error: DSP did not answer (link open)\n")
+    )
+    assert parse_dsp_hw(text).power == 3
+
+
+def test_a_reply_without_a_hw_line_is_an_error():
+    with pytest.raises(DspLinkError):
+        parse_dsp_hw("Error: trackCfg dsp ping | probe [bins] | status\n")
+
+
+def test_the_driver_asks_for_the_hardware_state():
+    radar = _Radar(HW)
+    assert radar.dsp_hw().stc == 1
+    assert radar.sent[0][0] == "trackCfg dsp hw"

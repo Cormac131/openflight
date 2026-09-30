@@ -592,7 +592,22 @@ L3_DSP_STAGE_SOC = 2
 L3_DSP_STAGE_TASK = 3
 L3_DSP_STAGE_MAILBOX = 4
 L3_DSP_STAGE_LINK = 5
+L3_DSP_STAGE_RESET = 0x10
 L3_DSP_STAGE_FAILED = 0x80
+L3_DSP_GPREG_TAG = 0xD5500000
+
+
+class DspHw(ctypes.Structure):
+    """``l3_dsp_hw_t``: the DSS as the MSS reads it, without the DSS's help."""
+
+    _fields_ = [
+        ("gpreg", ctypes.c_uint32),
+        ("halt", ctypes.c_uint32),
+        ("power", ctypes.c_uint32),
+        ("stc", ctypes.c_uint32),
+        ("esm", ctypes.c_uint32 * 4),
+        ("hsramOk", ctypes.c_uint32),
+    ]
 
 
 class DspStatus(ctypes.Structure):
@@ -1394,6 +1409,8 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_dsp_request_size": ([], _U32),
     "l3_dsp_reply_size": ([], _U32),
     "l3_dsp_status_size": ([], _U32),
+    "l3_dsp_hw_size": ([], _U32),
+    "l3_dsp_hw_format": ([_P(DspHw), *_TEXT], ctypes.c_int32),
     "l3_dsp_status_format": ([_P(DspStatus), *_TEXT], ctypes.c_int32),
     "l3_dsp_frame_bytes": ([_U32, _U32, _U32, _U32], _U32),
     "l3_dsp_request_check": ([_P(DspRequest), _U32], _U32),

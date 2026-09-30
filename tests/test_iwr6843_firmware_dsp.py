@@ -307,3 +307,70 @@ def test_a_dss_that_never_wrote_its_status_says_so(lib):
 
 def test_an_unknown_stage_is_shown_as_its_number(lib):
     assert formatted(lib, status(stage=42)).startswith("dsp status stage=42 ")
+
+
+# --- the DSS seen from the MSS's side ------------------------------------------
+#
+# 2026-09-30 on the board: "stage=never_booted", beats 0. HS-RAM held no
+# status: either the DSS never ran, or it ran and its HS-RAM writes are not
+# what the MSS reads. The MSS reads what does not need the DSS's help: its
+# halt bit and power state (DSSREG GEMPWRSMCFG4/3), the ROM self-test flag,
+# the ESM error status, and a second channel the DSS mirrors its stage into
+# (DSSREG DSSGPREG0, tagged); and checks HS-RAM itself with a write/read.
+
+
+def hw(**fields) -> fw.DspHw:
+    out = fw.DspHw()
+    for name, value in fields.items():
+        if name == "esm":
+            for index, word in enumerate(value):
+                out.esm[index] = word
+        else:
+            setattr(out, name, value)
+    return out
+
+
+def hw_text(lib, value: fw.DspHw) -> str:
+    return fw.c_text(lib.l3_dsp_hw_format, ctypes.byref(value))
+
+
+def test_the_hw_layout_matches_the_c(lib):
+    assert ctypes.sizeof(fw.DspHw) == lib.l3_dsp_hw_size()
+
+
+def test_a_running_dss_mirrors_its_stage_into_the_general_purpose_register(lib):
+    text = hw_text(
+        lib,
+        hw(gpreg=fw.L3_DSP_GPREG_TAG | fw.L3_DSP_STAGE_LINK, halt=0, power=3, hsramOk=1),
+    )
+    assert text == (
+        "dsp hw gpreg_stage=link_open halt=0 power=3 stc=0 "
+        "esm=00000000,00000000,00000000,00000000 hsram=ok"
+    )
+
+
+def test_an_untagged_register_means_the_dss_never_wrote_it(lib):
+    text = hw_text(lib, hw(gpreg=0, halt=1, power=0, hsramOk=0))
+    assert text.startswith("dsp hw gpreg_stage=none(00000000) halt=1 power=0 ")
+    assert text.endswith(" hsram=BAD")
+
+
+def test_the_reset_hook_is_the_earliest_stage(lib):
+    """Written before cinit and BIOS: stuck here, the DSS died before main."""
+    text = hw_text(lib, hw(gpreg=fw.L3_DSP_GPREG_TAG | fw.L3_DSP_STAGE_RESET))
+    assert "gpreg_stage=reset " in text
+
+
+def test_a_failed_stage_in_the_register_is_marked(lib):
+    gpreg = fw.L3_DSP_GPREG_TAG | fw.L3_DSP_STAGE_SOC | fw.L3_DSP_STAGE_FAILED
+    assert "gpreg_stage=soc_init!FAILED " in hw_text(lib, hw(gpreg=gpreg))
+
+
+def test_the_esm_words_are_printed_in_group_order(lib):
+    text = hw_text(lib, hw(esm=[0x1, 0x20000000, 0x0, 0x80]))
+    assert " esm=00000001,20000000,00000000,00000080 " in text
+
+
+def test_the_status_names_the_reset_stage_too(lib):
+    text = formatted(lib, status(stage=fw.L3_DSP_STAGE_RESET))
+    assert text.startswith("dsp status stage=reset ")

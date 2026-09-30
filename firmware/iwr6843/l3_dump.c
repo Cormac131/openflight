@@ -4678,6 +4678,42 @@ static void l3_dspPrintStatus(void)
     CLI_write("%s\n", line);
 }
 
+/* The DSS as the MSS sees it without the DSS's help (l3_dsp_ipc.h): its
+ * halt and power state, the ROM self-test flag, the ESM error status, the
+ * stage mirrored into DSSGPREG0, and whether HS-RAM reads back here. */
+#define L3_DSSREG_GEMPWRSMCFG3 0x2C8U
+#define L3_DSSREG_GEMPWRSMCFG4 0x2CCU
+#define L3_DSS_STC_STATUS      0x50040014U /* bit 0: the ROM ran the DSS STC */
+#define L3_HSRAM_PROBE_OFFSET  0x7E00U     /* an unused HS-RAM word */
+
+static uint32_t l3_readReg(uint32_t address)
+{
+    return *(volatile const uint32_t *)address;
+}
+
+static void l3_dspPrintHw(void)
+{
+    l3_dsp_hw_t hw;
+    volatile uint32_t *probe =
+        (volatile uint32_t *)(SOC_XWR68XX_MSS_HSRAM_BASE_ADDRESS + L3_HSRAM_PROBE_OFFSET);
+    char line[160];
+
+    hw.gpreg = l3_readReg(SOC_XWR68XX_MSS_DSSREG_BASE_ADDRESS);
+    hw.halt = (l3_readReg(SOC_XWR68XX_MSS_DSSREG_BASE_ADDRESS + L3_DSSREG_GEMPWRSMCFG4) >> 17U) & 1U;
+    hw.power = (l3_readReg(SOC_XWR68XX_MSS_DSSREG_BASE_ADDRESS + L3_DSSREG_GEMPWRSMCFG3) >> 18U) & 3U;
+    hw.stc = l3_readReg(L3_DSS_STC_STATUS) & 1U;
+    hw.esm[0] = l3_readReg(SOC_XWR68XX_MSS_ESM_BASE_ADDRESS + 0x18U); /* ESMSR1 */
+    hw.esm[1] = l3_readReg(SOC_XWR68XX_MSS_ESM_BASE_ADDRESS + 0x1CU); /* ESMSR2 */
+    hw.esm[2] = l3_readReg(SOC_XWR68XX_MSS_ESM_BASE_ADDRESS + 0x20U); /* ESMSR3 */
+    hw.esm[3] = l3_readReg(SOC_XWR68XX_MSS_ESM_BASE_ADDRESS + 0x58U); /* ESMSR4 */
+    *probe = 0xA5C3F00DU;
+    hw.hsramOk = (*probe == 0xA5C3F00DU) ? 1U : 0U;
+    *probe = 0x5A3C0FF2U;
+    hw.hsramOk = (hw.hsramOk != 0U && *probe == 0x5A3C0FF2U) ? 1U : 0U;
+    (void)l3_dsp_hw_format(&hw, line, sizeof(line));
+    CLI_write("%s\n", line);
+}
+
 static uint32_t l3_cyclesToUs(uint32_t cycles)
 {
     return cycles / (gCpuClock / 1000000U);
@@ -4695,6 +4731,7 @@ static int32_t l3_dspPing(void)
     ticks = Cycleprofiler_getTimeStamp();
     if (l3_dspExchange(&request, &reply) != 0) {
         l3_dspPrintStatus();
+        l3_dspPrintHw();
         CLI_write("Error: DSP did not answer (link %s)\n", gDspLink == NULL ? "closed" : "open");
         return -1;
     }
@@ -4755,6 +4792,7 @@ static int32_t l3_dspProbe(int32_t argc, char *argv[])
     }
     if (l3_dspExchange(&request, &dss) != 0) {
         l3_dspPrintStatus();
+        l3_dspPrintHw();
         CLI_write("Error: DSP did not answer (link %s)\n", gDspLink == NULL ? "closed" : "open");
         return -1;
     }
@@ -4771,7 +4809,7 @@ static int32_t l3_dspProbe(int32_t argc, char *argv[])
     return match ? 0 : -1;
 }
 
-/* "trackCfg dsp ping | probe [bins] | status": the detect link's
+/* "trackCfg dsp ping | probe [bins] | status | hw": the detect link's
  * diagnostics. A trackCfg sub-mode: the CLI table is at the SDK's
  * CLI_MAX_CMD. */
 static int32_t l3_cli_trackCfgDsp(int32_t argc, char *argv[])
@@ -4780,13 +4818,17 @@ static int32_t l3_cli_trackCfgDsp(int32_t argc, char *argv[])
         l3_dspPrintStatus();
         return 0;
     }
+    if (argc == 3 && strcmp(argv[2], "hw") == 0) {
+        l3_dspPrintHw();
+        return 0;
+    }
     if (argc == 3 && strcmp(argv[2], "ping") == 0) {
         return l3_dspPing();
     }
     if ((argc == 3 || argc == 4) && strcmp(argv[2], "probe") == 0) {
         return l3_dspProbe(argc, argv);
     }
-    CLI_write("Error: trackCfg dsp ping | probe [bins] | status\n");
+    CLI_write("Error: trackCfg dsp ping | probe [bins] | status | hw\n");
     return -1;
 }
 

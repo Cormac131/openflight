@@ -179,3 +179,31 @@ def test_the_mss_prints_the_dss_status_on_request_and_when_it_does_not_answer():
     assert "SOC_XWR68XX_MSS_HSRAM_BASE_ADDRESS + L3_DSP_STATUS_HSRAM_OFFSET" in text
     assert 'strcmp(argv[2], "status") == 0' in text
     assert text.count("l3_dspPrintStatus();") >= 3, "status, and after each unanswered command"
+
+
+def test_the_dss_marks_reset_before_c_init_and_bios():
+    """xdc Reset functions run before cinit: a DSS stuck at 'reset' died in
+    its C or BIOS startup, before main."""
+    cfg = (FIRMWARE_DIR / "dss" / "dss.cfg").read_text(encoding="utf-8")
+    assert "xdc.useModule('xdc.runtime.Reset')" in cfg
+    assert "'&dss_resetHook'" in cfg
+    text = DSS_MAIN.read_text(encoding="utf-8")
+    hook = text[text.index("void dss_resetHook(void)") :]
+    hook = hook[: hook.index("\n}\n")]
+    assert "L3_DSP_STAGE_RESET" in hook
+    assert "Cache_" not in hook, "BIOS is not up yet: no Cache calls in the reset hook"
+
+
+def test_the_dss_mirrors_its_stage_into_dssgpreg0():
+    text = DSS_MAIN.read_text(encoding="utf-8")
+    assert "SOC_XWR68XX_DSS_DSSREG_BASE_ADDRESS" in text
+    assert "L3_DSP_GPREG_TAG | stage" in text
+
+
+def test_the_mss_reads_the_dss_hardware_state_without_the_dss():
+    text = MSS_MAIN.read_text(encoding="utf-8")
+    assert "SOC_XWR68XX_MSS_DSSREG_BASE_ADDRESS" in text
+    assert "GEMPWRSMCFG4" in text and "GEMPWRSMCFG3" in text
+    assert "SOC_XWR68XX_MSS_ESM_BASE_ADDRESS" in text
+    assert 'strcmp(argv[2], "hw") == 0' in text
+    assert text.count("l3_dspPrintHw();") >= 3, "hw, and after each unanswered command"

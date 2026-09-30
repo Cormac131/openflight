@@ -59,6 +59,17 @@ def main() -> int:
             time.sleep(1.0)
             again = radar.dsp_status()
             print(f"  beats one second later: {again.beats} (rising means the DSS task runs)")
+            try:
+                hw = radar.dsp_hw()
+            except DspLinkError as hw_exc:
+                print(f"  no DSS hardware state ({hw_exc}): flash the latest link image")
+                return 1
+            print(
+                f"  DSS hardware: stage in DSSGPREG0={hw.gpreg_stage} halted={hw.halted} "
+                f"powered={hw.powered} (power={hw.power}) stc={hw.stc} "
+                f"hs_ram_readback={'ok' if hw.hsram_ok else 'BAD'}"
+            )
+            print("  ESM status: " + " ".join(f"{word:08x}" for word in hw.esm))
             return 1
         print(f"ping: {len(pings)} answered, round trip {min(pings)}..{max(pings)} us")
 
