@@ -149,6 +149,11 @@ def synth_shot_dump(
     seed=0,
     ridge_start_frame=0,
     club_hidden_frames=(),
+    golfer_bin=None,
+    golfer_amp=None,
+    golfer_speed_ms=1.5,
+    golfer_elevation_deg=-15.0,
+    golfer_azimuth_deg=-30.0,
 ):
     """A club approaching the tee, then a ball leaving it: the whole shot.
 
@@ -174,6 +179,10 @@ def synth_shot_dump(
     only from that frame on (0, the default: every frame).
     ``club_hidden_frames`` leaves the approaching club out of those frames
     (a club the radar loses for a while before impact); empty by default.
+    ``golfer_bin`` adds the golfer: one coherent return at that bin on every
+    frame from its own direction (``golfer_elevation_deg``,
+    ``golfer_azimuth_deg``), swaying radially at ``golfer_speed_ms`` so the
+    burst MTI keeps it, amplitude ``golfer_amp`` (``amp`` when None).
     """
     n_tx, n_rx = 3, 4
     res = 6.0 / n_samples
@@ -199,6 +208,28 @@ def synth_shot_dump(
             out.append((tuple(scale * c for c in club_v), club_amp or amp))
         return out
 
+    def draw(frame, loop, amplitude, range_m, v_r, az_rad, el_rad):
+        bin_at = int(range_m / res)
+        if not 0 <= bin_at < n_samples:
+            return
+        phase_az = -math.pi * math.sin(az_rad)
+        doppler_phase = 4.0 * math.pi * range_m / doa.LAM
+        # Elevation: physical element m carries exp(j pi sin(el) m); the
+        # logical [tx0.rx, tx2.rx] order is the reverse of physical.
+        physical = np.exp(1j * math.pi * math.sin(el_rad) * np.arange(2 * n_rx))
+        logical = physical[::-1]
+        for tx in range(n_tx):
+            tdm_phase = 4.0 * np.pi * v_r * tdm_offsets[tx] / doa.LAM
+            common = amplitude * np.exp(1j * (tdm_phase + doppler_phase))
+            if tx == 1:
+                elevation = 0.5 * (logical[:n_rx] + logical[n_rx:])
+                value = common * elevation * np.exp(1j * phase_az)
+            else:
+                elevation = logical[:n_rx] if tx == 0 else logical[n_rx:]
+                value = common * elevation
+            # += so two objects in one bin add
+            cube[frame, loop * n_tx + tx, :, bin_at] += value
+
     for frame in range(n_frames):
         for loop in range(loops):
             t = frame * FRAME_PERIOD_S + loop * TX2_LOOP_PERIOD_S
@@ -212,29 +243,27 @@ def synth_shot_dump(
                 y = s * velocity[1]
                 z = s * velocity[2]
                 range_m = math.sqrt(x * x + y * y + z * z)
-                bin_at = int(range_m / res)
-                if not 0 <= bin_at < n_samples:
-                    continue
-                az_rad = math.atan2(y, x)
-                el_rad = math.atan2(z, math.hypot(x, y))
-                phase_az = -math.pi * math.sin(az_rad)
                 v_r = (x * velocity[0] + y * velocity[1] + z * velocity[2]) / range_m
-                doppler_phase = 4.0 * math.pi * range_m / doa.LAM
-                # Elevation: physical element m carries exp(j pi sin(el) m); the
-                # logical [tx0.rx, tx2.rx] order is the reverse of physical.
-                physical = np.exp(1j * math.pi * math.sin(el_rad) * np.arange(2 * n_rx))
-                logical = physical[::-1]
-                for tx in range(n_tx):
-                    tdm_phase = 4.0 * np.pi * v_r * tdm_offsets[tx] / doa.LAM
-                    common = amplitude * np.exp(1j * (tdm_phase + doppler_phase))
-                    if tx == 1:
-                        elevation = 0.5 * (logical[:n_rx] + logical[n_rx:])
-                        value = common * elevation * np.exp(1j * phase_az)
-                    else:
-                        elevation = logical[:n_rx] if tx == 0 else logical[n_rx:]
-                        value = common * elevation
-                    # += so two objects in one bin add
-                    cube[frame, loop * n_tx + tx, :, bin_at] += value
+                draw(
+                    frame,
+                    loop,
+                    amplitude,
+                    range_m,
+                    v_r,
+                    math.atan2(y, x),
+                    math.atan2(z, math.hypot(x, y)),
+                )
+            if golfer_bin is not None:
+                sway_m = golfer_speed_ms * t
+                draw(
+                    frame,
+                    loop,
+                    golfer_amp or amp,
+                    (golfer_bin + 0.5) * res + sway_m % (0.5 * res),
+                    golfer_speed_ms,
+                    math.radians(golfer_azimuth_deg),
+                    math.radians(golfer_elevation_deg),
+                )
     # A ridge: returns whose phase is random from loop to loop, so the burst
     # MTI keeps a residual there on every frame, as the tee-band clutter does.
     rng = np.random.default_rng(seed)

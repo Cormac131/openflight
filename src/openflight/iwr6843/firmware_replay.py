@@ -28,6 +28,11 @@ from pathlib import Path
 import numpy as np
 
 from openflight.iwr6843 import firmware_host as fw, tunables
+from openflight.iwr6843.clutter_map import (
+    ClutterConfig,
+    ClutterSuppressor,
+    plausible_club_approach,
+)
 from openflight.iwr6843.dump import is_range_snapshot, parse_dump
 from openflight.iwr6843.self_trigger import BALL_SNR_MAX, check_ball_snr
 from openflight.iwr6843.tracking import RANGE_SPAN_M, same_tx_loop_period_s
@@ -346,6 +351,9 @@ class ReplayConfig:
     late_range_m: float | None = None
     # Firmware config constants (tunables.py) set over the defaults; applied last, so they win.
     overrides: Mapping[str, float] = field(default_factory=dict)
+    # Host-only golfer-clutter map (clutter_map.py) subtracted from every
+    # frame before any stage reads it; None replays the frames as recorded.
+    clutter: ClutterConfig | None = None
 
     @property
     def destination(self) -> int:
@@ -597,6 +605,10 @@ class ReplayResult:
     # the dump said (retention report / window change) or it fell back to all.
     ball_track_frames: int = 0
     ball_track_frames_known: bool = False
+    clutter_phases: tuple[str, ...] = ()  # the clutter map's phase on each frame
+    clutter_background: tuple[float, ...] = ()  # C(r) per global bin at the end
+    # Per frame: (window start, the amplitude gain applied to each bin).
+    clutter_seen_gains: tuple[tuple[int, tuple[float, ...]], ...] = ()
 
     @property
     def retain_windows(self) -> list[RetainSummary]:
@@ -1008,6 +1020,13 @@ def replay_dump(
     retain_windows: dict[int, fw.RetainWindow] = {}
     post_index = 0
     club_at_impact: tuple[float, float, float] | None = None
+    clutter = (
+        ClutterSuppressor(config.clutter, _clutter_stats(config.stat), config.fft_size)
+        if config.clutter is not None
+        else None
+    )
+    if clutter is not None:
+        cube = cube.copy()
     for frame in range(int(meta["n_frames"])):
         forced = config.post_from_frame is not None and frame >= config.post_from_frame
         # A sound-triggered recording's freeze is the impact: no self-trigger,
@@ -1018,6 +1037,17 @@ def replay_dump(
             break
         window_start, window_bins = frame_window(meta, frame)
         timestamp_us = timestamps[frame]
+        if clutter is not None:
+            clutter.frame(
+                cube,
+                frame,
+                window_start,
+                window_bins,
+                n_tx,
+                club_active=plausible_club_approach(points, frame, config.clutter),
+                impact=ended or forced,
+                shot_done=shot.state == _SHOT_RESULT,
+            )
         retain_window = None
         if retain_cfg is not None and config.retain is not None:
             # Decided before the frame lands, from the previous frame's state,
@@ -1354,6 +1384,13 @@ def replay_dump(
         frozen_impact_timestamp_us=frozen_impact_us,
         ball_track_frames=int(shot_cfg.ballTrackFrames),
         ball_track_frames_known=known_post is not None,
+        clutter_phases=tuple(clutter.phases) if clutter is not None else (),
+        clutter_background=(
+            tuple(float(v) for v in clutter.map.background(0, config.fft_size))
+            if clutter is not None
+            else ()
+        ),
+        clutter_seen_gains=tuple(clutter.gains) if clutter is not None else (),
         speed_mps=club_speed,
         fit_slope_bins_per_s=club_slope,
         fit_residual_bins=club_residual,
@@ -1365,6 +1402,15 @@ def replay_dump(
         shot=shot,
         ball_track=ball_track,
     )
+
+
+def _clutter_stats(stat: str):
+    """The per-bin statistic a clutter map learns: ``l3_verticalResidual``'s."""
+
+    def stats(cube: np.ndarray, frame: int, count: int, n_tx: int) -> np.ndarray:
+        return bin_observation_table(cube, frame, 0, count, n_tx)[stat]
+
+    return stats
 
 
 def _banded_window_targets(  # pylint: disable=too-many-arguments
