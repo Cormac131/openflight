@@ -315,3 +315,73 @@ def test_holding_the_centre_rounds_it(lib):
         values[b - 10] = 50.0
     band = place(lib, noisy_map(lib, 10, values), centre=28.6, width=5.0)
     assert (band.loBin, band.hiBin) == (29.0, 33.0)
+
+
+# --- span updates (the scan plan, l3_scan.h) ---------------------------------------
+#
+# An armed frame scores only some bins (the club's approach, the fallback's
+# stretch, a chunk of the band's interior), so idle frames feed the map span by
+# span. The map stays keyed to the frame's window; placement needs history on
+# every bin it might place the band over.
+
+
+def update_span(lib, noise, span_first, values, window=(20, 53)):
+    lib.l3_band_noise_update_span(
+        ctypes.byref(noise), STAT, window[0], window[1], span_first, obs_row(values), len(values)
+    )
+
+
+def test_a_span_update_keys_the_map_to_the_window_and_touches_only_its_bins(lib):
+    noise = fw.BandNoise()
+    lib.l3_band_noise_reset(ctypes.byref(noise))
+    update_span(lib, noise, 30, [16.0] * 5)
+    assert (noise.firstBin, noise.count) == (20, 53)
+    assert [noise.seen[i] for i in range(8, 17)] == [0, 0, 1, 1, 1, 1, 1, 0, 0]
+    assert noise.avg[10] == pytest.approx(16.0), "the first update seeds the bin"
+    update_span(lib, noise, 30, [0.0] * 5)
+    assert noise.avg[10] == pytest.approx(15.0) and noise.seen[10] == 2
+
+
+def test_a_span_update_on_a_moved_window_restarts_the_map(lib):
+    noise = fw.BandNoise()
+    lib.l3_band_noise_reset(ctypes.byref(noise))
+    update_span(lib, noise, 30, [16.0] * 5)
+    update_span(lib, noise, 40, [2.0] * 3, window=(32, 53))
+    assert (noise.firstBin, noise.count) == (32, 53)
+    assert noise.seen[30 - 32 + 32] == 0 and noise.seen[8] == 1
+
+
+def test_a_span_is_clipped_to_the_window(lib):
+    noise = fw.BandNoise()
+    lib.l3_band_noise_reset(ctypes.byref(noise))
+    update_span(lib, noise, 70, [5.0] * 6)  # 70..75, window ends at 72
+    assert [noise.seen[i] for i in range(49, 53)] == [0, 1, 1, 1]
+
+
+def test_whole_window_updates_count_history_on_every_bin(lib):
+    noise = noisy_map(lib, 20, [3.0] * 53, updates=3)
+    assert {noise.seen[i] for i in range(53)} == {3}
+
+
+def span_map(lib, values, first=20, updates=8, skip=None):
+    """A map fed span by span over the bins placement reads, as idle frames do."""
+    noise = fw.BandNoise()
+    lib.l3_band_noise_reset(ctypes.byref(noise))
+    for n in range(updates):
+        for start in range(first, first + len(values), 4):
+            if skip is not None and skip == start and n == updates - 1:
+                continue
+            chunk = values[start - first : start - first + 4]
+            update_span(lib, noise, start, chunk, window=(first, len(values)))
+    return noise
+
+
+def test_placement_from_span_updates_finds_the_ridge(lib):
+    band = place(lib, span_map(lib, peaked()), centre=47.0, width=5.0)
+    assert (band.loBin, band.hiBin) == (47.0, 51.0)
+
+
+def test_placement_needs_history_on_every_bin_it_might_cover(lib):
+    """One chunk (global 48..51) a round short: the band stays centred."""
+    band = place(lib, span_map(lib, peaked(), skip=48), centre=47.0, width=5.0)
+    assert (band.loBin, band.hiBin) == (45.0, 49.0)

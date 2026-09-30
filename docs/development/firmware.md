@@ -179,9 +179,32 @@ to the band's centre. By then the departing ball is too smeared for the ball
 tracker to start on, so the fallback's two points seed the flight
 (`l3_ball_track_seed`), whichever rule dated impact; the ball tracker's own
 first point needs only confidence 0.05 (the club tracker's 0.2 let the club's
-follow-through be taken as the ball). It fires about two frames after launch; at the kiosk's
-settings it fires every labelled swing, none more than three frames late.
+follow-through be taken as the ball). It fires about two frames after launch.
 `triggerLog track` prints a `leave` line after the `range impact` line.
+
+#### The scan plan: fitting the 3 ms frame
+
+Scoring a range bin (`l3_verticalResidual`) costs ~73 us on the R4F
+(`triggerLog perf`, 2026-09-30), and the detect task outranks the CLI and the
+trigger notices. With the tee band on, the armed path once scored the trigger
+region and then the whole window, ~5.1 ms of a 3 ms frame: the board stopped
+answering the moment the trigger was armed. `l3_scan.c` now says which bins a
+frame scores, each once:
+
+| When | Scored | Bins |
+|---|---|---|
+| before impact | club: 16 short of the band's near edge; fallback: 10 beyond its far edge; trigger region clipped to short of the band | 27 |
+| idle frames | the same, plus 2 bins of the band's interior for its noise map | 29 |
+| after impact | 12 following the ball (just beyond the band until tracked) + 4 following the club, merged | 16 |
+
+After impact the floor is frozen at impact (the fallback's median beyond the
+band, else the trigger's floor). When the detect task is behind (a newer frame
+landed before this one was taken) it sheds the ball detector, the map chunk
+and the pre-impact angle estimate; `stats` counts them as `shed=`. At the
+kiosk's settings the labelled swings fire on 32 of 34 with 25 good launches;
+the replay records `scored_bins` per frame and a labelled test holds the plan
+to 29 and 16. Wider spans measured better in the replay (the whole window: 34
+and 34) but cannot run in the frame until the residual is cheaper.
 
 `triggerLog` prints the front end's frame count, floor and threshold, then its
 configuration. After a missed swing, read `triggerLog track` (the club track,

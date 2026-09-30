@@ -78,6 +78,8 @@ class _KioskSwing:
     offset: int | None  # fired frame - labelled launch frame; None: never fired
     by_leave: bool  # the ball-leave fallback fired it
     labelled_mps: float  # the labelled ball's radial speed at launch
+    pre_scored_max: int  # most bins scored on one armed pre-impact frame
+    post_scored_max: int  # most bins scored on one post-impact frame
     launch_mps: float | None  # the replayed launch's radial speed; None: no launch
 
 
@@ -114,6 +116,15 @@ def _kiosk_swings() -> tuple[_KioskSwing, ...]:
                 offset=None if fired is None else fired - launch.frame,
                 by_leave=fired is not None and result.leave_frame == fired,
                 labelled_mps=_labelled_radial_mps(raw, labels),
+                # The frame that fires is scored as a pre-impact frame.
+                pre_scored_max=max(
+                    (f.scored_bins for f in result.frames if fired is None or f.frame <= fired),
+                    default=0,
+                ),
+                post_scored_max=max(
+                    (f.scored_bins for f in result.frames if fired is not None and f.frame > fired),
+                    default=0,
+                ),
                 # Radial, as the labels are range only: the 3D speed also
                 # carries the angle fit (20260824_111428: 60 m/s over three
                 # points at confidence 0.02, radial 50 against 47 labelled).
@@ -147,10 +158,17 @@ def test_the_kiosk_self_trigger_fires_at_the_labelled_launch():
 # fire; at the labelled launch rates (1.5-3.6 bins a frame, median 2.8) three
 # frames is as late as a fire can come and still hand it the ball.
 LATEST_FIRE_FRAMES = 3
+# Re-baselined 2026-09-30 for the scan plan (l3_scan.h), which scores 27-29
+# bins before impact and 16 after so the board keeps up with its 3 ms frames:
+# scoring the whole window every frame fired all 34, none late, but only in
+# the replay -- on the board it starved the CLI and fired nothing. Speeding up
+# the per-bin residual can widen the spans back and tighten these again.
+MAX_UNFIRED = 2  # was 0
+MAX_TOO_LATE = 1  # was 0
 
 
 @needs_compiler
-def test_every_labelled_swing_fires_at_the_kiosk_settings_before_the_ball_is_lost():
+def test_the_labelled_swings_fire_at_the_kiosk_settings_before_the_ball_is_lost():
     """When the club rules miss (the club unseen before launch, as in the early
     2026-08-09 captures), the ball leaving still fires, late but in time."""
     judged = _kiosk_fire_offsets()
@@ -160,7 +178,7 @@ def test_every_labelled_swing_fires_at_the_kiosk_settings_before_the_ball_is_los
         for name, offset in judged
         if offset is not None and offset > LATEST_FIRE_FRAMES
     ]
-    assert unfired == [] and too_late == [], (
+    assert len(unfired) <= MAX_UNFIRED and len(too_late) <= MAX_TOO_LATE, (
         f"never fired: {unfired}; fired more than {LATEST_FIRE_FRAMES} frames after "
         f"launch: {too_late}"
     )
@@ -170,6 +188,11 @@ def test_every_labelled_swing_fires_at_the_kiosk_settings_before_the_ball_is_los
 # follow-through steps out at up to ~34 m/s on the labels; the ball leaves at
 # 40-56 m/s.
 LAUNCH_TOLERANCE = 0.25
+# Re-baselined with the scan plan (see MAX_UNFIRED): the whole window gave 34
+# good launches and none wrong; 16 bins following the ball after impact give
+# 25, with 20260824_120840 taking its club (19 m/s for 45.5).
+MIN_GOOD_LAUNCHES = 25  # was 34
+MAX_WRONG_LAUNCHES = 1  # was 0
 
 
 def _launch_verdict(swing: _KioskSwing) -> str:
@@ -188,7 +211,19 @@ def test_no_labelled_swing_reports_the_club_as_the_ball_at_the_kiosk_settings():
         for s in _kiosk_swings()
         if _launch_verdict(s) == "wrong"
     ]
-    assert wrong == [], f"launch off the labelled speed (labelled, reported): {wrong}"
+    assert len(wrong) <= MAX_WRONG_LAUNCHES, (
+        f"launch off the labelled speed (labelled, reported): {wrong}"
+    )
+
+
+@needs_compiler
+def test_the_labelled_swings_report_their_launch_at_the_kiosk_settings():
+    swings = _kiosk_swings()
+    good = [s.name for s in swings if _launch_verdict(s) == "good"]
+    assert len(good) >= MIN_GOOD_LAUNCHES, (
+        f"{len(good)}/{len(swings)} launches within {LAUNCH_TOLERANCE:.0%} of the labels; "
+        f"not good: {[(s.name, _launch_verdict(s)) for s in swings if s.name not in good]}"
+    )
 
 
 @needs_compiler
@@ -205,3 +240,25 @@ def test_a_swing_the_ball_leaving_fired_gets_its_launch():
         if _launch_verdict(s) != "good"
     ]
     assert bad == [], f"fallback-fired swings without a good launch: {bad}"
+
+
+# The board scores a range bin in ~73 us (triggerLog perf, 2026-09-30) and has
+# 3 ms a frame, which must also leave the CLI and the trigger notices time:
+# the detect task outranks them, and the tee band's whole-window scoring (the
+# trigger region plus all 53 bins, ~5.1 ms) starved them the moment the
+# trigger was armed, so the board answered nothing and fired nothing.
+PRE_IMPACT_BIN_BUDGET = 29  # ~2.1 ms: 27 on a swing frame, 29 with an idle frame's map chunk
+POST_IMPACT_BIN_BUDGET = 16  # ~1.2 ms
+
+
+@needs_compiler
+def test_every_armed_frame_scores_within_the_boards_budget():
+    over = [
+        (s.name, s.pre_scored_max, s.post_scored_max)
+        for s in _kiosk_swings()
+        if s.pre_scored_max > PRE_IMPACT_BIN_BUDGET or s.post_scored_max > POST_IMPACT_BIN_BUDGET
+    ]
+    assert over == [], (
+        f"bins scored per frame over {PRE_IMPACT_BIN_BUDGET} before impact or "
+        f"{POST_IMPACT_BIN_BUDGET} after (dump, pre max, post max): {over[:5]}"
+    )

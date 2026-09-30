@@ -300,9 +300,11 @@ def test_a_whole_shot_carries_the_gate_the_tracks_and_their_3d_points():
     assert len(firmware["watched_peak"]) == len(firmware["frames"])
     fired = firmware["frames"][firmware["fired_frame"]]
     assert fired["fired"] is True
-    # The frame the gate fired on watched a peak above snr x floor.
-    peak = firmware["watched_peak"][firmware["fired_frame"]]
-    assert peak["stat"] >= firmware["config"]["snr"] * fired["floor"] * 0.5
+    # The frame that fired still reports what the trigger watched. The removed
+    # range gate fired on that peak (above snr x floor); the club track fires
+    # from its own span, and the scan plan clips the trigger's region to short
+    # of the band (l3_scan.h), where it is the floor's source only.
+    assert firmware["watched_peak"][firmware["fired_frame"]] is not None
     for point in firmware["points"] + firmware["ball_points"]:
         assert len(point["position"]) == 3
     assert "clubtrack" in firmware["report"]

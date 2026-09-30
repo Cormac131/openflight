@@ -105,6 +105,7 @@ def leave_targets(lib, state, obs, *, first: int = 30, edge: float = EDGE, param
         edge,
         out,
         fw.OBS_MAX_TARGETS,
+        None,
     )
     return [out[i] for i in range(n)]
 
@@ -390,3 +391,52 @@ def test_a_restart_keeps_the_newest_start_target(lib):
     frame(lib, state, 11, 47.2)
     assert state.startTarget.rangeBin == pytest.approx(47.2)
     assert state.startTarget.timestampUs == 33_000
+
+
+# --- the floor, for after impact -------------------------------------------------
+
+
+def test_the_median_beyond_the_band_is_reported_as_the_floor(lib):
+    """After impact the ball tracker scores only 16 bins beside the ball, whose
+    median is no noise floor (the ball, the club, the ridge); this one, of the
+    stretch the ball flies into, is: frozen, it kept 26/34 launches (a 16-bin
+    median kept 14)."""
+    state = leave(lib)
+    floor = ctypes.c_float(-1.0)
+    out = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
+    obs = window({50: 10.0}, noise=2.0)
+    lib.l3_leave_targets(
+        ctypes.byref(state.cfg),
+        ctypes.byref(peak_params()),
+        obs,
+        30,
+        len(obs),
+        7,
+        21_000,
+        EDGE,
+        out,
+        fw.OBS_MAX_TARGETS,
+        ctypes.byref(floor),
+    )
+    assert floor.value == pytest.approx(2.0)
+
+
+def test_too_few_bins_leave_the_floor_untouched(lib):
+    state = leave(lib)
+    floor = ctypes.c_float(-1.0)
+    out = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
+    obs = window({}, first=20, count=32)
+    lib.l3_leave_targets(
+        ctypes.byref(state.cfg),
+        ctypes.byref(peak_params()),
+        obs,
+        20,
+        len(obs),
+        7,
+        21_000,
+        EDGE,
+        out,
+        fw.OBS_MAX_TARGETS,
+        ctypes.byref(floor),
+    )
+    assert floor.value == pytest.approx(-1.0)

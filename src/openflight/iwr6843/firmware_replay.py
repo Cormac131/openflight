@@ -523,6 +523,9 @@ class ReplayFrame:
     ball_bin: float | None = None  # the ball point appended this frame
     retain: RetainSummary | None = None  # the retention mirror's window for this frame
     ball_hypotheses: tuple[HypothesisSummary, ...] = ()  # active after this frame
+    # Range bins the board scores (l3_verticalResidual) on this frame: its
+    # cost is ~73 us a bin (triggerLog perf, 2026-09-30) against a 3 ms frame.
+    scored_bins: int = 0
 
 
 @dataclass(frozen=True)
@@ -969,6 +972,12 @@ def replay_dump(
     launch = fw.Launch()
     ball_points: list[PointSummary] = []
     ball_floor = ctypes.c_float(0.0)  # the post window's own floor, as gBallFloor
+    # The scan plan (l3_scan.h): which bins a frame scores with the band on.
+    scan_cfg = fw.ScanCfg()
+    lib.l3_scan_cfg_defaults(ctypes.byref(scan_cfg))
+    map_cursor = ctypes.c_uint32(0)
+    # The fallback's median beyond the band: the post window's frozen floor.
+    leave_floor = ctypes.c_float(0.0)
     # Joint search (host-only, optional)
     joint: fw.Joint | None = None
     joint_targets = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
@@ -1119,6 +1128,8 @@ def replay_dump(
                     destination,
                     bin_width_m,
                     frame_us,
+                    scan_cfg=scan_cfg if band_enabled else None,
+                    frozen_floor=_post_floor(leave_floor, trig) if band_enabled else None,
                 )
             )
             if fitted_frozen_us is None and shot.state == _SHOT_RESULT:
@@ -1175,8 +1186,7 @@ def replay_dump(
             )
             continue
         first_bin = window_start + first_local.value
-        obs = bin_observations(cube, frame, first_local.value, count.value, n_tx)
-        lib.l3_trig_observe(ctypes.byref(trig), frame, destination, first_bin, obs, count.value)
+        # The band first: the scan plan and the trigger's region follow it.
         if band_enabled and not band_frozen:
             lib.l3_band_place(
                 ctypes.byref(noise),
@@ -1187,23 +1197,52 @@ def replay_dump(
             )
         elif not band_enabled:
             band.valid = 0
-        found, window_obs, window_count = _pre_impact_club_targets(
-            lib,
-            cube,
-            frame,
-            timestamp_us,
-            window_start,
-            window_bins,
-            n_tx,
-            params,
-            float(trig.floor),
-            band,
-            targets,
-            trigger_region=(first_bin, obs, count.value),
-            band_enabled=band_enabled,
-            leave=leave,
-            leave_track=track,
-        )
+        scan = None
+        if band_enabled:
+            scan = _scan_pre_impact(
+                lib,
+                cube,
+                frame,
+                timestamp_us,
+                window_start,
+                window_bins,
+                n_tx,
+                params,
+                trig,
+                destination,
+                band,
+                targets,
+                scan_cfg,
+                region=(first_bin, count.value),
+                idle=not track.active,
+                map_cursor=map_cursor,
+                leave=leave,
+                leave_track=track,
+                leave_floor=leave_floor,
+            )
+            found = scan.found
+            first_bin, scored_region = scan.region.first, scan.region.count
+            scored_bins = scan.scored
+        else:
+            obs = bin_observations(cube, frame, first_local.value, count.value, n_tx)
+            lib.l3_trig_observe(ctypes.byref(trig), frame, destination, first_bin, obs, count.value)
+            found, _, _ = _pre_impact_club_targets(
+                lib,
+                cube,
+                frame,
+                timestamp_us,
+                window_start,
+                window_bins,
+                n_tx,
+                params,
+                float(trig.floor),
+                band,
+                targets,
+                trigger_region=(first_bin, obs, count.value),
+                band_enabled=False,
+            )
+            scored_region = count.value
+            scored_bins = count.value
         left = bool(leave.fired) and leave_frame is None
         if left:
             leave_frame = frame
@@ -1217,10 +1256,18 @@ def replay_dump(
                 band_frozen = True
             else:
                 band_frozen = False
-                if window_count > 0:
-                    lib.l3_band_noise_update(
-                        ctypes.byref(noise), params.stat, window_start, window_obs, window_count
-                    )
+                if scan is not None:
+                    # Idle: every span this frame scored feeds the map.
+                    for span in scan.map_spans:
+                        lib.l3_band_noise_update_span(
+                            ctypes.byref(noise),
+                            params.stat,
+                            window_start,
+                            scan.window_count,
+                            span.first,
+                            _span_obs(scan.window_obs, window_start, span),
+                            span.count,
+                        )
         track_bin = None
         angle = None
         newest = fw.TrackPoint()
@@ -1330,7 +1377,7 @@ def replay_dump(
                 frame,
                 timestamp_us,
                 first_bin,
-                count.value,
+                scored_region,
                 float(trig.floor),
                 fired,
                 tuple(_target_summary(targets[i]) for i in range(found)),
@@ -1340,6 +1387,7 @@ def replay_dump(
                 _delivery_summary(delivery),
                 fw.IMPACT_WHY_NAMES[impact.why],
                 fw.SHOT_STATE_NAMES[shot.state],
+                scored_bins=scored_bins,
             )
         )
 
@@ -1488,6 +1536,128 @@ def _leave_club_near(lib, leave: fw.Leave, track: fw.ClubTrack | None, band: fw.
     return lib.l3_leave_club_near(
         ctypes.byref(leave.cfg), track.active, track.count, newest.rangeBin, band.loBin
     )
+
+
+@dataclass(frozen=True)
+class _PreScan:
+    """One band-on pre-impact frame as the scan plan scored it."""
+
+    found: int  # club targets kept (short of the band)
+    region: fw.Span  # the trigger's region, clipped to short of the band
+    map_spans: tuple[fw.Span, ...]  # what an idle frame feeds the noise map
+    window_obs: ctypes.Array  # per-bin observations over the window (each bin's own)
+    window_count: int
+    scored: int  # distinct bins the board scores this frame
+
+
+def _span_obs(window_obs: ctypes.Array, window_start: int, span: fw.Span) -> ctypes.Array:
+    """The observations of a span, as a C array starting at its first bin."""
+    first = span.first - window_start
+    return (fw.BinObs * max(1, span.count))(*window_obs[first : first + span.count])
+
+
+def _scan_pre_impact(  # pylint: disable=too-many-arguments,too-many-locals
+    lib,
+    cube,
+    frame: int,
+    timestamp_us: int,
+    window_start: int,
+    window_bins: int,
+    n_tx: int,
+    params: fw.ObsParams,
+    trig,
+    destination: int,
+    band: fw.Band,
+    targets: ctypes.Array,
+    scan_cfg: fw.ScanCfg,
+    *,
+    region: tuple[int, int],
+    idle: bool,
+    map_cursor: ctypes.c_uint32,
+    leave: fw.Leave,
+    leave_track: fw.ClubTrack,
+    leave_floor: ctypes.c_float,
+) -> _PreScan:
+    """l3_preImpactClubTargets with the band on: the scan plan (l3_scan_pre)
+    scores the trigger region clipped to short of the band, the club's
+    approach short of it and the fallback's stretch beyond it, plus on an idle
+    frame a chunk of the band's interior for the noise map. Each bin's
+    observation is its own, so the replay computes the window once and reads
+    the spans out of it; ``scored`` is what the board computes."""
+    window_count = min(window_bins, fw.TRIG_MAX_BINS)
+    window_obs = bin_observations(cube, frame, 0, window_count, n_tx)
+    region_span, club, leave_span = fw.Span(), fw.Span(), fw.Span()
+    lib.l3_scan_pre(
+        ctypes.byref(scan_cfg),
+        window_start,
+        window_count,
+        region[0],
+        region[1],
+        ctypes.byref(band),
+        ctypes.byref(region_span),
+        ctypes.byref(club),
+        ctypes.byref(leave_span),
+    )
+    chunk = fw.Span()
+    if idle:
+        lib.l3_scan_map_chunk(
+            ctypes.byref(scan_cfg),
+            window_start,
+            window_count,
+            ctypes.byref(band),
+            ctypes.byref(map_cursor),
+            ctypes.byref(chunk),
+        )
+    spans = (fw.Span * 4)(region_span, club, leave_span, chunk)
+    scored = lib.l3_scan_count(spans, 4)
+    if region_span.count > 0:
+        lib.l3_trig_observe(
+            ctypes.byref(trig),
+            frame,
+            destination,
+            region_span.first,
+            _span_obs(window_obs, window_start, region_span),
+            region_span.count,
+        )
+    if band.valid and leave_span.count > 0:
+        leaving = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
+        n_leaving = lib.l3_leave_targets(
+            ctypes.byref(leave.cfg),
+            ctypes.byref(params),
+            _span_obs(window_obs, window_start, leave_span),
+            leave_span.first,
+            leave_span.count,
+            frame,
+            timestamp_us,
+            band.hiBin,
+            leaving,
+            fw.OBS_MAX_TARGETS,
+            ctypes.byref(leave_floor),
+        )
+        lib.l3_leave_update(
+            ctypes.byref(leave),
+            leaving,
+            n_leaving,
+            band.hiBin,
+            0.5 * (band.loBin + band.hiBin),
+            _leave_club_near(lib, leave, leave_track, band),
+        )
+    found = 0
+    if club.count > 0:
+        found = lib.l3_obs_extract(
+            ctypes.byref(params),
+            frame,
+            timestamp_us,
+            club.first,
+            _span_obs(window_obs, window_start, club),
+            club.count,
+            float(trig.floor),
+            targets,
+            fw.OBS_MAX_TARGETS,
+        )
+        found = lib.l3_band_keep_short(ctypes.byref(band), targets, found)
+    map_spans = tuple(span for span in (club, leave_span, chunk) if span.count > 0)
+    return _PreScan(found, region_span, map_spans, window_obs, window_count, scored)
 
 
 def _pre_impact_club_targets(  # pylint: disable=too-many-arguments
@@ -1726,26 +1896,49 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
     destination,
     bin_width_m,
     frame_us,
+    *,
+    scan_cfg: fw.ScanCfg | None = None,
+    frozen_floor: float | None = None,
 ) -> ReplayFrame:
     """``l3_considerBallTrack``: the whole window as targets against the post
-    window's own floor; the ball tracker first, then the club track followed
+    window's own floor -- with the band on, the scan plan's 16 bins following
+    the ball against the floor frozen at impact; the ball tracker first, then the club track followed
     through the scene the ball leaves (the ball's claim and rate, the band it
     coasts across), angles for the ball point, the launch fit and the shot
     machine's post-impact transitions."""
     ball_params = fw.ObsParams(params.stat, ball_track.cfg.snr, params.loopPeriodS, params.subBin)
-    found, count, floor, _ = _banded_window_targets(
-        lib,
-        cube,
-        frame,
-        timestamp_us,
-        window_start,
-        window_bins,
-        n_tx,
-        ball_params,
-        band,
-        targets,
-        running_floor=ball_floor,
-    )
+    if scan_cfg is not None and frozen_floor is not None and band.valid:
+        found, count, floor = _scan_post_impact(
+            lib,
+            cube,
+            frame,
+            timestamp_us,
+            window_start,
+            window_bins,
+            n_tx,
+            ball_params,
+            band,
+            targets,
+            scan_cfg,
+            ball_track,
+            track,
+            frozen_floor,
+        )
+        ball_floor.value = floor
+    else:
+        found, count, floor, _ = _banded_window_targets(
+            lib,
+            cube,
+            frame,
+            timestamp_us,
+            window_start,
+            window_bins,
+            n_tx,
+            ball_params,
+            band,
+            targets,
+            running_floor=ball_floor,
+        )
     # The ball first: its claim and rate tell the club what it is not.
     appended = lib.l3_ball_track_update_joint(
         ctypes.byref(ball_track), targets, found, frame, timestamp_us, fw.TRACK_NO_TARGET
@@ -1820,7 +2013,88 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
         ball_bin,
         retain=None,
         ball_hypotheses=_hypothesis_summaries(ball_track),
+        scored_bins=count,
     )
+
+
+def _post_floor(leave_floor: ctypes.c_float, trig) -> float:
+    """The post window's frozen floor (as l3_considerSelfTrigger freezes
+    gBallFloor at impact): the fallback's median beyond the band, the noise of
+    the stretch the ball flies into; without one (too few bins beyond the band
+    in the window) the trigger's floor, the same statistic on the approach."""
+    return float(leave_floor.value) if leave_floor.value > 0.0 else float(trig.floor)
+
+
+def _predicted_bin(core, frame: int) -> float:
+    """A track's range at ``frame`` from its last point and its rate."""
+    return float(core.lastBin) + float(core.velocityBinsPerFrame) * (frame - core.lastFrame)
+
+
+def _scan_post_impact(  # pylint: disable=too-many-arguments,too-many-locals
+    lib,
+    cube,
+    frame: int,
+    timestamp_us: int,
+    window_start: int,
+    window_bins: int,
+    n_tx: int,
+    params: fw.ObsParams,
+    band: fw.Band,
+    targets: ctypes.Array,
+    scan_cfg: fw.ScanCfg,
+    ball_track: fw.BallTrack,
+    club_track: fw.ClubTrack,
+    frozen_floor: float,
+) -> tuple[int, int, float]:
+    """l3_considerBallTrack with the band on: the scan plan's post windows
+    (l3_scan_post) -- postBins following the ball, from just beyond the band
+    until it is tracked, and postClubBins following the club, just beyond the
+    band until it is taken -- merged (l3_scan_merge) and each extracted against
+    the floor frozen at impact (the fallback's median beyond the band: a
+    16-bin window's own median is the ball, the club and the ridge). Returns
+    (targets kept, bins scored, floor)."""
+    count = min(window_bins, fw.TRIG_MAX_BINS)
+    ball_core = ball_track.core
+    club_live = bool(club_track.active) and club_track.count > 0
+    ball_span, club_span = fw.Span(), fw.Span()
+    lib.l3_scan_post(
+        ctypes.byref(scan_cfg),
+        window_start,
+        count,
+        ctypes.byref(band),
+        1 if ball_core.active else 0,
+        _predicted_bin(ball_core, frame),
+        1 if club_live else 0,
+        _predicted_bin(club_track, frame) if club_live else 0.0,
+        ctypes.byref(ball_span),
+        ctypes.byref(club_span),
+    )
+    spans = (fw.Span * 2)()
+    n_spans = lib.l3_scan_merge(ball_span, club_span, spans)
+    window_obs = bin_observations(cube, frame, 0, count, n_tx)
+    found = 0
+    scored = 0
+    for index in range(n_spans):
+        span = spans[index]
+        scored += span.count
+        # As the board: each span's targets follow the last span's in the buffer.
+        extracted = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
+        got = lib.l3_obs_extract(
+            ctypes.byref(params),
+            frame,
+            timestamp_us,
+            span.first,
+            _span_obs(window_obs, window_start, span),
+            span.count,
+            frozen_floor,
+            extracted,
+            fw.OBS_MAX_TARGETS - found,
+        )
+        for i in range(got):
+            targets[found + i] = extracted[i]
+        found += got
+    found = lib.l3_band_filter(ctypes.byref(band), targets, found)
+    return found, scored, frozen_floor
 
 
 def _hypothesis_angles(  # pylint: disable=too-many-arguments

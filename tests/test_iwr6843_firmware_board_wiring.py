@@ -49,19 +49,24 @@ def test_band_off_is_no_band_on_every_pre_impact_frame():
     assert enabled < off < self_trigger.index("l3_preImpactClubTargets(")
 
 
-def test_noise_map_is_updated_only_from_idle_whole_window_frames():
+def test_noise_map_is_updated_only_from_idle_frames_span_by_span():
     """After the club track update: an active track freezes the band; an idle
-    frame thaws it and feeds the whole window it scored to the noise map."""
+    frame thaws it and feeds each span it scored to the noise map (l3_scan.h:
+    the club's, the fallback's and the band-interior chunk)."""
     self_trigger = body("l3_considerSelfTrigger")
     track = self_trigger.index("appended = l3_track_update(&gClubTrack,")
     active = self_trigger.index("if (gClubTrack.active) {", track)
     frozen = self_trigger.index("gBandFrozen = 1U;", active)
     thawed = self_trigger.index("gBandFrozen = 0U;", frozen)
-    scored = self_trigger.index("if (windowCount > 0U) {", thawed)
     update = self_trigger.index(
-        "l3_band_noise_update(&gBandNoise, gTrigCfg.stat, frame.binStart, obs,", scored
+        "l3_band_noise_update_span(&gBandNoise, gTrigCfg.stat, frame.binStart,", thawed
     )
-    assert track < active < frozen < thawed < scored < update
+    assert "windowCount, fed[k]->first," in self_trigger[update : update + 200]
+    assert track < active < frozen < thawed < update
+    assert "l3_band_noise_update(&gBandNoise" not in SOURCE, "never the whole window"
+    for index, span in enumerate(("club", "leave", "chunk")):
+        assert f"fed[{index}] = &{span};" in self_trigger[thawed:update]
+    assert "if (fed[k]->count > 0U) {" in self_trigger[thawed:update]
 
 
 def test_noise_map_is_reset_once_with_the_fit_defaults():
@@ -74,19 +79,15 @@ def test_noise_map_is_reset_once_with_the_fit_defaults():
     assert "l3_band_noise_reset" not in body("l3_trigRearm")
 
 
-def test_pre_impact_club_targets_keep_only_short_of_a_valid_band():
+def test_pre_impact_club_targets_come_from_the_club_span_short_of_a_valid_band():
+    """The helper scores nothing: obs is indexed by the frame's local bin and the
+    scan plan's spans were scored into it."""
     helper = body("l3_preImpactClubTargets")
-    valid = helper.index("if (gImpactFitCfg.bandBins > 0.0F) {")
-    whole = helper.index("l3_verticalResidual(frame, bin, NULL, &obs[bin]);")
-    keep = helper.index("l3_band_keep_short(&gBand, targets, found)")
-    region = helper.index("return l3_obs_extract(params, frameIndex, frameUs, regionFirstBin,")
-    assert valid < whole < keep < region, "the whole window only when the band is enabled"
-    # The whole-window count is reported for the noise map; the trigger view none.
-    assert "*windowCount = count;" in helper
-    assert "*windowCount = 0U;" in helper
-    # The whole window: global first bin frame->binStart, so a target's
-    # peakBin - frame.binStart is its local bin in both modes.
-    assert "l3_obs_extract(params, frameIndex, frameUs, frame->binStart, obs, count," in helper
+    assert "l3_verticalResidual(" not in helper
+    extract = helper.index("found = l3_obs_extract(params, frameIndex, frameUs, club->first,")
+    assert "&obs[club->first - windowFirst], club->count," in helper[extract:]
+    keep = helper.index("return gBand.valid ? l3_band_keep_short(&gBand, targets, found) : found;")
+    assert extract < keep
     assert "l3_band_filter" not in helper, "before impact: short of the band, not merely outside"
 
 
@@ -94,7 +95,7 @@ def test_club_track_reads_the_helper_and_the_trigger_keeps_its_region():
     self_trigger = body("l3_considerSelfTrigger")
     trig = self_trigger.index("l3_trig_observe(&gTrig, gPreFramesCaptured, teeBin,")
     helper = self_trigger.index(
-        "found = l3_preImpactClubTargets(&frame, obs, frame.binStart + first,"
+        "found = l3_preImpactClubTargets(obs, frame.binStart, &club, &leave,"
     )
     track = self_trigger.index("appended = l3_track_update(&gClubTrack, targets, found,")
     assert trig < helper < track
@@ -124,19 +125,19 @@ def test_range_impact_runs_every_pre_impact_frame_and_feeds_the_shot():
     assert "in.impactTimestampUs = fired ? impactUs : frameUs;" in observe
 
 
-def test_the_ball_leave_fallback_reads_the_window_before_the_club_targets_reuse_it():
-    """Band on, l3_leave_targets reads the whole window the club's targets come
-    from, into the same target buffer (no new RAM), before the club's own
-    extraction overwrites it. No band, no fallback."""
+def test_the_ball_leave_fallback_reads_its_span_before_the_club_targets_reuse_the_buffer():
+    """Band on, l3_leave_targets reads the scan plan's span beyond the band into
+    the club's target buffer (no new RAM), before the club's own extraction
+    overwrites it, and reports the median there as the post window's floor. No
+    band, no fallback."""
     targets = body("l3_preImpactClubTargets")
-    guard = targets.index("if (gBand.valid) {")
+    guard = targets.index("if (gBand.valid && leave->count > 0U) {")
     read = targets.index(
-        "uint32_t leaving = l3_leave_targets(&gLeave.cfg, params, obs, frame->binStart, count,"
+        "uint32_t leaving = l3_leave_targets(&gLeave.cfg, params, &obs[leave->first - windowFirst],"
     )
+    assert "&gLeaveFloor);" in targets[read : read + 400]
     update = targets.index("*left = l3_leave_update(&gLeave, targets, leaving, gBand.hiBin,")
-    club = targets.index(
-        "found = l3_obs_extract(params, frameIndex, frameUs, frame->binStart, obs,"
-    )
+    club = targets.index("found = l3_obs_extract(params, frameIndex, frameUs, club->first,")
     assert guard < read < update < club
     # Armed by the club track as it stood after the last frame, near the band,
     # as the replay's _leave_club_near asks it.
@@ -147,7 +148,7 @@ def test_the_ball_leave_fallback_reads_the_window_before_the_club_targets_reuse_
     assert "0.5F * (gBand.loBin + gBand.hiBin), near);" in targets[update:club]
     self_trigger = body("l3_considerSelfTrigger")
     assert "int32_t left = 0;" in self_trigger
-    assert "&windowCount, &left);" in self_trigger
+    assert "&left);" in self_trigger[self_trigger.index("l3_preImpactClubTargets(") :]
 
 
 def test_the_fire_is_dated_by_the_rule_that_fired():
@@ -266,7 +267,7 @@ def test_board_places_the_band_from_the_noise_map_until_frozen():
     targets = self_trigger.index("l3_preImpactClubTargets(")
     assert place < targets
     assert "gBandFrozen" in self_trigger[: place + 200]
-    assert "l3_band_noise_update(&gBandNoise," in self_trigger
+    assert "l3_band_noise_update_span(&gBandNoise," in self_trigger
     assert "gBandFrozen = 0U" in body("l3_trigRearm")
     assert "l3_band_around" not in SOURCE
 
@@ -339,3 +340,106 @@ def test_a_fallback_fire_seeds_the_ball_tracker_with_the_balls_two_points():
     )
     guard = self_trigger.rindex("if (left && gBallTrack.armed) {", 0, seed)
     assert observe < guard < seed < self_trigger.index("if (!fired) {")
+
+
+# --- the scan plan (l3_scan.h) -------------------------------------------------
+#
+# The board scores a bin in ~73 us and has 3 ms a frame; the detect task
+# outranks the CLI and the trigger notices. Scoring the trigger region and then
+# the whole window (~5.1 ms) starved them the moment the trigger was armed.
+
+
+def test_globals_for_the_scan_plan():
+    for declaration in (
+        "static l3_scan_cfg_t       gScanCfg;",
+        "static uint32_t            gMapCursor;",
+        "static float               gLeaveFloor;",
+        "static uint8_t             gDetectBehind;",
+        "static uint32_t            gDetectShed;",
+    ):
+        assert declaration in SOURCE, declaration
+    assert '#include "l3_scan.h"' in SOURCE
+    assert "l3_scan_cfg_defaults(&gScanCfg);" in body("l3_clubTrackConfigure")
+    assert "gLeaveFloor = 0.0F;" in body("l3_trigRearm")
+    makefile = (FIRMWARE_DIR / "makefile").read_text(encoding="utf-8")
+    assert " l3_scan.c " in makefile
+
+
+def test_a_span_is_scored_once_per_frame_into_the_frames_local_bins():
+    score = body("l3_scoreSpan")
+    assert "uint32_t local = bin - frame->binStart;" in score
+    assert "l3_verticalResidual(frame, local, NULL, &obs[local]);" in score
+    assert "(scored[local >> 5U] & (1UL << (local & 31U))) == 0U" in score
+
+
+def test_the_band_is_placed_before_the_plan_and_the_trigger_reads_its_clipped_region():
+    self_trigger = body("l3_considerSelfTrigger")
+    place = self_trigger.index("l3_band_place(&gBandNoise,")
+    plan = self_trigger.index(
+        "l3_scan_pre(&gScanCfg, frame.binStart, windowCount, frame.binStart + first, count,"
+    )
+    stale = self_trigger.index("if (l3_detectFrameStale(&frame)) {")
+    observe = self_trigger.index(
+        "l3_trig_observe(&gTrig, gPreFramesCaptured, teeBin, region.first,"
+    )
+    helper = self_trigger.index("l3_preImpactClubTargets(obs, frame.binStart, &club, &leave,")
+    assert place < plan < stale < observe < helper
+    # Every scored bin is a span's; nothing scores the window.
+    assert self_trigger.count("l3_verticalResidual(") == 0
+    for span in ("&region", "&club", "&leave", "&chunk"):
+        assert f"l3_scoreSpan(&frame, {span}, obs, scored);" in self_trigger
+
+
+def test_an_idle_frame_that_is_not_behind_refreshes_a_band_interior_chunk():
+    self_trigger = body("l3_considerSelfTrigger")
+    chunk = self_trigger.index("l3_scan_map_chunk(&gScanCfg, frame.binStart, windowCount, &gBand,")
+    assert "if (!gClubTrack.active && !gDetectBehind) {" in self_trigger[chunk - 120 : chunk]
+
+
+def test_band_off_scores_only_the_trigger_region():
+    self_trigger = body("l3_considerSelfTrigger")
+    off = self_trigger.index("gBand.valid = 0U;")
+    region = self_trigger.index("region.first = frame.binStart + first;", off)
+    assert "club = region;" in self_trigger[region : region + 200]
+
+
+def test_behind_the_detect_task_sheds_the_ball_detector_the_map_chunk_and_angles():
+    """A newer frame landed before this one was taken: skip what the trigger's
+    fire does not need, so the backlog drains and the CLI gets its time."""
+    task = body("l3_detectTask")
+    behind = task.index("gDetectBehind = ((uint32_t)(gPreFramesCaptured - epoch) >= 1U) ? 1U : 0U;")
+    shed = task.index("if (!gDetectBehind) {", behind)
+    ball = task.index("l3_considerBall(queuedSlot);", shed)
+    trigger = task.index("l3_considerSelfTrigger(queuedSlot);", ball)
+    assert behind < shed < ball < trigger
+    assert "gDetectShed++;" in task
+    self_trigger = body("l3_considerSelfTrigger")
+    angles = self_trigger.index("gClubTrack.count > 1U && !gDetectBehind &&")
+    assert angles < self_trigger.index("l3_channelSnapshot(&frame, (uint32_t)hit->peakBin")
+
+
+def test_impact_freezes_the_post_floor_from_the_fallbacks_median():
+    observe = body("l3_shotObserve")
+    arm = observe.index("l3_ball_track_arm(&gBallTrack,")
+    freeze = observe.index("gBallFloor = (gLeaveFloor > 0.0F) ? gLeaveFloor : gTrig.floor;", arm)
+    assert "if (gBand.valid) {" in observe[arm:freeze]
+
+
+def test_after_impact_the_ball_tracker_scores_the_post_spans_against_the_frozen_floor():
+    """The ball's span and the club's (l3_scan_post), merged so no bin is
+    extracted twice, each scored once and extracted after the last one's
+    targets; the whole window only without a band."""
+    ball_track = body("l3_considerBallTrack")
+    band = ball_track.index("if (gImpactFitCfg.bandBins > 0.0F && gBand.valid) {")
+    post = ball_track.index("l3_scan_post(&gScanCfg, frame.binStart, count, &gBand,")
+    assert "&ballSpan, &clubSpan);" in ball_track[post : post + 400]
+    merge = ball_track.index("spans = l3_scan_merge(ballSpan, clubSpan, merged);", post)
+    score = ball_track.index("l3_scoreSpan(&frame, &merged[k], obs, scored);", merge)
+    extract = ball_track.index(
+        "found += l3_obs_extract(&params, frameIndex, gPostTimestampUs, merged[k].first,", score
+    )
+    assert "&targets[found], L3_OBS_MAX_TARGETS - found);" in ball_track[extract : extract + 300]
+    whole = ball_track.index("l3_obs_floor_update(&gBallFloor,", extract)
+    assert band < post < merge < score < extract < whole
+    # The club track's prediction, as the ball's: from its last point and rate.
+    assert "gClubTrack.active && gClubTrack.count > 0U" in ball_track[band:post]

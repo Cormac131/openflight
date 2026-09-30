@@ -64,6 +64,7 @@ void l3_band_noise_update(l3_band_noise_t *noise, uint32_t stat, uint32_t firstB
         noise->firstBin = firstBin;
         noise->count = count;
         noise->updates = 0U;
+        memset(noise->seen, 0, sizeof(noise->seen));
         for (i = 0U; i < count; i++) {
             noise->avg[i] = l3_obs_stat(stat, &obs[i]);
         }
@@ -74,7 +75,68 @@ void l3_band_noise_update(l3_band_noise_t *noise, uint32_t stat, uint32_t firstB
             noise->avg[i] += (value - noise->avg[i]) / (float)(1U << L3_BAND_NOISE_SHIFT);
         }
     }
+    for (i = 0U; i < count; i++) {
+        if (noise->seen[i] < 255U) {
+            noise->seen[i]++;
+        }
+    }
     noise->updates++;
+}
+
+void l3_band_noise_update_span(l3_band_noise_t *noise, uint32_t stat, uint32_t windowFirst,
+                               uint32_t windowCount, uint32_t spanFirst, const l3_bin_obs_t *obs,
+                               uint32_t count)
+{
+    uint32_t i;
+
+    if (windowCount > L3_BAND_NOISE_BINS) {
+        windowCount = L3_BAND_NOISE_BINS;
+    }
+    if (windowCount == 0U) {
+        return;
+    }
+    if (noise->firstBin != windowFirst || noise->count != windowCount) {
+        memset(noise, 0, sizeof(*noise));
+        noise->firstBin = windowFirst;
+        noise->count = windowCount;
+    }
+    for (i = 0U; i < count; i++) {
+        uint32_t bin = spanFirst + i;
+        uint32_t k;
+        float value;
+
+        if (bin < windowFirst || bin >= windowFirst + windowCount) {
+            continue;
+        }
+        k = bin - windowFirst;
+        value = l3_obs_stat(stat, &obs[i]);
+        if (noise->seen[k] == 0U) {
+            noise->avg[k] = value;
+        } else {
+            noise->avg[k] += (value - noise->avg[k]) / (float)(1U << L3_BAND_NOISE_SHIFT);
+        }
+        if (noise->seen[k] < 255U) {
+            noise->seen[k]++;
+        }
+    }
+    noise->updates++;
+}
+
+/* Every map bin in [first, last] has placement's history. */
+static uint8_t l3_band_history(const l3_band_noise_t *noise, int32_t first, int32_t last)
+{
+    int32_t bin;
+
+    if (noise->count == 0U) {
+        return 0U;
+    }
+    for (bin = first; bin <= last; bin++) {
+        if (bin < (int32_t)noise->firstBin || bin >= (int32_t)(noise->firstBin + noise->count) ||
+            noise->seen[(uint32_t)bin - noise->firstBin] < L3_BAND_NOISE_MIN_UPDATES) {
+            return 0U;
+        }
+    }
+    return 1U;
 }
 
 static void l3_band_span(int32_t lo, uint32_t width, l3_band_t *out)
@@ -111,13 +173,16 @@ void l3_band_place(const l3_band_noise_t *noise, float centreBin, float searchBi
     if (last > centre) {
         last = centre;
     }
-    if (noise->updates >= L3_BAND_NOISE_MIN_UPDATES) {
+    if (noise->count > 0U) {
         if (first < (int32_t)noise->firstBin) {
             first = (int32_t)noise->firstBin;
         }
         if (last > (int32_t)(noise->firstBin + noise->count) - (int32_t)width) {
             last = (int32_t)(noise->firstBin + noise->count) - (int32_t)width;
         }
+    }
+    /* History on every bin a candidate would cover, or the band stays centred. */
+    if (first <= last && l3_band_history(noise, first, last + (int32_t)width - 1)) {
         for (start = first; start <= last; start++) {
             float sum = 0.0F;
             float gap = fabsf((float)start + 0.5F * (float)(width - 1U) - centreBin);

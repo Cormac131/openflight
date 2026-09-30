@@ -91,11 +91,14 @@ uint8_t l3_leave_club_near(const l3_leave_cfg_t *cfg, uint8_t active, uint32_t c
  * observations (global first bin firstBin, count bins): targets beyond
  * edgeBin whose statistic (params->stat) is at least cfg->snr times the
  * median statistic of the bins beyond it. Fewer than L3_LEAVE_MIN_FLOOR_BINS
- * bins beyond the edge give none. Returns how many were written to out. */
+ * bins beyond the edge give none. Returns how many were written to out;
+ * *floor (when not NULL) receives the median, the noise of the stretch the
+ * ball flies into, which the ball tracker's 16-bin post window freezes as its
+ * floor (l3_scan.h); left untouched when there were too few bins. */
 uint32_t l3_leave_targets(const l3_leave_cfg_t *cfg, const l3_obs_params_t *params,
                           const l3_bin_obs_t *obs, uint32_t firstBin, uint32_t count,
                           uint32_t frame, uint32_t timestampUs, float edgeBin,
-                          l3_target_obs_t *out, uint32_t maxOut);
+                          l3_target_obs_t *out, uint32_t maxOut, float *floor);
 /* One pre-impact frame's l3_leave_targets: edgeBin is the band's far edge,
  * originBin the ball's rest bin, clubNear l3_leave_club_near for this frame.
  * Returns 1 on the update that fires; later updates are ignored until

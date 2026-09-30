@@ -22,6 +22,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a firmware rebuild and reflash.
 
 ### Fixed
+- **IWR6843 board went silent the moment the self-trigger was armed.** With
+  the tee band on (the default since 2026-09-29) every armed frame scored the
+  trigger region and then the whole 53-bin window: at ~73 us a bin
+  (`triggerLog perf`) that is ~5.1 ms of a 3 ms frame, and the detect task
+  outranks the CLI and the trigger notices, so the board answered nothing and
+  fired nothing. The old range gate hid it by firing (falsely) within half a
+  second; with it gone (4959d379) nothing ever fired on the board, which is
+  why the trigger changes made no real-world difference. Bisected on the
+  board: band off it runs 1,550 armed frames; band on it stops within one.
+  - `l3_scan.c`, the scan plan: before impact the club's approach 16 bins
+    short of the band, 10 beyond it for the ball-leave fallback, the trigger
+    region clipped to short of the band, and on idle frames 2 bins of the
+    band's interior for its noise map (27 bins a swing frame, 29 idle); after
+    impact 12 bins following the ball (from just beyond the band until it is
+    tracked) and 4 following the club (16). Each bin is scored once
+  - the band's noise map is fed span by span (`l3_band_noise_update_span`,
+    per-bin history; placement needs 8 updates on every bin it might cover)
+  - the post window's floor is frozen at impact: the fallback's median beyond
+    the band, else the trigger's floor (a 16-bin window's own median is the
+    ball, the club and the ridge: it kept 14/34 launches)
+  - when the detect task is behind (a newer frame already landed) it sheds
+    the ball detector, the map chunk and the pre-impact angle estimate
+    (~1.6 ms each); `stats` reports `shed=`
+  - the replay mirrors the plan and records `scored_bins`; a labelled test
+    holds every armed frame to 29 bins before impact and 16 after
+  Cost on the labelled swings at the kiosk's settings, against the
+  whole-window replay (which the board could never run): 32/34 fire (was 34),
+  one 4 frames late, 25 good launches (was 34), one wrong; consistent impact
+  fits 7 (unchanged). The labelled bars are re-baselined to these numbers.
+  A 16-bin pre-impact scan was measured and rejected (21/34 fire). Worst-case
+  detect stack 2,264 of 3,072 bytes; DATA_RAM free 1,491 bytes (16 KB floor
+  already breached). The residual itself (~73 us a bin) is the next target.
+  Needs a firmware rebuild and reflash.
 - **IWR6843 ball tracker took the club's follow-through as the ball.** A
   departing ball smears within a frame: after a fire its first points read
   confidence 0.04-0.17, under the 0.2 the core needs to start a track, so a

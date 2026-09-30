@@ -114,7 +114,7 @@ def test_self_trigger_reads_a_finished_slot_beside_capture():
     assert "l3detect_slot_live" in detect
     assert "l3_publishDetectFrame" in done
     assert "l3_publishDetectFrame" in packed
-    assert 'CLI_write("detect dropped=%u stale=%u notice_dropped=%u\\n"' in stats
+    assert 'CLI_write("detect dropped=%u stale=%u notice_dropped=%u shed=%u\\n"' in stats
     assert "gPreFramesCaptured < gCapturePlan.preFrames" in consider
 
 
@@ -125,11 +125,13 @@ def test_trigger_scores_every_loop_not_just_loop_zero():
 
     assert "l3_verticalPowerAt" not in source
     assert "perLoop[0]" not in source
-    assert "l3_verticalResidual(&frame, first + bin, NULL, &obs[bin]);" in consider
-    assert (
-        "l3_trig_observe(&gTrig, gPreFramesCaptured, teeBin, frame.binStart + first, obs, count);"
-        in consider
+    # Every bin is scored by l3_scoreSpan (all loops), once a frame; the trigger
+    # observes its region of those scores.
+    assert "l3_verticalResidual(frame, local, NULL, &obs[local]);" in _function(
+        "static void l3_scoreSpan("
     )
+    assert "l3_scoreSpan(&frame, &region, obs, scored);" in consider
+    assert "l3_trig_observe(&gTrig, gPreFramesCaptured, teeBin, region.first," in consider
 
 
 def test_trigger_no_longer_gates_on_the_tee_bin_or_a_toward_away_sequence():
@@ -339,10 +341,10 @@ def test_club_track_rides_the_trigger_pass_and_prints_from_trigger_log():
     consider = _function("static void l3_considerSelfTrigger(")
 
     update = consider.index("l3_trig_observe(&gTrig,")
-    extract = consider.index("l3_preImpactClubTargets(&frame, obs,")
+    extract = consider.index("l3_preImpactClubTargets(obs, frame.binStart, &club, &leave,")
     track = consider.index("l3_track_update(&gClubTrack, targets, found, gPreFramesCaptured,")
     assert update < extract < track
-    assert consider.count("l3_verticalResidual(") == 1, "one residual pass feeds both"
+    assert consider.count("l3_verticalResidual(") == 0, "bins are scored once, by l3_scoreSpan"
     assert "gTrig.floor," in consider[extract:track], "targets use the trigger's floor"
     assert "gClubTrackDest = teeBin;" in consider
     assert consider.rindex("gTrigBusy = 0U;") > track, "the track update is inside the busy window"
@@ -453,7 +455,9 @@ def test_angles_are_estimated_for_the_associated_target_only():
     club track appended, with the track's range-rate resolving the TDM alias."""
     consider = _function("static void l3_considerSelfTrigger(")
 
-    assert "gClubTrack.lastTargetIndex < found && gClubTrack.count > 1U" in consider
+    assert "gClubTrack.lastTargetIndex < found &&" in consider
+    # Shed when the detect task is behind (l3_scan.h): the fire does not use it.
+    assert "gClubTrack.count > 1U && !gDetectBehind &&" in consider
     assert "const l3_target_obs_t *hit = &targets[gClubTrack.lastTargetIndex];" in consider
     assert (
         "l3_channelSnapshot(&frame, (uint32_t)hit->peakBin - frame.binStart,\n"
@@ -588,7 +592,7 @@ def test_ball_tracker_runs_the_whole_post_window_against_the_trigger_floor():
     assert "if (!gBallTrack.armed || gCapturePlan.loops == 0U)" in consider
     assert "gPostTimestampUs += gFrameDeltaUs[slot];" in consider
     assert "frameIndex = gPreFramesCaptured + gPostFramesScored;" in consider
-    assert "l3_verticalResidual(&frame, bin, NULL, &obs[bin]);" in consider
+    assert "l3_verticalResidual(&frame, bin, NULL, &obs[bin]);" in consider, "band off"
     assert "gBallFloor, targets, L3_OBS_MAX_TARGETS);" in consider
     assert (
         "l3_obs_floor_update(&gBallFloor, gTrigCfg.stat, obs, count, L3_TRIG_FLOOR_SHIFT);"

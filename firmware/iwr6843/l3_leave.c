@@ -59,12 +59,12 @@ static int32_t l3_leave_note(l3_leave_t *leave, uint8_t why)
 uint32_t l3_leave_targets(const l3_leave_cfg_t *cfg, const l3_obs_params_t *params,
                           const l3_bin_obs_t *obs, uint32_t firstBin, uint32_t count,
                           uint32_t frame, uint32_t timestampUs, float edgeBin,
-                          l3_target_obs_t *out, uint32_t maxOut)
+                          l3_target_obs_t *out, uint32_t maxOut, float *floor)
 {
     l3_obs_params_t own = *params;
     uint32_t skip;
     uint32_t beyond;
-    float floor;
+    float median;
 
     /* The first local bin strictly beyond the edge. */
     skip = (edgeBin < (float)firstBin) ? 0U : (uint32_t)edgeBin + 1U - firstBin;
@@ -75,9 +75,12 @@ uint32_t l3_leave_targets(const l3_leave_cfg_t *cfg, const l3_obs_params_t *para
     if (beyond > L3_OBS_MAX_BINS) {
         beyond = L3_OBS_MAX_BINS;
     }
-    floor = l3_obs_median(own.stat, &obs[skip], beyond);
+    median = l3_obs_median(own.stat, &obs[skip], beyond);
+    if (floor != NULL) {
+        *floor = median;
+    }
     own.snr = cfg->snr;
-    return l3_obs_extract(&own, frame, timestampUs, firstBin + skip, &obs[skip], beyond, floor,
+    return l3_obs_extract(&own, frame, timestampUs, firstBin + skip, &obs[skip], beyond, median,
                           out, maxOut);
 }
 

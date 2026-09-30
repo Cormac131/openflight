@@ -157,7 +157,8 @@ def test_the_detect_task_reads_the_scratch_frame_and_drops_a_stale_one():
             "static void l3_considerSelfTrigger(uint32_t slot)",
             "gTrigBusy = 0U;\n        l3_noteTrigger(1U, 0.0F);\n        return;",
         ),
-        ("static void l3_considerBallTrack(uint32_t slot)", "gTrigBusy = 0U;\n        return;"),
+        # Both of its paths (the band's post spans, the whole window) check.
+        ("static void l3_considerBallTrack(uint32_t slot)", "gTrigBusy = 0U;\n            return;"),
         ("static void l3_considerBall(uint32_t slot)", "gBallBusy = 0U;\n        return;"),
     ):
         body = _function(name)
@@ -165,8 +166,12 @@ def test_the_detect_task_reads_the_scratch_frame_and_drops_a_stale_one():
         assert "gFrameBinStart[slot]" not in body and "gFrameBinCount[slot]" not in body, name
         stale_at = body.index("if (l3_detectFrameStale(&frame)) {")
         assert "gDetectScratchStale++;" in body[stale_at:] and guard in body[stale_at:], name
-        # The observations are computed first, the staleness judged before any decision.
-        assert body.index("l3_vertical", 0) < stale_at, name
+        # The observations are computed first (the band paths score the scan
+        # plan's spans with l3_scoreSpan), the staleness judged before any decision.
+        scored_at = min(
+            body.index(call) for call in ("l3_vertical", "l3_scoreSpan(") if call in body
+        )
+        assert scored_at < stale_at, name
     for reader in (
         "static void l3_verticalResidual(",
         "static float l3_verticalStaticPower(",

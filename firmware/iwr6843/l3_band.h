@@ -25,6 +25,8 @@ typedef struct {
     uint32_t count;                    /* bins covered, 0 before the first update */
     uint32_t updates;
     float    avg[L3_BAND_NOISE_BINS];
+    uint8_t  seen[L3_BAND_NOISE_BINS]; /* updates per bin, saturating: history for
+                                        * l3_band_place when fed span by span */
 } l3_band_noise_t;
 
 void l3_band_noise_reset(l3_band_noise_t *noise);
@@ -32,6 +34,14 @@ void l3_band_noise_reset(l3_band_noise_t *noise);
  * EMA of l3_obs_stat(stat, ...); a different window restarts the map. */
 void l3_band_noise_update(l3_band_noise_t *noise, uint32_t stat, uint32_t firstBin,
                           const l3_bin_obs_t *obs, uint32_t count);
+/* An idle frame's scored span, global bins [spanFirst, spanFirst + count),
+ * obs its observations, into a map kept over the window [windowFirst,
+ * windowFirst + windowCount) (l3_scan.h: an armed frame scores only some
+ * bins). A different window restarts the map; bins outside it are ignored;
+ * a bin's first update seeds it. */
+void l3_band_noise_update_span(l3_band_noise_t *noise, uint32_t stat, uint32_t windowFirst,
+                               uint32_t windowCount, uint32_t spanFirst, const l3_bin_obs_t *obs,
+                               uint32_t count);
 /* The contiguous run of round(widthBins) bins with the largest summed noise,
  * inside [centre - searchBins, centre + searchBins] and the map, that holds
  * round(centreBin) (the ball's bin is always inside the band: a ridge wholly

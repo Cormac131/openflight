@@ -64,6 +64,7 @@
 #include "l3_band.h"
 #include "l3_impact.h"
 #include "l3_leave.h"
+#include "l3_scan.h"
 #include "l3_impact_fit.h"
 #include "l3_iq8.h"
 #include "l3_iq16_stats.h"
@@ -449,6 +450,11 @@ static l3_band_noise_t     gBandNoise;
 static uint8_t             gBandFrozen;
 static l3_impact_t         gRangeImpact;   /* range-only fire (l3_impact_update_range) */
 static l3_leave_t          gLeave;         /* ball-leave fallback (l3_leave_update) */
+static l3_scan_cfg_t       gScanCfg;       /* which bins a frame scores (l3_scan.h) */
+static uint32_t            gMapCursor;     /* band-interior chunk the next idle frame refreshes */
+static float               gLeaveFloor;    /* the fallback's median beyond the band: post floor */
+static uint8_t             gDetectBehind;  /* a newer frame landed before this one was taken */
+static uint32_t            gDetectShed;    /* frames that shed the ball detector, map and angles */
 static l3_impact_fit_t     gImpactFit;
 static uint8_t             gImpactFitCfgSet;
 #define L3_IMPACT_FIT_MAX_BAND_BINS 64.0F
@@ -3129,6 +3135,27 @@ static void l3_verticalResidual(const l3_detect_frame_t *source, uint32_t localB
     }
 }
 
+/* Score a span's global bins into obs[] at the frame's local bins, each once
+ * a frame: the scan plan's spans (l3_scan.h) overlap. scored is a 64-bit mask
+ * (two words) of the local bins already scored this frame. */
+static void l3_scoreSpan(const l3_detect_frame_t *frame, const l3_span_t *span,
+                         l3_trig_obs_t *obs, uint32_t *scored)
+{
+    uint32_t bin;
+
+    for (bin = span->first; bin < span->first + span->count; bin++) {
+        uint32_t local = bin - frame->binStart;
+
+        if (local >= L3_TRIG_MAX_BINS || local >= frame->binCount) {
+            continue;
+        }
+        if ((scored[local >> 5U] & (1UL << (local & 31U))) == 0U) {
+            l3_verticalResidual(frame, local, NULL, &obs[local]);
+            scored[local >> 5U] |= (uint32_t)(1UL << (local & 31U));
+        }
+    }
+}
+
 /* l3sparse's per-loop residual power rows. */
 /* Per-loop residual power of a FROZEN ring slot, for the l3sparse power map
  * and the l3track cell selection: always the retained window in the ring,
@@ -3432,6 +3459,7 @@ static void l3_trigRearm(void)
     gPostTimestampUs = 0U;
     gPostFramesScored = 0U;
     gBallFloor = 0.0F;
+    gLeaveFloor = 0.0F;
     gShotResultReady = 0U;
     gBandFrozen = 0U;
 }
@@ -3490,6 +3518,7 @@ static void l3_clubTrackConfigure(void)
         leaveCfg.binWidthM = cfg.binWidthM;
         l3_leave_init(&gLeave, &leaveCfg);
     }
+    l3_scan_cfg_defaults(&gScanCfg);
     l3_impact_fit_reset(&gImpactFit);
     /* The ball track shares the club track's geometry; the shot machine
      * gives the ball tracker the whole post movie. */
@@ -3538,6 +3567,11 @@ static void l3_shotObserve(uint32_t teeBin, int32_t fired, uint32_t impactUs)
         gShot.impactFrame == gPreFramesCaptured) {
         l3_ball_track_arm(&gBallTrack, l3_ballArmBin(teeBin), &gBallPosition,
                           in.impactTimestampUs);
+        if (gBand.valid) {
+            /* The post window's floor, frozen (l3_scan.h): the fallback's
+             * median beyond the band, else the trigger's own floor. */
+            gBallFloor = (gLeaveFloor > 0.0F) ? gLeaveFloor : gTrig.floor;
+        }
         gPostTimestampUs = frameUs;
     }
 }
@@ -3643,22 +3677,62 @@ static void l3_considerBallTrack(uint32_t slot)
     frameIndex = gPreFramesCaptured + gPostFramesScored;
     gTrigBusy = 1U;
     ticks = Cycleprofiler_getTimeStamp();
-    for (bin = 0U; bin < count; bin++) {
-        l3_verticalResidual(&frame, bin, NULL, &obs[bin]);
-    }
-    if (l3_detectFrameStale(&frame)) {
-        gDetectScratchStale++;
-        gTrigBusy = 0U;
-        return;
-    }
     params.stat = gTrigCfg.stat;
     /* A departing ball is a weaker return than a club: its own snr. */
     params.snr = (gBallSnr > 0.0F) ? gBallSnr : gBallTrackCfg.snr;
     params.loopPeriodS = gTrigLoopPeriodS;
     params.subBin = gObsSubBin;
-    l3_obs_floor_update(&gBallFloor, gTrigCfg.stat, obs, count, L3_TRIG_FLOOR_SHIFT);
-    found = l3_obs_extract(&params, frameIndex, gPostTimestampUs, frame.binStart, obs, count,
-                           gBallFloor, targets, L3_OBS_MAX_TARGETS);
+    if (gImpactFitCfg.bandBins > 0.0F && gBand.valid) {
+        /* The scan plan's post windows (l3_scan.h): postBins following the
+         * ball and postClubBins following the club, merged so no bin is
+         * extracted twice, against the floor frozen at impact (a 16-bin
+         * window's own median is the ball, the club and the ridge). */
+        const l3_club_track_t *ball = &gBallTrack.core;
+        float ballPredicted = ball->lastBin +
+                              ball->velocityBinsPerFrame * (float)(frameIndex - ball->lastFrame);
+        uint8_t clubLive = (gClubTrack.active && gClubTrack.count > 0U) ? 1U : 0U;
+        float clubPredicted =
+            clubLive ? gClubTrack.lastBin +
+                           gClubTrack.velocityBinsPerFrame *
+                               (float)(frameIndex - gClubTrack.lastFrame)
+                     : 0.0F;
+        uint32_t scored[2] = { 0U, 0U };
+        l3_span_t ballSpan;
+        l3_span_t clubSpan;
+        l3_span_t merged[2];
+        uint32_t spans;
+        uint32_t k;
+
+        l3_scan_post(&gScanCfg, frame.binStart, count, &gBand, ball->active, ballPredicted,
+                     clubLive, clubPredicted, &ballSpan, &clubSpan);
+        spans = l3_scan_merge(ballSpan, clubSpan, merged);
+        for (k = 0U; k < spans; k++) {
+            l3_scoreSpan(&frame, &merged[k], obs, scored);
+        }
+        if (l3_detectFrameStale(&frame)) {
+            gDetectScratchStale++;
+            gTrigBusy = 0U;
+            return;
+        }
+        found = 0U;
+        for (k = 0U; k < spans; k++) {
+            found += l3_obs_extract(&params, frameIndex, gPostTimestampUs, merged[k].first,
+                                    &obs[merged[k].first - frame.binStart], merged[k].count,
+                                    gBallFloor, &targets[found], L3_OBS_MAX_TARGETS - found);
+        }
+    } else {
+        for (bin = 0U; bin < count; bin++) {
+            l3_verticalResidual(&frame, bin, NULL, &obs[bin]);
+        }
+        if (l3_detectFrameStale(&frame)) {
+            gDetectScratchStale++;
+            gTrigBusy = 0U;
+            return;
+        }
+        l3_obs_floor_update(&gBallFloor, gTrigCfg.stat, obs, count, L3_TRIG_FLOOR_SHIFT);
+        found = l3_obs_extract(&params, frameIndex, gPostTimestampUs, frame.binStart, obs, count,
+                               gBallFloor, targets, L3_OBS_MAX_TARGETS);
+    }
     /* The tee band's ridge is neither club nor ball; without a band nothing
      * is dropped. gBand is the last pre-impact frame's. */
     found = l3_band_filter(&gBand, targets, found);
@@ -3784,68 +3858,46 @@ static void l3_considerBallTrack(uint32_t slot)
 }
 
 /* The club track's targets on a pre-impact frame; returns how many
- * (firmware_replay._pre_impact_club_targets).
- *
- * Band off: the trigger region's own observations (obs[0..regionCount), first
- * global bin regionFirstBin), extracted against the trigger's floor -- the
- * view the club track always had. Band on (bandBins > 0, placed or not): the
- * trigger region would be mostly band, so the whole window is read into obs
- * (the trigger has scored its region by now) against the same floor, and
- * only targets short of the band are kept: the club approaches the ball, so
- * nothing in the band or beyond it is the club before impact. Either way a
- * target's peakBin is global, and peakBin - frame->binStart is its local bin
- * in the frame. *windowCount is how many whole-window bins obs now holds
- * (for the band's noise map), 0 when the whole window was not read. A
- * scratch reused mid-read offers no targets this frame. */
-static uint32_t l3_preImpactClubTargets(const l3_detect_frame_t *frame, l3_trig_obs_t *obs,
-                                        uint32_t regionFirstBin, uint32_t regionCount,
+ * (firmware_replay._scan_pre_impact). obs holds the frame's scored bins at
+ * their local index (windowFirst is the frame's first global bin): the scan
+ * plan's spans (l3_scan.h), scored by l3_considerSelfTrigger. The club's
+ * targets come from its span against the trigger's floor, and with a band only
+ * those short of it are kept: the club approaches the ball, so nothing in the
+ * band or beyond it is the club before impact. With a band the ball-leave
+ * fallback first reads its span beyond it, into the same target buffer (no RAM
+ * of its own), and leaves the median there as the post window's floor. */
+static uint32_t l3_preImpactClubTargets(const l3_trig_obs_t *obs, uint32_t windowFirst,
+                                        const l3_span_t *club, const l3_span_t *leave,
                                         const l3_obs_params_t *params, float floor,
                                         uint32_t frameIndex, uint32_t frameUs,
-                                        l3_target_obs_t *targets, uint32_t *windowCount,
-                                        int32_t *left)
+                                        l3_target_obs_t *targets, int32_t *left)
 {
-    *windowCount = 0U;
-    if (gImpactFitCfg.bandBins > 0.0F) {
-        uint32_t count = frame->binCount;
-        uint32_t found;
-        uint32_t bin;
+    uint32_t found;
 
-        if (count > L3_TRIG_MAX_BINS) {
-            count = L3_TRIG_MAX_BINS;
-        }
-        for (bin = 0U; bin < count; bin++) {
-            l3_verticalResidual(frame, bin, NULL, &obs[bin]);
-        }
-        if (l3_detectFrameStale(frame)) {
-            gDetectScratchStale++;
-            return 0U;
-        }
-        *windowCount = count;
-        if (gBand.valid) {
-            /* The ball-leave fallback reads the same window for its own
-             * returns, into the club's target buffer before the club's
-             * extraction overwrites it: no RAM of its own. */
-            uint32_t leaving = l3_leave_targets(&gLeave.cfg, params, obs, frame->binStart, count,
-                                                frameIndex, frameUs, gBand.hiBin, targets,
-                                                L3_OBS_MAX_TARGETS);
-            l3_track_point_t newest;
-            /* The club track as it stood after the last frame, near the band. */
-            uint8_t near = (gClubTrack.count > 0U &&
-                            l3_track_point(&gClubTrack, gClubTrack.count - 1U, &newest))
-                               ? l3_leave_club_near(&gLeave.cfg, gClubTrack.active,
-                                                    gClubTrack.count, newest.rangeBin,
-                                                    gBand.loBin)
-                               : 0U;
+    if (gBand.valid && leave->count > 0U) {
+        uint32_t leaving = l3_leave_targets(&gLeave.cfg, params, &obs[leave->first - windowFirst],
+                                            leave->first, leave->count, frameIndex, frameUs,
+                                            gBand.hiBin, targets, L3_OBS_MAX_TARGETS,
+                                            &gLeaveFloor);
+        l3_track_point_t newest;
+        /* The club track as it stood after the last frame, near the band. */
+        uint8_t near = (gClubTrack.count > 0U &&
+                        l3_track_point(&gClubTrack, gClubTrack.count - 1U, &newest))
+                           ? l3_leave_club_near(&gLeave.cfg, gClubTrack.active,
+                                                gClubTrack.count, newest.rangeBin,
+                                                gBand.loBin)
+                           : 0U;
 
-            *left = l3_leave_update(&gLeave, targets, leaving, gBand.hiBin,
-                                    0.5F * (gBand.loBin + gBand.hiBin), near);
-        }
-        found = l3_obs_extract(params, frameIndex, frameUs, frame->binStart, obs, count,
-                               floor, targets, L3_OBS_MAX_TARGETS);
-        return l3_band_keep_short(&gBand, targets, found);
+        *left = l3_leave_update(&gLeave, targets, leaving, gBand.hiBin,
+                                0.5F * (gBand.loBin + gBand.hiBin), near);
     }
-    return l3_obs_extract(params, frameIndex, frameUs, regionFirstBin, obs, regionCount,
-                          floor, targets, L3_OBS_MAX_TARGETS);
+    if (club->count == 0U) {
+        return 0U;
+    }
+    found = l3_obs_extract(params, frameIndex, frameUs, club->first,
+                           &obs[club->first - windowFirst], club->count, floor, targets,
+                           L3_OBS_MAX_TARGETS);
+    return gBand.valid ? l3_band_keep_short(&gBand, targets, found) : found;
 }
 
 /* Per completed pre-trigger slot: reduce the watch region to one observation
@@ -3858,7 +3910,12 @@ static void l3_considerSelfTrigger(uint32_t slot)
     static l3_trig_obs_t obs[L3_TRIG_MAX_BINS];
     uint32_t first;
     uint32_t count;
-    uint32_t bin;
+    uint32_t windowCount;
+    uint32_t scored[2] = { 0U, 0U };
+    l3_span_t region;
+    l3_span_t club;
+    l3_span_t leave;
+    l3_span_t chunk;
     int32_t ranged = 0;
     int32_t left = 0;
     int32_t fired;
@@ -3903,10 +3960,36 @@ static void l3_considerSelfTrigger(uint32_t slot)
         return;
     }
     gTrigBusy = 1U;
-    ticks = Cycleprofiler_getTimeStamp();
-    for (bin = 0U; bin < count; bin++) {
-        l3_verticalResidual(&frame, first + bin, NULL, &obs[bin]);
+    windowCount = (frame.binCount > L3_TRIG_MAX_BINS) ? L3_TRIG_MAX_BINS : frame.binCount;
+    memset(&chunk, 0, sizeof(chunk));
+    /* The band first (re-placed on the noisiest idle bins near the
+     * destination until a club track freezes it): the scan plan (l3_scan.h)
+     * and the trigger's region follow it. The whole window cost ~5.1 ms of a
+     * 3 ms frame and starved the CLI and the notices, which this task
+     * outranks. */
+    if (gImpactFitCfg.bandBins > 0.0F) {
+        if (!gBandFrozen) {
+            l3_band_place(&gBandNoise, (float)teeBin, gImpactFitCfg.bandSearchBins,
+                          gImpactFitCfg.bandBins, &gBand);
+        }
+        l3_scan_pre(&gScanCfg, frame.binStart, windowCount, frame.binStart + first, count,
+                    &gBand, &region, &club, &leave);
+        if (!gClubTrack.active && !gDetectBehind) {
+            l3_scan_map_chunk(&gScanCfg, frame.binStart, windowCount, &gBand, &gMapCursor,
+                              &chunk);
+        }
+    } else {
+        gBand.valid = 0U;
+        region.first = frame.binStart + first;
+        region.count = count;
+        club = region;
+        memset(&leave, 0, sizeof(leave));
     }
+    ticks = Cycleprofiler_getTimeStamp();
+    l3_scoreSpan(&frame, &region, obs, scored);
+    l3_scoreSpan(&frame, &club, obs, scored);
+    l3_scoreSpan(&frame, &leave, obs, scored);
+    l3_scoreSpan(&frame, &chunk, obs, scored);
     l3_profileStage(L3_PROF_RESIDUAL, ticks);
     if (l3_detectFrameStale(&frame)) {
         /* The scratch went back to the HWA before this read finished. */
@@ -3916,36 +3999,27 @@ static void l3_considerSelfTrigger(uint32_t slot)
         return;
     }
     ticks = Cycleprofiler_getTimeStamp();
-    l3_trig_observe(&gTrig, gPreFramesCaptured, teeBin, frame.binStart + first, obs, count);
+    if (region.count > 0U) {
+        l3_trig_observe(&gTrig, gPreFramesCaptured, teeBin, region.first,
+                        &obs[region.first - frame.binStart], region.count);
+    }
     l3_profileStage(L3_PROF_TRIGGER, ticks);
     {
-        /* Ranked targets into the club track: the trigger's observations,
-         * or with a tee band the whole window short of it. */
+        /* Ranked targets into the club track: the club's span of the plan. */
         static l3_target_obs_t targets[L3_OBS_MAX_TARGETS];
         l3_obs_params_t params;
         uint32_t found;
-        uint32_t windowCount;
         int32_t appended;
 
         params.stat = gTrigCfg.stat;
         params.snr = gTrigCfg.snr;
         params.loopPeriodS = gTrigLoopPeriodS;
         params.subBin = gObsSubBin;
-        /* The band: re-placed on the noisiest idle bins near the
-         * destination until a club track freezes it. */
-        if (gImpactFitCfg.bandBins > 0.0F) {
-            if (!gBandFrozen) {
-                l3_band_place(&gBandNoise, (float)teeBin, gImpactFitCfg.bandSearchBins,
-                              gImpactFitCfg.bandBins, &gBand);
-            }
-        } else {
-            gBand.valid = 0U;
-        }
         ticks = Cycleprofiler_getTimeStamp();
-        found = l3_preImpactClubTargets(&frame, obs, frame.binStart + first, count, &params,
+        found = l3_preImpactClubTargets(obs, frame.binStart, &club, &leave, &params,
                                         gTrig.floor, gPreFramesCaptured,
                                         gPreFramesCaptured * (uint32_t)gFramePeriodUs, targets,
-                                        &windowCount, &left);
+                                        &left);
         l3_profileStage(L3_PROF_EXTRACT, ticks);
         gClubTrackDest = teeBin;
         ticks = Cycleprofiler_getTimeStamp();
@@ -3953,19 +4027,31 @@ static void l3_considerSelfTrigger(uint32_t slot)
                                    gPreFramesCaptured * (uint32_t)gFramePeriodUs);
         l3_profileStage(L3_PROF_CLUB_TRACK, ticks);
         /* An active club track freezes the band where it stands; an idle
-         * frame thaws it and feeds the whole window it read to the map. */
+         * frame thaws it and feeds each span it scored to the map. */
         if (gImpactFitCfg.bandBins > 0.0F) {
             if (gClubTrack.active) {
                 gBandFrozen = 1U;
             } else {
+                const l3_span_t *fed[3];
+                uint32_t k;
+
                 gBandFrozen = 0U;
-                if (windowCount > 0U) {
-                    l3_band_noise_update(&gBandNoise, gTrigCfg.stat, frame.binStart, obs,
-                                         windowCount);
+                fed[0] = &club;
+                fed[1] = &leave;
+                fed[2] = &chunk;
+                for (k = 0U; k < 3U; k++) {
+                    if (fed[k]->count > 0U) {
+                        l3_band_noise_update_span(&gBandNoise, gTrigCfg.stat, frame.binStart,
+                                                  windowCount, fed[k]->first,
+                                                  &obs[fed[k]->first - frame.binStart],
+                                                  fed[k]->count);
+                    }
                 }
             }
         }
-        if (appended && gClubTrack.lastTargetIndex < found && gClubTrack.count > 1U &&
+        /* Behind, the angle estimate (~1.6 ms) is shed: the fire does not use it. */
+        if (appended && gClubTrack.lastTargetIndex < found &&
+            gClubTrack.count > 1U && !gDetectBehind &&
             l3_track_point(&gClubTrack, gClubTrack.count - 1U, &newest)) {
             /* Angles for the associated target only: one estimate per frame.
              * The track's range-rate velocity resolves the TDM alias, so the
@@ -4083,7 +4169,16 @@ static void l3_detectTask(UArg arg0, UArg arg1)
             gDetectStale++;
             continue;
         }
-        l3_considerBall(queuedSlot);
+        /* Behind: a newer frame landed before this one was taken. Shed what
+         * the trigger's fire does not need (the ball detector here, the map
+         * chunk and the club's angles in the trigger) so the backlog drains
+         * and the CLI and the notices, which this task outranks, get time. */
+        gDetectBehind = ((uint32_t)(gPreFramesCaptured - epoch) >= 1U) ? 1U : 0U;
+        if (!gDetectBehind) {
+            l3_considerBall(queuedSlot);
+        } else {
+            gDetectShed++;
+        }
         l3_considerSelfTrigger(queuedSlot);
     }
 }
@@ -5189,10 +5284,11 @@ static int32_t l3_cli_stats(int32_t argc, char *argv[])
               (unsigned)gSelfTriggerLatched,
               (unsigned)gTriggerEnabled);
 #ifdef HWA_CHAINED_SNAPSHOT_RING
-    CLI_write("detect dropped=%u stale=%u notice_dropped=%u\n",
+    CLI_write("detect dropped=%u stale=%u notice_dropped=%u shed=%u\n",
               (unsigned)gDetectQueue.dropped,
               (unsigned)gDetectStale,
-              (unsigned)gNoticeDropped);
+              (unsigned)gNoticeDropped,
+              (unsigned)gDetectShed);
 #ifdef L3_RING_IQ8
     if (l3_captureCompactsIq16()) {
         static char retainLine[96];

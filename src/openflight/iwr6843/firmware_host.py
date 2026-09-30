@@ -41,6 +41,7 @@ HOST_SOURCES = (
     "l3_ball_hyp.c",
     "l3_impact.c",
     "l3_leave.c",
+    "l3_scan.c",
     "l3_shot.c",
     "l3_ball_track.c",
     "l3_result.c",
@@ -324,6 +325,7 @@ class BandNoise(ctypes.Structure):
         ("count", ctypes.c_uint32),
         ("updates", ctypes.c_uint32),
         ("avg", ctypes.c_float * BAND_NOISE_BINS),
+        ("seen", ctypes.c_uint8 * BAND_NOISE_BINS),
     ]
 
 
@@ -574,6 +576,25 @@ class ImpactCfg(ctypes.Structure):
     """``l3_impact_cfg_t``."""
 
     _fields_ = [("horizonS", ctypes.c_float), ("endM", ctypes.c_float)]
+
+
+class Span(ctypes.Structure):
+    """``l3_span_t``: global first bin and count."""
+
+    _fields_ = [("first", ctypes.c_uint32), ("count", ctypes.c_uint32)]
+
+
+class ScanCfg(ctypes.Structure):
+    """``l3_scan_cfg_t``: which range bins a frame scores."""
+
+    _fields_ = [
+        ("clubBins", ctypes.c_uint32),
+        ("leaveBins", ctypes.c_uint32),
+        ("postBins", ctypes.c_uint32),
+        ("postBehindBins", ctypes.c_uint32),
+        ("postClubBins", ctypes.c_uint32),
+        ("mapChunkBins", ctypes.c_uint32),
+    ]
 
 
 class LeaveCfg(ctypes.Structure):
@@ -1404,6 +1425,23 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     ),
     "l3_impact_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_impact_cause_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_band_noise_update_span": (
+        [_P(BandNoise), _U32, _U32, _U32, _U32, _P(BinObs), _U32],
+        None,
+    ),
+    "l3_scan_cfg_defaults": ([_P(ScanCfg)], None),
+    "l3_scan_pre": (
+        [_P(ScanCfg), _U32, _U32, _U32, _U32, _P(Band), _P(Span), _P(Span), _P(Span)],
+        None,
+    ),
+    "l3_scan_map_chunk": ([_P(ScanCfg), _U32, _U32, _P(Band), _P(ctypes.c_uint32), _P(Span)], None),
+    "l3_scan_post": (
+        [_P(ScanCfg), _U32, _U32, _P(Band), ctypes.c_uint8, _F32, ctypes.c_uint8, _F32]
+        + [_P(Span), _P(Span)],
+        None,
+    ),
+    "l3_scan_merge": ([Span, Span, _P(Span)], _U32),
+    "l3_scan_count": ([_P(Span), _U32], _U32),
     "l3_leave_cfg_defaults": ([_P(LeaveCfg)], None),
     "l3_leave_init": ([_P(Leave), _P(LeaveCfg)], None),
     "l3_leave_rearm": ([_P(Leave)], None),
@@ -1411,7 +1449,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_leave_club_near": ([_P(LeaveCfg), ctypes.c_uint8, _U32, _F32, _F32], ctypes.c_uint8),
     "l3_leave_targets": (
         [_P(LeaveCfg), _P(ObsParams), _P(BinObs), _U32, _U32, _U32, _U32, _F32]
-        + [_P(TargetObs), _U32],
+        + [_P(TargetObs), _U32, _P(ctypes.c_float)],
         _U32,
     ),
     "l3_leave_update": (
@@ -1761,6 +1799,8 @@ __all__ = [
     "ImpactClub",
     "Leave",
     "LeaveCfg",
+    "ScanCfg",
+    "Span",
     "FIT_MAX_POINTS",
     "FIT_NO_TRACK",
     "FIT_TRACK_NAMES",
