@@ -55,6 +55,28 @@ def test_read_line_drains_an_overlong_line_instead_of_stopping_mid_line():
     assert "L3_SPARSE_REQUEST_TIMEOUT_MS" in read_line
 
 
+def test_release_rearms_without_reading_a_cell_line():
+    """A second CLI line cannot sit in the one-byte SCI receiver during the power dump."""
+    release = _function("static int32_t l3_cli_release(")
+
+    assert "l3_readLine" not in release
+    assert "l3_awaitFrozenRing()" in release
+    assert release.index("l3_awaitFrozenRing()") < release.index("l3_sparseRearm()")
+    assert 'tableEntry[16].cmd           = "l3release"' in _source()
+
+
+def test_blank_line_before_the_cell_request_is_not_a_missing_request():
+    """A stray CR/LF left in the FIFO must not reject the real cells line."""
+    sparse = _function("int32_t l3_cli_sparse(")
+    read_line = _function("static int32_t l3_readLine(")
+
+    assert "return L3_READLINE_EMPTY;" in read_line
+    retry = sparse.index("lineStatus == L3_READLINE_EMPTY")
+    missing = sparse.index('CLI_write("Error: sparse cell request missing')
+    assert retry < missing
+    assert sparse.count("l3_readLine(request") == 2
+
+
 def test_slice_count_is_the_number_of_cells_actually_parsed():
     sparse = _function("int32_t l3_cli_sparse(")
 
@@ -64,13 +86,59 @@ def test_slice_count_is_the_number_of_cells_actually_parsed():
     assert parsed < header < count
 
 
+def test_self_trigger_judges_each_finished_slot_inline_after_the_rearm():
+    """The rearm task runs the detector right after restarting the HWA.
+
+    A separate low-priority detect task judged slots whenever it got the CPU,
+    so the freeze could land frames after the one that fired. Replaying saved
+    captures judges every frame in order, and so does this.
+    """
+    source = _source()
+    rearm = _function("static void l3_hwaRearmTask")
+    drain = _function("static void l3_runQueuedDetects(void)")
+    publish = _function("static void l3_publishDetectFrame(")
+    done = _function("static void l3_hwaOutputDoneCB")
+    packed = _function("static void l3_iq8EdmaDoneCB")
+    stats = _function("static int32_t l3_cli_stats")
+
+    assert "l3_detectTask" not in source
+    assert "gDetectSemaphore" not in source
+    assert "L3_DETECT_TASK_PRIORITY" not in source
+    assert "Semaphore_post" not in publish
+
+    restart = rearm.index("errCode = l3_restartCompletedHwaFrame();")
+    judged = rearm.index("l3_runQueuedDetects();")
+    assert restart < judged
+    assert "l3_considerSelfTrigger" not in rearm
+
+    assert "while (l3detect_pop(&gDetectQueue, &queuedSlot, &epoch))" in drain
+    live = drain.index("l3detect_slot_live")
+    assert live < drain.index("l3_considerSelfTrigger(queuedSlot)")
+    assert "gDetectStale++" in drain
+
+    assert "l3_publishDetectFrame" in done
+    assert "l3_publishDetectFrame" in packed
+    assert 'CLI_write("detect dropped=%u stale=%u\\n"' in stats
+
+
+def test_rearm_task_stack_covers_the_inline_detector():
+    """The detector's frame now sits on the rearm task's stack."""
+    init = _source()
+    create = init.index("Task_create(l3_hwaRearmTask, &taskParams, NULL);")
+    params = init.rindex("Task_Params_init(&taskParams);", 0, create)
+    block = init[params:create]
+    assert "taskParams.priority = L3_HWA_REARM_TASK_PRIORITY;" in block
+    assert "taskParams.stackSize = 3U * 1024U;" in block
+    assert init.index("l3detect_init(&gDetectQueue);") < create
+
+
 def test_trigger_peak_tracks_bin_zero_with_an_explicit_flag():
     consider = _function("static void l3_considerSelfTrigger(")
 
     assert "gTriggerPeakBin != 0U" not in consider
     assert consider.count("gTriggerHavePeak") >= 3
     assert "gTriggerHavePeak = 0U;" in _function("static void l3_clearTriggerMotion(")
-    assert "gTriggerHavePeak = 0U;" in _function("static int32_t l3_cli_triggerCfg(")
+    assert "l3_clearTriggerMotion();" in _function("static int32_t l3_cli_triggerCfg(")
 
 
 def test_loop_means_are_computed_once_per_bin():
