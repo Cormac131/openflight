@@ -560,6 +560,12 @@ class IWR6843Radar:
 
         return parse_dsp_pong(self.cmd("trackCfg dsp ping", 2.0))
 
+    def dsp_status(self):
+        """``trackCfg dsp status``: the boot stage the DSS reached (``dsp_link.DspStatus``)."""
+        from .dsp_link import parse_dsp_status  # pylint: disable=import-outside-toplevel
+
+        return parse_dsp_status(self.cmd("trackCfg dsp status", 2.0))
+
     def dsp_probe(self, bins: int | None = None):
         """``trackCfg dsp probe [bins]``: the newest ring frame scored on the MSS
         and the DSS, timed and compared (``dsp_link.DspProbe``). Needs a

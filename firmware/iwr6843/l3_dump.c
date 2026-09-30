@@ -4664,6 +4664,20 @@ static int32_t l3_dspExchange(l3_dsp_request_t *request, l3_dsp_reply_t *reply)
     return -1;
 }
 
+/* The DSS's boot status (l3_dsp_ipc.h), read from HS-RAM: where a DSS that
+ * does not answer stopped. */
+static void l3_dspPrintStatus(void)
+{
+    l3_dsp_status_t status;
+    char line[96];
+
+    memcpy(&status,
+           (const void *)(SOC_XWR68XX_MSS_HSRAM_BASE_ADDRESS + L3_DSP_STATUS_HSRAM_OFFSET),
+           sizeof(status));
+    (void)l3_dsp_status_format(&status, line, sizeof(line));
+    CLI_write("%s\n", line);
+}
+
 static uint32_t l3_cyclesToUs(uint32_t cycles)
 {
     return cycles / (gCpuClock / 1000000U);
@@ -4680,6 +4694,7 @@ static int32_t l3_dspPing(void)
     request.cmd = L3_DSP_CMD_PING;
     ticks = Cycleprofiler_getTimeStamp();
     if (l3_dspExchange(&request, &reply) != 0) {
+        l3_dspPrintStatus();
         CLI_write("Error: DSP did not answer (link %s)\n", gDspLink == NULL ? "closed" : "open");
         return -1;
     }
@@ -4739,6 +4754,7 @@ static int32_t l3_dspProbe(int32_t argc, char *argv[])
         return -1;
     }
     if (l3_dspExchange(&request, &dss) != 0) {
+        l3_dspPrintStatus();
         CLI_write("Error: DSP did not answer (link %s)\n", gDspLink == NULL ? "closed" : "open");
         return -1;
     }
@@ -4755,17 +4771,22 @@ static int32_t l3_dspProbe(int32_t argc, char *argv[])
     return match ? 0 : -1;
 }
 
-/* "trackCfg dsp ping | probe [bins]": the detect link's diagnostics. A
- * trackCfg sub-mode: the CLI table is at the SDK's CLI_MAX_CMD. */
+/* "trackCfg dsp ping | probe [bins] | status": the detect link's
+ * diagnostics. A trackCfg sub-mode: the CLI table is at the SDK's
+ * CLI_MAX_CMD. */
 static int32_t l3_cli_trackCfgDsp(int32_t argc, char *argv[])
 {
+    if (argc == 3 && strcmp(argv[2], "status") == 0) {
+        l3_dspPrintStatus();
+        return 0;
+    }
     if (argc == 3 && strcmp(argv[2], "ping") == 0) {
         return l3_dspPing();
     }
     if ((argc == 3 || argc == 4) && strcmp(argv[2], "probe") == 0) {
         return l3_dspProbe(argc, argv);
     }
-    CLI_write("Error: trackCfg dsp ping | probe [bins]\n");
+    CLI_write("Error: trackCfg dsp ping | probe [bins] | status\n");
     return -1;
 }
 

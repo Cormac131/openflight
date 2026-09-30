@@ -15,8 +15,10 @@ from openflight.iwr6843.driver import IWR6843Radar
 from openflight.iwr6843.dsp_link import (
     DspLinkError,
     DspProbe,
+    DspStatus,
     parse_dsp_pong,
     parse_dsp_probe,
+    parse_dsp_status,
     summarize_probes,
 )
 
@@ -128,3 +130,36 @@ def test_the_driver_probes_all_bins_or_the_first_few(bins, line):
 def test_the_driver_refuses_a_nonsense_bin_count():
     with pytest.raises(ValueError):
         _Radar(PROBE).dsp_probe(0)
+
+
+def test_the_dss_status_line_is_parsed():
+    status = parse_dsp_status("dsp status stage=link_open err=0 beats=412 served=0\nDone\n")
+    assert status == DspStatus(stage="link_open", failed=False, err=0, beats=412, served=0)
+    assert status.booted
+
+
+def test_a_failed_stage_is_parsed():
+    status = parse_dsp_status("dsp status stage=soc_init FAILED err=-3 beats=0 served=0\n")
+    assert (status.stage, status.failed, status.err) == ("soc_init", True, -3)
+
+
+def test_a_dss_that_never_booted_is_parsed():
+    status = parse_dsp_status("dsp status stage=never_booted magic=00000000\nDone\n")
+    assert status.stage == "never_booted" and not status.booted
+
+
+def test_status_is_read_even_when_the_reply_also_carries_an_error():
+    """A failed ping prints the status line and then its Error line."""
+    text = "dsp status stage=task err=0 beats=0 served=0\nError: DSP did not answer (link open)\n"
+    assert parse_dsp_status(text).stage == "task"
+
+
+def test_a_reply_without_a_status_line_is_an_error():
+    with pytest.raises(DspLinkError):
+        parse_dsp_status("Error: trackCfg <loopPeriodS> ...\n")
+
+
+def test_the_driver_asks_for_the_status():
+    radar = _Radar("dsp status stage=link_open err=0 beats=3 served=1\nDone\n")
+    assert radar.dsp_status().served == 1
+    assert radar.sent[0][0] == "trackCfg dsp status"

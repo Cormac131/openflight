@@ -22,6 +22,12 @@ _PROBE = re.compile(
     re.MULTILINE,
 )
 _ERROR = re.compile(r"^Error:\s*(.*)$", re.MULTILINE)
+_STATUS = re.compile(
+    r"^dsp status stage=(?P<stage>\w+)(?P<failed> FAILED)? err=(?P<err>-?\d+) "
+    r"beats=(?P<beats>\d+) served=(?P<served>\d+)\s*$",
+    re.MULTILINE,
+)
+_NEVER_BOOTED = re.compile(r"^dsp status stage=never_booted magic=[0-9a-f]{8}\s*$", re.MULTILINE)
 
 
 class DspLinkError(RuntimeError):
@@ -42,6 +48,26 @@ class DspProbe:
     status: int  # the DSS's L3_DSP_* status
     mss_energy: str  # the energy sum's float bits, hex
     dss_energy: str
+
+
+@dataclass(frozen=True)
+class DspStatus:
+    """``trackCfg dsp status``: the boot stage the DSS reached (HS-RAM).
+
+    Stages in order: main, soc_init, task, mailbox_init, link_open (serving);
+    never_booted when the DSS never wrote its status. ``beats`` rises while
+    the link task waits for requests, so a rising count means BIOS runs.
+    """
+
+    stage: str
+    failed: bool
+    err: int
+    beats: int
+    served: int
+
+    @property
+    def booted(self) -> bool:
+        return self.stage != "never_booted"
 
 
 @dataclass(frozen=True)
@@ -89,6 +115,24 @@ def parse_dsp_probe(text: str) -> DspProbe:
         status=int(fields["status"]),
         mss_energy=fields["mss_energy"],
         dss_energy=fields["dss_energy"],
+    )
+
+
+def parse_dsp_status(text: str) -> DspStatus:
+    """The status line; also found in a failed ping's or probe's reply,
+    which prints it before its Error line."""
+    if _NEVER_BOOTED.search(text):
+        return DspStatus(stage="never_booted", failed=False, err=0, beats=0, served=0)
+    match = _STATUS.search(text)
+    if match is None:
+        _raise_on_error(text, "trackCfg dsp status")
+        raise DspLinkError(f"trackCfg dsp status: no status line in {text!r}")
+    return DspStatus(
+        stage=match.group("stage"),
+        failed=match.group("failed") is not None,
+        err=int(match.group("err")),
+        beats=int(match.group("beats")),
+        served=int(match.group("served")),
     )
 
 

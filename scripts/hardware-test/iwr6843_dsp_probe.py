@@ -47,7 +47,18 @@ def main() -> int:
             pings = [radar.dsp_ping() for _ in range(args.repeats)]
         except DspLinkError as exc:
             print(f"FAIL ping: {exc}")
-            print("Flash an image with the detect link (releases/l3_dump_dsp_link_test.bin).")
+            try:
+                status = radar.dsp_status()
+            except DspLinkError as status_exc:
+                print(f"  no DSS status either ({status_exc}): flash the latest link image")
+                return 1
+            print(
+                f"  DSS status: stage={status.stage}{' FAILED' if status.failed else ''} "
+                f"err={status.err} beats={status.beats} served={status.served}"
+            )
+            time.sleep(1.0)
+            again = radar.dsp_status()
+            print(f"  beats one second later: {again.beats} (rising means the DSS task runs)")
             return 1
         print(f"ping: {len(pings)} answered, round trip {min(pings)}..{max(pings)} us")
 

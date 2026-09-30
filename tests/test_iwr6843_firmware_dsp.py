@@ -247,3 +247,63 @@ def test_a_ping_is_answered_with_its_sequence(lib):
         fw.L3_DSP_OK,
         0,
     )
+
+
+# --- the DSS's boot status, for when it does not answer -----------------------
+#
+# 2026-09-30 on the board: "trackCfg dsp ping: DSP did not answer (link open)".
+# The MSS cannot tell a DSS that never booted from one stuck in SOC_init or
+# one whose mailbox never opened. The DSS records each boot stage and a
+# heartbeat in HS-RAM, which both cores map, and the MSS prints it.
+
+
+def status(**fields) -> fw.DspStatus:
+    out = fw.DspStatus(magic=fw.L3_DSP_STATUS_MAGIC)
+    for name, value in fields.items():
+        setattr(out, name, value)
+    return out
+
+
+def formatted(lib, value: fw.DspStatus | None) -> str:
+    return fw.c_text(lib.l3_dsp_status_format, ctypes.byref(value) if value else None)
+
+
+def test_the_status_layout_matches_the_c(lib):
+    assert ctypes.sizeof(fw.DspStatus) == lib.l3_dsp_status_size()
+
+
+def test_the_status_sits_at_the_top_of_hs_ram_on_both_cores():
+    """One offset, each core's own base (MSS 0x52080000, DSS 0x21080000)."""
+    assert 0 < fw.L3_DSP_STATUS_HSRAM_OFFSET <= 32 * 1024 - ctypes.sizeof(fw.DspStatus)
+
+
+@pytest.mark.parametrize(
+    ("stage", "name"),
+    [
+        (fw.L3_DSP_STAGE_MAIN, "main"),
+        (fw.L3_DSP_STAGE_SOC, "soc_init"),
+        (fw.L3_DSP_STAGE_TASK, "task"),
+        (fw.L3_DSP_STAGE_MAILBOX, "mailbox_init"),
+        (fw.L3_DSP_STAGE_LINK, "link_open"),
+    ],
+)
+def test_each_boot_stage_is_named(lib, stage, name):
+    text = formatted(lib, status(stage=stage, heartbeat=7, served=2))
+    assert text == f"dsp status stage={name} err=0 beats=7 served=2"
+
+
+def test_a_failed_stage_says_which_and_its_error(lib):
+    text = formatted(lib, status(stage=fw.L3_DSP_STAGE_LINK | fw.L3_DSP_STAGE_FAILED, errCode=-3))
+    assert text == "dsp status stage=link_open FAILED err=-3 beats=0 served=0"
+
+
+def test_a_dss_that_never_wrote_its_status_says_so(lib):
+    """Anything but the magic: the DSS never reached main (or HS-RAM is not shared)."""
+    assert formatted(lib, fw.DspStatus(magic=0xDEADBEEF, stage=5)) == (
+        "dsp status stage=never_booted magic=deadbeef"
+    )
+    assert formatted(lib, None) == "dsp status stage=never_booted magic=00000000"
+
+
+def test_an_unknown_stage_is_shown_as_its_number(lib):
+    assert formatted(lib, status(stage=42)).startswith("dsp status stage=42 ")

@@ -137,3 +137,45 @@ def test_the_mss_sends_frames_as_l3_offsets_and_scores_them_itself_too():
     text = MSS_MAIN.read_text(encoding="utf-8")
     assert "SOC_XWR68XX_MSS_L3RAM_BASE_ADDRESS" in text
     assert "l3_dsp_probe_run(" in text, "the MSS runs the same probe to compare"
+
+
+def test_the_dss_leaves_the_system_clock_to_the_mss():
+    """SOC_SysClock_INIT on the DSS re-ungates and unhalts the BSS and spins
+    on the APLL calibration flag, the MSS's job; TI's own DSS (the mmw demo)
+    uses BYPASS_INIT. Suspect for the DSS not answering on the board."""
+    text = DSS_MAIN.read_text(encoding="utf-8")
+    assert "socCfg.clockCfg = SOC_SysClock_BYPASS_INIT;" in text
+    assert "SOC_SysClock_INIT;" not in text
+
+
+def test_the_dss_records_every_boot_stage_and_writes_it_back():
+    """The status must leave the DSS's cache or the MSS never sees it."""
+    text = DSS_MAIN.read_text(encoding="utf-8")
+    for stage in (
+        "L3_DSP_STAGE_MAIN",
+        "L3_DSP_STAGE_SOC",
+        "L3_DSP_STAGE_TASK",
+        "L3_DSP_STAGE_MAILBOX",
+        "L3_DSP_STAGE_LINK",
+    ):
+        assert f"dss_status({stage}" in text, stage
+    assert "SOC_XWR68XX_DSS_HSRAM_BASE_ADDRESS + L3_DSP_STATUS_HSRAM_OFFSET" in text
+    status = text[text.index("static void dss_status(") :]
+    assert "Cache_wb(" in status[: status.index("\n}\n")]
+    assert status.index("dss_status(L3_DSP_STAGE_MAIN") > 0
+    main = text[text.index("int main(void)") :]
+    assert main.index("dss_status(L3_DSP_STAGE_MAIN") < main.index("SOC_init(")
+
+
+def test_the_dss_beats_while_it_waits_for_the_mss():
+    """A bounded read, counted on each timeout: beats rising says BIOS runs."""
+    text = DSS_MAIN.read_text(encoding="utf-8")
+    assert "cfg.readTimeout = BIOS_WAIT_FOREVER;" not in text
+    assert "dss_statusCount(&gDssStatus->heartbeat)" in text
+
+
+def test_the_mss_prints_the_dss_status_on_request_and_when_it_does_not_answer():
+    text = MSS_MAIN.read_text(encoding="utf-8")
+    assert "SOC_XWR68XX_MSS_HSRAM_BASE_ADDRESS + L3_DSP_STATUS_HSRAM_OFFSET" in text
+    assert 'strcmp(argv[2], "status") == 0' in text
+    assert text.count("l3_dspPrintStatus();") >= 3, "status, and after each unanswered command"

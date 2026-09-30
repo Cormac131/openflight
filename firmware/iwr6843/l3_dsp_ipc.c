@@ -2,6 +2,7 @@
 #include "l3_dsp_ipc.h"
 
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "l3_bin_score.h"
@@ -15,6 +16,51 @@ uint32_t l3_dsp_request_size(void)
 uint32_t l3_dsp_reply_size(void)
 {
     return (uint32_t)sizeof(l3_dsp_reply_t);
+}
+
+uint32_t l3_dsp_status_size(void)
+{
+    return (uint32_t)sizeof(l3_dsp_status_t);
+}
+
+static const char *l3_dsp_stage_name(uint32_t stage)
+{
+    switch (stage) {
+    case L3_DSP_STAGE_MAIN:
+        return "main";
+    case L3_DSP_STAGE_SOC:
+        return "soc_init";
+    case L3_DSP_STAGE_TASK:
+        return "task";
+    case L3_DSP_STAGE_MAILBOX:
+        return "mailbox_init";
+    case L3_DSP_STAGE_LINK:
+        return "link_open";
+    default:
+        return NULL;
+    }
+}
+
+int32_t l3_dsp_status_format(const l3_dsp_status_t *status, char *out, uint32_t cap)
+{
+    const char *name;
+    char number[12];
+    uint32_t stage;
+
+    if (status == NULL || status->magic != L3_DSP_STATUS_MAGIC) {
+        return (int32_t)snprintf(out, cap, "dsp status stage=never_booted magic=%08x",
+                                 status == NULL ? 0U : (unsigned)status->magic);
+    }
+    stage = status->stage & ~L3_DSP_STAGE_FAILED;
+    name = l3_dsp_stage_name(stage);
+    if (name == NULL) {
+        (void)snprintf(number, sizeof(number), "%u", (unsigned)status->stage);
+        name = number;
+    }
+    return (int32_t)snprintf(out, cap, "dsp status stage=%s%s err=%d beats=%u served=%u", name,
+                             (status->stage & L3_DSP_STAGE_FAILED) != 0U ? " FAILED" : "",
+                             (int)status->errCode, (unsigned)status->heartbeat,
+                             (unsigned)status->served);
 }
 
 uint32_t l3_dsp_frame_bytes(uint32_t ntx, uint32_t nrx, uint32_t binCount, uint32_t loops)

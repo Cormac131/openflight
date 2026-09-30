@@ -53,12 +53,40 @@ typedef struct {
     float    r1ImSum;
 } l3_dsp_reply_t;
 
+/* The DSS's boot status, written by the DSS into HS-RAM (32 KB, mapped by
+ * both cores: MSS 0x52080000, DSS 0x21080000) at this offset and read by the
+ * MSS when the DSS does not answer: which boot stage it reached, the error
+ * if a stage failed, a heartbeat while it waits for requests, and how many
+ * it has served. */
+#define L3_DSP_STATUS_MAGIC         0x4C445353U /* "LDSS" */
+#define L3_DSP_STATUS_HSRAM_OFFSET  0x7F00U
+
+#define L3_DSP_STAGE_MAIN     1U  /* main() entered */
+#define L3_DSP_STAGE_SOC      2U  /* SOC_init returned */
+#define L3_DSP_STAGE_TASK     3U  /* BIOS started the link task */
+#define L3_DSP_STAGE_MAILBOX  4U  /* Mailbox_init returned */
+#define L3_DSP_STAGE_LINK     5U  /* Mailbox_open returned: serving */
+#define L3_DSP_STAGE_FAILED   0x80U /* or'd in: the stage failed, see errCode */
+
+typedef struct {
+    uint32_t magic;
+    uint32_t stage;
+    int32_t  errCode;
+    uint32_t heartbeat; /* read timeouts while serving */
+    uint32_t served;    /* requests answered */
+} l3_dsp_status_t;
+
 uint32_t l3_dsp_request_size(void);
 uint32_t l3_dsp_reply_size(void);
 /* Bytes of one IQ16 frame: loops x ntx x nrx x binCount complex samples. */
 uint32_t l3_dsp_frame_bytes(uint32_t ntx, uint32_t nrx, uint32_t binCount, uint32_t loops);
 /* L3_DSP_OK, or why the request must not run against an L3 of l3Bytes. */
 uint32_t l3_dsp_request_check(const l3_dsp_request_t *request, uint32_t l3Bytes);
+uint32_t l3_dsp_status_size(void);
+/* "dsp status stage=<name>[ FAILED] err=E beats=B served=S", or, without the
+ * magic (NULL too), "dsp status stage=never_booted magic=XXXXXXXX".
+ * Returns the characters written, as snprintf. */
+int32_t l3_dsp_status_format(const l3_dsp_status_t *status, char *out, uint32_t cap);
 /* Answer a request against the L3 arena at l3Base (this core's address for
  * it): check it, then for PROBE score its bins. The caller times the call
  * and fills reply->cycles. l3Base may be NULL for a PING. */

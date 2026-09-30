@@ -585,6 +585,26 @@ L3_DSP_MAGIC = 0x4C445331
 L3_DSP_CMD_PING = 1
 L3_DSP_CMD_PROBE = 2
 L3_DSP_OK = 0
+L3_DSP_STATUS_MAGIC = 0x4C445353
+L3_DSP_STATUS_HSRAM_OFFSET = 0x7F00
+L3_DSP_STAGE_MAIN = 1
+L3_DSP_STAGE_SOC = 2
+L3_DSP_STAGE_TASK = 3
+L3_DSP_STAGE_MAILBOX = 4
+L3_DSP_STAGE_LINK = 5
+L3_DSP_STAGE_FAILED = 0x80
+
+
+class DspStatus(ctypes.Structure):
+    """``l3_dsp_status_t``: the DSS's boot status in HS-RAM."""
+
+    _fields_ = [
+        ("magic", ctypes.c_uint32),
+        ("stage", ctypes.c_uint32),
+        ("errCode", ctypes.c_int32),
+        ("heartbeat", ctypes.c_uint32),
+        ("served", ctypes.c_uint32),
+    ]
 
 
 class DspRequest(ctypes.Structure):
@@ -1373,6 +1393,8 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     # l3_dsp_ipc.h
     "l3_dsp_request_size": ([], _U32),
     "l3_dsp_reply_size": ([], _U32),
+    "l3_dsp_status_size": ([], _U32),
+    "l3_dsp_status_format": ([_P(DspStatus), *_TEXT], ctypes.c_int32),
     "l3_dsp_frame_bytes": ([_U32, _U32, _U32, _U32], _U32),
     "l3_dsp_request_check": ([_P(DspRequest), _U32], _U32),
     "l3_dsp_probe_run": (

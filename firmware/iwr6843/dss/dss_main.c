@@ -41,6 +41,30 @@
 #pragma DATA_ALIGN(dss_solveTaskStack, 8)
 static uint8_t dss_solveTaskStack[DSS_SOLVE_TASK_STACK_SIZE];
 
+/* How long a read waits before the heartbeat counts one (BIOS ticks, ms). */
+#define DSS_LINK_BEAT_TICKS 100U
+
+/* The boot status in HS-RAM (l3_dsp_ipc.h), which the MSS reads when this
+ * core does not answer. */
+static volatile l3_dsp_status_t *const gDssStatus =
+    (volatile l3_dsp_status_t *)(SOC_XWR68XX_DSS_HSRAM_BASE_ADDRESS + L3_DSP_STATUS_HSRAM_OFFSET);
+
+/* Record a boot stage (or'd with L3_DSP_STAGE_FAILED for a failure) and
+ * write it back out of this core's cache, so the MSS reads it. */
+static void dss_status(uint32_t stage, int32_t errCode)
+{
+    gDssStatus->stage = stage;
+    gDssStatus->errCode = errCode;
+    gDssStatus->magic = L3_DSP_STATUS_MAGIC;
+    Cache_wb((Ptr)gDssStatus, sizeof(l3_dsp_status_t), Cache_Type_ALLD, TRUE);
+}
+
+static void dss_statusCount(volatile uint32_t *counter)
+{
+    (*counter)++;
+    Cache_wb((Ptr)gDssStatus, sizeof(l3_dsp_status_t), Cache_Type_ALLD, TRUE);
+}
+
 /* Answer one request from the MSS. A PROBE's frame was written by the EDMA
  * behind this core's L2 cache, so the cache over it is invalidated before a
  * byte is read; the scoring is timed in CPU cycles (TSCL). */
@@ -63,7 +87,8 @@ static void dss_answer(const l3_dsp_request_t *request, l3_dsp_reply_t *reply)
 
 /* The detect link: read a request, answer it, release the mailbox for the
  * next. A message of the wrong size is answered with ERR_MAGIC so the MSS
- * does not wait out its timeout. */
+ * does not wait out its timeout. The read is bounded so the heartbeat shows
+ * this task alive while nothing arrives. */
 static void dss_solveTask(UArg arg0, UArg arg1)
 {
     Mailbox_Config cfg;
@@ -73,20 +98,25 @@ static void dss_solveTask(UArg arg0, UArg arg1)
     (void)arg0;
     (void)arg1;
     TSCL = 0U; /* any write starts the free-running cycle counter */
-    Mailbox_init(MAILBOX_TYPE_DSS);
-    if (Mailbox_Config_init(&cfg) < 0) {
+    dss_status(L3_DSP_STAGE_TASK, 0);
+    errCode = Mailbox_init(MAILBOX_TYPE_DSS);
+    if (errCode < 0 || Mailbox_Config_init(&cfg) < 0) {
+        dss_status(L3_DSP_STAGE_MAILBOX | L3_DSP_STAGE_FAILED, errCode);
         return;
     }
+    dss_status(L3_DSP_STAGE_MAILBOX, 0);
     cfg.readMode = MAILBOX_MODE_BLOCKING;
-    cfg.readTimeout = BIOS_WAIT_FOREVER;
+    cfg.readTimeout = DSS_LINK_BEAT_TICKS;
     cfg.writeMode = MAILBOX_MODE_BLOCKING;
     cfg.writeTimeout = 100U;
     cfg.chType = MAILBOX_CHTYPE_MULTI;
     cfg.chId = MAILBOX_CH_ID_0;
     link = Mailbox_open(MAILBOX_TYPE_MSS, &cfg, &errCode);
     if (link == NULL || errCode != 0) {
+        dss_status(L3_DSP_STAGE_LINK | L3_DSP_STAGE_FAILED, errCode);
         return;
     }
+    dss_status(L3_DSP_STAGE_LINK, 0);
     while (1) {
         l3_dsp_request_t request;
         l3_dsp_reply_t reply;
@@ -94,12 +124,17 @@ static void dss_solveTask(UArg arg0, UArg arg1)
 
         memset(&request, 0, sizeof(request));
         got = Mailbox_read(link, (uint8_t *)&request, sizeof(request));
+        if (got <= 0) {
+            dss_statusCount(&gDssStatus->heartbeat); /* timed out: nothing to release */
+            continue;
+        }
         (void)Mailbox_readFlush(link);
         if (got != (int32_t)sizeof(request)) {
             request.magic = 0U;
         }
         dss_answer(&request, &reply);
         (void)Mailbox_write(link, (const uint8_t *)&reply, sizeof(reply));
+        dss_statusCount(&gDssStatus->served);
     }
 }
 
@@ -110,12 +145,20 @@ int main(void)
     int32_t errCode;
     SOC_Cfg socCfg;
 
+    gDssStatus->heartbeat = 0U;
+    gDssStatus->served = 0U;
+    dss_status(L3_DSP_STAGE_MAIN, 0);
     memset((void *)&socCfg, 0, sizeof(SOC_Cfg));
-    socCfg.clockCfg = SOC_SysClock_INIT;
+    /* The MSS owns the system clock and the BSS. SOC_SysClock_INIT here
+     * would ungate and unhalt the BSS again and spin on the APLL calibration
+     * flag; TI's mmw demo DSS bypasses it the same way. */
+    socCfg.clockCfg = SOC_SysClock_BYPASS_INIT;
     socHandle = SOC_init(&socCfg, &errCode);
     if (socHandle == NULL) {
+        dss_status(L3_DSP_STAGE_SOC | L3_DSP_STAGE_FAILED, errCode);
         return -1;
     }
+    dss_status(L3_DSP_STAGE_SOC, 0);
 
     Task_Params_init(&taskParams);
     taskParams.priority = 2;
