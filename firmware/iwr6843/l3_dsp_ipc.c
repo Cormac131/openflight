@@ -68,6 +68,26 @@ uint32_t l3_dsp_frame_bytes(uint32_t ntx, uint32_t nrx, uint32_t binCount, uint3
     return loops * ntx * nrx * binCount * 2U * (uint32_t)sizeof(int16_t);
 }
 
+/* SCORE's spans: at least one, at most L3_DSP_MAX_SPANS, each non-empty and
+ * inside both the frame and the detector's L3_DSP_MAX_BINS. */
+static uint32_t l3_dsp_spans_check(const l3_dsp_request_t *request)
+{
+    uint32_t limit = (request->binCount < L3_DSP_MAX_BINS) ? request->binCount : L3_DSP_MAX_BINS;
+    uint32_t k;
+
+    if (request->nSpans == 0U || request->nSpans > L3_DSP_MAX_SPANS) {
+        return L3_DSP_ERR_SPANS;
+    }
+    for (k = 0U; k < request->nSpans; k++) {
+        /* Subtraction, not addition, so a huge count cannot wrap. */
+        if (request->spanCount[k] == 0U || request->spanFirst[k] >= limit ||
+            request->spanCount[k] > limit - request->spanFirst[k]) {
+            return L3_DSP_ERR_SPANS;
+        }
+    }
+    return L3_DSP_OK;
+}
+
 uint32_t l3_dsp_request_check(const l3_dsp_request_t *request, uint32_t l3Bytes)
 {
     uint32_t frameBytes;
@@ -78,14 +98,17 @@ uint32_t l3_dsp_request_check(const l3_dsp_request_t *request, uint32_t l3Bytes)
     if (request->cmd == L3_DSP_CMD_PING) {
         return L3_DSP_OK;
     }
-    if (request->cmd != L3_DSP_CMD_PROBE) {
+    if (request->cmd != L3_DSP_CMD_PROBE && request->cmd != L3_DSP_CMD_SCORE) {
         return L3_DSP_ERR_CMD;
     }
     if (request->ntx == 0U || request->ntx > L3_BIN_SCORE_MAX_TX || request->loops == 0U ||
         request->loops > L3_IQ16_MAX_LOOPS || request->binCount == 0U ||
-        request->binCount > 256U || request->nBins == 0U ||
-        request->firstBin >= request->binCount ||
-        request->nBins > request->binCount - request->firstBin) {
+        request->binCount > 256U) {
+        return L3_DSP_ERR_GEOMETRY;
+    }
+    if (request->cmd == L3_DSP_CMD_PROBE &&
+        (request->nBins == 0U || request->firstBin >= request->binCount ||
+         request->nBins > request->binCount - request->firstBin)) {
         return L3_DSP_ERR_GEOMETRY;
     }
     frameBytes = l3_dsp_frame_bytes(request->ntx, L3_DSP_N_RX, request->binCount, request->loops);
@@ -93,6 +116,9 @@ uint32_t l3_dsp_request_check(const l3_dsp_request_t *request, uint32_t l3Bytes)
     if ((request->frameOffset & 3U) != 0U || frameBytes > l3Bytes ||
         request->frameOffset > l3Bytes - frameBytes) {
         return L3_DSP_ERR_RANGE;
+    }
+    if (request->cmd == L3_DSP_CMD_SCORE) {
+        return l3_dsp_spans_check(request);
     }
     return L3_DSP_OK;
 }
@@ -130,4 +156,234 @@ void l3_dsp_probe_run(const l3_dsp_request_t *request, const uint8_t *l3Base, ui
             reply->nBins++;
         }
     }
+}
+
+/* --- SCORE ------------------------------------------------------------------ */
+
+uint32_t l3_dsp_result_size(void)
+{
+    return (uint32_t)sizeof(l3_dsp_result_t);
+}
+
+int32_t l3_dsp_iq16_scorer(void *ctx, uint32_t localBin, l3_bin_obs_t *out)
+{
+    const l3_dsp_iq16_ctx_t *frame = (const l3_dsp_iq16_ctx_t *)ctx;
+
+    if (frame == NULL) {
+        return -1;
+    }
+    return l3_bin_score_iq16(frame->frame, frame->binCount, localBin, frame->ntx, L3_DSP_N_RX,
+                             frame->loops, out, NULL);
+}
+
+static uint32_t l3_dsp_bin_limit(uint32_t binCount)
+{
+    return (binCount < L3_DSP_MAX_BINS) ? binCount : L3_DSP_MAX_BINS;
+}
+
+static uint32_t l3_dsp_marked(const uint32_t *bitmap, uint32_t bin)
+{
+    return (bitmap[bin >> 5U] >> (bin & 31U)) & 1U;
+}
+
+static void l3_dsp_mark(uint32_t *bitmap, uint32_t bin)
+{
+    bitmap[bin >> 5U] |= (uint32_t)(1UL << (bin & 31U));
+}
+
+uint32_t l3_dsp_spans_localize(uint32_t binStart, uint32_t binCount, const l3_span_t *global,
+                               uint32_t n, l3_span_t *local)
+{
+    uint32_t limit = l3_dsp_bin_limit(binCount);
+    uint32_t kept = 0U;
+    uint32_t k;
+
+    if (global == NULL || local == NULL || n > L3_DSP_MAX_SPANS) {
+        return 0U;
+    }
+    for (k = 0U; k < n; k++) {
+        uint32_t first = global[k].first;
+        uint32_t end = global[k].first + global[k].count; /* one past, global */
+
+        if (global[k].count == 0U || end < first) {
+            continue; /* empty, or wrapped */
+        }
+        if (first < binStart) {
+            first = binStart;
+        }
+        if (end > binStart + limit) {
+            end = binStart + limit;
+        }
+        if (end <= first) {
+            continue; /* entirely outside the frame */
+        }
+        local[kept].first = first - binStart;
+        local[kept].count = end - first;
+        kept++;
+    }
+    return kept;
+}
+
+uint32_t l3_dsp_spans_score(const l3_span_t *spans, uint32_t nSpans, uint32_t binCount,
+                            l3_bin_scorer_fn scorer, void *ctx, l3_bin_obs_t *obs,
+                            uint32_t *scored)
+{
+    uint32_t limit = l3_dsp_bin_limit(binCount);
+    uint32_t newly = 0U;
+    uint32_t k;
+
+    if (spans == NULL || scorer == NULL || obs == NULL || scored == NULL) {
+        return 0U;
+    }
+    for (k = 0U; k < nSpans; k++) {
+        uint32_t bin;
+
+        for (bin = spans[k].first; bin < limit && bin - spans[k].first < spans[k].count; bin++) {
+            if (l3_dsp_marked(scored, bin) != 0U) {
+                continue;
+            }
+            if (scorer(ctx, bin, &obs[bin]) == 0) {
+                l3_dsp_mark(scored, bin);
+                newly++;
+            }
+        }
+    }
+    return newly;
+}
+
+void l3_dsp_serve(const l3_dsp_request_t *request, const uint8_t *l3Base, uint32_t l3Bytes,
+                  l3_dsp_reply_t *reply, l3_dsp_result_t *result)
+{
+    l3_dsp_iq16_ctx_t frame;
+    l3_span_t spans[L3_DSP_MAX_SPANS];
+    uint32_t k;
+
+    if (request == NULL || request->cmd != L3_DSP_CMD_SCORE) {
+        l3_dsp_probe_run(request, l3Base, l3Bytes, reply);
+        return;
+    }
+    memset(reply, 0, sizeof(*reply));
+    reply->magic = L3_DSP_MAGIC;
+    reply->cmd = request->cmd;
+    reply->seq = request->seq;
+    reply->status = l3_dsp_request_check(request, l3Bytes);
+    if (result == NULL) {
+        reply->status = L3_DSP_ERR_RANGE;
+        return;
+    }
+    memset(result, 0, sizeof(*result));
+    result->magic = L3_DSP_RESULT_MAGIC;
+    result->seq = request->seq;
+    result->epoch = request->epoch;
+    if (reply->status == L3_DSP_OK && l3Base == NULL) {
+        reply->status = L3_DSP_ERR_RANGE;
+    }
+    result->status = reply->status;
+    if (reply->status != L3_DSP_OK) {
+        return;
+    }
+    for (k = 0U; k < request->nSpans; k++) {
+        spans[k].first = request->spanFirst[k];
+        spans[k].count = request->spanCount[k];
+    }
+    frame.frame = (const int16_t *)(const void *)&l3Base[request->frameOffset];
+    frame.binCount = request->binCount;
+    frame.ntx = request->ntx;
+    frame.loops = request->loops;
+    result->count = l3_dsp_spans_score(spans, request->nSpans, request->binCount,
+                                       l3_dsp_iq16_scorer, &frame, result->obs, result->scored);
+    reply->nBins = result->count;
+}
+
+static uint32_t l3_dsp_popcount(const uint32_t *bitmap)
+{
+    uint32_t count = 0U;
+    uint32_t bin;
+
+    for (bin = 0U; bin < L3_DSP_MAX_BINS; bin++) {
+        count += l3_dsp_marked(bitmap, bin);
+    }
+    return count;
+}
+
+uint32_t l3_dsp_result_check(const l3_dsp_result_t *result, uint32_t seq, uint32_t epoch)
+{
+    if (result == NULL || result->magic != L3_DSP_RESULT_MAGIC || result->seq != seq ||
+        result->epoch != epoch) {
+        return L3_DSP_ERR_STALE;
+    }
+    if (result->status != L3_DSP_OK) {
+        return result->status;
+    }
+    if (result->count != l3_dsp_popcount(result->scored)) {
+        return L3_DSP_ERR_STALE; /* torn or corrupt: never merged */
+    }
+    return L3_DSP_OK;
+}
+
+uint32_t l3_dsp_result_merge(const l3_dsp_result_t *result, l3_bin_obs_t *obs,
+                             uint32_t *scored)
+{
+    uint32_t merged = 0U;
+    uint32_t bin;
+
+    if (result == NULL || obs == NULL || scored == NULL) {
+        return 0U;
+    }
+    for (bin = 0U; bin < L3_DSP_MAX_BINS; bin++) {
+        if (l3_dsp_marked(result->scored, bin) != 0U && l3_dsp_marked(scored, bin) == 0U) {
+            obs[bin] = result->obs[bin];
+            l3_dsp_mark(scored, bin);
+            merged++;
+        }
+    }
+    return merged;
+}
+
+static uint32_t l3_dsp_bits(float value)
+{
+    uint32_t bits;
+
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+int32_t l3_dsp_result_compare(const l3_dsp_result_t *result, const l3_bin_obs_t *mss,
+                              const uint32_t *mssScored, uint32_t *bin, uint32_t *field)
+{
+    uint32_t local;
+
+    if (result == NULL || mss == NULL || mssScored == NULL) {
+        return 0;
+    }
+    for (local = 0U; local < L3_DSP_MAX_BINS; local++) {
+        uint32_t which = L3_DSP_FIELD_SET;
+        uint32_t onDss = l3_dsp_marked(result->scored, local);
+
+        if (onDss != l3_dsp_marked(mssScored, local)) {
+            which = L3_DSP_FIELD_SET;
+        } else if (onDss == 0U) {
+            continue;
+        } else if (l3_dsp_bits(result->obs[local].energy) != l3_dsp_bits(mss[local].energy)) {
+            which = L3_DSP_FIELD_ENERGY;
+        } else if (l3_dsp_bits(result->obs[local].peak) != l3_dsp_bits(mss[local].peak)) {
+            which = L3_DSP_FIELD_PEAK;
+        } else if (l3_dsp_bits(result->obs[local].loop0) != l3_dsp_bits(mss[local].loop0)) {
+            which = L3_DSP_FIELD_LOOP0;
+        } else if (l3_dsp_bits(result->obs[local].r1Re) != l3_dsp_bits(mss[local].r1Re)) {
+            which = L3_DSP_FIELD_R1RE;
+        } else if (l3_dsp_bits(result->obs[local].r1Im) != l3_dsp_bits(mss[local].r1Im)) {
+            which = L3_DSP_FIELD_R1IM;
+        } else {
+            continue;
+        }
+        if (bin != NULL) {
+            *bin = local;
+        }
+        if (field != NULL) {
+            *field = which;
+        }
+        return 0;
+    }
+    return 1;
 }

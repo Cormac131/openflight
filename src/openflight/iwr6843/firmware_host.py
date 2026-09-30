@@ -52,6 +52,8 @@ HOST_SOURCES = (
     "l3_iq16_stats.c",
     "l3_bin_score.c",
     "l3_dsp_ipc.c",
+    "l3_detect_core.c",
+    "l3_timing.c",
 )
 
 # l3_observation.h
@@ -225,6 +227,7 @@ PROFILE_STAGE_NAMES = (
     "impact",
     "balldetect",
     "balltrack",
+    "dspwait",
 )
 
 # l3_club_track.h
@@ -584,7 +587,21 @@ class ImpactCfg(ctypes.Structure):
 L3_DSP_MAGIC = 0x4C445331
 L3_DSP_CMD_PING = 1
 L3_DSP_CMD_PROBE = 2
+L3_DSP_CMD_SCORE = 3
 L3_DSP_OK = 0
+L3_DSP_ERR_MAGIC = 1
+L3_DSP_ERR_CMD = 2
+L3_DSP_ERR_GEOMETRY = 3
+L3_DSP_ERR_RANGE = 4
+L3_DSP_ERR_SPANS = 5
+L3_DSP_ERR_STALE = 6
+L3_DSP_MAX_SPANS = 4
+L3_DSP_MAX_BINS = 64
+L3_DSP_BITMAP_WORDS = L3_DSP_MAX_BINS // 32
+L3_DSP_RESULT_MAGIC = 0x4C445352
+L3_DSP_RESULT_HSRAM_OFFSET = 0x7400
+L3_DSP_FIELD_NAMES = ("energy", "peak", "loop0", "r1Re", "r1Im", "set")
+HSRAM_BYTES = 32 * 1024
 L3_DSP_STATUS_MAGIC = 0x4C445353
 L3_DSP_STATUS_HSRAM_OFFSET = 0x7F00
 L3_DSP_STAGE_MAIN = 1
@@ -620,6 +637,10 @@ class DspRequest(ctypes.Structure):
         ("nBins", ctypes.c_uint32),
         ("ntx", ctypes.c_uint32),
         ("loops", ctypes.c_uint32),
+        ("epoch", ctypes.c_uint32),
+        ("nSpans", ctypes.c_uint32),
+        ("spanFirst", ctypes.c_uint32 * L3_DSP_MAX_SPANS),
+        ("spanCount", ctypes.c_uint32 * L3_DSP_MAX_SPANS),
     ]
 
 
@@ -643,6 +664,137 @@ class Span(ctypes.Structure):
     """``l3_span_t``: global first bin and count."""
 
     _fields_ = [("first", ctypes.c_uint32), ("count", ctypes.c_uint32)]
+
+
+class DspResult(ctypes.Structure):
+    """``l3_dsp_result_t``: SCORE's observations in HS-RAM."""
+
+    _fields_ = [
+        ("magic", ctypes.c_uint32),
+        ("seq", ctypes.c_uint32),
+        ("epoch", ctypes.c_uint32),
+        ("status", ctypes.c_uint32),
+        ("count", ctypes.c_uint32),
+        ("invCycles", ctypes.c_uint32),
+        ("scoreCycles", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+        ("scored", ctypes.c_uint32 * L3_DSP_BITMAP_WORDS),
+        ("obs", BinObs * L3_DSP_MAX_BINS),
+    ]
+
+
+class DspIq16Ctx(ctypes.Structure):
+    """``l3_dsp_iq16_ctx_t``: the shared IQ16 scorer's frame."""
+
+    _fields_ = [
+        ("frame", ctypes.POINTER(ctypes.c_int16)),
+        ("binCount", ctypes.c_uint32),
+        ("ntx", ctypes.c_uint32),
+        ("loops", ctypes.c_uint32),
+    ]
+
+
+# l3_dsp_ipc.h: int32_t (*)(void *ctx, uint32_t localBin, l3_bin_obs_t *out)
+BinScorer = ctypes.CFUNCTYPE(
+    ctypes.c_int32, ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(BinObs)
+)
+
+# l3_detect_core.h
+DETECT_CORE_NAMES = ("mss", "dss", "verify")
+DETECT_CORE_MSS, DETECT_CORE_DSS, DETECT_CORE_VERIFY = 0, 1, 2
+DETECT_OUTCOME_OK, DETECT_OUTCOME_FAILED, DETECT_OUTCOME_MISMATCH = 0, 1, 2
+DETECT_CORE_FAIL_LIMIT_DEFAULT = 3
+
+
+class DetectCore(ctypes.Structure):
+    """``l3_detect_core_t``."""
+
+    _fields_ = [
+        ("requested", ctypes.c_uint8),
+        ("active", ctypes.c_uint8),
+        ("latched", ctypes.c_uint8),
+        ("failLimit", ctypes.c_uint8),
+        ("failStreak", ctypes.c_uint32),
+        ("mssFrames", ctypes.c_uint32),
+        ("dssFrames", ctypes.c_uint32),
+        ("verifyFrames", ctypes.c_uint32),
+        ("ineligible", ctypes.c_uint32),
+        ("failures", ctypes.c_uint32),
+        ("fallbacks", ctypes.c_uint32),
+        ("latches", ctypes.c_uint32),
+        ("mismatches", ctypes.c_uint32),
+        ("haveMismatch", ctypes.c_uint8),
+        ("mismatchSlot", ctypes.c_uint32),
+        ("mismatchBin", ctypes.c_uint32),
+        ("mismatchField", ctypes.c_uint32),
+        ("dssInvCyclesLast", ctypes.c_uint32),
+        ("dssInvCyclesMax", ctypes.c_uint32),
+        ("dssScoreCyclesLast", ctypes.c_uint32),
+        ("dssScoreCyclesMax", ctypes.c_uint32),
+    ]
+
+
+# l3_timing.h
+TIMING_TIMELINE_DEPTH = 16
+TIMING_STAT_NAMES = ("wait", "score", "service", "latency", "arrival")
+TIMING_FLAG_POST, TIMING_FLAG_BEHIND, TIMING_FLAG_STALE = 1, 2, 4
+TIMING_FLAG_FIRED, TIMING_FLAG_SCORED = 8, 16
+TIMING_CORE_FALLBACK = 3
+
+
+class TimingEvent(ctypes.Structure):
+    """``l3_timing_event_t``: one frame's cycle stamps."""
+
+    _fields_ = [
+        ("slot", ctypes.c_uint32),
+        ("epoch", ctypes.c_uint32),
+        ("acquired", ctypes.c_uint32),
+        ("dequeued", ctypes.c_uint32),
+        ("scoreStart", ctypes.c_uint32),
+        ("scoreEnd", ctypes.c_uint32),
+        ("decided", ctypes.c_uint32),
+        ("core", ctypes.c_uint8),
+        ("flags", ctypes.c_uint8),
+        ("depth", ctypes.c_uint8),
+        ("reserved", ctypes.c_uint8),
+    ]
+
+
+class TimingStat(ctypes.Structure):
+    """``l3_timing_stat_t``."""
+
+    _fields_ = [
+        ("count", ctypes.c_uint32),
+        ("lastUs", ctypes.c_uint32),
+        ("minUs", ctypes.c_uint32),
+        ("maxUs", ctypes.c_uint32),
+        ("sumUs", ctypes.c_uint32),
+        ("sumOverflow", ctypes.c_uint32),
+    ]
+
+
+class Timing(ctypes.Structure):
+    """``l3_timing_t``."""
+
+    _fields_ = [
+        ("ticksPerUs", ctypes.c_uint32),
+        ("budgetUs", ctypes.c_uint32),
+        ("ringFrames", ctypes.c_uint32),
+        ("frames", ctypes.c_uint32),
+        ("overBudget", ctypes.c_uint32),
+        ("depthMax", ctypes.c_uint32),
+        ("marginCount", ctypes.c_uint32),
+        ("marginLastUs", ctypes.c_int32),
+        ("marginMinUs", ctypes.c_int32),
+        ("marginNegative", ctypes.c_uint32),
+        ("havePrevious", ctypes.c_uint8),
+        ("previousEpoch", ctypes.c_uint32),
+        ("previousAcquired", ctypes.c_uint32),
+        ("stat", TimingStat * len(TIMING_STAT_NAMES)),
+        ("timelineNext", ctypes.c_uint32),
+        ("timelineCount", ctypes.c_uint32),
+        ("timeline", TimingEvent * TIMING_TIMELINE_DEPTH),
+    ]
 
 
 class ScanCfg(ctypes.Structure):
@@ -1401,6 +1553,44 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
         [_P(DspRequest), _P(ctypes.c_uint8), _U32, _P(DspReply)],
         None,
     ),
+    "l3_dsp_result_size": ([], _U32),
+    "l3_dsp_iq16_scorer": ([ctypes.c_void_p, _U32, _P(BinObs)], ctypes.c_int32),
+    "l3_dsp_spans_localize": ([_U32, _U32, _P(Span), _U32, _P(Span)], _U32),
+    "l3_dsp_spans_score": (
+        [_P(Span), _U32, _U32, BinScorer, ctypes.c_void_p, _P(BinObs), _P(_U32)],
+        _U32,
+    ),
+    "l3_dsp_serve": (
+        [_P(DspRequest), _P(ctypes.c_uint8), _U32, _P(DspReply), _P(DspResult)],
+        None,
+    ),
+    "l3_dsp_result_check": ([_P(DspResult), _U32, _U32], _U32),
+    "l3_dsp_result_merge": ([_P(DspResult), _P(BinObs), _P(_U32)], _U32),
+    "l3_dsp_result_compare": (
+        [_P(DspResult), _P(BinObs), _P(_U32), _P(_U32), _P(_U32)],
+        ctypes.c_int32,
+    ),
+    # l3_detect_core.h
+    "l3_detect_core_init": ([_P(DetectCore)], None),
+    "l3_detect_core_reset_counts": ([_P(DetectCore)], None),
+    "l3_detect_core_set": ([_P(DetectCore), _U32, ctypes.c_uint8], ctypes.c_int32),
+    "l3_detect_core_route": ([_P(DetectCore), ctypes.c_uint8], _U32),
+    "l3_detect_core_report": ([_P(DetectCore), _U32, _U32, _U32, _U32], ctypes.c_int32),
+    "l3_detect_core_note_mismatch": ([_P(DetectCore), _U32, _U32, _U32], None),
+    "l3_detect_core_name": ([_U32], ctypes.c_char_p),
+    "l3_detect_core_parse": ([ctypes.c_char_p, _P(_U32)], ctypes.c_int32),
+    "l3_detect_core_format": ([_P(DetectCore), _U32, *_TEXT], ctypes.c_int32),
+    # l3_timing.h
+    "l3_timing_init": ([_P(Timing), _U32, _U32, _U32], None),
+    "l3_timing_reset": ([_P(Timing)], None),
+    "l3_timing_record": ([_P(Timing), _P(TimingEvent)], None),
+    "l3_timing_margin_us": ([_P(Timing), _U32], ctypes.c_int32),
+    "l3_timing_mean_us": ([_P(Timing), _U32], _U32),
+    "l3_timing_stat_name": ([_U32], ctypes.c_char_p),
+    "l3_timing_event": ([_P(Timing), _U32, _P(TimingEvent)], ctypes.c_int32),
+    "l3_timing_format_summary": ([_P(Timing), *_TEXT], ctypes.c_int32),
+    "l3_timing_format_stat": ([_P(Timing), _U32, *_TEXT], ctypes.c_int32),
+    "l3_timing_format_event": ([_P(Timing), _P(TimingEvent), *_TEXT], ctypes.c_int32),
     # l3_observation.h
     "l3_obs_stat": ([_U32, _P(BinObs)], _F32),
     "l3_obs_median": ([_U32, _P(BinObs), _U32], _F32),
@@ -1483,7 +1673,10 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     ),
     "l3_track_recent_rate": ([_P(ClubTrack)], _F32),
     "l3_track_set_angles": ([_P(ClubTrack), _F32, _F32, ctypes.c_uint8], ctypes.c_int32),
-    "l3_track_set_point_angles": ([_P(ClubTrack), _U32, _F32, _F32, ctypes.c_uint8], ctypes.c_int32),
+    "l3_track_set_point_angles": (
+        [_P(ClubTrack), _U32, _F32, _F32, ctypes.c_uint8],
+        ctypes.c_int32,
+    ),
     "l3_track_point": ([_P(ClubTrack), _U32, _P(TrackPoint)], ctypes.c_int32),
     "l3_track_delivery": ([_P(ClubTrack), _U32, _P(Delivery)], _U32),
     "l3_track_delivery_range": ([_P(ClubTrack), _U32, _U32, _U32, _P(Delivery)], _U32),
@@ -1833,6 +2026,29 @@ __all__ = [
     "BallTrack",
     "BallTrackCfg",
     "BinObs",
+    "BinScorer",
+    "DETECT_CORE_DSS",
+    "DETECT_CORE_FAIL_LIMIT_DEFAULT",
+    "DETECT_CORE_MSS",
+    "DETECT_CORE_NAMES",
+    "DETECT_CORE_VERIFY",
+    "DETECT_OUTCOME_FAILED",
+    "DETECT_OUTCOME_MISMATCH",
+    "DETECT_OUTCOME_OK",
+    "DetectCore",
+    "DspIq16Ctx",
+    "DspResult",
+    "TIMING_CORE_FALLBACK",
+    "TIMING_FLAG_BEHIND",
+    "TIMING_FLAG_FIRED",
+    "TIMING_FLAG_POST",
+    "TIMING_FLAG_SCORED",
+    "TIMING_FLAG_STALE",
+    "TIMING_STAT_NAMES",
+    "TIMING_TIMELINE_DEPTH",
+    "Timing",
+    "TimingEvent",
+    "TimingStat",
     "Launch",
     "ANGLE_AZIMUTH",
     "ANGLE_ELEVATION",

@@ -7,6 +7,7 @@ void l3detect_init(L3DetectQueue *queue)
     for (index = 0U; index < L3_DETECT_QUEUE_DEPTH; index++) {
         queue->slot[index] = 0U;
         queue->epoch[index] = 0U;
+        queue->stamp[index] = 0U;
     }
     queue->head = 0U;
     queue->tail = 0U;
@@ -14,7 +15,7 @@ void l3detect_init(L3DetectQueue *queue)
     queue->published = 0U;
 }
 
-int32_t l3detect_publish(L3DetectQueue *queue, uint16_t slot, uint32_t epoch)
+int32_t l3detect_publish(L3DetectQueue *queue, uint16_t slot, uint32_t epoch, uint32_t stamp)
 {
     uint32_t tail = queue->tail;
     uint32_t held = tail - queue->head;
@@ -25,12 +26,13 @@ int32_t l3detect_publish(L3DetectQueue *queue, uint16_t slot, uint32_t epoch)
     }
     queue->slot[tail % L3_DETECT_QUEUE_DEPTH] = slot;
     queue->epoch[tail % L3_DETECT_QUEUE_DEPTH] = epoch;
+    queue->stamp[tail % L3_DETECT_QUEUE_DEPTH] = stamp;
     queue->published++;
     queue->tail = tail + 1U;
     return 0;
 }
 
-int32_t l3detect_pop(L3DetectQueue *queue, uint16_t *slot, uint32_t *epoch)
+int32_t l3detect_pop(L3DetectQueue *queue, uint16_t *slot, uint32_t *epoch, uint32_t *stamp)
 {
     uint32_t head = queue->head;
 
@@ -39,8 +41,14 @@ int32_t l3detect_pop(L3DetectQueue *queue, uint16_t *slot, uint32_t *epoch)
     }
     *slot = queue->slot[head % L3_DETECT_QUEUE_DEPTH];
     *epoch = queue->epoch[head % L3_DETECT_QUEUE_DEPTH];
+    *stamp = queue->stamp[head % L3_DETECT_QUEUE_DEPTH];
     queue->head = head + 1U;
     return 1;
+}
+
+uint32_t l3detect_depth(const L3DetectQueue *queue)
+{
+    return queue->tail - queue->head;
 }
 
 int32_t l3detect_slot_live(uint32_t epoch, uint32_t current, uint32_t ringFrames)

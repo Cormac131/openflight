@@ -1,10 +1,11 @@
 /* DSS (C674x) image: the detect link, and the on-chip solve stages.
  *
- * The detect task is moving here from the MSS. Phase 0 answers the MSS over
- * the mailbox (l3_dsp_ipc.h): PING, and PROBE, which scores bins of a frame
- * in the shared L3 ring with the same code the MSS runs (l3_bin_score.c).
- * The DSS reads the ring in place from L3 and caches it in L2; it owns no
- * resident L3 buffer.
+ * The detect task is moving here from the MSS. The DSS answers the MSS over
+ * the mailbox (l3_dsp_ipc.h): PING, PROBE, which scores bins of a frame in
+ * the shared L3 ring with the same code the MSS runs (l3_bin_score.c), and
+ * SCORE, the live detector's scan-plan spans of a frame, whose observations
+ * go to the result block in HS-RAM. The DSS reads the ring in place from L3
+ * and caches it in L2; it owns no resident L3 buffer.
  */
 #include <c6x.h>
 #include <string.h>
@@ -49,6 +50,11 @@ static uint8_t dss_solveTaskStack[DSS_SOLVE_TASK_STACK_SIZE];
 static volatile l3_dsp_status_t *const gDssStatus =
     (volatile l3_dsp_status_t *)(SOC_XWR68XX_DSS_HSRAM_BASE_ADDRESS + L3_DSP_STATUS_HSRAM_OFFSET);
 
+/* SCORE's result block in HS-RAM (l3_dsp_ipc.h), which the MSS reads once
+ * the mailbox reply says it is ready. */
+static l3_dsp_result_t *const gDssResult =
+    (l3_dsp_result_t *)(SOC_XWR68XX_DSS_HSRAM_BASE_ADDRESS + L3_DSP_RESULT_HSRAM_OFFSET);
+
 /* Record a boot stage (or'd with L3_DSP_STAGE_FAILED for a failure) and
  * write it back out of this core's cache, so the MSS reads it. */
 static void dss_status(uint32_t stage, int32_t errCode)
@@ -65,24 +71,37 @@ static void dss_statusCount(volatile uint32_t *counter)
     Cache_wb((Ptr)gDssStatus, sizeof(l3_dsp_status_t), Cache_Type_ALLD, TRUE);
 }
 
-/* Answer one request from the MSS. A PROBE's frame was written by the EDMA
- * behind this core's L2 cache, so the cache over it is invalidated before a
- * byte is read; the scoring is timed in CPU cycles (TSCL). */
+/* Answer one request from the MSS. A PROBE's or SCORE's frame was written
+ * by the EDMA behind this core's L2 cache, so the cache over it is
+ * invalidated before a byte is read -- the whole frame, and timed apart
+ * from the scoring (TSCL cycles) so what the invalidate costs is measured
+ * before anything narrower is tried. A SCORE's result is written back out
+ * of the cache before the reply goes, so the MSS reads what was written. */
 static void dss_answer(const l3_dsp_request_t *request, l3_dsp_reply_t *reply)
 {
     const uint8_t *l3 = (const uint8_t *)SOC_XWR68XX_DSS_L3RAM_BASE_ADDRESS;
+    uint8_t reads = (uint8_t)((request->cmd == L3_DSP_CMD_PROBE ||
+                               request->cmd == L3_DSP_CMD_SCORE) &&
+                              l3_dsp_request_check(request, DSS_L3_BYTES) == L3_DSP_OK);
     uint32_t start;
+    uint32_t invCycles = 0U;
 
-    if (request->cmd == L3_DSP_CMD_PROBE &&
-        l3_dsp_request_check(request, DSS_L3_BYTES) == L3_DSP_OK) {
+    start = TSCL;
+    if (reads) {
         Cache_inv((Ptr)&l3[request->frameOffset],
                   l3_dsp_frame_bytes(request->ntx, L3_DSP_N_RX, request->binCount,
                                      request->loops),
                   Cache_Type_ALLD, TRUE);
+        invCycles = TSCL - start;
     }
     start = TSCL;
-    l3_dsp_probe_run(request, l3, DSS_L3_BYTES, reply);
+    l3_dsp_serve(request, l3, DSS_L3_BYTES, reply, gDssResult);
     reply->cycles = TSCL - start;
+    if (request->cmd == L3_DSP_CMD_SCORE) {
+        gDssResult->invCycles = invCycles;
+        gDssResult->scoreCycles = reply->cycles;
+        Cache_wb((Ptr)gDssResult, sizeof(*gDssResult), Cache_Type_ALLD, TRUE);
+    }
 }
 
 /* The detect link: read a request, answer it, release the mailbox for the

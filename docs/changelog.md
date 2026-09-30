@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **IWR6843 detect timing, and the detector's bin scoring on the DSS.**
+  `triggerLog perf` and the new `triggerLog timing` report when each frame
+  was acquired, taken, scored and decided, and keep two deadlines apart:
+  whether the detect task keeps up with the 3 ms frames (service against
+  the frame interval) and whether any frame outlived its ring slot (the
+  reuse margin). A slot is now checked again after it has been read, and a
+  read the writer overtook is discarded (`stale_read`). `trackCfg
+  detectCore mss|dss|verify` moves only the bin scoring to the DSS (SCORE,
+  results in HS-RAM), or runs both cores at once and compares them bit for
+  bit (`verify`); tracker and trigger stay on the MSS. A DSS that fails a
+  frame has the MSS score it, and three failures in a row latch the MSS.
+  The default stays `mss`. `IWR6843Radar.detect_core()` and
+  `detect_timing()` read them. Needs a firmware rebuild and reflash;
+  unproven on the board until `trackCfg dsp probe` shows `match=1` there.
 - **IWR6843 detect task moving to the DSP: the link, phase 0.** The trigger
   runs on the R4F and the DSS image has only slept since it first booted.
   The DSS now answers the MSS over the mailbox, and the IQ16 per-bin scoring

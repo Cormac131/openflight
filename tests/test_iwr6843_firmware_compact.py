@@ -152,6 +152,9 @@ def test_the_detect_task_reads_the_scratch_frame_and_drops_a_stale_one():
     assert "return l3_ringFrameOf(slot);" in of
     stale = _function("static int32_t l3_detectFrameStale(")
     assert "gScratchBusy[frame->scratch] || gScratchFrame[frame->scratch] != frame->epoch" in stale
+    # The check counts what it finds itself: the scratch reused, or the ring
+    # slot reached by the writer during the read.
+    assert "gDetectScratchStale++;" in stale and "gDetectStaleAfterRead++;" in stale
     for name, guard in (
         (
             "static void l3_considerSelfTrigger(uint32_t slot)",
@@ -165,11 +168,11 @@ def test_the_detect_task_reads_the_scratch_frame_and_drops_a_stale_one():
         assert "l3_detect_frame_t frame = l3_detectFrameOf(slot);" in body, name
         assert "gFrameBinStart[slot]" not in body and "gFrameBinCount[slot]" not in body, name
         stale_at = body.index("if (l3_detectFrameStale(&frame)) {")
-        assert "gDetectScratchStale++;" in body[stale_at:] and guard in body[stale_at:], name
+        assert guard in body[stale_at:], name
         # The observations are computed first (the band paths score the scan
-        # plan's spans with l3_scoreSpan), the staleness judged before any decision.
+        # plan's spans with l3_scoreSpans), the staleness judged before any decision.
         scored_at = min(
-            body.index(call) for call in ("l3_vertical", "l3_scoreSpan(") if call in body
+            body.index(call) for call in ("l3_vertical", "l3_scoreSpans(") if call in body
         )
         assert scored_at < stale_at, name
     for reader in (

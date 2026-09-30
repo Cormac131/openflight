@@ -16,6 +16,7 @@
 typedef struct {
     volatile uint16_t slot[L3_DETECT_QUEUE_DEPTH];
     volatile uint32_t epoch[L3_DETECT_QUEUE_DEPTH];
+    volatile uint32_t stamp[L3_DETECT_QUEUE_DEPTH]; /* cycle count when published */
     volatile uint32_t head;
     volatile uint32_t tail;
     volatile uint32_t dropped;
@@ -24,14 +25,22 @@ typedef struct {
 
 void l3detect_init(L3DetectQueue *queue);
 
-/* Returns 0 when queued. Returns -1 and increments dropped when full. */
-int32_t l3detect_publish(L3DetectQueue *queue, uint16_t slot, uint32_t epoch);
+/* Returns 0 when queued. Returns -1 and increments dropped when full. stamp
+ * is the cycle count the frame was acquired at (l3_timing.h). */
+int32_t l3detect_publish(L3DetectQueue *queue, uint16_t slot, uint32_t epoch, uint32_t stamp);
 
 /* Returns 1 and writes the oldest item, or 0 when empty. */
-int32_t l3detect_pop(L3DetectQueue *queue, uint16_t *slot, uint32_t *epoch);
+int32_t l3detect_pop(L3DetectQueue *queue, uint16_t *slot, uint32_t *epoch, uint32_t *stamp);
+
+/* Items waiting to be popped. */
+uint32_t l3detect_depth(const L3DetectQueue *queue);
 
 /* A slot stays readable until the writer is one frame from reusing it.
- * ringFrames < 2 cannot overlap a read with the next write. */
+ * ringFrames < 2 cannot overlap a read with the next write. Checked when
+ * the slot is popped AND again once it has been read: the writer may have
+ * reached it meanwhile (a slow read, a DSS that answered late), and what
+ * was read is then two frames mixed. The writer only moves forward, so a
+ * slot live after the read was live throughout it. */
 int32_t l3detect_slot_live(uint32_t epoch, uint32_t current, uint32_t ringFrames);
 
 #endif /* L3_DETECT_QUEUE_H */
