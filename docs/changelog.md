@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **IWR6843 self-trigger still missed swings on the kiosk: it now also fires
+  when the club's approach ends near the ball.** The club track's crossing of
+  the ball's range was checked with the manifest's hand-set tee bins (about 5
+  bins short of the ball), but the kiosk aims 2 bins short of the ball, and
+  the hand labels show the club's radar range at launch is 3-12 bins (median
+  7.4) short of the ball's. Replayed at the kiosk's settings it fired within
+  two frames of the labelled launch on 19 of 34 swings, no better than the
+  range gate it replaced (17). The range impact now also fires on the first
+  frame an approaching club track takes no point after one within `endM`
+  (0.40 m) of the ball, dated to that last point: 27 of 34 within two frames,
+  29 from four frames early (the launch still lands in the 16 post frames) to
+  two late. `tests/test_iwr6843_labelled_replay.py` now replays every labelled
+  swing at the kiosk's own settings. `trackCfg impact
+  <horizonS> [endM]`; the `range impact` line gains `cause=` and `armed=`.
+  Needs a firmware rebuild and reflash.
 - **IWR6843 self-trigger recognised no swings: the club track fires it now.**
   The range gate in `l3_trigger.c` fired from its own short track entering a
   gate around the tee. It held the tee's standing clutter (hands, body, a mat

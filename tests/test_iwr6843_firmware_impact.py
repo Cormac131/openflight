@@ -2,7 +2,9 @@
 
 The self-trigger fires on it: the club-in line fitted to the club track
 (l3_impact_fit_track) crosses the ball's range within a horizon of the current
-frame's time. The geometric detector that judged the club's 3D line against
+frame's time, or when an approaching club track ends near the ball: the
+club's radar range at impact is 3-12 bins short of the ball's, so the crossing
+alone often never comes. The geometric detector that judged the club's 3D line against
 the ball's position was removed on 2026-09-30: nothing armed it on the kiosk
 and it never fired on the recorded swings.
 """
@@ -17,6 +19,8 @@ from openflight.iwr6843 import firmware_host as fw
 
 WHY = {name: index for index, name in enumerate(fw.IMPACT_WHY_NAMES)}
 FIT_WHY = {name: i for i, name in enumerate(fw.FIT_WHY_NAMES)}
+CAUSE = {name: index for index, name in enumerate(fw.IMPACT_CAUSE_NAMES)}
+BALL_M = 2.0
 
 
 @pytest.fixture(scope="module")
@@ -42,14 +46,29 @@ def club_in_estimate(time_us: float, why: str = "ok") -> fw.FitEstimate:
     return e
 
 
-def update(lib, impact, estimate, now_us: int) -> int:
+def club_state(appended: bool, gap_m: float = 1.0, time_us: int = 0) -> fw.ImpactClub:
+    """This frame's club track as the impact sees it: whether it took a point,
+    its newest point ``gap_m`` short of a ball at BALL_M, and that point's time."""
+    club = fw.ImpactClub()
+    club.appended = int(appended)
+    club.rangeM = BALL_M - gap_m
+    club.timeUs = time_us
+    club.ballRangeM = BALL_M
+    return club
+
+
+def update(lib, impact, estimate, now_us: int, club: fw.ImpactClub | None = None) -> int:
     ref = None if estimate is None else ctypes.byref(estimate)
-    return lib.l3_impact_update_range(ctypes.byref(impact), ref, now_us)
+    club_ref = None if club is None else ctypes.byref(club)
+    return lib.l3_impact_update_range(ctypes.byref(impact), ref, club_ref, now_us)
 
 
-def test_the_default_horizon_is_a_frame_and_some_slack():
-    """One 3 ms frame plus scheduling slack: the only setting left."""
-    assert [name for name, _type in fw.ImpactCfg._fields_] == ["horizonS"]
+def test_the_settings_are_the_horizon_and_the_end_distance():
+    assert [name for name, _type in fw.ImpactCfg._fields_] == ["horizonS", "endM"]
+
+
+def test_the_default_end_distance(lib):
+    assert range_impact(lib).cfg.endM == pytest.approx(0.40)
 
 
 def test_the_default_horizon_value(lib):
@@ -110,7 +129,7 @@ def test_range_impact_fires_across_the_uint32_wrap(lib):
     # The fitted crossing lies just past 2**32 (a float), now has wrapped to 0.
     impact = range_impact(lib)
     e = club_in_estimate(2.0**32 + 1024.0)
-    assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 0) == 1
+    assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), None, 0) == 1
     assert impact.impactTimestampUs == 1024
     assert impact.offsetS == pytest.approx(0.001024, abs=1e-6)
 
@@ -124,7 +143,10 @@ def test_why_names_and_format(lib):
     update(lib, impact, club_in_estimate(30_000), 20_000)
     update(lib, impact, club_in_estimate(30_000), 27_500)
     text = fw.c_text(lib.l3_impact_format, ctypes.byref(impact), cap=240)
-    assert text == "impact fired=1 why=fired offsetms=2.50 t=30000 pending=1 passed=0 fired_n=1"
+    assert text == (
+        "impact fired=1 why=fired cause=crossing offsetms=2.50 t=30000 pending=1 passed=0 "
+        "fired_n=1 armed=0"
+    )
 
 
 def test_the_geometric_detector_is_gone(lib):
@@ -132,3 +154,93 @@ def test_the_geometric_detector_is_gone(lib):
         assert not hasattr(lib, gone), gone
     for gone in ("closestM", "contact", "velocity"):
         assert gone not in {name for name, _type in fw.Impact._fields_}
+
+
+def test_cause_names(lib):
+    assert fw.IMPACT_CAUSE_NAMES == ("none", "crossing", "end")
+    for index, name in enumerate(fw.IMPACT_CAUSE_NAMES):
+        assert lib.l3_impact_cause_name(index).decode() == name
+    assert lib.l3_impact_cause_name(99).decode() == "?"
+
+
+# --- the approach ending near the ball ------------------------------------------
+#
+# The club's crossing of the ball's range is 3-12 bins (median 7.4) beyond
+# where the radar last sees the club on the 34 labelled swings: at impact its
+# return merges with the ball's and the club track stops taking points. The
+# frame it stops, having last been seen close to the ball, is impact.
+
+
+def test_a_track_that_ends_near_the_ball_fires_dated_to_its_last_point(lib):
+    impact = range_impact(lib)
+    e = club_in_estimate(60_000)  # the crossing is still far ahead: pending
+    assert update(lib, impact, e, 24_000, club_state(True, 0.30, 24_000)) == 0
+    assert impact.why == WHY["pending"] and impact.endArmed == 1
+    assert update(lib, impact, e, 27_000, club_state(False)) == 1
+    assert impact.why == WHY["fired"]
+    assert impact.cause == CAUSE["end"]
+    assert impact.impactTimestampUs == 24_000
+    assert impact.offsetS == pytest.approx(-0.003, abs=1e-6)
+
+
+def test_the_end_fires_when_the_track_is_released_and_its_estimate_is_gone(lib):
+    """Released, the track has no points left: no club-in estimate, still the end."""
+    impact = range_impact(lib)
+    update(lib, impact, club_in_estimate(60_000), 24_000, club_state(True, 0.30, 24_000))
+    assert update(lib, impact, None, 27_000, club_state(False)) == 1
+    assert impact.cause == CAUSE["end"]
+
+
+def test_a_track_that_ends_far_from_the_ball_does_not_fire(lib):
+    impact = range_impact(lib)
+    e = club_in_estimate(60_000)
+    assert update(lib, impact, e, 24_000, club_state(True, 0.60, 24_000)) == 0
+    assert impact.endArmed == 0
+    assert update(lib, impact, e, 27_000, club_state(False)) == 0
+    assert impact.fired == 0
+
+
+def test_a_point_without_a_club_in_estimate_does_not_arm_the_end(lib):
+    """A lone acquisition near the ball (clutter, a reacquired return) has no
+    fitted approach behind it."""
+    impact = range_impact(lib)
+    update(lib, impact, club_in_estimate(60_000, "few_points"), 24_000, club_state(True, 0.1))
+    assert impact.endArmed == 0
+    assert update(lib, impact, None, 27_000, club_state(False)) == 0
+
+
+def test_a_far_point_after_a_near_one_disarms_the_end(lib):
+    impact = range_impact(lib)
+    e = club_in_estimate(60_000)
+    update(lib, impact, e, 24_000, club_state(True, 0.30, 24_000))
+    update(lib, impact, e, 27_000, club_state(True, 0.60, 27_000))
+    assert impact.endArmed == 0
+    assert update(lib, impact, e, 30_000, club_state(False)) == 0
+
+
+def test_the_end_is_off_with_a_zero_distance(lib):
+    impact = range_impact(lib, endM=0.0)
+    e = club_in_estimate(60_000)
+    update(lib, impact, e, 24_000, club_state(True, 0.0, 24_000))
+    assert impact.endArmed == 0
+    assert update(lib, impact, e, 27_000, club_state(False)) == 0
+
+
+def test_without_a_club_state_only_the_crossing_fires(lib):
+    impact = range_impact(lib)
+    assert update(lib, impact, club_in_estimate(30_000), 29_000) == 1
+    assert impact.cause == CAUSE["crossing"]
+
+
+def test_the_crossing_still_fires_on_a_frame_that_arms_the_end(lib):
+    impact = range_impact(lib)
+    assert update(lib, impact, club_in_estimate(30_000), 29_000, club_state(True, 0.1, 29_000))
+    assert impact.cause == CAUSE["crossing"] and impact.impactTimestampUs == 30_000
+
+
+def test_rearm_clears_the_armed_end(lib):
+    impact = range_impact(lib)
+    update(lib, impact, club_in_estimate(60_000), 24_000, club_state(True, 0.30, 24_000))
+    lib.l3_impact_rearm(ctypes.byref(impact))
+    assert impact.endArmed == 0 and impact.cause == CAUSE["none"]
+    assert update(lib, impact, None, 27_000, club_state(False)) == 0

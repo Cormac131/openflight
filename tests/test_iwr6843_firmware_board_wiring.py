@@ -108,8 +108,12 @@ def test_range_impact_runs_every_pre_impact_frame_and_feeds_the_shot():
     club_in = self_trigger.index(
         "l3_impact_fit_track(&gImpactFitCfg, L3_FIT_CLUB_IN, l3_fit_span_point,"
     )
-    ranged = self_trigger.index("ranged = l3_impact_update_range(&gRangeImpact, &clubIn,")
+    ranged = self_trigger.index("ranged = l3_impact_update_range(&gRangeImpact, &clubIn, &clubNow,")
     assert delivery < club_in < ranged
+    # The approach-end rule sees this frame's newest point only when one was taken.
+    club_now = self_trigger.index("clubNow.ballRangeM = (float)teeBin * gClubTrack.cfg.binWidthM;")
+    took = self_trigger.index("if (appended && gClubTrack.count > 0U &&", club_now)
+    assert club_in < club_now < took < self_trigger.index("clubNow.appended = 1U;") < ranged
     # The range-only impact is the self-trigger: it feeds the shot, then freezes.
     observe_call = self_trigger.index("l3_shotObserve(teeBin, ranged);")
     assert ranged < observe_call < self_trigger.index("if (!ranged) {")

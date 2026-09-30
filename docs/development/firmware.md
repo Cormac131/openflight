@@ -138,7 +138,7 @@ triggerCfg <globalBin> <snr> <on> [approach past stat]
 triggerLog [trace|track|shot|result|perf|clear]
 trackCfg cal <pitchDeg> <yawDeg> <rollDeg> <azOffsetRad> <elOffsetDeg> <rangeBiasM>
 trackCfg elem <index> <phaseRad> <gain>
-trackCfg impact <horizonS>
+trackCfg impact <horizonS> [endM]
 captureCfg adaptive <enabled> <approachBins> <marginBins>
 ```
 
@@ -152,6 +152,15 @@ still carrying the gate's `minCoh minStep minSpeed minApproach`, is refused
 rather than half applied. `trackCfg impact <horizonS>` sets how close to the
 frame's time the club's predicted crossing must be (default 4 ms); the old
 five-value line of the removed geometric detector is refused.
+
+The crossing alone often never comes. On the 34 labelled swings the club's
+radar range when the ball leaves is 3-12 bins (median 7.4) short of the
+ball's: at impact the club's return merges with the ball's and the club track
+stops taking points. So the range impact also fires on the first frame an
+approaching track (one with a usable club-in estimate) takes no point after a
+point within `endM` of the ball's range (default 0.40 m, about 8.5 bins; 0
+turns it off), dated to that last point. `triggerLog track` prints which rule
+fired (`cause=crossing` or `cause=end`) and whether the end rule is armed.
 
 `triggerLog` prints the front end's frame count, floor and threshold, then its
 configuration. After a missed swing, read `triggerLog track` (the club track,

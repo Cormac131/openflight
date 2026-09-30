@@ -1254,8 +1254,14 @@ def replay_dump(
             destination * bin_width_m,
             ctypes.byref(club_in),
         )
+        club_now = fw.ImpactClub()
+        club_now.appended = 1 if appended else 0
+        if appended:
+            club_now.rangeM = float(newest.rangeM)
+            club_now.timeUs = int(newest.timestampUs)
+        club_now.ballRangeM = destination * bin_width_m
         ranged = lib.l3_impact_update_range(
-            ctypes.byref(impact), ctypes.byref(club_in), timestamp_us
+            ctypes.byref(impact), ctypes.byref(club_in), ctypes.byref(club_now), timestamp_us
         )
         if ranged and range_frame is None:
             range_frame = frame

@@ -3980,11 +3980,22 @@ static void l3_considerSelfTrigger(uint32_t slot)
              * against this frame's clock (the club coasts across the band). */
             l3_fit_span_t clubSpan = { &gClubTrack, 0U, gClubTrack.count };
             l3_fit_estimate_t clubIn;
+            l3_impact_club_t clubNow;
 
             l3_impact_fit_track(&gImpactFitCfg, L3_FIT_CLUB_IN, l3_fit_span_point, &clubSpan,
                                 gClubTrack.count, (float)teeBin * gClubTrack.cfg.binWidthM,
                                 &clubIn);
-            ranged = l3_impact_update_range(&gRangeImpact, &clubIn,
+            /* The approach ending near the ball also fires: the club's return
+             * merges with the ball's at impact, short of its range. */
+            memset(&clubNow, 0, sizeof(clubNow));
+            clubNow.ballRangeM = (float)teeBin * gClubTrack.cfg.binWidthM;
+            if (appended && gClubTrack.count > 0U &&
+                l3_track_point(&gClubTrack, gClubTrack.count - 1U, &newest)) {
+                clubNow.appended = 1U;
+                clubNow.rangeM = newest.rangeM;
+                clubNow.timeUs = newest.timestampUs;
+            }
+            ranged = l3_impact_update_range(&gRangeImpact, &clubIn, &clubNow,
                                             gPreFramesCaptured * (uint32_t)gFramePeriodUs);
         }
         l3_profileStage(L3_PROF_IMPACT, ticks);
@@ -4451,20 +4462,27 @@ static int32_t l3_cli_trackCfgElem(int32_t argc, char *argv[])
     return 0;
 }
 
-/* "trackCfg impact <horizonS>": the range-only impact fires when the club's
- * crossing of the ball's range is within this of the frame's time. The
- * geometric detector's tolerance, speed, confidence and armed values went
- * with it (2026-09-30), so the old five-value line is refused. */
+/* "trackCfg impact <horizonS> [endM]": the range-only impact fires when the
+ * club's crossing of the ball's range is within horizonS of the frame's time,
+ * or when an approach last seen within endM of the ball ends (0 turns that
+ * off; left out keeps it). The geometric detector's tolerance, speed,
+ * confidence and armed values went with it (2026-09-30), so the old
+ * five-value line is refused. */
 static int32_t l3_cli_trackCfgImpact(int32_t argc, char *argv[])
 {
-    float values[1];
+    float values[2];
+    uint32_t count = (argc == 4) ? 2U : 1U;
 
-    if (l3_parseFloats(argc, argv, 2, 1U, values) != 0 || values[0] <= 0.0F) {
-        CLI_write("Error: trackCfg impact <horizonS>\n");
+    if (l3_parseFloats(argc, argv, 2, count, values) != 0 || values[0] <= 0.0F ||
+        (count == 2U && (values[1] < 0.0F || values[1] > L3_IMPACT_END_MAX_M))) {
+        CLI_write("Error: trackCfg impact <horizonS> [endM 0..2]\n");
         return -1;
     }
     l3_ensureRadarCal();  /* also fills the impact cfg's defaults once */
     gImpactCfg.horizonS = values[0];
+    if (count == 2U) {
+        gImpactCfg.endM = values[1];
+    }
     l3_impact_init(&gRangeImpact, &gImpactCfg);
     CLI_write("Done\n");
     return 0;

@@ -80,6 +80,7 @@ LAUNCH_NO_LATE = 0xFF
 
 # l3_impact.h
 IMPACT_WHY_NAMES = ("none", "nodelivery", "pending", "passed", "fired")
+IMPACT_CAUSE_NAMES = ("none", "crossing", "end")
 
 # l3_impact_fit.h
 FIT_MAX_POINTS = 8
@@ -569,7 +570,18 @@ class FollowCtx(ctypes.Structure):
 class ImpactCfg(ctypes.Structure):
     """``l3_impact_cfg_t``."""
 
-    _fields_ = [("horizonS", ctypes.c_float)]
+    _fields_ = [("horizonS", ctypes.c_float), ("endM", ctypes.c_float)]
+
+
+class ImpactClub(ctypes.Structure):
+    """``l3_impact_club_t``: the club track this frame, for the approach-end rule."""
+
+    _fields_ = [
+        ("appended", ctypes.c_uint8),
+        ("rangeM", ctypes.c_float),
+        ("timeUs", ctypes.c_uint32),
+        ("ballRangeM", ctypes.c_float),
+    ]
 
 
 class Impact(ctypes.Structure):
@@ -579,6 +591,9 @@ class Impact(ctypes.Structure):
         ("cfg", ImpactCfg),
         ("fired", ctypes.c_uint8),
         ("why", ctypes.c_uint8),
+        ("cause", ctypes.c_uint8),
+        ("endArmed", ctypes.c_uint8),
+        ("endTimeUs", ctypes.c_uint32),
         ("offsetS", ctypes.c_float),
         ("impactTimestampUs", ctypes.c_uint32),
         ("counters", ctypes.c_uint32 * len(IMPACT_WHY_NAMES)),
@@ -1343,8 +1358,12 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_impact_cfg_defaults": ([_P(ImpactCfg)], None),
     "l3_impact_init": ([_P(Impact), _P(ImpactCfg)], None),
     "l3_impact_rearm": ([_P(Impact)], None),
-    "l3_impact_update_range": ([_P(Impact), _P(FitEstimate), _U32], ctypes.c_int32),
+    "l3_impact_update_range": (
+        [_P(Impact), _P(FitEstimate), _P(ImpactClub), _U32],
+        ctypes.c_int32,
+    ),
     "l3_impact_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_impact_cause_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_impact_format": ([_P(Impact), *_TEXT], ctypes.c_int32),
     # l3_impact_fit.h
     "l3_impact_fit_cfg_defaults": ([_P(ImpactFitCfg)], None),
@@ -1652,6 +1671,7 @@ __all__ = [
     "Cpx",
     "Delivery",
     "FollowCtx",
+    "IMPACT_CAUSE_NAMES",
     "IMPACT_WHY_NAMES",
     "MEAS_FALLBACK",
     "MEAS_IMPLAUSIBLE",
@@ -1681,6 +1701,7 @@ __all__ = [
     "ShotInput",
     "Impact",
     "ImpactCfg",
+    "ImpactClub",
     "FIT_MAX_POINTS",
     "FIT_NO_TRACK",
     "FIT_TRACK_NAMES",
