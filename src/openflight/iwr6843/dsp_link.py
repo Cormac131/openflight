@@ -33,6 +33,12 @@ _STATUS = re.compile(
     r"beats=(?P<beats>\d+) served=(?P<served>\d+)\s*$",
     re.MULTILINE,
 )
+_HW = re.compile(
+    r"^dsp hw gpreg_stage=(?P<stage>\S+) halt=(?P<halt>\d+) power=(?P<power>\d+) "
+    r"stc=(?P<stc>\d+) esm=(?P<esm>[0-9a-f]{8}(?:,[0-9a-f]{8}){3}) "
+    r"hsram=(?P<hsram>ok|BAD)\s*$",
+    re.MULTILINE,
+)
 _NEVER_BOOTED = re.compile(r"^dsp status stage=never_booted magic=[0-9a-f]{8}\s*$", re.MULTILINE)
 _CORES = r"(?:mss|dss|verify)"
 _DETECT = re.compile(
@@ -108,6 +114,31 @@ class DspStatus:
     @property
     def booted(self) -> bool:
         return self.stage != "never_booted"
+
+
+@dataclass(frozen=True)
+class DspHw:
+    """``trackCfg dsp hw``: the DSS as the MSS reads it without the DSS's help.
+
+    ``gpreg_stage`` is the stage the DSS mirrored into DSSGPREG0 (``reset``
+    is its earliest, before C init and BIOS), or ``none(XXXXXXXX)`` when it
+    never wrote it; ``esm`` the ESMSR1..3 and ESMSR4 error flags.
+    """
+
+    gpreg_stage: str
+    halt: int
+    power: int
+    stc: int
+    esm: tuple[int, int, int, int]
+    hsram_ok: bool
+
+    @property
+    def halted(self) -> bool:
+        return self.halt == 1
+
+    @property
+    def powered(self) -> bool:
+        return self.power == 3
 
 
 @dataclass(frozen=True)
@@ -271,6 +302,23 @@ def parse_dsp_status(text: str) -> DspStatus:
         err=int(match.group("err")),
         beats=int(match.group("beats")),
         served=int(match.group("served")),
+    )
+
+
+def parse_dsp_hw(text: str) -> DspHw:
+    """The hardware line; also found in a failed ping's or probe's reply."""
+    match = _HW.search(text)
+    if match is None:
+        _raise_on_error(text, "trackCfg dsp hw")
+        raise DspLinkError(f"trackCfg dsp hw: no hw line in {text!r}")
+    esm = tuple(int(word, 16) for word in match.group("esm").split(","))
+    return DspHw(
+        gpreg_stage=match.group("stage"),
+        halt=int(match.group("halt")),
+        power=int(match.group("power")),
+        stc=int(match.group("stc")),
+        esm=(esm[0], esm[1], esm[2], esm[3]),
+        hsram_ok=match.group("hsram") == "ok",
     )
 
 

@@ -55,14 +55,37 @@ static volatile l3_dsp_status_t *const gDssStatus =
 static l3_dsp_result_t *const gDssResult =
     (l3_dsp_result_t *)(SOC_XWR68XX_DSS_HSRAM_BASE_ADDRESS + L3_DSP_RESULT_HSRAM_OFFSET);
 
+/* DSSREG DSSGPREG0: the stage again, on a channel that is not HS-RAM. */
+static volatile uint32_t *const gDssGpreg0 =
+    (volatile uint32_t *)SOC_XWR68XX_DSS_DSSREG_BASE_ADDRESS;
+
 /* Record a boot stage (or'd with L3_DSP_STAGE_FAILED for a failure) and
  * write it back out of this core's cache, so the MSS reads it. */
 static void dss_status(uint32_t stage, int32_t errCode)
 {
+    *gDssGpreg0 = L3_DSP_GPREG_TAG | stage;
     gDssStatus->stage = stage;
     gDssStatus->errCode = errCode;
     gDssStatus->magic = L3_DSP_STATUS_MAGIC;
     Cache_wb((Ptr)gDssStatus, sizeof(l3_dsp_status_t), Cache_Type_ALLD, TRUE);
+}
+
+/* xdc Reset function (dss.cfg): runs before cinit and BIOS startup, so no
+ * globals beyond the constant addresses and no Cache calls. Caching is not
+ * yet set up, so the writes reach memory. */
+void dss_resetHook(void);
+void dss_resetHook(void)
+{
+    volatile uint32_t *gpreg = (volatile uint32_t *)SOC_XWR68XX_DSS_DSSREG_BASE_ADDRESS;
+    volatile l3_dsp_status_t *status = (volatile l3_dsp_status_t *)(
+        SOC_XWR68XX_DSS_HSRAM_BASE_ADDRESS + L3_DSP_STATUS_HSRAM_OFFSET);
+
+    *gpreg = L3_DSP_GPREG_TAG | L3_DSP_STAGE_RESET;
+    status->stage = L3_DSP_STAGE_RESET;
+    status->errCode = 0;
+    status->heartbeat = 0U;
+    status->served = 0U;
+    status->magic = L3_DSP_STATUS_MAGIC;
 }
 
 static void dss_statusCount(volatile uint32_t *counter)
