@@ -70,9 +70,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="candidate threshold as a multiple of the firmware's running noise floor",
     )
     parser.add_argument(
-        "--hits", type=int, default=2, help="tracked frames before the gate may fire"
-    )
-    parser.add_argument(
         "--wait-s", type=float, default=60.0, help="deadline for prompted and polled steps"
     )
     parser.add_argument(
@@ -137,7 +134,6 @@ def main(argv: list[str] | None = None) -> int:
         config=args.config,
         tee_m=args.tee_m,
         snr=args.snr,
-        hits=args.hits,
         wait_s=args.wait_s,
         swing_wait_s=args.swing_wait_s,
         shots=args.shots,

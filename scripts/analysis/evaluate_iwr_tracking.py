@@ -151,7 +151,6 @@ def iter_cases(roots: Iterable[Path]) -> Iterator[Case]:
             config = fr.ReplayConfig(
                 tee_bin=tee_bin_for(options),
                 snr=options.snr,
-                track_frames=options.track_frames,
                 pitch_deg=options.pitch_deg,
                 post_from_frame=(meta.get("retention") or {}).get("pre_frames"),
             )

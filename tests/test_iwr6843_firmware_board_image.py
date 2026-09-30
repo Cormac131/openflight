@@ -3,7 +3,7 @@
 DATA_RAM on the R4F is shared by the IQ16 scratch, the heap, .data, .bss and
 the stacks, and the tracker state outgrew it. The board image therefore
 compiles out what is not needed on the board right now: the ball-hypothesis
-search (off at run time anyway) and most of the trigger's flight recorder.
+search (off at run time anyway) and most of the trigger's raw-input trace.
 The code stays in the tree and the default host build keeps all of it.
 
 These tests pin the switch list to the makefile, build the modules with that
@@ -20,14 +20,13 @@ from pathlib import Path
 
 import pytest
 from iwr6843_twotrack import BIN_M, TwoTracks
-from test_iwr6843_firmware_trigger import CLUB, Detector, make_cfg
+from test_iwr6843_firmware_trigger import CLUB, FrontEnd, make_cfg
 
 from openflight.iwr6843 import firmware_host as fw
 
 FIRMWARE_DIR = Path(__file__).parents[1] / "firmware" / "iwr6843"
 APP_MAKEFILE = FIRMWARE_DIR / "makefile"
 TOP_MAKEFILE = FIRMWARE_DIR.parent / "Makefile"
-BOARD_LOG_DEPTH = 48
 BOARD_TRACE_DEPTH = 24
 
 
@@ -56,10 +55,9 @@ def board(tmp_path_factory):
 # --- the makefile ------------------------------------------------------------
 
 
-def test_the_board_image_leaves_out_the_search_and_most_of_the_recorder():
+def test_the_board_image_leaves_out_the_search_and_most_of_the_trace():
     assert dict(define.split("=", 1) for define in board_defines()) == {
         "L3_BALL_HYPOTHESES": "0",
-        "L3_TRIG_LOG_DEPTH": f"{BOARD_LOG_DEPTH}U",
         "L3_TRIG_TRACE_DEPTH": f"{BOARD_TRACE_DEPTH}U",
     }
 
@@ -84,9 +82,9 @@ def test_the_host_defaults_keep_everything():
     hyp = (FIRMWARE_DIR / "l3_ball_hyp.h").read_text(encoding="utf-8")
     trigger = (FIRMWARE_DIR / "l3_trigger.h").read_text(encoding="utf-8")
     assert "#ifndef L3_BALL_HYPOTHESES\n#define L3_BALL_HYPOTHESES 1\n#endif" in hyp
-    assert "#ifndef L3_TRIG_LOG_DEPTH\n#define L3_TRIG_LOG_DEPTH         128U\n#endif" in trigger
+    assert "L3_TRIG_LOG_DEPTH" not in trigger, "the gate's flight recorder went with the gate"
     assert "#ifndef L3_TRIG_TRACE_DEPTH\n#define L3_TRIG_TRACE_DEPTH       64U\n#endif" in trigger
-    assert (fw.TRIG_LOG_DEPTH, fw.TRIG_TRACE_DEPTH) == (128, 64)
+    assert fw.TRIG_TRACE_DEPTH == 64
 
 
 def test_the_hypothesis_angle_loop_is_compiled_out_with_the_search():
@@ -166,19 +164,8 @@ def test_asking_the_board_for_the_search_gets_the_plain_track(host, board):
     assert got.launch() == expected.launch()
 
 
-def test_the_board_flight_recorder_keeps_the_newest_48_frames(board):
-    det = Detector(board, make_cfg(board, minStepBins=0.0, trackFrames=200))
-    for _ in range(BOARD_LOG_DEPTH + 20):
-        det.feed({12: CLUB})  # every frame logs, never fires (too young)
-    records = det.records()
-    assert len(records) == BOARD_LOG_DEPTH
-    assert records[0].frame == 21
-    assert records[-1].frame == BOARD_LOG_DEPTH + 20
-    assert f"records={BOARD_LOG_DEPTH}" in det.summary()
-
-
 def test_the_board_trace_keeps_the_newest_24_frames(board):
-    det = Detector(board, make_cfg(board, minStepBins=0.0, trackFrames=200))
+    det = FrontEnd(board, make_cfg(board))
     for _ in range(BOARD_TRACE_DEPTH + 10):
         det.feed({12: CLUB})
     traces = det.traces()

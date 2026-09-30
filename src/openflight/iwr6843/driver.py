@@ -536,15 +536,12 @@ class IWR6843Radar:
         return self.cmd("stats", 2.0)
 
     def trigger_log(self) -> str:
-        """The self-trigger detector's summary, configuration and frame log.
+        """The self-trigger front end's floor and threshold, then its configuration.
 
-        One text line per logged frame: candidate bin, integrated residual
-        energy against the noise floor, Doppler velocity and coherence, track
-        age, and why the frame did or did not fire. A missed swing reads back
-        as long as nothing above the floor has been seen since; the firmware
-        prints up to 128 records, so allow a few seconds at CLI baud.
+        The club track fires the trigger: ``club_track`` reads what it followed
+        and ``trigger_trace`` what the radar was offered.
         """
-        return self.cmd("triggerLog", 6.0)
+        return self.cmd("triggerLog", 2.0)
 
     def tee_scan(self, first_bin: int, count: int) -> str:
         """``ball scan``: static power per global bin averaged over the ring's pre frames.

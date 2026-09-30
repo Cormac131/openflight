@@ -112,7 +112,7 @@ It exercises every command the firmware registers on its CLI and prints one
 | `profiles` | `captureCfg`, `phaseCaptureCfg`, `captureFormat`, `iq8Scale` validate their arguments; every shipped `config/iwr6843_*.cfg` loads with the declared format and stride | yes |
 | `readback` | `l3dump`, `l3sparse` (limit, oversized, late request), `trackCfg`, `l3track`, and `l3release` stream and rearm | yes |
 | `trigger` | a fresh session is untriggered, `triggerCfg` arms and disarms, the detector goes live only once the pre-trigger ring is full, `debugCfg` streams parsable change-only lines, the floor measurement works, and reconfiguring clears a previous arm | yes |
-| `trigger-swing` | with `--swing`: a ball on the tee reaches `watching`, a swing fires `Triggered` (the notice must survive a `stats` reply), the frozen ring reads back in under 1.0 s, the host detector replay agrees, the ring rearms, and a latched session is cleared by reconfigure | no, prompts you |
+| `trigger-swing` | with `--swing`: a ball on the tee reaches `watching`, a swing fires `Triggered` (the notice must survive a `stats` reply), the frozen ring reads back in under 1.0 s, the host club-track replay fires too, the ring rearms, and a latched session is cleared by reconfigure | no, prompts you |
 | `solve` | always `SKIP`: the on-chip DSS solve is in the image but the MSS exposes no CLI entry point for it yet | yes |
 
 The `l3track without trackCfg` check can only prove the refusal on the first run
@@ -216,9 +216,11 @@ result v1 shot=1 verdict=valid valid=0x1ff quality=0x7ff impact=20000 source=gat
 
 Read it as a chain of evidence. `delivery valid=spa` means speed, path and
 attack were all measured (angles came through); `valid=s` alone means the
-club was seen in range only. `impact source=` says which detector fired: 1
-the range gate, 2 the geometry, 3 both; the geometric detector fires the
-capture only once `trackCfg impact ... 1` arms it. `shot state=result` with
+club was seen in range only. `impact source=` says which detector fired: 4
+the range-only impact (the club track's line crossing the ball's range), 2
+the geometry, 6 both; the geometric detector fires the capture only once
+`trackCfg impact ... 1` arms it. 1 was the range gate, removed on 2026-09-30,
+and only appears in results from older firmware. `shot state=result` with
 `launch valid=shv` is a complete post-impact measurement; `balltrack
 confirmed=0` means nothing left the origin fast enough to be a ball (a
 practice swing, or the ball was not where the destination bin said).

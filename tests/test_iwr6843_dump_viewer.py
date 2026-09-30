@@ -93,7 +93,7 @@ def test_options_coerce_form_strings_and_skip_blanks():
             "dest_bin": "",
             "snr": "6.5",
             "stat": "energy",
-            "impact_armed": "true",
+            "geometry_armed": "true",
             "stop_at_fire": False,
             "post_from_frame": None,
             "tee_range_m": " ",
@@ -103,7 +103,7 @@ def test_options_coerce_form_strings_and_skip_blanks():
     assert options.dest_bin == 38  # blank means unset → form default
     assert options.snr == 6.5
     assert options.stat == "energy"
-    assert options.impact_armed is True
+    assert options.geometry_armed is True
     assert options.stop_at_fire is False
     assert options.post_from_frame is None
     assert options.tee_range_m == dv.ViewerOptions().tee_range_m
@@ -111,7 +111,19 @@ def test_options_coerce_form_strings_and_skip_blanks():
 
 @pytest.mark.parametrize("text", ["off", "0", "no", ""])
 def test_options_read_falsy_checkbox_strings_as_false(text):
-    assert dv.ViewerOptions.from_mapping({"impact_armed": text}).impact_armed is False
+    assert dv.ViewerOptions.from_mapping({"stop_at_fire": text}).stop_at_fire is False
+
+
+def test_options_fire_on_the_club_track_with_the_geometry_unarmed_by_default():
+    assert dv.ViewerOptions().geometry_armed is False
+    assert dv.ViewerOptions.for_recording({}).geometry_armed is False
+
+
+def test_the_gate_options_are_gone():
+    """The range gate and its track-frame count were removed (2026-09-30)."""
+    for gone in ("track_frames", "fire_mode", "impact_armed"):
+        with pytest.raises(ValueError, match=f"unknown options: {gone}"):
+            dv.ViewerOptions.from_mapping({gone: "1"})
 
 
 def test_options_reject_unknown_keys_and_bad_numbers():
@@ -134,8 +146,8 @@ def test_tee_bin_is_explicit_or_the_rounded_slant_range_when_cleared():
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("triggerCfg 41 6.0 2", {"tee_bin": 41, "snr": 6.0, "track_frames": 2}),
-        ("  triggerCfg 7 3 1 ", {"tee_bin": 7, "snr": 3.0, "track_frames": 1}),
+        ("triggerCfg 41 6.0 2", {"tee_bin": 41, "snr": 6.0}),
+        ("  triggerCfg 7 3 1 ", {"tee_bin": 7, "snr": 3.0}),
         ("triggerCfg 0 0 0", {}),  # SELF_TRIGGER_OFF_COMMAND
         (None, {}),
         ("", {}),
@@ -439,7 +451,6 @@ def test_session_context_finds_the_log_in_the_parent_folder(tmp_path):
     assert context["defaults"] == {
         "tee_bin": 41,
         "snr": 6.0,
-        "track_frames": 2,
         "tee_range_m": 1.845,
         "pitch_deg": 10.4,
     }

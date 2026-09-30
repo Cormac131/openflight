@@ -34,10 +34,8 @@ R4F_CFLAGS += $(L3_VARIANT_DEFS)
 # (make clean first; this replaces the whole list).
 #   L3_BALL_HYPOTHESES=0  the ball-hypothesis search: off at run time until
 #                         the recorded captures say otherwise (~1.6 KB)
-#   L3_TRIG_LOG_DEPTH=48  trigger flight recorder, host 128 (~2.2 KB)
 #   L3_TRIG_TRACE_DEPTH=24 trigger raw-input trace, host 64 (~1.3 KB)
-L3_FEATURE_DEFS ?= --define=L3_BALL_HYPOTHESES=0 --define=L3_TRIG_LOG_DEPTH=48U \
-                   --define=L3_TRIG_TRACE_DEPTH=24U
+L3_FEATURE_DEFS ?= --define=L3_BALL_HYPOTHESES=0 --define=L3_TRIG_TRACE_DEPTH=24U
 R4F_CFLAGS += $(L3_FEATURE_DEFS)
 
 APPNAME = l3_dump

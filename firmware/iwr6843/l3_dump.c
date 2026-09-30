@@ -384,9 +384,11 @@ static volatile uint8_t  gHwaRearmBusy;
 static volatile uint8_t  gHwaFreezeRequested;
 static volatile uint8_t  gTriggerEnabled;
 static volatile uint8_t  gSelfTriggerLatched;
-/* Self-trigger detector (l3_trigger.c). The detect task updates it once
- * per completed slot with gTrigBusy raised; the CLI task (triggerCfg,
- * triggerLog) waits for that flag before it resets or reads the state.
+/* Self-trigger front end (l3_trigger.c): the watch region, the noise floor
+ * the club targets are extracted against, and the raw-input trace. The
+ * detect task updates it once per completed slot with gTrigBusy raised; the
+ * CLI task (triggerCfg, triggerLog) waits for that flag before it resets or
+ * reads the state. The club track's range-only impact fires the capture.
  * gTriggerPhase is the readout the host's stats parser already knows. */
 static l3_trig_cfg_t     gTrigCfg;
 /* How targets read their sub-bin range (L3_OBS_SUBBIN_*): "trackCfg subbin". */
@@ -425,14 +427,14 @@ static uint8_t           gBallAngleValid;
 #define L3_BALL_ANGLE_MIN_PEAK_RATIO 3.0F
 /* Geometric impact detector over the club delivery and the ball position.
  * It records its verdict every frame; it fires the capture only once armed
- * ("trackCfg impact ... 1"), the range gate being the proven fallback. */
+ * ("trackCfg impact ... 1"). The range-only impact always fires. */
 static l3_impact_cfg_t   gImpactCfg;
 static l3_impact_t       gImpact;
 static uint8_t           gImpactCfgSet;
-static uint8_t           gImpactArmed;
+static uint8_t           gGeometryArmed;
 static l3_delivery_t     gDelivery;        /* the newest frame's delivery fit */
 static l3_vec3_t         gBallPosition;    /* destination in the golf frame */
-static uint8_t           gTrigFireSource;  /* bit 0 range gate, bit 1 geometry, bit 2 range */
+static uint8_t           gTrigFireSource;  /* L3_SHOT_IMPACT_* bits: geometry, range */
 /* The tee band (l3_band.h) and the impact from the tracks either side of it
  * (l3_impact_fit.h), as firmware_replay runs them. bandBins 0 (the default)
  * is no band: the club track, the ball tracker and the post-impact targets
@@ -3422,7 +3424,6 @@ static void l3_applyAdaptiveWindows(void)
 static void l3_trigRearm(void)
 {
     l3_applyAdaptiveWindows();
-    l3_trig_rearm(&gTrig);
     l3_track_reset(&gClubTrack);
     l3_impact_rearm(&gImpact);
     l3_impact_rearm(&gRangeImpact);
@@ -3517,7 +3518,7 @@ static float l3_ballArmBin(uint32_t teeBin)
  * ball tracker at the destination (the band's far edge with a band) with the
  * impact time: the geometric detector's interpolated one when it fired, else
  * the range-only one when it fired, else this frame's. */
-static void l3_shotObserve(uint32_t teeBin, int32_t gateFired, int32_t geometric, int32_t ranged)
+static void l3_shotObserve(uint32_t teeBin, int32_t geometric, int32_t ranged)
 {
     l3_shot_input_t in;
     uint32_t frameUs = gPreFramesCaptured * (uint32_t)gFramePeriodUs;
@@ -3527,7 +3528,6 @@ static void l3_shotObserve(uint32_t teeBin, int32_t gateFired, int32_t geometric
     in.ballPosition = gBallPosition;
     in.clubActive = gClubTrack.active;
     in.clubPoints = gClubTrack.count;
-    in.gateFired = (uint8_t)(gateFired ? 1U : 0U);
     in.geometricFired = (uint8_t)(geometric ? 1U : 0U);
     in.rangeFired = (uint8_t)(ranged ? 1U : 0U);
     if (geometric && gImpact.fired) {
@@ -3844,9 +3844,9 @@ static void l3_considerSelfTrigger(uint32_t slot)
     uint32_t first;
     uint32_t count;
     uint32_t bin;
-    int32_t fired;
     int32_t geometric = 0;
     int32_t ranged = 0;
+    uint8_t accepted;
     l3_track_point_t newest;
     uint32_t ticks;
     uintptr_t key;
@@ -3899,10 +3899,8 @@ static void l3_considerSelfTrigger(uint32_t slot)
         l3_noteTrigger(1U, 0.0F);
         return;
     }
-    gTrig.loopPeriodS = gTrigLoopPeriodS;
     ticks = Cycleprofiler_getTimeStamp();
-    fired = l3_trig_update(&gTrig, gPreFramesCaptured, teeBin, frame.binStart + first,
-                           obs, count);
+    l3_trig_observe(&gTrig, gPreFramesCaptured, teeBin, frame.binStart + first, obs, count);
     l3_profileStage(L3_PROF_TRIGGER, ticks);
     {
         /* Ranked targets into the club track: the trigger's observations,
@@ -4009,13 +4007,13 @@ static void l3_considerSelfTrigger(uint32_t slot)
         l3_profile_frame(&gProfile);
     }
     gTrigBusy = 0U;
-    gTrigFireSource = (uint8_t)((fired ? 1U : 0U) | (geometric ? 2U : 0U) | (ranged ? 4U : 0U));
-    l3_shotObserve(teeBin, fired, geometric && gImpactArmed, ranged && gImpactArmed);
-    if ((geometric || ranged) && gImpactArmed) {
-        fired = 1;
-    }
-    if (!fired) {
-        l3_noteTrigger(gTrig.state == L3_TRIG_STATE_TRACKING ? 7U : 5U, gTrig.floor);
+    /* Every impact detector that fired, whether or not it may freeze. */
+    gTrigFireSource = (uint8_t)((geometric ? L3_SHOT_IMPACT_GEOMETRY : 0U) |
+                                (ranged ? L3_SHOT_IMPACT_RANGE : 0U));
+    accepted = l3_shot_fire_sources(gGeometryArmed, geometric, ranged);
+    l3_shotObserve(teeBin, accepted & L3_SHOT_IMPACT_GEOMETRY, accepted & L3_SHOT_IMPACT_RANGE);
+    if (accepted == 0U) {
+        l3_noteTrigger(gClubTrack.active ? 7U : 5U, gTrig.floor);
         return;
     }
     key = Hwi_disable();
@@ -4472,7 +4470,8 @@ static int32_t l3_cli_trackCfgElem(int32_t argc, char *argv[])
 
 /* "trackCfg impact <toleranceM> <horizonS> <minSpeedMps> <minConfidence>
  * <armed>": the geometric impact detector. armed 0 records its verdicts
- * beside the range gate without firing; 1 lets it fire the capture. */
+ * beside the range-only impact without firing; 1 lets it fire the capture
+ * too. The range-only impact fires either way. */
 static int32_t l3_cli_trackCfgImpact(int32_t argc, char *argv[])
 {
     float values[5];
@@ -4488,7 +4487,7 @@ static int32_t l3_cli_trackCfgImpact(int32_t argc, char *argv[])
     gImpactCfg.horizonS = values[1];
     gImpactCfg.minSpeedMps = values[2];
     gImpactCfg.minConfidence = values[3];
-    gImpactArmed = (values[4] != 0.0F) ? 1U : 0U;
+    gGeometryArmed = (values[4] != 0.0F) ? 1U : 0U;
     l3_impact_init(&gImpact, &gImpactCfg);
     l3_impact_init(&gRangeImpact, &gImpactCfg);
     CLI_write("Done\n");
@@ -4603,26 +4602,26 @@ static int32_t l3_cli_trackCfg(int32_t argc, char *argv[])
 /* Longest triggerCfg waits for the detect task to finish scoring a frame. */
 #define L3_TRIGGER_CFG_WAIT_MS 50U
 
-/* CLI "triggerCfg <bin> <snr> <frames> [approach gate minCoh minStep stat
- * minSpeed]": arm the approaching-clubhead detector around the tee bin, a
- * GLOBAL range-FFT bin (the host converts the tee range; bin 34 is 1.59 m
- * on a 128-point FFT over 6 m). A candidate needs a residual statistic of at least <snr> times the
- * running noise floor; its track needs <frames> observations before
- * entering the impact gate fires the capture. frames of 0 disables the
- * trigger. The optional values are the bins watched short of the tee, the
- * gate half-width in bins, the minimum Doppler coherence (0..1, 0 = off),
- * the minimum mean approach rate in bins per frame, the statistic (0 =
- * energy over all loops, 1 = strongest loop) and the minimum apparent
- * Doppler speed of a candidate in m/s (0 = off). Re-arming clears the log. */
+/* CLI "triggerCfg <bin> <snr> <on> [approach past stat]": turn the
+ * self-trigger's detect path on around the destination bin, a GLOBAL
+ * range-FFT bin (the host converts the tee range; bin 34 is 1.59 m on a
+ * 128-point FFT over 6 m). Club targets need a residual statistic of at least
+ * <snr> times the running noise floor. <on> of 0 turns the self-trigger off;
+ * any other value turns it on (it was the removed range gate's track-frame
+ * count, so existing arming lines still work). The club track's range-only
+ * impact fires the capture. The optional values are the bins watched short
+ * of the destination, the bins past it, and the statistic (0 = energy over
+ * all loops, 1 = strongest loop). The range gate's own thresholds went with
+ * it, so a longer line is refused rather than half applied. */
 static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
 {
     l3_trig_cfg_t cfg;
     unsigned long value;
+    unsigned long on;
     char *end;
 
-    if (argc < 4 || argc > 11) {
-        CLI_write("Error: triggerCfg <globalBin> <snr> <frames> "
-                  "[approach gate minCoh minStep stat minSpeed minApproach]\n");
+    if (argc < 4 || argc > 7) {
+        CLI_write("Error: triggerCfg <globalBin> <snr> <on> [approach past stat]\n");
         return -1;
     }
     l3_trig_cfg_defaults(&cfg);
@@ -4637,12 +4636,11 @@ static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
         CLI_write("Error: trigger snr\n");
         return -1;
     }
-    value = strtoul(argv[3], &end, 10);
+    on = strtoul(argv[3], &end, 10);
     if (*end != '\0') {
-        CLI_write("Error: trigger frames\n");
+        CLI_write("Error: trigger on\n");
         return -1;
     }
-    cfg.trackFrames = (uint32_t)value;
     if (argc > 4) {
         value = strtoul(argv[4], &end, 10);
         if (*end != '\0') {
@@ -4654,51 +4652,21 @@ static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
     if (argc > 5) {
         value = strtoul(argv[5], &end, 10);
         if (*end != '\0') {
-            CLI_write("Error: trigger gate bins\n");
+            CLI_write("Error: trigger past bins\n");
             return -1;
         }
-        cfg.gateBins = (uint32_t)value;
+        cfg.pastBins = (uint32_t)value;
     }
     if (argc > 6) {
-        cfg.minCoherence = strtof(argv[6], &end);
-        if (*end != '\0') {
-            CLI_write("Error: trigger min coherence\n");
-            return -1;
-        }
-    }
-    if (argc > 7) {
-        cfg.minStepBins = strtof(argv[7], &end);
-        if (*end != '\0') {
-            CLI_write("Error: trigger min step\n");
-            return -1;
-        }
-    }
-    if (argc > 8) {
-        value = strtoul(argv[8], &end, 10);
+        value = strtoul(argv[6], &end, 10);
         if (*end != '\0') {
             CLI_write("Error: trigger stat\n");
             return -1;
         }
         cfg.stat = (uint32_t)value;
     }
-    if (argc > 9) {
-        cfg.minSpeedMps = strtof(argv[9], &end);
-        if (*end != '\0') {
-            CLI_write("Error: trigger min speed\n");
-            return -1;
-        }
-    }
-    if (argc > 10) {
-        value = strtoul(argv[10], &end, 10);
-        if (*end != '\0') {
-            CLI_write("Error: trigger min approach bins\n");
-            return -1;
-        }
-        cfg.minApproachBins = (uint32_t)value;
-    }
-    if (cfg.trackFrames != 0U && l3_trig_cfg_check(&cfg) != 0) {
-        CLI_write("Error: trigger config (snr >= 1, gate < approach <= %u, "
-                  "minApproach <= approach)\n",
+    if (on != 0UL && l3_trig_cfg_check(&cfg) != 0) {
+        CLI_write("Error: trigger config (snr >= 1, past < approach <= %u, stat 0|1)\n",
                   (unsigned)L3_TRIG_MAX_BINS);
         return -1;
     }
@@ -4715,9 +4683,9 @@ static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
         }
     }
     gTrigCfg = cfg;
-    l3_trig_init(&gTrig, &gTrigCfg, gTrigLoopPeriodS);
+    l3_trig_init(&gTrig, &gTrigCfg);
     l3_clubTrackConfigure();
-    gTriggerEnabled = (cfg.trackFrames != 0U) ? 1U : 0U;
+    gTriggerEnabled = (on != 0UL) ? 1U : 0U;
     CLI_write("Done\n");
     return 0;
 }
@@ -4727,8 +4695,8 @@ static int32_t l3_cli_triggerCfg(int32_t argc, char *argv[])
  * "bin:max@frame"), then one line per traced frame, oldest first: the
  * region's strongest bin whenever it reached the trace bar, with its
  * all-loop energy, strongest-loop power, loop-0 power and the floor. A swing
- * that never becomes a candidate still shows up here, or shows up nowhere,
- * which says whether the club is invisible or merely rejected. */
+ * the club track never took still shows up here, or shows up nowhere, which
+ * says whether the club is invisible or merely under the threshold. */
 static void l3_writeTriggerTrace(char *line, uint32_t cap)
 {
     l3_trig_trace_t entry;
@@ -4751,20 +4719,16 @@ static void l3_writeTriggerTrace(char *line, uint32_t cap)
     }
 }
 
-/* CLI "triggerLog [trace|track|shot|result|perf|clear]". Bare: the detector's state and counters,
- * its configuration, then one line per logged frame, oldest first. Only
- * frames with a candidate or an active track are logged; gap= counts the
- * quiet frames before each. "trace" prints the raw-input trace instead (see
- * above); "clear" empties the trace and its maxima without touching the log
- * or the arm. Records keep accruing while this prints, so a frame logged
- * mid-print can show twice or not at all. */
+/* CLI "triggerLog [trace|track|shot|result|perf|clear]". Bare: the
+ * self-trigger front end's floor and threshold, then its configuration.
+ * "track" prints the club track that fires; "trace" the raw-input trace
+ * (see above); "clear" empties the trace and its maxima without touching
+ * the arm. */
 static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
 {
     /* Static, not on the CLI task's small stack. Must hold at least
      * L3_RESULT_PACKET_BYTES + 1 for the "result" packet's first half. */
     static char line[192];
-    l3_trig_record_t record;
-    uint32_t count;
     uint32_t index;
 
     if (argc == 2 && strcmp(argv[1], "clear") == 0) {
@@ -4889,7 +4853,7 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         (void)l3_angle_format(&gLastAngle, line, sizeof(line));
         CLI_write(" %s estimates=%u\n", line, (unsigned)gAngleEstimates);
         (void)l3_impact_format(&gImpact, line, sizeof(line));
-        CLI_write("%s armed=%u source=%u\n", line, (unsigned)gImpactArmed,
+        CLI_write("%s armed=%u source=%u\n", line, (unsigned)gGeometryArmed,
                   (unsigned)gTrigFireSource);
         (void)l3_impact_format(&gRangeImpact, line, sizeof(line));
         CLI_write("range %s\n", line);
@@ -4906,18 +4870,12 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|cal|clear]\n");
         return -1;
     }
+    /* The front end's floor and arming; "track" has the club track, which
+     * fires, and "trace" what the radar was offered. */
     (void)l3_trig_format_summary(&gTrig, line, sizeof(line));
     CLI_write("%s\n", line);
     (void)l3_trig_format_config(&gTrig, line, sizeof(line));
     CLI_write("%s\n", line);
-    count = l3_trig_log_count(&gTrig);
-    for (index = 0U; index < count; index++) {
-        if (!l3_trig_log_get(&gTrig, index, &record)) {
-            break;
-        }
-        (void)l3_trig_format_record(&record, line, sizeof(line));
-        CLI_write("%s\n", line);
-    }
     CLI_write("Done\n");
     return 0;
 }
@@ -5919,7 +5877,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[11].cmdHandlerFxn = l3_cli_sparse;
     cliCfg.tableEntry[12].cmd           = "triggerCfg";
     cliCfg.tableEntry[12].helpString    =
-        "triggerCfg <localBin> <snr> <frames> [approach gate minCoh minStep stat minSpeed]";
+        "triggerCfg <globalBin> <snr> <on> [approach past stat]";
     cliCfg.tableEntry[12].cmdHandlerFxn = l3_cli_triggerCfg;
     cliCfg.tableEntry[13].cmd           = "l3track";
     cliCfg.tableEntry[13].helpString    = "Freeze, pick ball and club cells on-chip, send them";
@@ -5940,7 +5898,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
         "ball [status] | ball scan <firstBin> <count> | ball cfg <enable> <follow> [...]";
     cliCfg.tableEntry[18].cmdHandlerFxn = l3_cli_ball;
     cliCfg.tableEntry[17].cmd           = "triggerLog";
-    cliCfg.tableEntry[17].helpString    = "triggerLog [trace|track|shot|result|perf|frames|cal|clear]: log, trace, club, shot, result, perf, stored frames, calibration";
+    cliCfg.tableEntry[17].helpString    = "triggerLog [trace|track|shot|result|perf|frames|cal|clear]: floor, trace, club, shot, result, perf, stored frames, calibration";
     cliCfg.tableEntry[17].cmdHandlerFxn = l3_cli_triggerLog;
     CLI_open(&cliCfg);
 }

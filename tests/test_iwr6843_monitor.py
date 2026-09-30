@@ -166,14 +166,14 @@ def test_capture_monitor_accepts_iq8_self_trigger_and_says_so(tmp_path, caplog):
         config_path=config,
         output_dir=tmp_path / "dumps",
         radar=radar,
-        self_trigger=SelfTriggerConfig(tee_bin=1, snr=2.0, track_frames=2),
+        self_trigger=SelfTriggerConfig(tee_bin=1, snr=2.0),
     )
 
     with caplog.at_level(logging.INFO):
         monitor.start(armed=False)
     try:
         assert radar.configs == [str(config)]
-        assert radar.commands[0][0] == "triggerCfg 1 2.0 2"
+        assert radar.commands[0][0] == "triggerCfg 1 2.0 1"
         assert any("IQ8 detect" in record.getMessage() for record in caplog.records)
     finally:
         monitor.stop()
@@ -502,7 +502,7 @@ def _self_trigger_monitor(tmp_path, radar, **kwargs) -> IWR6843CaptureMonitor:
         output_dir=tmp_path / "dumps",
         radar=radar,
         button_factory=FakeButton,
-        self_trigger=SelfTriggerConfig(tee_bin=12, snr=6.0, track_frames=2),
+        self_trigger=SelfTriggerConfig(tee_bin=12, snr=6.0),
         **kwargs,
     )
 
@@ -596,7 +596,7 @@ def test_self_trigger_config_is_sent_before_the_worker_owns_the_port(tmp_path):
     monitor.start(armed=False)
     monitor.stop()
 
-    assert radar.commands[0] == ("triggerCfg 12 6.0 2", threading.current_thread().name)
+    assert radar.commands[0] == ("triggerCfg 12 6.0 1", threading.current_thread().name)
 
 
 def test_measure_trigger_level_reads_p95_and_stops_if_the_probe_is_rejected():
@@ -620,12 +620,11 @@ def test_measure_trigger_level_reads_p95_and_stops_if_the_probe_is_rejected():
     floor, level = measure_trigger_level(
         radar,
         14,
-        2,
         clock=lambda: clock["t"],
         pause=lambda seconds: clock.__setitem__("t", clock["t"] + seconds),
     )
 
-    assert radar.commands[0] == f"triggerCfg 14 {SELF_TRIGGER_DEFAULT_SNR} 2", (
+    assert radar.commands[0] == f"triggerCfg 14 {SELF_TRIGGER_DEFAULT_SNR} 1", (
         "the real arm, at the default snr"
     )
     assert floor == pytest.approx(200000.0)
@@ -633,7 +632,7 @@ def test_measure_trigger_level_reads_p95_and_stops_if_the_probe_is_rejected():
 
     rejected = _Radar("Error: trigger power\n")
     with pytest.raises(RuntimeError, match="background probe rejected"):
-        measure_trigger_level(rejected, 14, 2, clock=lambda: 0.0, pause=lambda _seconds: None)
+        measure_trigger_level(rejected, 14, clock=lambda: 0.0, pause=lambda _seconds: None)
 
 
 def test_rejected_self_trigger_config_fails_start_and_releases_the_radar(tmp_path):
@@ -770,7 +769,7 @@ def test_other_profile_turns_the_trigger_off_and_back_on_even_on_failure(tmp_pat
     monitor.stop()
 
     lines = [line for line, _thread in radar.commands]
-    assert lines == ["triggerCfg 12 6.0 2", SELF_TRIGGER_OFF_COMMAND, "triggerCfg 12 6.0 2"]
+    assert lines == ["triggerCfg 12 6.0 1", SELF_TRIGGER_OFF_COMMAND, "triggerCfg 12 6.0 1"]
 
 
 def test_trigger_during_a_serial_job_is_rejected(tmp_path):
@@ -877,10 +876,9 @@ def test_sparse_failure_after_freeze_is_a_capture_error_not_a_fallback(tmp_path)
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"tee_bin": -1, "snr": 6.0, "track_frames": 2}, "bin"),
-        ({"tee_bin": 3, "snr": 0.5, "track_frames": 2}, "snr"),
-        ({"tee_bin": 3, "snr": float("nan"), "track_frames": 2}, "snr"),
-        ({"tee_bin": 3, "snr": 6.0, "track_frames": 0}, "track frames"),
+        ({"tee_bin": -1, "snr": 6.0}, "bin"),
+        ({"tee_bin": 3, "snr": 0.5}, "snr"),
+        ({"tee_bin": 3, "snr": float("nan")}, "snr"),
     ],
 )
 def test_self_trigger_config_rejects_values_the_firmware_would_misread(kwargs, message):
@@ -889,11 +887,8 @@ def test_self_trigger_config_rejects_values_the_firmware_would_misread(kwargs, m
 
 
 def test_self_trigger_command_is_the_firmware_triggercfg_line():
-    assert (
-        SelfTriggerConfig(tee_bin=14, snr=6.0, track_frames=2).command
-        == "triggerCfg 14 6.0 2"
-    )
-    # Zero frames is the firmware's "off"; the on-line never sends it.
+    assert SelfTriggerConfig(tee_bin=14, snr=6.0).command == "triggerCfg 14 6.0 1"
+    # Zero is the firmware's "off"; the on-line never sends it.
     assert SELF_TRIGGER_OFF_COMMAND == "triggerCfg 0 0 0"
 
 
@@ -1234,7 +1229,7 @@ def test_tracker_configuration_precedes_trigger_and_listener(tmp_path):
     monitor.stop()
     assert [command for command, _ in radar.commands] == [
         "trackCfg 0.000135 0.046875 4 1 1.6",
-        "triggerCfg 12 6.0 2",
+        "triggerCfg 12 6.0 1",
     ]
     assert all(thread == threading.current_thread().name for _, thread in radar.commands)
     assert monitor.onboard_tracking

@@ -104,7 +104,6 @@ def _ctx(radar, **overrides) -> fc.Context:
         config="config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg",
         tee_m=1.575,
         snr=6.0,
-        hits=2,
         wait_s=5.0,
         shots=2,
         profiles=("config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg",),
@@ -987,16 +986,17 @@ def _trigger_radar(
     def trigger_cfg(line):
         fields = line.split()
         optional = fields[4:]
+        # l3_cli_triggerCfg: <bin> <snr> <on> [approach past stat].
         if (
-            len(fields) not in (4, 6)
+            not 4 <= len(fields) <= 7
             or not fields[1].isdigit()
             or not fields[3].isdigit()
             or fields[2].startswith("-")
             or any(not item.isdigit() for item in optional)
         ):
-            return b"Error: triggerCfg <localBin> <power> <hits>\n"
-        hits = int(fields[3])
-        state["enabled"] = enabled_after_arm if hits else 0
+            return b"Error: triggerCfg <globalBin> <snr> <on> [approach past stat]\n"
+        on = int(fields[3])
+        state["enabled"] = enabled_after_arm if on else 0
         state["phase"] = phases[0]
         state["bin"], state["level"] = int(fields[1]), int(float(fields[2]))
         return b"Done\n"
@@ -1019,6 +1019,12 @@ def _trigger_radar(
             return debug_cfg(line)
         if line == "stats":
             return stats(0)
+        if line == "triggerLog":
+            return (
+                f"trig frames=40 floor=412.0 thr=2472.0 traced=0\n"
+                f"trigcfg tee={state['bin']} snr={state['level']}.00 approach=12 past=3 "
+                "stat=peak\nDone\n"
+            ).encode()
         return b"Done\n"
 
     radar = scripted_radar({}, handler=handler)
@@ -1036,7 +1042,7 @@ def test_trigger_section_names_match_the_spec():
         "trigger/debug lines only change on phase change",
         "trigger/floor measurement",
         "trigger/reconfigure clears a previous arm",
-        "trigger/triggerLog prints the detector log",
+        "trigger/triggerLog prints the floor and configuration",
     ]
 
 
@@ -1132,7 +1138,7 @@ def test_floor_measurement_uses_the_runtime_helper(monkeypatch):
     monkeypatch.setattr(
         fc,
         "measure_trigger_level",
-        lambda radar, local_bin, hits, snr, clock, pause: (300.0, 300.0 * snr),
+        lambda radar, local_bin, snr, clock, pause: (300.0, 300.0 * snr),
     )
     assert check.run(_ctx(_trigger_radar())).status == "PASS"
 
@@ -1300,32 +1306,38 @@ def test_debug_lines_ignore_a_line_still_arriving():
 def test_arm_command_sends_the_snr_not_a_power_level():
     ctx = _ctx(_trigger_radar())
     # The ball is on the configured tee, so the firmware minimum is one bin
-    # short of it (approach must be deeper than the gate, and 0 is rejected).
-    assert fc.arm_command(ctx) == f"triggerCfg {fc._tee_bin(ctx)} 6.0 2 1 0"  # pylint: disable=protected-access
+    # short of it (approach must reach further than past it; 0 is rejected).
+    assert fc.arm_command(ctx) == f"triggerCfg {fc._tee_bin(ctx)} 6.0 1 1 0"  # pylint: disable=protected-access
 
 
 def test_trigger_watch_starts_at_the_configured_tee_not_short_of_the_ball():
     """A ball past the configured tee arms a watch from the tee out to the ball."""
     assert fc.trigger_watch(42, 40) == (2, 1)
     ctx = _ctx(_trigger_radar(), observed_tee_bin=42)
-    assert fc.arm_command(ctx) == "triggerCfg 42 6.0 2 2 1"
+    assert fc.arm_command(ctx) == "triggerCfg 42 6.0 1 2 1"
 
 
-def test_detector_evidence_collects_trace_and_log_lines_and_skips_missing_commands():
+def test_detector_evidence_collects_trace_and_club_track_lines_and_skips_missing_commands():
     replies = {
         "triggerLog trace": (
-            b"triggerLog trace\ntrigtrace state=idle stat=peak floor=812 bar=2.0x frames=40 "
+            b"triggerLog trace\ntrigtrace stat=peak floor=812 bar=2.0x frames=40 "
             b"region=2+16 entries=1\ntrigmax 2:900@3 3:812@1\n"
-            b"t frame=3 gap=2 bin=2 state=idle energy=9000 peak=1800 loop0=700 floor=812\nDone\n"
+            b"t frame=3 gap=2 bin=2 energy=9000 peak=1800 loop0=700 floor=812\nDone\n"
         ),
-        "triggerLog": b"triggerLog\ntrig state=idle floor=812 frames=40 records=0\nDone\n",
+        "triggerLog track": (
+            b"triggerLog track\nclubtrack active=0 why=released count=0 total=4 misses=0 "
+            b"acq=2 assoc=2 coast=1 drop=1\ndelivery points=0\n"
+            b"range impact fired=0 why=nodelivery\np frame=3 bin=30.00\nDone\n"
+        ),
     }
     radar = scripted_radar(replies)
     lines = fc.detector_evidence(_ctx(radar))
     assert lines[0].startswith("trigtrace ")
     assert lines[1].startswith("trigmax ")
     assert lines[2].startswith("t frame=3 ")
-    assert lines[3].startswith("trig state=idle")
+    assert lines[3].startswith("clubtrack ")
+    assert lines[4].startswith("range impact ")
+    assert len(lines) == 5
 
     old = scripted_radar({})  # every command unknown
     assert fc.detector_evidence(_ctx(old)) == []
@@ -1347,12 +1359,13 @@ def test_missed_swing_prints_the_detector_evidence_before_cleanup_can_clear_it(m
 
 
 TRACE_CLUB_SEEN_ENERGY_WEAK = [
-    "trigtrace state=idle stat=energy floor=325611 bar=2.0x frames=4000 region=2+16 entries=4",
+    "trigtrace stat=energy floor=325611 bar=2.0x frames=4000 region=2+16 entries=4",
     "trigmax 2:400000@10 3:390000@11",
-    "t frame=17291 gap=3 bin=7 state=idle energy=401221 peak=692871 loop0=50000 floor=325611 thr=1953666 e/f=1.2 p/f=2.1 coh=80",
-    "t frame=17293 gap=1 bin=12 state=idle energy=810112 peak=7834921 loop0=60000 floor=326001 thr=1956006 e/f=2.5 p/f=24.0 coh=85",
-    "t frame=17294 gap=0 bin=14 state=idle energy=1124211 peak=12531121 loop0=70000 floor=327192 thr=1963152 e/f=3.4 p/f=38.3 coh=88",
-    "trig state=idle floor=327192 frames=4000 cand=0 acq=0 adv=0 jump=0 miss=0 lost=0 lowcoh=0 slowdop=0 young=0 slow=0 fired=0 records=0",
+    "t frame=17291 gap=3 bin=7 energy=401221 peak=692871 loop0=50000 floor=325611 thr=1953666 e/f=1.2 p/f=2.1 coh=80",
+    "t frame=17293 gap=1 bin=12 energy=810112 peak=7834921 loop0=60000 floor=326001 thr=1956006 e/f=2.5 p/f=24.0 coh=85",
+    "t frame=17294 gap=0 bin=14 energy=1124211 peak=12531121 loop0=70000 floor=327192 thr=1963152 e/f=3.4 p/f=38.3 coh=88",
+    "clubtrack active=0 why=none count=0 total=0 misses=0 acq=0 assoc=0 coast=0 drop=0",
+    "range impact fired=0 why=nodelivery",
 ]
 
 
@@ -1361,8 +1374,12 @@ def test_parse_trace_lines_reads_header_and_frames():
     assert header["stat"] == "energy" and header["floor"] == "325611"
     assert [f["bin"] for f in frames] == [7.0, 12.0, 14.0]
     assert frames[-1]["p/f"] == pytest.approx(38.3) and frames[-1]["thr"] == 1963152.0
-    assert fc.parse_log_summary(TRACE_CLUB_SEEN_ENERGY_WEAK)["cand"] == 0
-    assert fc.parse_log_summary(["nothing"]) == {}
+
+
+def test_parse_club_evidence_reads_the_track_and_the_range_impact():
+    club, ranged = fc.parse_club_evidence(TRACE_CLUB_SEEN_ENERGY_WEAK)
+    assert club["acq"] == "0" and ranged == {"fired": "0", "why": "nodelivery"}
+    assert fc.parse_club_evidence(["nothing"]) == ({}, {})
 
 
 def _diagnose(evidence, **overrides):
@@ -1381,7 +1398,7 @@ def test_diagnosis_names_the_statistic_that_would_have_crossed():
 
 
 def test_diagnosis_with_no_trace_blames_the_view_of_the_club_or_the_ball():
-    quiet = ["trigtrace state=idle stat=peak floor=812 bar=2.0x frames=400 region=2+16 entries=0"]
+    quiet = ["trigtrace stat=peak floor=812 bar=2.0x frames=400 region=2+16 entries=0"]
     assert "club not seen" in _diagnose(quiet)
     from openflight.iwr6843.tee_scan import BallDetection
 
@@ -1393,33 +1410,32 @@ def test_diagnosis_with_no_trace_blames_the_view_of_the_club_or_the_ball():
 
 
 @pytest.mark.parametrize(
-    ("summary", "expected"),
+    ("club", "ranged", "expected"),
     [
-        (
-            "cand=6 acq=2 adv=3 jump=0 miss=0 lost=0 lowcoh=0 slowdop=0 young=2 slow=0 fired=0",
-            "young/slow",
-        ),
-        (
-            "cand=6 acq=3 adv=1 jump=2 miss=1 lost=1 lowcoh=0 slowdop=0 young=0 slow=0 fired=0",
-            "jumped or was lost",
-        ),
-        (
-            "cand=0 acq=0 adv=0 jump=0 miss=0 lost=0 lowcoh=4 slowdop=0 young=0 slow=0 fired=0",
-            "coherence or Doppler gate",
-        ),
-        (
-            "cand=6 acq=2 adv=4 jump=0 miss=0 lost=0 lowcoh=0 slowdop=0 young=0 slow=0 fired=1",
-            "no Triggered notice reached the host",
-        ),
+        ("acq=2 assoc=6 coast=0 drop=0 total=7", "fired=1 why=fired", "no Triggered notice"),
+        ("acq=3 assoc=1 coast=4 drop=2 total=2", "fired=0 why=nodelivery", "never held enough"),
+        ("acq=1 assoc=6 coast=0 drop=0 total=7", "fired=0 why=pending", "still short of the tee"),
+        ("acq=1 assoc=6 coast=0 drop=0 total=7", "fired=0 why=passed", "crossed the tee's range"),
     ],
 )
-def test_diagnosis_follows_the_log_counters_when_the_club_crossed_the_threshold(summary, expected):
+def test_diagnosis_follows_the_club_track_when_the_club_crossed_the_threshold(
+    club, ranged, expected
+):
     evidence = [
-        "trigtrace state=idle stat=peak floor=1000 bar=2.0x frames=400 region=2+16 entries=1",
-        "t frame=10 gap=0 bin=14 state=tracking energy=9000 peak=20000 loop0=800 floor=1000 thr=6000 e/f=9.0 p/f=20.0 coh=90",
-        f"trig state=idle floor=1000 frames=400 {summary} records=6",
+        "trigtrace stat=peak floor=1000 bar=2.0x frames=400 region=2+16 entries=1",
+        "t frame=10 gap=0 bin=14 energy=9000 peak=20000 loop0=800 floor=1000 thr=6000 e/f=9.0 p/f=20.0 coh=90",
+        f"clubtrack active=0 why=released count=0 misses=0 {club}",
+        f"range impact {ranged}",
     ]
-    assert expected in _diagnose(evidence)
+    text = _diagnose(evidence)
+    assert expected in text
+    assert "club track:" in text and "range impact:" in text
+
+
+def test_diagnosis_no_longer_speaks_of_the_gate():
+    text = _diagnose(TRACE_CLUB_SEEN_ENERGY_WEAK)
+    for gone in ("young", "slowdop", "lowcoh", "candidates:"):
+        assert gone not in text
 
 
 def _ball_radar(*, ball_bin: int | None = 41, ball_power: float = 8650.0, baseline: float = 1000.0):
@@ -1716,7 +1732,7 @@ def test_host_replay_runs_the_firmware_detector_on_the_bin_the_board_was_armed_w
     assert "frame 3 of 4" in replay.detail
     config = seen["config"]
     assert isinstance(config, ReplayConfig)
-    assert (config.tee_bin, config.snr, config.track_frames) == (37, 6.0, 2)
+    assert (config.tee_bin, config.snr) == (37, 6.0)
     assert config.stop_at_fire is True
 
 

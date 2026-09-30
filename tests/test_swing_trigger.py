@@ -1,4 +1,9 @@
-"""Parser and ring-replay report for scripts/iwr6843/swing_trigger.py."""
+"""scripts/iwr6843/swing_trigger.py: swing the club-track self-trigger on the board.
+
+The range gate and the host ball-leave replay this tool once judged swings
+with are gone (2026-09-30). A swing now passes when the club track's
+range-only impact is what fired, read back from ``triggerLog track``.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +11,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-import numpy as np
+import pytest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "iwr6843" / "swing_trigger.py"
 spec = importlib.util.spec_from_file_location("swing_trigger", SCRIPT)
@@ -16,38 +21,25 @@ sys.modules[spec.name] = swing_trigger
 spec.loader.exec_module(swing_trigger)
 
 TEE_BIN = 14
-LEVEL = 1000.0
 
-
-def _row(peaks: dict[int, float], bins: int = 53) -> np.ndarray:
-    power = np.zeros(bins, dtype=np.float64)
-    for index, value in peaks.items():
-        power[index] = value
-    return power
-
-
-def _leave_power(n_loops: int = 1) -> np.ndarray:
-    frames = [
-        _row({TEE_BIN: LEVEL}),
-        _row({TEE_BIN: LEVEL}),
-        _row({TEE_BIN: LEVEL, 2: LEVEL}),
-        _row({TEE_BIN: LEVEL, 6: LEVEL + 1}),
-        _row({TEE_BIN: LEVEL, TEE_BIN + 2: LEVEL + 2}),
-        _row({TEE_BIN: LEVEL, TEE_BIN + 4: LEVEL + 3}),
-    ]
-    rows = []
-    for frame in frames:
-        rows.append(frame)
-        for _loop in range(1, n_loops):
-            rows.append(np.zeros_like(frame))
-    return np.stack(rows)
+# ``triggerLog track`` as the board prints it right after a club-track fire.
+FIRED_TRACK = (
+    "triggerLog track\n"
+    "clubtrack active=1 why=associated count=7 total=7 misses=0 bin=37.62 dest=38 dist=0.38 "
+    "vel=31.20 speed=31.40 fit=1 residual=0.08 acq=1 assoc=6 coast=0 drop=0\n"
+    "delivery points=7 speed=31.40 valid=1\n"
+    " angle az=+0.0 el=+2.1 estimates=6\n"
+    "impact fired=0 why=pending closestcm=4.00 armed=0 source=4\n"
+    "range impact fired=1 why=fired closestcm=0.00 offsetms=0.90 t=24900\n"
+    "impactfit verdict=pending\n"
+    "p frame=7 t=21.0ms bin=37.62 dist=0.4\n"
+    "Done\n"
+)
 
 
 def test_windows_port_name_is_rejected_on_the_pi():
     message = swing_trigger.port_name_error("COM5", "linux")
-
-    assert message is not None
-    assert "leave --port off" in message
+    assert message is not None and "/dev/ttyUSB0" in message
     assert swing_trigger.port_name_error("COM5", "win32") is None
     assert swing_trigger.port_name_error("/dev/ttyUSB0", "linux") is None
     assert swing_trigger.port_name_error(None, "linux") is None
@@ -55,14 +47,7 @@ def test_windows_port_name_is_rejected_on_the_pi():
 
 def test_parse_trig_reads_stats_and_debug_lines():
     stats = swing_trigger.parse_trig("trig phase=watching tee=1800 latched=0 enabled=1")
-    debug = swing_trigger.parse_trig(
-        "trig phase=toward tee=10 approach=4 ready=1 toward=1 away=0 "
-        "run=3 peak=8 have=1 bin=14 level=1000 latched=0"
-    )
-
     assert stats == {"phase": "watching", "tee": "1800", "latched": "0", "enabled": "1"}
-    assert debug["phase"] == "toward"
-    assert debug["peak"] == "8"
     assert swing_trigger.parse_trig("frames=1 active=1") is None
 
 
@@ -76,45 +61,33 @@ def test_released_fired_phase_is_not_a_new_swing():
     assert swing_trigger.is_latched(legacy)
 
 
-def test_format_status_names_an_occupied_tee():
-    fields = swing_trigger.parse_trig("trig phase=watching tee=1800 latched=0 enabled=1")
-
-    text = swing_trigger.format_status(fields, LEVEL)
-
-    assert "watching" in text
-    assert "tee=1800" in text
-    assert "ball" in text
-    assert "latched=0" in text
+def test_format_status_reads_tee_as_the_floor_against_the_threshold():
+    fields = swing_trigger.parse_trig("trig phase=toward tee=1800 latched=0 enabled=1")
+    text = swing_trigger.format_status(fields, 10800.0)
+    assert text.startswith("toward")
+    assert "floor=1800" in text and "threshold=10800" in text
 
 
-def test_replay_uses_loop0_and_reports_the_fire_frame():
-    observations = swing_trigger.replay_loop0(_leave_power(n_loops=2), 2, TEE_BIN, LEVEL, 2)
-
-    assert observations[-1].fired
-    assert observations[-1].frame == 5
-    text = swing_trigger.format_swing(observations)
-    assert "PASS  replay fired at frame 5" in text
-    assert "toward" in text
+def test_a_club_track_fire_passes_with_its_track_summarised():
+    passed, text = swing_trigger.summarize_fire(FIRED_TRACK)
+    assert passed
+    assert "PASS" in text
+    assert "7 club points" in text and "31.4 m/s" in text
 
 
-def test_fire_frame_names_the_loud_bins():
-    row = _row({TEE_BIN: LEVEL, 8: LEVEL * 3, TEE_BIN + 4: LEVEL * 5})
+def test_a_fire_the_range_impact_did_not_make_fails():
+    """The capture froze but not on the club track (or it lost the track)."""
+    reply = FIRED_TRACK.replace(
+        "range impact fired=1 why=fired", "range impact fired=0 why=nodelivery"
+    )
+    passed, text = swing_trigger.summarize_fire(reply)
+    assert not passed
+    assert "FAIL" in text and "nodelivery" in text
 
-    text = swing_trigger.format_hotspot(row, TEE_BIN, LEVEL)
 
-    assert f"tee bin {TEE_BIN}={LEVEL:.0f}" in text
-    assert "approach bin 8=" in text
-    assert f"past bin {TEE_BIN + 4}=" in text
-    assert "bins >=" in text
-
-
-def test_quiet_tee_does_not_pass():
-    power = np.stack([_row({TEE_BIN: LEVEL}) for _frame in range(4)])
-
-    observations = swing_trigger.replay_loop0(power, 1, TEE_BIN, LEVEL, 2)
-
-    assert not any(obs.fired for obs in observations)
-    assert "FAIL" in swing_trigger.format_swing(observations)
+def test_an_unreadable_track_fails():
+    passed, text = swing_trigger.summarize_fire("Error: triggerLog\n")
+    assert not passed and "FAIL" in text
 
 
 class _ArmRadar:
@@ -130,28 +103,60 @@ class _ArmRadar:
         return "Done\n"
 
 
-def test_omitted_level_samples_the_lane_and_arms_above_it(monkeypatch):
-    def measure(_radar, tee_bin, hits):
-        assert (tee_bin, hits) == (TEE_BIN, 2)
-        return 200000.0, 300000.0
+def test_arming_samples_the_lane_then_arms_the_club_track(monkeypatch):
+    def measure(_radar, tee_bin, *, snr):
+        assert (tee_bin, snr) == (TEE_BIN, 1.0)
+        return 200000.0, 200000.0
 
     monkeypatch.setattr(swing_trigger, "measure_trigger_level", measure)
     radar = _ArmRadar()
 
-    level = swing_trigger._arm(radar, "cfg", TEE_BIN, None, 2)
+    threshold = swing_trigger._arm(radar, "cfg", TEE_BIN, 1.0)
 
-    assert level == 300000.0
-    assert radar.commands[-1] == "triggerCfg 14 300000 2"
+    assert threshold == 200000.0
+    assert radar.commands[0] == "cfg"
+    assert radar.commands[-1] == "triggerCfg 14 1.0 1"
 
 
-def test_explicit_level_is_armed_without_sampling(monkeypatch):
-    def measure(*_args, **_kwargs):
-        raise AssertionError("explicit level must not sample the lane")
+class _SwingRadar:
+    def __init__(self, track: str, stats: str = "trig phase=watching tee=10 latched=0\nDone\n"):
+        self.track = track
+        self.stats_reply = stats
+        self.calls: list[str] = []
 
-    monkeypatch.setattr(swing_trigger, "measure_trigger_level", measure)
-    radar = _ArmRadar()
+    def club_track(self) -> str:
+        self.calls.append("track")
+        return self.track
 
-    level = swing_trigger._arm(radar, "cfg", TEE_BIN, 250.0, 2)
+    def shot_status(self) -> str:
+        self.calls.append("shot")
+        return "shot state=impact since=1 impact=24900 source=range\nDone\n"
 
-    assert level == 250.0
-    assert radar.commands[-1] == "triggerCfg 14 250 2"
+    def release_sparse_freeze(self) -> None:
+        self.calls.append("release")
+
+    def stats(self) -> str:
+        self.calls.append("stats")
+        return self.stats_reply
+
+
+def test_a_swing_reads_the_track_before_releasing_the_ring(capsys):
+    radar = _SwingRadar(FIRED_TRACK)
+
+    assert swing_trigger._validate_swing(radar, 1) is True
+
+    assert radar.calls[:3] == ["track", "shot", "release"]
+    out = capsys.readouterr().out
+    assert "clubtrack active=1" in out and "source=range" in out and "PASS" in out
+
+
+def test_a_ring_still_latched_after_the_release_fails():
+    radar = _SwingRadar(FIRED_TRACK, stats="trig phase=fired tee=10 latched=1\nDone\n")
+    assert swing_trigger._validate_swing(radar, 1) is False
+
+
+@pytest.mark.parametrize("gone", ["--hits", "--level"])
+def test_the_range_gate_options_are_gone(monkeypatch, gone):
+    monkeypatch.setattr(sys, "argv", ["swing_trigger.py", gone, "2"])
+    with pytest.raises(SystemExit):
+        swing_trigger.main()

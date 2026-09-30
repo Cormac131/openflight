@@ -68,16 +68,15 @@ The supported angle radar.
 | `--iwr6843-net-m` | float; default `4.6` | Distance in metres from the enclosure front to the net or screen; the array's 0.30 m depth is added internally. Only used with `--iwr6843-flight net`: ball tracks are kept 0.25 m short of it (default: 4.6) |
 | `--iwr6843-tee-band-bins` | float; default `6` (`0` = off) | **Experimental.** Width, in range bins, of the tee band the IWR6843 club and ball trackers ignore; the firmware places it on the noisiest bins within 10 bins of the tee (learned from idle frames, frozen while the club swings) and impact is then fitted from the tracks either side (`trackCfg impactFit`). Before 2026-09-29 the value was a half width. 0 = off (default). The value is sent at every start, 0 included, so a restart clears a band a previous run set. A 13-bin band (the old ±6 half width) failed acceptance on the recorded sessions (club tracking collapsed); leave it off unless you are testing a cluttered setup |
 | `--iwr6843-flight` | choices: `net`, `range`, `course`; default `net` | net clamps tracks at the net. range or course keeps returns past it and measures the late-window descent after the shot is published |
-| `--iwr6843-self-trigger` | flag | Freeze the IWR ring when the firmware tracks the clubhead into the tee and send S! to the OPS, instead of the sound-gate edge. Disconnect the SEN-14262 GATE from HOST_INT. Requires --iwr6843 and --trigger sound |
+| `--iwr6843-self-trigger` | flag | Freeze the IWR ring when the firmware club track is predicted to cross the tee's range and send S! to the OPS, instead of the sound-gate edge. Disconnect the SEN-14262 GATE from HOST_INT. Requires --iwr6843 and --trigger sound |
 | `--iwr6843-full-capture` | flag | Transfer all samples and TX channels instead of selected cells; about 7 seconds for the default profile. Use with `--debug` to save full diagnostic dumps. |
 | `--no-iwr6843-onboard-track` | flag | Select cells on the Pi instead of onboard; still transfers selected samples unless `--iwr6843-full-capture` is set. |
 | `--iwr6843-onboard-metrics` | flag | Prefer the firmware's usable club path and attack angle over the host pipeline's; launch angles always come from the host. The onboard result rides on every shot as `iwr6843_onboard` either way; OPS ball speed is never replaced. |
 | `--iwr6843-ball-detector` | choices: `off`, `on`, `follow`; default `on` | Firmware ball-placement detector: `on` locks the ball for the onboard shot machine and drives the kiosk setup banner; `follow` also aims the self-trigger at the locked ball; `off` keeps the configured tee bin |
 | `--iwr6843-setup-poll-s` | float; default `1.0` | Seconds between `ball status` polls for the setup banner |
 | `--iwr6843-self-trigger-bin` | int | Global range-FFT bin the trigger watches, inside the cfg's first capture window (default: two bins short of the ball, from `--iwr6843-tee-m`: bin 38 for the default 1.575 m; bin 34 is 1.59 m from the array). Requires --iwr6843-self-trigger |
-| `--iwr6843-self-trigger-snr` | float | Clubhead candidate threshold as a multiple of the firmware's running noise floor, at least 1 (default: 1). Requires --iwr6843-self-trigger |
+| `--iwr6843-self-trigger-snr` | float | Club target threshold as a multiple of the firmware's running noise floor, at least 1 (default: 1). Requires --iwr6843-self-trigger |
 | `--iwr6843-ball-snr` | float | The firmware ball tracker's target threshold as a multiple of its noise floor, 1..1e6, set apart from the trigger's (`trackCfg ballSnr`; default: the firmware's, 1). The Pi sends it at every start (0 on the wire restores the firmware default) |
-| `--iwr6843-self-trigger-frames` | int | Frames a candidate must be tracked approaching the tee before it can fire, at least 1 (default: 2). Requires --iwr6843-self-trigger |
 | `--iwr6843-tilt-deg` | float | Override mount tilt from the TI calibration JSON |
 | `--iwr6843-radar-height-m` | float | Override antenna-center height from the TI calibration JSON |
 | `--iwr6843-ball-height-m` | float; default `0.04` | Ball-center height above the floor/mat (default: 0.040) |
@@ -88,19 +87,23 @@ The supported angle radar.
 | `--iwr6843-horizontal-phase-reference-rad` | float | Static target-line phase measured by horizontal aim calibration. Subtracted from the TX2 horizontal proxy before angle conversion. |
 
 Self-trigger mode uses serial messages; no microphone or trigger GPIO is required,
-and the trigger pin is left unallocated. The firmware watches the bins short of
-the tee for a moving return of at least the configured SNR times its running
-noise floor, follows that return frame to frame, and freezes once the track is
-old enough and enters the impact gate around the tee. It does not wait for the
-club to leave again. The detector also waits until the pre-trigger ring has
+and the trigger pin is left unallocated. The firmware extracts club targets of
+at least the configured SNR times its running noise floor from the bins short
+of the tee, the club track follows the club through them, and the capture
+freezes when the line fitted to the club's approach is predicted to cross the
+tee's range within 4 ms. It does not wait for the club to leave again. (The
+range gate that fired from its own short track, and `--iwr6843-self-trigger-frames`
+which tuned it, were removed on 2026-09-30.) The trigger also waits until the pre-trigger ring has
 wrapped, so the saved movie has its full history. These checks reduce false
 triggers but do not prove ball identity; validate tee geometry and thresholds
 with real shots. Self-trigger needs an IQ16 profile: the IQ8 dense profiles are
 rejected at startup. Full capture is a diagnostic alternative, not a longer
 recording window.
 
-The detector is `firmware/iwr6843/l3_trigger.c`.
-`tests/test_iwr6843_firmware_trigger.py` builds it on the host.
+The front end (floor, watch region, trace) is `firmware/iwr6843/l3_trigger.c`;
+the club track and its range-only impact are `l3_club_track.c` and `l3_impact.c`.
+`tests/test_iwr6843_firmware_trigger.py` and `test_iwr6843_firmware_replay.py`
+build them on the host.
 Flash an image built from the matching firmware.
 
 ## IWR6843 dump viewer and label tools

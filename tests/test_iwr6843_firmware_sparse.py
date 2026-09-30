@@ -126,7 +126,10 @@ def test_trigger_scores_every_loop_not_just_loop_zero():
     assert "l3_verticalPowerAt" not in source
     assert "perLoop[0]" not in source
     assert "l3_verticalResidual(&frame, first + bin, NULL, &obs[bin]);" in consider
-    assert "l3_trig_update(&gTrig, gPreFramesCaptured, teeBin, frame.binStart + first," in consider
+    assert (
+        "l3_trig_observe(&gTrig, gPreFramesCaptured, teeBin, frame.binStart + first, obs, count);"
+        in consider
+    )
 
 
 def test_trigger_no_longer_gates_on_the_tee_bin_or_a_toward_away_sequence():
@@ -167,24 +170,55 @@ def test_trigger_config_waits_for_a_frame_in_progress_before_resetting():
     # drops it after the update.
     assert (
         consider.index("gTrigBusy = 1U;")
-        < consider.index("l3_trig_update(")
+        < consider.index("l3_trig_observe(")
         < consider.rindex("gTrigBusy = 0U;")
     )
 
 
-def test_trigger_config_disables_on_zero_frames_and_checks_the_rest():
+def test_trigger_config_disables_on_zero_and_checks_the_rest():
     cfg = _function("static int32_t l3_cli_triggerCfg(")
 
-    assert "if (cfg.trackFrames != 0U && l3_trig_cfg_check(&cfg) != 0)" in cfg
-    assert "gTriggerEnabled = (cfg.trackFrames != 0U) ? 1U : 0U;" in cfg
-    assert "argc < 4 || argc > 11" in cfg
+    assert "if (on != 0UL && l3_trig_cfg_check(&cfg) != 0)" in cfg
+    assert "gTriggerEnabled = (on != 0UL) ? 1U : 0U;" in cfg
 
 
-def test_every_ring_rearm_resets_the_detector_but_keeps_its_log():
+def test_trigger_config_refuses_the_removed_gate_thresholds():
+    """[approach past stat] only: a line carrying the range gate's minCoh,
+    minStep, minSpeed or minApproach is refused, not half applied."""
+    cfg = _function("static int32_t l3_cli_triggerCfg(")
+
+    assert "argc < 4 || argc > 7" in cfg
+    assert "cfg.pastBins = (uint32_t)value;" in cfg
+    assert "cfg.stat = (uint32_t)value;" in cfg
+    for gone in ("minCoherence", "minStepBins", "minSpeedMps", "minApproachBins", "trackFrames"):
+        assert gone not in cfg
+
+
+def test_every_ring_rearm_resets_the_club_track_and_keeps_the_floor():
     source = _source()
 
     assert source.count("    gPreFramesCaptured = 0U;\n    l3_trigRearm();\n") == 3
-    assert "l3_trig_rearm(&gTrig);" in _function("static void l3_trigRearm(")
+    rearm = _function("static void l3_trigRearm(")
+    assert "l3_track_reset(&gClubTrack);" in rearm
+    assert "&gTrig" not in rearm, "the floor and the trace outlive a shot"
+
+
+def test_the_range_gate_is_gone_from_the_board():
+    source = _source()
+
+    for gone in (
+        "l3_trig_update(",
+        "l3_trig_rearm(",
+        "l3_trig_log_",
+        "l3_trig_format_record(",
+        "L3_TRIG_STATE_",
+        "gFireMode",
+        "gImpactArmed",
+        "L3_SHOT_FIRE_",
+        "l3_cli_trackCfgFire",
+        "gateFired",
+    ):
+        assert gone not in source, gone
 
 
 def test_trigger_log_command_is_registered_and_ends_with_done():
@@ -194,7 +228,7 @@ def test_trigger_log_command_is_registered_and_ends_with_done():
     assert 'cliCfg.tableEntry[17].cmd           = "triggerLog";' in source
     assert "l3_trig_format_summary(&gTrig" in log
     assert "l3_trig_format_config(&gTrig" in log
-    assert log.rindex('CLI_write("Done\\n");') > log.rindex("l3_trig_format_record(")
+    assert log.rindex('CLI_write("Done\\n");') > log.rindex("l3_trig_format_config(")
 
 
 def test_detect_task_never_writes_the_cli_uart_itself():
@@ -263,13 +297,6 @@ def test_sensor_stop_takes_a_self_trigger_freeze_instead_of_closing_over_it():
     assert stop.index("l3_awaitFrozenRing") < stop.index("MMWave_close")
 
 
-def test_doppler_speed_gate_and_min_approach_are_optional_and_ride_the_same_pass():
-    cfg = _function("static int32_t l3_cli_triggerCfg(")
-    assert "cfg.minSpeedMps = strtof(argv[9], &end);" in cfg
-    assert "cfg.minApproachBins = (uint32_t)value;" in cfg
-    assert cfg.index("argc > 10") < cfg.index("cfg.minApproachBins")
-
-
 def test_tee_scan_reports_static_power_the_trigger_never_sees():
     """A stationary ball is exactly what MTI removes; ball scan reads it back raw."""
     source = _source()
@@ -311,7 +338,7 @@ def test_club_track_rides_the_trigger_pass_and_prints_from_trigger_log():
     source = _source()
     consider = _function("static void l3_considerSelfTrigger(")
 
-    update = consider.index("l3_trig_update(&gTrig,")
+    update = consider.index("l3_trig_observe(&gTrig,")
     extract = consider.index("l3_preImpactClubTargets(&frame, obs,")
     track = consider.index("l3_track_update(&gClubTrack, targets, found, gPreFramesCaptured,")
     assert update < extract < track
@@ -336,7 +363,7 @@ def test_club_track_rides_the_trigger_pass_and_prints_from_trigger_log():
         'CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|cal|clear]\\n");' in log
     )
     assert (
-        "triggerLog [trace|track|shot|result|perf|frames|cal|clear]: log, trace, club, shot, result, "
+        "triggerLog [trace|track|shot|result|perf|frames|cal|clear]: floor, trace, club, shot, result, "
         "perf, stored frames, calibration" in source
     )
 
@@ -345,7 +372,7 @@ def test_loop_period_for_doppler_comes_from_the_accepted_profile():
     source = _source()
 
     assert "gTrigLoopPeriodS = (float)(profCfg.idleTimeConst + profCfg.rampEndTime)" in source
-    assert "gTrig.loopPeriodS = gTrigLoopPeriodS;" in _function(
+    assert "params.loopPeriodS = gTrigLoopPeriodS;" in _function(
         "static void l3_considerSelfTrigger("
     )
 
@@ -467,11 +494,12 @@ def test_geometric_impact_records_every_frame_and_fires_only_when_armed():
     ) in consider, "boresight when the ball has no measured direction"
     assert "geometric = l3_impact_update(&gImpact, &gDelivery, &gBallPosition, 1U);" in consider
     assert (
-        "gTrigFireSource = (uint8_t)((fired ? 1U : 0U) | (geometric ? 2U : 0U) | "
-        "(ranged ? 4U : 0U));"
+        "gTrigFireSource = (uint8_t)((geometric ? L3_SHOT_IMPACT_GEOMETRY : 0U) |\n"
+        "                                (ranged ? L3_SHOT_IMPACT_RANGE : 0U));"
     ) in consider
-    assert "if ((geometric || ranged) && gImpactArmed) {\n        fired = 1;\n    }" in consider
-    assert consider.index("geometric = l3_impact_update(") < consider.index("if (!fired) {")
+    # The range-only impact freezes; the geometric one only once armed.
+    assert "accepted = l3_shot_fire_sources(gGeometryArmed, geometric, ranged);" in consider
+    assert consider.index("geometric = l3_impact_update(") < consider.index("if (accepted == 0U) {")
     assert "l3_impact_rearm(&gImpact);" in _function("static void l3_trigRearm(")
     configure = _function("static void l3_clubTrackConfigure(")
     assert "cfg.cal = gRadarCal;" in configure
@@ -492,7 +520,7 @@ def test_calibration_and_impact_are_configured_through_track_cfg_sub_modes():
     assert "l3_cal_set_element(&gRadarCal, index, values[2], values[1])" in elem
     assert "values[0] >= (float)L3_CAL_MAX_VIRTUAL" in elem
     impact = _function("static int32_t l3_cli_trackCfgImpact(")
-    assert "gImpactArmed = (values[4] != 0.0F) ? 1U : 0U;" in impact
+    assert "gGeometryArmed = (values[4] != 0.0F) ? 1U : 0U;" in impact
     assert "l3_impact_init(&gImpact, &gImpactCfg);" in impact
     assert "tableEntry[19]" not in source, "sub-modes, not new commands"
     assert "or cal/elem/impact/impactFit ..." in source
@@ -504,7 +532,7 @@ def test_trigger_log_track_prints_delivery_angle_and_impact_lines():
     assert "l3_track_format_delivery(&gDelivery, line, sizeof(line));" in log
     assert "l3_angle_format(&gLastAngle, line, sizeof(line));" in log
     assert "l3_impact_format(&gImpact, line, sizeof(line));" in log
-    assert 'CLI_write("%s armed=%u source=%u\\n", line, (unsigned)gImpactArmed,' in log
+    assert 'CLI_write("%s armed=%u source=%u\\n", line, (unsigned)gGeometryArmed,' in log
     track = log[log.index('strcmp(argv[1], "track") == 0') :]
     assert (
         track.index("l3_track_format_status(")
@@ -576,10 +604,10 @@ def test_shot_machine_sees_every_pre_frame_and_arms_the_ball_tracker_at_impact()
     observe = _function("static void l3_shotObserve(")
 
     assert (
-        "l3_shotObserve(teeBin, fired, geometric && gImpactArmed, ranged && gImpactArmed);"
+        "l3_shotObserve(teeBin, accepted & L3_SHOT_IMPACT_GEOMETRY, accepted & L3_SHOT_IMPACT_RANGE);"
         in consider
     )
-    assert consider.index("l3_shotObserve(") < consider.index("if (!fired) {")
+    assert consider.index("l3_shotObserve(") < consider.index("if (accepted == 0U) {")
     assert "in.ballLocked = gTrigDestBall;" in observe
     assert "in.clubActive = gClubTrack.active;" in observe
     assert "if (geometric && gImpact.fired) {" in observe
@@ -608,7 +636,7 @@ def test_trigger_log_shot_prints_the_machine_the_ball_track_and_the_launch():
         'CLI_write("Error: triggerLog [trace|track|shot|result|perf|frames|cal|clear]\\n");' in log
     )
     assert (
-        "triggerLog [trace|track|shot|result|perf|frames|cal|clear]: log, trace, club, shot, result, "
+        "triggerLog [trace|track|shot|result|perf|frames|cal|clear]: floor, trace, club, shot, result, "
         "perf, stored frames, calibration" in source
     )
 
@@ -683,7 +711,7 @@ def test_adaptive_windows_apply_between_shots_from_the_locked_ball():
     assert "gCapturePlan.preStart = windows.preStart;" in apply
     assert "gCapturePlan.lateStart = windows.lateStart;" in apply
     assert "if (l3_finalizeCapturePlan(gCapturePlan.loops) == 0) {" in apply
-    assert rearm.index("l3_applyAdaptiveWindows();") < rearm.index("l3_trig_rearm(&gTrig);")
+    assert rearm.index("l3_applyAdaptiveWindows();") < rearm.index("l3_track_reset(&gClubTrack);")
     sparse_rearm = _function("static int32_t l3_sparseRearm(")
     assert sparse_rearm.index("l3_trigRearm();") < sparse_rearm.index(
         "l3_restartCompletedHwaFrame()"

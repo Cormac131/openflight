@@ -11,7 +11,7 @@
  * READY needs a locked ball unless the configuration lets the tee stand in
  * (the motion-only fallback). CLUB_ACQUIRE is the first club point,
  * CLUB_TRACK a track with a range rate. A dropped track returns to READY. The
- * range gate or the geometric detector firing enters IMPACT, which freezes
+ * range-only or the (armed) geometric impact firing enters IMPACT, which freezes
  * the ball origin, the club delivery, the impact time and the club
  * trajectory: everything after reads those, never the live trackers. The
  * first post-impact frame enters BALL_TRACK; the ball tracker finishing or
@@ -38,7 +38,9 @@ enum {
     L3_SHOT_STATE_COUNT
 };
 
-/* impactSource bits */
+/* impactSource bits. Bit 0 was the range gate, removed on 2026-09-30; it is
+ * never set now, and stays reserved so result packets from older firmware
+ * still decode. */
 #define L3_SHOT_IMPACT_GATE      1U
 #define L3_SHOT_IMPACT_GEOMETRY  2U
 #define L3_SHOT_IMPACT_RANGE     4U
@@ -54,7 +56,6 @@ typedef struct {
     l3_vec3_t ballPosition;        /* golf frame; the tee when not locked */
     uint8_t   clubActive;          /* club track has a track */
     uint32_t  clubPoints;          /* points it holds */
-    uint8_t   gateFired;           /* range gate fired this frame */
     uint8_t   geometricFired;      /* geometric detector fired this frame */
     uint32_t  impactTimestampUs;   /* the geometric detector's time, else the frame's */
     const l3_delivery_t   *delivery;
@@ -93,6 +94,10 @@ uint8_t l3_shot_update(l3_shot_t *shot, const l3_shot_input_t *in, uint32_t fram
 /* 1 once impact has been declared: the ball, not the club, is the target. */
 int32_t l3_shot_wants_departing(const l3_shot_t *shot);
 const char *l3_shot_state_name(uint8_t state);
+/* The L3_SHOT_IMPACT_* bits of this frame's impact fires that freeze the
+ * capture: the club track's range-only impact always, the geometric
+ * detector's only once armed ("trackCfg impact ... armed 1"). */
+uint8_t l3_shot_fire_sources(uint8_t geometryArmed, int32_t geometricFired, int32_t rangeFired);
 /* "none", "gate", "geometry", "both" (gate+geometry), else the '+'-joined
  * names of the bits set, in the order gate, geometry, range. */
 const char *l3_shot_source_name(uint8_t source, char *buf, uint32_t cap);

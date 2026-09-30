@@ -92,7 +92,7 @@ def test_pre_impact_club_targets_keep_only_short_of_a_valid_band():
 
 def test_club_track_reads_the_helper_and_the_trigger_keeps_its_region():
     self_trigger = body("l3_considerSelfTrigger")
-    trig = self_trigger.index("fired = l3_trig_update(&gTrig, gPreFramesCaptured, teeBin,")
+    trig = self_trigger.index("l3_trig_observe(&gTrig, gPreFramesCaptured, teeBin,")
     helper = self_trigger.index(
         "found = l3_preImpactClubTargets(&frame, obs, frame.binStart + first,"
     )
@@ -110,11 +110,13 @@ def test_range_impact_runs_every_pre_impact_frame_and_feeds_the_shot():
     )
     ranged = self_trigger.index("ranged = l3_impact_update_range(&gRangeImpact, &clubIn,")
     assert geometric < club_in < ranged
-    assert "(ranged ? 4U : 0U)" in self_trigger
-    assert "l3_shotObserve(teeBin, fired, geometric && gImpactArmed, ranged && gImpactArmed);" in (
-        self_trigger
+    assert "(ranged ? L3_SHOT_IMPACT_RANGE : 0U)" in self_trigger
+    # The range-only impact always fires; the geometric one only once armed.
+    decide = self_trigger.index(
+        "accepted = l3_shot_fire_sources(gGeometryArmed, geometric, ranged);"
     )
-    assert "if ((geometric || ranged) && gImpactArmed) {" in self_trigger
+    observe_call = self_trigger.index("l3_shotObserve(teeBin, accepted & L3_SHOT_IMPACT_GEOMETRY,")
+    assert ranged < decide < observe_call
     observe = body("l3_shotObserve")
     assert "in.rangeFired = (uint8_t)(ranged ? 1U : 0U);" in observe
     assert observe.index("in.impactTimestampUs = gImpact.impactTimestampUs;") < observe.index(

@@ -179,7 +179,6 @@ class Context:
     config: str
     tee_m: float
     snr: float  # candidate threshold over the firmware's noise floor
-    hits: int  # tracked frames before the gate may fire
     wait_s: float
     shots: int
     profiles: tuple[str, ...]
@@ -306,7 +305,7 @@ def _measure_level(ctx: Context) -> tuple[tuple[float, float] | None, str | None
     """
     try:
         floor, level = measure_trigger_level(
-            ctx.radar, _tee_bin(ctx), ctx.hits, snr=ctx.snr, clock=ctx.clock, pause=ctx.sleep
+            ctx.radar, _tee_bin(ctx), snr=ctx.snr, clock=ctx.clock, pause=ctx.sleep
         )
     except RuntimeError as exc:
         if "latched" in str(exc):
@@ -1035,6 +1034,9 @@ TRIGGER_CFG_CASES: tuple[tuple[str, bool], ...] = (
     ("triggerCfg x 1000 2", False),
     ("triggerCfg 10 -5 2", False),
     ("triggerCfg 10 1000 y", False),
+    # The removed range gate's thresholds (minCoh minStep minSpeed minApproach)
+    # are refused, not half applied: [approach past stat] is all that is left.
+    ("triggerCfg 10 1000 2 12 3 1 0", False),
 )
 # Phases the detector reports while watching an empty or occupied tee (l3_triggerPhaseName).
 LIVE_PHASES = frozenset({"tee-low", "occupying", "watching", "no-approach", "toward", "away"})
@@ -1054,24 +1056,24 @@ TRIG_DEBUG_FIELDS = (
 )
 
 
-# Firmware l3_trig_cfg_check requires the approach to be deeper than the gate,
-# and rejects an approach of 0. The default gate is 3 bins (~0.14 m).
-_TRIGGER_GATE_BINS = 3
+# Firmware l3_trig_cfg_check requires the approach to reach further than the
+# bins past the tee, and rejects an approach of 0. The default is 3 past (~0.14 m).
+_TRIGGER_PAST_BINS = 3
 
 
 def trigger_watch(tee_bin: int, near_bin: int) -> tuple[int, int]:
-    """``(approach, gate)`` so the watch starts at ``near_bin``.
+    """``(approach, past)`` so the watch starts at ``near_bin``.
 
     Bins closer than the configured tee are the golfer and the mat, not the
     club. ``approach`` is how many bins short of ``tee_bin`` are included.
-    When the ball is only a few bins past ``near_bin``, the gate shrinks so
-    the window can still start on that bin: the firmware will not arm a gate
-    as wide as the approach.
+    When the ball is only a few bins past ``near_bin``, ``past`` shrinks so
+    the window can still start on that bin: the firmware will not arm a
+    region that reaches as far past the tee as short of it.
     """
     short = tee_bin - near_bin
     if short < 1:
         return 1, 0
-    return short, min(_TRIGGER_GATE_BINS, short - 1)
+    return short, min(_TRIGGER_PAST_BINS, short - 1)
 
 
 def arm_command(ctx: Context) -> str:
@@ -1080,29 +1082,30 @@ def arm_command(ctx: Context) -> str:
     The second number is an SNR multiple, not a power: the earlier suite sent
     a measured absolute level (~3e7) there, which armed a threshold no swing
     could reach and read as "the radar does not see the club". The approach
-    and gate that follow keep the watch from starting closer than ``--tee-m``.
+    and the bins past the tee that follow keep the watch from starting closer
+    than ``--tee-m``.
     """
     tee = _tee_bin(ctx)
-    approach, gate = trigger_watch(tee, expected_tee_bin(ctx))
-    config = SelfTriggerConfig(tee_bin=tee, snr=ctx.snr, track_frames=ctx.hits)
-    return f"{config.command} {approach} {gate}"
+    approach, past = trigger_watch(tee, expected_tee_bin(ctx))
+    config = SelfTriggerConfig(tee_bin=tee, snr=ctx.snr)
+    return f"{config.command} {approach} {past}"
 
 
 def detector_evidence(ctx: Context) -> list[str]:
-    """What the detector saw: its raw-input trace, then its frame log.
+    """What the trigger saw: its raw-input trace, then the club track that fires.
 
     For a swing that did not fire. Read before disarming: ``triggerCfg``
-    clears both. Empty on firmware without them.
+    clears them. Empty on firmware without them.
     """
     lines: list[str] = []
-    for command in ("triggerLog trace", "triggerLog"):
+    for command in ("triggerLog trace", "triggerLog track"):
         reply = ctx.radar.cmd(command, 6.0)
         if "not recognized" in reply:
             continue
         lines.extend(
             line.strip()
             for line in reply.splitlines()
-            if line.strip().startswith(("trig", "t frame=", "frame="))
+            if line.strip().startswith(("trig", "t frame=", "clubtrack ", "range impact "))
             and not line.strip().startswith("triggerLog")  # the command's echo
         )
     return lines
@@ -1174,19 +1177,17 @@ def parse_trace_lines(lines: list[str]) -> tuple[dict[str, str], list[dict[str, 
     return header, frames
 
 
-def parse_log_summary(lines: list[str]) -> dict[str, int]:
-    """Counters from the ``trig state=...`` summary line of ``triggerLog``, if present."""
+def parse_club_evidence(lines: list[str]) -> tuple[dict[str, str], dict[str, str]]:
+    """(``clubtrack`` fields, ``range impact`` fields) from ``triggerLog track`` lines."""
+    club: dict[str, str] = {}
+    ranged: dict[str, str] = {}
     for line in lines:
         text = line.strip()
-        if text.startswith("trig state="):
-            counters: dict[str, int] = {}
-            for key, value in _fields(text[len("trig ") :]).items():
-                try:
-                    counters[key] = int(value)
-                except ValueError:
-                    continue
-            return counters
-    return {}
+        if text.startswith("clubtrack "):
+            club = _fields(text[len("clubtrack ") :])
+        elif text.startswith("range impact "):
+            ranged = _fields(text[len("range impact ") :])
+    return club, ranged
 
 
 def diagnose_missed_swing(
@@ -1198,14 +1199,14 @@ def diagnose_missed_swing(
     ball: BallDetection | None,
     stat: str | None = None,
 ) -> list[str]:
-    """Human-readable diagnosis of a swing that did not fire, from the detector's own words.
+    """Human-readable diagnosis of a swing that did not fire, from the board's own words.
 
     Follows the decision table the instrumentation was built for: ball seen?
-    club seen? which statistic crossed the threshold? was a candidate
-    acquired, tracked, and if so why did the gate not fire?
+    club seen? which statistic crossed the threshold? did the club track hold
+    the approach, and if so why did its range-only impact not fire?
     """
     header, frames = parse_trace_lines(evidence)
-    counters = parse_log_summary(evidence)
+    club, ranged = parse_club_evidence(evidence)
     stat = stat or header.get("stat", "peak")
     out = ["Ball:", f"  expected bin: {expected_bin}"]
     if ball is not None:
@@ -1221,12 +1222,10 @@ def diagnose_missed_swing(
         f"  floor:      {floor:.0f}",
         f"  snr:        {snr:g}",
         f"  threshold:  {floor * snr:.0f}",
-        f"  candidates: {counters.get('cand', 0)}  acquired: {counters.get('acq', 0)}  "
-        f"jumped: {counters.get('jump', 0)}  lost: {counters.get('lost', 0)}  "
-        f"young: {counters.get('young', 0)}  slow: {counters.get('slow', 0)}  "
-        f"short: {counters.get('short', 0)}  "
-        f"lowcoh: {counters.get('lowcoh', 0)}  slowdop: {counters.get('slowdop', 0)}  "
-        f"fired: {counters.get('fired', 0)}",
+        f"  club track: acquired {club.get('acq', '0')}  associated {club.get('assoc', '0')}  "
+        f"coasted {club.get('coast', '0')}  dropped {club.get('drop', '0')}  "
+        f"points {club.get('total', '0')}",
+        f"  range impact: fired={ranged.get('fired', '0')}  why={ranged.get('why', 'none')}",
     ]
     if not frames:
         out += [
@@ -1255,22 +1254,27 @@ def diagnose_missed_swing(
     crossed = max_pf if stat == "peak" else max_ef
     other, other_name = (max_ef, "energy") if stat == "peak" else (max_pf, "peak")
     out.append("Likely failure:")
-    if counters.get("fired", 0) > 0:
+    why = ranged.get("why", "none")
+    acquired = int(club.get("acq", "0") or 0)
+    if ranged.get("fired") == "1":
         out.append(
-            "  the detector fired but no Triggered notice reached the host: freeze/notification path"
+            "  the club track fired but no Triggered notice reached the host: "
+            "freeze/notification path"
         )
-    elif counters.get("young", 0) + counters.get("slow", 0) + counters.get("short", 0) > 0:
+    elif why == "pending":
         out.append(
-            "  club tracked into the gate but rejected as young/slow/short: "
-            "tune trackFrames / minStep / minApproach"
+            "  the club's line was still short of the tee when the track ended: "
+            "check the tee bin (--tee-m) against where the ball is"
         )
-    elif counters.get("jump", 0) + counters.get("lost", 0) > 0 and counters.get("acq", 0) > 0:
+    elif why == "passed":
         out.append(
-            "  club acquired but the track jumped or was lost before the gate: continuation window"
+            "  the club's line crossed the tee's range more than a horizon before a frame "
+            "judged it: frames dropped? check detect dropped/stale in stats"
         )
-    elif counters.get("lowcoh", 0) + counters.get("slowdop", 0) > 0:
+    elif acquired > 0:
         out.append(
-            "  club above threshold but rejected by the coherence or Doppler gate: relax or disable it"
+            "  the club track never held enough of the approach to fit the club's line "
+            f"(why={why}): check coasted/dropped above and the tee band"
         )
     elif crossed < snr:
         line = (
@@ -1280,12 +1284,11 @@ def diagnose_missed_swing(
         if other >= snr:
             line += f"; {other_name} reached {other:.2f}x and would have crossed"
         out.append(line)
-    elif counters.get("cand", 0) == 0:
-        out.append(
-            "  a frame crossed the threshold but no candidate was counted: check the region and arming"
-        )
     else:
-        out.append("  candidate acquired and nothing rejected it: read the frame log above")
+        out.append(
+            "  a frame crossed the threshold but the club track acquired nothing: "
+            "check the region and arming"
+        )
     return out
 
 
@@ -1457,10 +1460,12 @@ def _check_reconfigure_clears_arm(ctx: Context) -> CheckResult:
 
 
 def _check_trigger_log(ctx: Context) -> CheckResult:
-    name = "trigger/triggerLog prints the detector log"
+    name = "trigger/triggerLog prints the floor and configuration"
     reply = cli(ctx, "triggerLog")
     if "Done" not in reply:
         return failed(name, reply.strip()[:80] or "no Done")
+    if "trig frames=" not in reply or "trigcfg " not in reply:
+        return failed(name, reply.strip()[:80] or "no trig/trigcfg lines")
     return passed(name, "Done")
 
 
@@ -1478,7 +1483,7 @@ def trigger_section() -> Section:
             Check("trigger/debug lines only change on phase change", _check_debug_change_only),
             Check("trigger/floor measurement", _check_floor),
             Check("trigger/reconfigure clears a previous arm", _check_reconfigure_clears_arm),
-            Check("trigger/triggerLog prints the detector log", _check_trigger_log),
+            Check("trigger/triggerLog prints the floor and configuration", _check_trigger_log),
         ),
     )
 
@@ -1686,9 +1691,7 @@ def _swing_checks(shot: int, state: _SwingState) -> tuple[Check, ...]:
         if state.last_dump is None:
             return skipped(name, "no ring to replay")
         raw, state.last_dump = state.last_dump, None
-        config = ReplayConfig(
-            tee_bin=_tee_bin(ctx), snr=ctx.snr, track_frames=ctx.hits, stop_at_fire=True
-        )
+        config = ReplayConfig(tee_bin=_tee_bin(ctx), snr=ctx.snr, stop_at_fire=True)
         try:
             result = replay_dump(raw, config)
         except ValueError as exc:
@@ -1697,11 +1700,11 @@ def _swing_checks(shot: int, state: _SwingState) -> tuple[Check, ...]:
             # No host C compiler: the firmware modules cannot be built here.
             return skipped(name, str(exc))
         frames = len(result.frames)
-        armed = f"armed on bin {config.tee_bin} at snr {ctx.snr:g}, {ctx.hits} frames"
+        armed = f"armed on bin {config.tee_bin} at snr {ctx.snr:g}"
         if result.fired_frame is None:
-            return failed(name, f"host detector did not fire over {frames} frames ({armed})")
+            return failed(name, f"host club track did not fire over {frames} frames ({armed})")
         return passed(
-            name, f"host detector fired at frame {result.fired_frame} of {frames} ({armed})"
+            name, f"host club track fired at frame {result.fired_frame} of {frames} ({armed})"
         )
 
     def rearmed(ctx: Context) -> CheckResult:

@@ -64,12 +64,7 @@ SUBBIN_NAMES = {"centroid": SUBBIN_CENTROID, "parabolic": SUBBIN_PARABOLIC}
 
 # l3_trigger.h
 TRIG_MAX_BINS = 64
-TRIG_LOG_DEPTH = 128
 TRIG_TRACE_DEPTH = 64
-TRIG_COUNT_TOTAL = 13
-TRIG_NO_BIN = 0xFF
-TRIG_STATE_IDLE, TRIG_STATE_TRACKING, TRIG_STATE_FIRED = 0, 1, 2
-TRIG_STATE_NAMES = ("idle", "tracking", "fired")
 
 # l3_frames.h / l3_angle.h
 CAL_MAX_VIRTUAL = 8
@@ -405,19 +400,14 @@ class AngleObs(ctypes.Structure):
 
 
 class TrigCfg(ctypes.Structure):
-    """``l3_trig_cfg_t``."""
+    """``l3_trig_cfg_t``: the self-trigger front end's watch region and threshold."""
 
     _fields_ = [
         ("teeBin", ctypes.c_uint32),
         ("snr", ctypes.c_float),
-        ("trackFrames", ctypes.c_uint32),
         ("approachBins", ctypes.c_uint32),
-        ("gateBins", ctypes.c_uint32),
-        ("minCoherence", ctypes.c_float),
-        ("minStepBins", ctypes.c_float),
+        ("pastBins", ctypes.c_uint32),
         ("stat", ctypes.c_uint32),
-        ("minSpeedMps", ctypes.c_float),
-        ("minApproachBins", ctypes.c_uint32),
     ]
 
 
@@ -428,55 +418,23 @@ class TrigTrace(ctypes.Structure):
         ("frame", ctypes.c_uint32),
         ("gap", ctypes.c_uint16),
         ("bin", ctypes.c_uint8),
-        ("state", ctypes.c_uint8),
+        ("dest", ctypes.c_uint8),
         ("energy", ctypes.c_float),
         ("peak", ctypes.c_float),
         ("loop0", ctypes.c_float),
         ("floor", ctypes.c_float),
         ("threshold", ctypes.c_float),
         ("coherencePct", ctypes.c_uint8),
-        ("dest", ctypes.c_uint8),
-    ]
-
-
-class TrigRecord(ctypes.Structure):
-    """``l3_trig_record_t``: one logged detector frame."""
-
-    _fields_ = [
-        ("frame", ctypes.c_uint32),
-        ("gap", ctypes.c_uint16),
-        ("state", ctypes.c_uint8),
-        ("why", ctypes.c_uint8),
-        ("bin", ctypes.c_uint8),
-        ("age", ctypes.c_uint8),
-        ("velocityCms", ctypes.c_int16),
-        ("energy", ctypes.c_float),
-        ("peak", ctypes.c_float),
-        ("floor", ctypes.c_float),
-        ("coherencePct", ctypes.c_uint8),
-        ("dest", ctypes.c_uint8),
     ]
 
 
 class Trig(ctypes.Structure):
-    """``l3_trig_t``: the self-trigger detector."""
+    """``l3_trig_t``: the self-trigger front end (floor, trace, max-hold)."""
 
     _fields_ = [
         ("cfg", TrigCfg),
-        ("state", ctypes.c_uint8),
         ("floor", ctypes.c_float),
-        ("loopPeriodS", ctypes.c_float),
-        ("trackBin", ctypes.c_uint8),
-        ("trackStartBin", ctypes.c_uint8),
-        ("trackAge", ctypes.c_uint8),
-        ("trackMisses", ctypes.c_uint8),
-        ("trackStartFrame", ctypes.c_uint32),
-        ("standHold", ctypes.c_uint8 * 128),
-        ("counters", ctypes.c_uint32 * TRIG_COUNT_TOTAL),
-        ("quietSince", ctypes.c_uint32),
-        ("logNext", ctypes.c_uint32),
-        ("logCount", ctypes.c_uint32),
-        ("log", TrigRecord * TRIG_LOG_DEPTH),
+        ("frames", ctypes.c_uint32),
         ("traceQuiet", ctypes.c_uint32),
         ("traceNext", ctypes.c_uint32),
         ("traceCount", ctypes.c_uint32),
@@ -721,7 +679,6 @@ class ShotInput(ctypes.Structure):
         ("ballPosition", Vec3),
         ("clubActive", ctypes.c_uint8),
         ("clubPoints", ctypes.c_uint32),
-        ("gateFired", ctypes.c_uint8),
         ("geometricFired", ctypes.c_uint8),
         ("impactTimestampUs", ctypes.c_uint32),
         ("delivery", ctypes.POINTER(Delivery)),
@@ -1368,16 +1325,12 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     # l3_trigger.h
     "l3_trig_cfg_defaults": ([_P(TrigCfg)], None),
     "l3_trig_cfg_check": ([_P(TrigCfg)], ctypes.c_int32),
-    "l3_trig_init": ([_P(Trig), _P(TrigCfg), _F32], None),
-    "l3_trig_rearm": ([_P(Trig)], None),
+    "l3_trig_init": ([_P(Trig), _P(TrigCfg)], None),
     "l3_trig_region": ([_P(TrigCfg), _U32, _U32, _U32, _P(_U32), _P(_U32)], ctypes.c_int32),
-    "l3_trig_update": ([_P(Trig), _U32, _U32, _U32, _P(BinObs), _U32], ctypes.c_int32),
-    "l3_trig_log_count": ([_P(Trig)], _U32),
-    "l3_trig_log_get": ([_P(Trig), _U32, _P(TrigRecord)], ctypes.c_int32),
+    "l3_trig_observe": ([_P(Trig), _U32, _U32, _U32, _P(BinObs), _U32], None),
+    "l3_trig_threshold": ([_P(Trig)], _F32),
     "l3_trig_format_summary": ([_P(Trig), *_TEXT], ctypes.c_int32),
     "l3_trig_format_config": ([_P(Trig), *_TEXT], ctypes.c_int32),
-    "l3_trig_format_record": ([_P(TrigRecord), *_TEXT], ctypes.c_int32),
-    "l3_trig_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_trig_trace_clear": ([_P(Trig)], None),
     "l3_trig_trace_count": ([_P(Trig)], _U32),
     "l3_trig_trace_get": ([_P(Trig), _U32, _P(TrigTrace)], ctypes.c_int32),
@@ -1563,6 +1516,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_shot_update": ([_P(Shot), _P(ShotInput), _U32], ctypes.c_uint8),
     "l3_shot_wants_departing": ([_P(Shot)], ctypes.c_int32),
     "l3_shot_state_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_shot_fire_sources": ([ctypes.c_uint8, ctypes.c_int32, ctypes.c_int32], ctypes.c_uint8),
     "l3_shot_source_name": ([ctypes.c_uint8, ctypes.c_char_p, _U32], ctypes.c_char_p),
     "l3_shot_format": ([_P(Shot), *_TEXT], ctypes.c_int32),
     "l3_track_format_point": ([_P(TrackPoint), _U32, *_TEXT], ctypes.c_int32),
@@ -1698,14 +1652,7 @@ __all__ = [
     "BallHypVerdict",
     "BallHyps",
     "BallHypsCfg",
-    "TRIG_COUNT_TOTAL",
-    "TRIG_LOG_DEPTH",
     "TRIG_MAX_BINS",
-    "TRIG_NO_BIN",
-    "TRIG_STATE_FIRED",
-    "TRIG_STATE_IDLE",
-    "TRIG_STATE_NAMES",
-    "TRIG_STATE_TRACKING",
     "TRIG_TRACE_DEPTH",
     "ANGLE_GRID_STEPS",
     "ANGLE_MAX_CHANNELS",
@@ -1782,7 +1729,6 @@ __all__ = [
     "TrackPoint",
     "Trig",
     "TrigCfg",
-    "TrigRecord",
     "TrigTrace",
     "build_firmware_library",
     "c_text",

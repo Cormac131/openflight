@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **IWR6843 self-trigger recognised no swings: the club track fires it now.**
+  The range gate in `l3_trigger.c` fired from its own short track entering a
+  gate around the tee. It held the tee's standing clutter (hands, body, a mat
+  edge) until the club had passed: replayed at the kiosk's settings (tee bin
+  38, snr 1, 6-bin band) it fired on 10 of the 20 2026-08-24 swings, and its
+  standing/stall limits going from 3/4 to 8/8 frames on 2026-09-30 made it
+  worse. The club track's range-only impact (`l3_impact_update_range`, the
+  club-in line crossing the tee's range within 4 ms) fires on 19 of those 20,
+  18 within three frames of the recorded freeze. It already ran on every
+  frame, recording only; it is now what freezes the capture.
+  `trackCfg impact ... armed 1` still lets the geometric impact fire too.
+
+### Removed
+- **The IWR6843 range gate.** Its tracker, state machine, flight recorder and
+  thresholds are gone from `l3_trigger.c`, which keeps the watch region, the
+  noise floor the club targets are extracted against, and the raw-input trace.
+  `triggerCfg` is now `<bin> <snr> <on> [approach past stat]` (the old
+  `<frames>` is read as on/off, so existing arming lines still work; a line
+  with the gate's `minCoh minStep minSpeed minApproach` is refused). Plain
+  `triggerLog` prints the floor and configuration; `triggerLog track` is the
+  place to look after a missed swing. `--iwr6843-self-trigger-frames` and the
+  `--hits` options of `swing_trigger.py`, `watch_trigger.py` and
+  `test_iwr_firmware.py` went with it; those tools now report the club track
+  that fired. Bit 0 (`gate`) of the shot's impact source is reserved so older
+  result packets still decode. Needs a firmware rebuild and reflash.
+
 ### Changed
 - **IWR6843 tee and net distances are measured from the enclosure front; the
   software adds the array depth.** `--iwr6843-net-m` is measured from the front

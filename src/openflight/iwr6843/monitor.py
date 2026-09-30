@@ -213,17 +213,15 @@ def _pause(seconds: float) -> None:
 # Default RF profile for the kiosk and live IWR scripts: adaptive16 keeps the
 # wide 53-bin IQ16 processing windows and retains a 141 ms movie (24/7/16).
 DEFAULT_IWR6843_CONFIG = "config/iwr6843_l3dump_adaptive_47f3ms_53bin_a16.cfg"
-# A moving return short of the tee counts as a clubhead candidate at this
-# multiple of the firmware's running noise floor. The board's triggerLog
-# shows the snr real swings and idle frames reach; tune from that.
+# A return short of the tee counts as a club target at this multiple of the
+# firmware's running noise floor. The board's triggerLog trace shows the snr
+# real swings and idle frames reach; tune from that.
 SELF_TRIGGER_DEFAULT_SNR = FIRMWARE_TRIGGER_DEFAULT_SNR
 # The global bin the trigger watches without --iwr6843-self-trigger-bin.
 SELF_TRIGGER_DEFAULT_BIN = FIRMWARE_TRIGGER_DEFAULT_BIN
-# Frames a candidate must be tracked approaching before the gate may fire.
-SELF_TRIGGER_DEFAULT_TRACK_FRAMES = 2
 # Bins short of the ball the trigger (and the ball search it arms) is aimed at
-# by default. The gate has to sit just short of where the club reaches the ball,
-# and the ball tracker only accepts a return within its origin gate of the arm
+# by default. The watch region has to reach just short of where the club
+# reaches the ball, and the ball tracker only accepts a return within its origin gate of the arm
 # bin: on 38 labelled swings the ball was best tracked 2 bins short of its rest
 # bin (470/552 ball points) and lost outright from 4-5 bins short.
 SELF_TRIGGER_TEE_LEAD_BINS = 2
@@ -244,19 +242,19 @@ def self_trigger_bin(tee_from_front_m: float, config_path: str | Path, fft_size:
 
 @dataclass(frozen=True)
 class SelfTriggerConfig:
-    """Firmware ``triggerCfg``: freeze when a tracked clubhead reaches the tee.
+    """Firmware ``triggerCfg``: freeze when the club track reaches the tee.
 
-    The firmware watches the range bins short of ``tee_bin`` for a moving
-    return of at least ``snr`` times its running noise floor, follows it
-    frame to frame, and fires once it has been seen ``track_frames`` times
-    and enters the impact gate around the tee. The gate width, approach
-    depth, Doppler coherence and approach-rate tunables keep their firmware
-    defaults; ``triggerLog`` on the board reports what each frame saw.
+    ``triggerCfg`` turns the self-trigger on around ``tee_bin``: per frame the
+    firmware extracts club targets of at least ``snr`` times its running noise
+    floor from the bins short of it, the club track follows the club through
+    them, and its range-only impact freezes the capture when the club's line
+    is predicted to cross the tee's range. (The range gate that fired from its
+    own short track was removed on 2026-09-30.) The watch depth keeps its
+    firmware default; ``triggerLog track`` on the board reports the track.
     """
 
     tee_bin: int  # global range-FFT bin (tee_global_bin), not a window offset
     snr: float
-    track_frames: int
 
     def __post_init__(self) -> None:
         if self.tee_bin < 0:
@@ -264,25 +262,20 @@ class SelfTriggerConfig:
         if not math.isfinite(self.snr) or self.snr < 1.0:
             # Below the floor itself every frame would be a candidate.
             raise ValueError(f"self-trigger snr must be >= 1, got {self.snr}")
-        if self.track_frames < 1:
-            # triggerCfg treats 0 frames as "off", which would leave the host
-            # waiting for a notice that never comes.
-            raise ValueError(f"self-trigger track frames must be >= 1, got {self.track_frames}")
 
     @property
     def command(self) -> str:
-        """CLI line that arms this trigger."""
-        return f"triggerCfg {self.tee_bin} {self.snr} {self.track_frames}"
+        """CLI line that arms this trigger: ``<bin> <snr> <on>``."""
+        return f"triggerCfg {self.tee_bin} {self.snr} 1"
 
 
-# frames=0 disables the firmware trigger (see l3_cli_triggerCfg).
+# on=0 disables the firmware trigger (see l3_cli_triggerCfg).
 SELF_TRIGGER_OFF_COMMAND = "triggerCfg 0 0 0"
 
 
 def measure_trigger_level(
     radar: IWR6843Radar,
     tee_bin: int,
-    hits: int,
     *,
     snr: float = SELF_TRIGGER_DEFAULT_SNR,
     clock: Callable[[], float] | None = None,
@@ -299,7 +292,7 @@ def measure_trigger_level(
     """
     now = _monotonic if clock is None else clock
     wait = _pause if pause is None else pause
-    probe = SelfTriggerConfig(tee_bin=tee_bin, snr=snr, track_frames=hits).command
+    probe = SelfTriggerConfig(tee_bin=tee_bin, snr=snr).command
     reply = radar.cmd(probe, 2.0)
     if "Error" in reply or "Done" not in reply:
         raise RuntimeError(f"IWR6843 background probe rejected: {reply.strip()}")
@@ -974,7 +967,6 @@ __all__ = [
     "SELF_TRIGGER_DEFAULT_SNR",
     "TEE_BAND_DEFAULT_BINS",
     "TEE_BAND_MAX_BINS",
-    "SELF_TRIGGER_DEFAULT_TRACK_FRAMES",
     "SELF_TRIGGER_OFF_COMMAND",
     "CaptureConfigSummary",
     "IWR6843Capture",

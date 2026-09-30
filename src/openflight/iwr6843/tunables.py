@@ -38,8 +38,7 @@ def _t(root: str, path: str, kind: str, low: float, high: float, step: float) ->
 
 TUNABLES: tuple[Tunable, ...] = (
     _t("trig", "approachBins", "int", 4, 24, 2),
-    _t("trig", "gateBins", "int", 1, 8, 1),
-    _t("trig", "minApproachBins", "int", 1, 8, 1),
+    _t("trig", "pastBins", "int", 1, 8, 1),
     _t("club", "gateBins", "float", 1.0, 6.0, 0.5),
     _t("club", "maxMisses", "int", 0, 5, 1),
     _t("club", "minConfidence", "float", 0.0, 0.8, 0.1),

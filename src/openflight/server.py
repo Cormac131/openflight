@@ -1121,7 +1121,6 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
     """
     from .iwr6843.monitor import (
         SELF_TRIGGER_DEFAULT_SNR,
-        SELF_TRIGGER_DEFAULT_TRACK_FRAMES,
         SelfTriggerConfig,
         check_first_window_bin,
         self_trigger_bin,
@@ -1132,7 +1131,6 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
         for flag, value in (
             ("--iwr6843-self-trigger-bin", args.iwr6843_self_trigger_bin),
             ("--iwr6843-self-trigger-snr", args.iwr6843_self_trigger_snr),
-            ("--iwr6843-self-trigger-frames", args.iwr6843_self_trigger_frames),
         )
         if value is not None
     ]
@@ -1146,11 +1144,9 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
     else:
         check_first_window_bin(bin_index, args.iwr6843_config, f"self-trigger bin {bin_index}")
     snr = args.iwr6843_self_trigger_snr
-    frames = args.iwr6843_self_trigger_frames
     return SelfTriggerConfig(
         tee_bin=bin_index,
         snr=SELF_TRIGGER_DEFAULT_SNR if snr is None else snr,
-        track_frames=SELF_TRIGGER_DEFAULT_TRACK_FRAMES if frames is None else frames,
     )
 
 
@@ -4968,9 +4964,9 @@ def main():
     parser.add_argument(
         "--iwr6843-self-trigger",
         action="store_true",
-        help="Freeze the IWR ring when the firmware tracks the clubhead into the tee "
-        "and send S! to the OPS, instead of the sound-gate edge. The bin it watches "
-        "is --iwr6843-self-trigger-bin",
+        help="Freeze the IWR ring when the firmware club track is predicted to cross "
+        "the tee's range and send S! to the OPS, instead of the sound-gate edge. The "
+        "bin it watches is --iwr6843-self-trigger-bin",
     )
     parser.add_argument(
         "--iwr6843-self-trigger-bin",
@@ -4984,7 +4980,7 @@ def main():
         "--iwr6843-self-trigger-snr",
         type=float,
         default=None,
-        help="Clubhead candidate threshold as a multiple of the firmware's running "
+        help="Club target threshold as a multiple of the firmware's running "
         "noise floor, at least 1 (default: 1). Requires --iwr6843-self-trigger",
     )
     parser.add_argument(
@@ -4993,13 +4989,6 @@ def main():
         help="Prefer the IWR6843 firmware's usable club delivery (path, attack) over the host "
         "pipeline's. Launch angles always come from the host. The onboard result rides on "
         "every shot as iwr6843_onboard either way.",
-    )
-    parser.add_argument(
-        "--iwr6843-self-trigger-frames",
-        type=int,
-        default=None,
-        help="Frames a candidate must be tracked approaching before it can fire, "
-        "at least 1 (default: 2 with --iwr6843-self-trigger)",
     )
     from .iwr6843.setup_poll import BALL_DETECTOR_MODES  # pylint: disable=import-outside-toplevel
 

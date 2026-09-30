@@ -1,17 +1,17 @@
 /* IWR6843 geometric impact detector.
  *
- * The range gate (l3_trigger.c) fires when the club's range bin enters a
- * window around the ball's bin. This detector fires on geometry instead: the
- * club delivery (l3_club_track.c) is a position and a velocity in the GOLF
+ * Two detectors over the club track. The geometric one: the club delivery (l3_club_track.c) is a position and a velocity in the GOLF
  * frame, the ball is a position in the same frame, so the closest approach
  * of the club's line to the ball and the moment it happens follow directly.
  * Impact is declared when that closest approach comes within a tolerance of
  * the ball and its time lies within a horizon of the newest observation,
  * which also gives the impact time between frames rather than a frame index.
  * A practice swing that misses the ball by more than the tolerance never
- * fires; a body walking through the lane is too slow to. The range gate is
- * kept as the fallback until this has proved itself on hardware; l3_dump.c
- * fires on either and records which. Pure C, no hardware.
+ * fires; a body walking through the lane is too slow to. It fires the capture
+ * only once armed ("trackCfg impact ... 1"). The range-only one
+ * (l3_impact_update_range) needs no angles and always fires the capture: it
+ * replaced the range gate, whose own tracker stalled on the tee's clutter.
+ * l3_dump.c records which fired. Pure C, no hardware.
  */
 #ifndef L3_IMPACT_H
 #define L3_IMPACT_H

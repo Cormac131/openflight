@@ -45,11 +45,12 @@ class ViewerOptions:  # pylint: disable=too-many-instance-attributes
     tee_bin: int | None = st.FIRMWARE_TRIGGER_DEFAULT_BIN  # None: from tee_range_m
     dest_bin: int | None = st.FIRMWARE_TRIGGER_DEFAULT_BIN
     snr: float = st.FIRMWARE_TRIGGER_DEFAULT_SNR  # the trigger's (triggerCfg)
-    track_frames: int = fr.DEFAULT_TRACK_FRAMES
     stat: str = "peak"
     subbin: str = "parabolic"
     post_from_frame: int | None = None
-    impact_armed: bool = False
+    # "trackCfg impact ... armed 1": the geometric impact fires too. The club
+    # track's range-only impact always fires the self-trigger.
+    geometry_armed: bool = False
     stop_at_fire: bool = False
     pitch_deg: float = DEFAULT_PITCH_DEG
     tee_range_m: float = st.DEFAULT_TEE_RANGE_M
@@ -71,7 +72,8 @@ class ViewerOptions:  # pylint: disable=too-many-instance-attributes
         """Options to replay a recorded capture as the board ran it: what the
         session log says (``raw``, as ``from_mapping``) over the settings the
         recordings were made with (triggerCfg snr 6, ball snr 3, the tee bin
-        from the slant range, no tee band), not today's defaults."""
+        from the slant range, no tee band), not today's defaults. The range
+        gate that froze them is gone; the replay fires on the club track."""
         recorded = {
             "tee_bin": None,
             "dest_bin": None,
@@ -260,11 +262,10 @@ def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOp
         tee_bin=tee_bin_for(options),
         dest_bin=options.dest_bin,
         snr=options.snr,
-        track_frames=options.track_frames,
         stat=options.stat,
         subbin=options.subbin,
         post_from_frame=options.post_from_frame,
-        impact_armed=options.impact_armed,
+        geometry_armed=options.geometry_armed,
         stop_at_fire=options.stop_at_fire,
         pitch_deg=options.pitch_deg,
         ball_hypotheses=options.ball_hypotheses,
@@ -306,7 +307,7 @@ def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOp
         "longest_run": result.longest_run,
         "acquisitions": result.acquisitions,
         "track_counters": result.track_counters,
-        "trig_counters": result.trig_counters,
+        "trigger_summary": result.trigger_summary,
         "report": fr.format_report(result, points=True),
         "band": list(result.band) if result.band is not None else None,
         "range_frame": result.range_frame,
@@ -374,15 +375,11 @@ def analyze_dump(raw: bytes, options: ViewerOptions | None = None) -> dict:
 
 
 def parse_trigger_cfg(text: str | None) -> dict:
-    """``triggerCfg <bin> <snr> <frames>`` -> viewer options, {} when absent or off."""
+    """``triggerCfg <bin> <snr> <on>`` -> viewer options, {} when absent or off."""
     match = _TRIGGER_CFG.search(text or "")
     if not match or int(match.group(3)) == 0:
         return {}
-    return {
-        "tee_bin": int(match.group(1)),
-        "snr": float(match.group(2)),
-        "track_frames": int(match.group(3)),
-    }
+    return {"tee_bin": int(match.group(1)), "snr": float(match.group(2))}
 
 
 def _read_jsonl(path: Path) -> list[dict]:

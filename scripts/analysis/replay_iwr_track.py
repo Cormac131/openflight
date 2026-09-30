@@ -29,7 +29,6 @@ from openflight.iwr6843 import firmware_host as fw
 from openflight.iwr6843.firmware_replay import (
     DEFAULT_FFT_SIZE,
     DEFAULT_SNR,
-    DEFAULT_TRACK_FRAMES,
     ReplayConfig,
     ReplayResult,
     RetainReplay,
@@ -59,12 +58,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--snr", type=float, default=argparse.SUPPRESS, help=f"triggerCfg snr ({DEFAULT_SNR})"
-    )
-    parser.add_argument(
-        "--track-frames",
-        type=int,
-        default=argparse.SUPPRESS,
-        help=f"triggerCfg track frames ({DEFAULT_TRACK_FRAMES})",
     )
     parser.add_argument(
         "--stat",
@@ -122,7 +115,6 @@ def _overrides(args: argparse.Namespace) -> dict:
         for key in (
             "dest_bin",
             "snr",
-            "track_frames",
             "stat",
             "subbin",
             "stop_at_fire",

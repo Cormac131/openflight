@@ -41,15 +41,13 @@ def test_stop_sensor_requires_acknowledgement_and_inactive_health(monkeypatch):
     assert calls == [("sensorStop", 3.0), ("stats", 2.0)]
 
 
-def test_trigger_log_reads_the_detector_log_with_a_window_for_128_lines(monkeypatch):
+def test_trigger_log_reads_the_front_end_floor_and_configuration(monkeypatch):
+    """Two lines since the range gate's 128-record log went with it."""
     radar = IWR6843Radar.__new__(IWR6843Radar)
     calls = []
     reply = (
-        "triggerLog\ntrig state=idle floor=812 frames=4000 cand=9 acq=3 adv=4 jump=0 "
-        "miss=1 lost=1 lowcoh=0 young=0 slow=0 fired=1 records=9\n"
-        "trigcfg tee=14 snr=6.00 track=2 approach=12 gate=3 mincoh=0.00 minstep=1.00 loopus=135.0\n"
-        "frame=3120 gap=2900 state=tracking why=acquired bin=5 age=1 energy=9800 floor=810 "
-        "snr=12.1 v=-3.20 coh=71\n"
+        "triggerLog\ntrig frames=4000 floor=812.0 thr=812.0 traced=3\n"
+        "trigcfg tee=38 snr=1.00 approach=12 past=3 stat=peak\n"
         "Done\nl3dump:/>"
     )
 
@@ -60,7 +58,7 @@ def test_trigger_log_reads_the_detector_log_with_a_window_for_128_lines(monkeypa
     monkeypatch.setattr(radar, "cmd", fake_cmd)
 
     assert radar.trigger_log() == reply
-    assert calls == [("triggerLog", 6.0)]
+    assert calls == [("triggerLog", 2.0)]
 
 
 def test_tee_scan_sends_the_bin_range(monkeypatch):
@@ -530,9 +528,10 @@ def test_watch_script_releases_a_trigger_in_the_arming_reply(monkeypatch):
 
     radar.cmd.side_effect = _cmd
     radar.release_sparse_freeze.side_effect = lambda: calls.append("release")
+    radar.club_track.side_effect = lambda: calls.append("triggerLog track") or "clubtrack\nDone\n"
     type(radar.ser).in_waiting = PropertyMock(side_effect=KeyboardInterrupt)
     monkeypatch.setitem(main.__globals__, "IWR6843Radar", lambda **_kwargs: radar)
-    monkeypatch.setitem(main.__globals__, "tee_global_bin", lambda *_args: 14)
+    monkeypatch.setitem(main.__globals__, "self_trigger_bin", lambda *_args: 14)
     monkeypatch.setitem(
         main.__globals__, "measure_trigger_level", lambda *_args, **_kwargs: (200000.0, 1200000.0)
     )
@@ -540,10 +539,12 @@ def test_watch_script_releases_a_trigger_in_the_arming_reply(monkeypatch):
 
     main()
 
+    # The club track that fired is printed before the ring is released.
     assert calls == [
         "debugCfg 1",
-        "triggerCfg 14 6.0 2",
+        "triggerCfg 14 6.0 1",
         "debugCfg 0",
+        "triggerLog track",
         "release",
         "debugCfg 1",
         "debugCfg 0",
@@ -569,7 +570,7 @@ def test_watch_script_arms_above_the_measured_tee_floor(monkeypatch):
     radar.cmd.side_effect = _cmd
     type(radar.ser).in_waiting = PropertyMock(side_effect=KeyboardInterrupt)
     monkeypatch.setitem(main.__globals__, "IWR6843Radar", lambda **_kwargs: radar)
-    monkeypatch.setitem(main.__globals__, "tee_global_bin", lambda *_args: 14)
+    monkeypatch.setitem(main.__globals__, "self_trigger_bin", lambda *_args: 14)
     monkeypatch.setitem(
         main.__globals__, "measure_trigger_level", lambda *_args, **_kwargs: (200000.0, 1200000.0)
     )
@@ -577,7 +578,22 @@ def test_watch_script_arms_above_the_measured_tee_floor(monkeypatch):
 
     main()
 
-    assert calls[:2] == ["debugCfg 1", f"triggerCfg 14 {SELF_TRIGGER_DEFAULT_SNR} 2"]
+    assert calls[:2] == ["debugCfg 1", f"triggerCfg 14 {SELF_TRIGGER_DEFAULT_SNR} 1"]
+
+
+def test_watch_script_has_no_range_gate_options():
+    """--hits was the removed range gate's track-frame count."""
+    import runpy
+    import sys
+
+    main = runpy.run_path("scripts/iwr6843/watch_trigger.py")["main"]
+    sys_argv = sys.argv
+    try:
+        sys.argv = ["watch_trigger.py", "--hits", "2"]
+        with pytest.raises(SystemExit):
+            main()
+    finally:
+        sys.argv = sys_argv
 
 
 class _PyserialShortRead:
@@ -625,7 +641,6 @@ def test_background_floor_collects_eight_samples_inside_two_seconds():
     floor, level = measure_trigger_level(
         radar,
         14,
-        2,
         clock=lambda: port.elapsed,
         pause=pause,
     )

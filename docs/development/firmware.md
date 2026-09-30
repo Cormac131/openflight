@@ -94,9 +94,9 @@ silently hiding cadence failures.
 ## Onboard Self-Trigger
 
 With `--iwr6843-self-trigger` the firmware, not the sound gate, decides when
-impact is imminent. Once per completed frame the HWA rearm task scores the
-range bins around the tee and hands them to the detector in
-`firmware/iwr6843/l3_trigger.c`:
+impact is imminent. Once per completed frame the detect task scores the range
+bins around the tee. The front end in `firmware/iwr6843/l3_trigger.c` keeps the
+floor and the trace, and the club track fires:
 
 ```text
 completed frame (every loop of the vertical TX pair, all RX)
@@ -107,32 +107,34 @@ completed frame (every loop of the vertical TX pair, all RX)
      phase and coherence)
   -> noise floor = smoothed median of the watched bins in the chosen
      statistic (strongest loop by default: a fast club can be in a bin for
-     only part of a frame); threshold = floor x snr
-  -> candidate = strongest bin above threshold inside the current track's
-     continuation window (-2..+8 bins), else the strongest bin in the region
-     as a new track
-  -> IDLE -> TRACKING: the track is followed frame to frame by that window
-     (one missing frame is bridged, a larger retreat restarts it); its
-     approach rate is measured from its nearest point to the radar, so a
-     slow backswing does not count against the downswing
-  -> TRACKING -> FIRED: the track enters the impact gate (tee +/- gate bins)
-     with at least <frames> observations and a mean approach rate of at
-     least minStep bins per frame
+     only part of a frame); threshold = floor x snr        (l3_trigger.c)
+  -> club targets above the threshold into the club track, which predicts
+     the club through bins a standing return holds and reads past the tee
+     band                                                  (l3_club_track.c)
+  -> range-only impact: the club-in line fitted to the track crosses the
+     tee's range within 4 ms of this frame               (l3_impact.c)
   -> the freeze the sound gate would have requested, then "Triggered" on the CLI
 ```
 
-Nothing is required of the tee bin itself, and the club is never required to
-be seen moving away again: that only makes the trigger late and adds a
-condition a real swing can fail. The reported Doppler velocity is a readout,
-not a condition: with three TX at 45 us chirps a loop is 135 us, so Doppler
-is unambiguous only to about +/- 9 m/s and a clubhead aliases. Range rate
-across frames is what separates a clubhead (2-3 bins per 3 ms frame for a
-driver) from a player walking up to the ball (a bin every few frames).
+Until 2026-09-30 a range gate in `l3_trigger.c` fired instead, from its own
+short track entering a gate around the tee. It held the tee's standing clutter
+(hands, body, a mat edge) and on the 2026-08-24 recordings fired on 10 of 20
+swings at the kiosk's settings. The club track fires on 19 of them, 18 within
+three frames of the recorded freeze, so the gate, its track, its flight
+recorder and its thresholds were removed.
 
-The detector is armed and tuned over the CLI:
+The club is never required to be seen moving away again: that only makes the
+trigger late and adds a condition a real swing can fail. The reported Doppler
+velocity is a readout, not a condition: with three TX at 45 us chirps a loop
+is 135 us, so Doppler is unambiguous only to about +/- 9 m/s and a clubhead
+aliases. Range rate across frames is what separates a clubhead (2-3 bins per
+3 ms frame for a driver) from a player walking up to the ball (a bin every few
+frames).
+
+The self-trigger is armed and tuned over the CLI:
 
 ```text
-triggerCfg <globalBin> <snr> <frames> [approach gate minCoh minStep stat minSpeed minApproach]
+triggerCfg <globalBin> <snr> <on> [approach past stat]
 triggerLog [trace|track|shot|result|perf|clear]
 trackCfg cal <pitchDeg> <yawDeg> <rollDeg> <azOffsetRad> <elOffsetDeg> <rangeBiasM>
 trackCfg elem <index> <phaseRad> <gain>
@@ -140,31 +142,21 @@ trackCfg impact <toleranceM> <horizonS> <minSpeedMps> <minConfidence> <armed>
 captureCfg adaptive <enabled> <approachBins> <marginBins>
 ```
 
-`snr` is the candidate threshold over the running noise floor (default 6 on
-the host), `frames` the observations a track needs before the gate may fire
-(host default 2; 0 disables the trigger). The optional values default to 12
-approach bins (about 0.56 m short of the tee), a gate half-width of 3 bins,
-no coherence test, one bin per frame of approach, the strongest-loop
-statistic (`stat` 1; 0 selects the energy over all loops once the club is
-known to be seen), and no Doppler speed gate (`minSpeed` in m/s; a player
-standing in the approach window moves under 1 m/s and reads as such, while
-a clubhead aliases across the ±9 m/s span, so a gate of 1.5 m/s rejects
-body returns at the cost of about one club frame in six, which the bridged
-miss absorbs), and three bins of approach (`minApproach`) seen before the
-gate may fire. Both approach tests measure from the track's nearest point to
-the radar, so a return standing in the gate (a hand placing the ball, an arm
-at address) has no approach and is logged `slow`, and one whose strongest
-scatterer wanders two bins in two frames is logged `short`; a clubhead
-covers a gate's width at a bin or more per frame. `triggerLog` prints the
-detector's state and counters,
-its configuration, then one line per frame that had a moving return above
-the floor (idle frames only count toward the next line's `gap=`): candidate
-bin, all-loop energy and strongest-loop peak against the floor (in the
-configured statistic's units), apparent velocity, coherence, track age, and
-`why=` the frame did or did not fire
-(`acquired`, `advanced`, `jumped`, `missed`, `lost`, `lowcoh`, `slowdop`,
-`young`, `slow`, `short`, `fired`). Read it after a missed swing before re-arming: the ring
-re-arm after `l3sparse` keeps the log, `triggerCfg` clears it.
+`snr` is the club-target threshold over the running noise floor (default 1 on
+the kiosk). `on` of 0 turns the self-trigger off and any other value turns it
+on; it was the gate's track-frame count, so existing arming lines still work.
+The optional values default to 12 approach bins (about 0.56 m short of the
+tee), 3 bins past it, and the strongest-loop statistic (`stat` 1; 0 selects the
+energy over all loops once the club is known to be seen). A longer line, one
+still carrying the gate's `minCoh minStep minSpeed minApproach`, is refused
+rather than half applied. `trackCfg impact ... armed 1` lets the geometric
+impact fire the capture as well as the range-only one.
+
+`triggerLog` prints the front end's frame count, floor and threshold, then its
+configuration. After a missed swing, read `triggerLog track` (the club track,
+its delivery, and the `range impact` verdict: `nodelivery`, `pending`,
+`passed` or `fired`) and `triggerLog trace` (what the radar was offered)
+before re-arming: `triggerCfg` clears the trace.
 ### Observation layer and club track
 
 The per-bin residuals are not the trigger's alone. `l3_observation.c` owns
@@ -250,8 +242,9 @@ the closest approach of the fitted line and the moment it happens, which
 dates impact between frames. Contact within the tolerance and the horizon
 fires; a line that misses by more is a practice swing; a slow mover is a
 body. It records its verdict every frame and fires the capture only when
-`trackCfg impact ... 1` arms it; the range gate stays the fallback and
-`triggerLog track` reports which fired.
+`trackCfg impact ... 1` arms it. The range-only impact (the club-in line
+crossing the ball's range) always fires, and `triggerLog track` reports which
+fired.
 
 `l3_shot.c` is the explicit per-shot sequence: WAITING_FOR_BALL, READY,
 CLUB_ACQUIRE, CLUB_TRACK, IMPACT, BALL_TRACK, SOLVE, RESULT. IMPACT freezes
@@ -593,7 +586,7 @@ change what comes next.
           |                 |
           |        speed / path / attack (l3_track_delivery)
           |                 |
-          +------> IMPACT <-+   range gate (l3_trigger) or geometry (l3_impact)
+          +------> IMPACT <-+   range-only or (armed) geometry (l3_impact)
                     |
                     v      shot machine (l3_shot)
                BALL TRACKER (l3_ball_track)
@@ -780,7 +773,7 @@ matching host-parser change and regression tests in the same commit.
 |---|---|
 | `firmware/iwr6843/l3_dump.c` | RF control, HWA/EDMA pipeline, circular ring, freeze/rearm, CLI, and dump streaming |
 | `firmware/iwr6843/l3_observation.c`, `l3_observation.h` | Observation layer: statistic, adaptive floor, target extraction with sub-bin range, coherence, Doppler readout, confidence (host-testable, no hardware) |
-| `firmware/iwr6843/l3_trigger.c`, `l3_trigger.h` | Self-trigger detector: impact gate over the observation layer, frame log and trace (host-testable, no hardware) |
+| `firmware/iwr6843/l3_trigger.c`, `l3_trigger.h` | Self-trigger front end: watch region, noise floor and raw-input trace; the club track fires (host-testable, no hardware) |
 | `firmware/iwr6843/l3_club_track.c`, `l3_club_track.h` | Persistent club trajectory: predictive association, coasting, 3D delivery fit (host-testable, no hardware) |
 | `firmware/iwr6843/l3_frames.c`, `l3_frames.h` | Radar and golf coordinate frames, the calibration structure, velocity-angle conventions |
 | `firmware/iwr6843/l3_angle.c`, `l3_angle.h` | Azimuth and elevation of a target from its antenna channels, TDM alias resolution |

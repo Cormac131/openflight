@@ -42,7 +42,6 @@ DEFAULT_SNR = 6.0
 DEFAULT_BALL_SNR = 3.0
 # The host-only joint search's own extraction snr, not the trigger's.
 JOINT_SEARCH_SNR = 6.0
-DEFAULT_TRACK_FRAMES = 2
 DEFAULT_FFT_SIZE = 128
 # The lag-1 Doppler readout aliases at wavelength / (4 T); at 135 us that
 # is about +/- 9 m/s, so a clubhead reads as a speed uniformly over the span.
@@ -292,7 +291,6 @@ class ReplayConfig:
 
     tee_bin: int  # global; the destination without a locked ball
     snr: float = DEFAULT_SNR
-    track_frames: int = DEFAULT_TRACK_FRAMES
     stat: str = "peak"  # "peak" or "energy"
     subbin: str = "parabolic"  # how targets read their sub-bin range: "parabolic" or "centroid"
     dest_bin: int | None = None  # a locked ball's global bin; None uses the tee
@@ -306,8 +304,9 @@ class ReplayConfig:
     azimuth_offset_rad: float = 0.0
     elevation_offset_deg: float = 0.0
     range_bias_m: float = 0.0
-    # Geometric impact detector: armed lets it end the replay like the gate.
-    impact_armed: bool = False
+    # "trackCfg impact ... armed 1": the geometric impact fires the capture
+    # too. The club track's range-only impact always does.
+    geometry_armed: bool = False
     # Frames after the trigger fires go to the ball tracker, as the board's
     # post movie does; a locked ball at dest_bin makes the shot require one.
     post_impact: bool = True
@@ -514,9 +513,8 @@ class ReplayFrame:
     timestamp_us: int
     first_bin: int  # global bin of the first scored observation
     count: int  # observations scored; 0 when the window missed the tee
-    floor: float  # the trigger's floor after this frame
-    trig_state: str
-    fired: bool
+    floor: float  # the trigger front end's floor after this frame
+    fired: bool  # the self-trigger fired on this frame
     targets: tuple[TargetSummary, ...]
     track_why: str
     track_bin: float | None  # the point appended this frame, global sub-bin
@@ -560,7 +558,9 @@ class ReplayResult:
     config: ReplayConfig
     frames: list[ReplayFrame]
     points: list[PointSummary]  # every appended point, beyond the C ring's depth
-    fired_frame: int | None  # the range gate
+    # The self-trigger's fire, the frame the board freezes on: the club
+    # track's range-only impact, or an armed geometric one if it came first.
+    fired_frame: int | None
     geometric_frame: int | None  # the geometric impact detector's fire
     impact_timestamp_us: int | None  # interpolated impact time from the geometry
     delivery: DeliverySummary | None  # at the end of the replay
@@ -571,12 +571,11 @@ class ReplayResult:
     shot_status: str  # l3_shot_format at the end
     ball_status: str  # l3_ball_track_format_status at the end
     track_counters: dict[str, int]
-    trig_counters: dict[str, int]
     speed_mps: float
     fit_slope_bins_per_s: float
     fit_residual_bins: float
     status: str  # l3_track_format_status at the end of the replay
-    trigger_summary: str  # l3_trig_format_summary at the end of the replay
+    trigger_summary: str  # l3_trig_format_summary (the front end's floor) at the end
     trig: fw.Trig = field(repr=False)
     track: fw.ClubTrack = field(repr=False)
     impact: fw.Impact = field(repr=False)
@@ -643,23 +642,6 @@ class ReplayResult:
         if not pairs:
             return 0.0
         return sum(1 for a, b in pairs if b.range_bin > a.range_bin) / len(pairs)
-
-
-_TRIG_COUNTERS = (
-    "frames",
-    "cand",
-    "acq",
-    "adv",
-    "jump",
-    "miss",
-    "lost",
-    "lowcoh",
-    "slowdop",
-    "young",
-    "slow",
-    "short",
-    "fired",
-)
 
 
 def _target_summary(target: fw.TargetObs) -> TargetSummary:
@@ -906,13 +888,12 @@ def replay_dump(
     lib.l3_trig_cfg_defaults(ctypes.byref(trig_cfg))
     trig_cfg.teeBin = config.tee_bin
     trig_cfg.snr = config.snr
-    trig_cfg.trackFrames = config.track_frames
     trig_cfg.stat = fw.STAT_NAMES[config.stat]
     tunables.apply_overrides(config.overrides, "trig", trig_cfg)
     if lib.l3_trig_cfg_check(ctypes.byref(trig_cfg)) != 0:
         raise ValueError(f"the firmware rejects this trigger configuration: {config}")
     trig = fw.Trig()
-    lib.l3_trig_init(ctypes.byref(trig), ctypes.byref(trig_cfg), loop_period_s)
+    lib.l3_trig_init(ctypes.byref(trig), ctypes.byref(trig_cfg))
 
     track_cfg = fw.TrackCfg()
     lib.l3_track_cfg_defaults(ctypes.byref(track_cfg))
@@ -1035,13 +1016,10 @@ def replay_dump(
     club_at_impact: tuple[float, float, float] | None = None
     for frame in range(int(meta["n_frames"])):
         forced = config.post_from_frame is not None and frame >= config.post_from_frame
-        # A sound-triggered recording's freeze is the impact: no gate, however
-        # early it fires, makes the frames before it post-impact.
+        # A sound-triggered recording's freeze is the impact: no self-trigger,
+        # however early it fires, makes the frames before it post-impact.
         early = config.post_from_frame is not None and not forced
-        ended = not early and (
-            fired_frame is not None
-            or (config.impact_armed and (geometric_frame is not None or range_frame is not None))
-        )
+        ended = not early and fired_frame is not None
         if config.stop_at_fire and ended and not forced:
             break
         window_start, window_bins = frame_window(meta, frame)
@@ -1100,7 +1078,9 @@ def replay_dump(
             forced_in = fw.ShotInput()
             forced_in.ballLocked = 1 if config.dest_bin is not None else 0
             forced_in.ballPosition = ball_position
-            forced_in.gateFired = 1
+            # The shot machine's inputs are the impact detectors'; an impact
+            # the replay is given enters through the range-only one.
+            forced_in.rangeFired = 1
             forced_in.impactTimestampUs = timestamp_us
             forced_in.delivery = ctypes.pointer(delivery)
             forced_in.club = ctypes.pointer(track)
@@ -1130,7 +1110,6 @@ def replay_dump(
                     shot,
                     ball_position,
                     ball_points,
-                    fw.TRIG_STATE_NAMES[trig.state],
                     track,
                     points,
                     band,
@@ -1182,7 +1161,6 @@ def replay_dump(
                     window_start,
                     0,
                     float(trig.floor),
-                    fw.TRIG_STATE_NAMES[trig.state],
                     False,
                     (),
                     fw.TRACK_WHY_NAMES[track.why],
@@ -1195,9 +1173,7 @@ def replay_dump(
             continue
         first_bin = window_start + first_local.value
         obs = bin_observations(cube, frame, first_local.value, count.value, n_tx)
-        fired = bool(
-            lib.l3_trig_update(ctypes.byref(trig), frame, destination, first_bin, obs, count.value)
-        )
+        lib.l3_trig_observe(ctypes.byref(trig), frame, destination, first_bin, obs, count.value)
         if band_enabled and not band_frozen:
             lib.l3_band_place(
                 ctypes.byref(noise),
@@ -1294,9 +1270,14 @@ def replay_dump(
         )
         if ranged and range_frame is None:
             range_frame = frame
-        if fired and early:
-            fired = False  # a sound trigger's impact is post_from_frame, not the gate
-        if fired:
+        # l3_considerSelfTrigger: the range-only impact fires, the geometric
+        # one only once armed. A sound-triggered recording's impact is
+        # post_from_frame, so nothing before it fires.
+        accepted = (
+            0 if early else lib.l3_shot_fire_sources(config.geometry_armed, geometric, ranged)
+        )
+        fired = bool(accepted)
+        if fired and fired_frame is None:
             fired_frame = frame
         # The shot machine, as l3_shotObserve feeds it; IMPACT arms the ball tracker.
         shot_in = fw.ShotInput()
@@ -1304,12 +1285,11 @@ def replay_dump(
         shot_in.ballPosition = ball_position
         shot_in.clubActive = track.active
         shot_in.clubPoints = track.count
-        shot_in.gateFired = 1 if fired else 0
-        shot_in.geometricFired = 1 if (geometric and config.impact_armed) else 0
-        shot_in.rangeFired = 1 if (ranged and config.impact_armed) else 0
-        if geometric and config.impact_armed:
+        shot_in.geometricFired = 1 if accepted & fw.SHOT_IMPACT_GEOMETRY else 0
+        shot_in.rangeFired = 1 if accepted & fw.SHOT_IMPACT_RANGE else 0
+        if shot_in.geometricFired and impact.fired:
             shot_in.impactTimestampUs = int(impact.impactTimestampUs)
-        elif ranged and config.impact_armed:
+        elif shot_in.rangeFired and range_impact.fired:
             shot_in.impactTimestampUs = int(range_impact.impactTimestampUs)
         else:
             shot_in.impactTimestampUs = timestamp_us
@@ -1335,7 +1315,6 @@ def replay_dump(
                 first_bin,
                 count.value,
                 float(trig.floor),
-                fw.TRIG_STATE_NAMES[trig.state],
                 fired,
                 tuple(_target_summary(targets[i]) for i in range(found)),
                 fw.TRACK_WHY_NAMES[track.why],
@@ -1376,7 +1355,6 @@ def replay_dump(
         shot_status=fw.c_text(lib.l3_shot_format, ctypes.byref(shot), cap=240),
         ball_status=fw.c_text(lib.l3_ball_track_format_status, ctypes.byref(ball_track), cap=240),
         track_counters={name: int(track.counters[i]) for i, name in enumerate(fw.TRACK_WHY_NAMES)},
-        trig_counters={name: int(trig.counters[i]) for i, name in enumerate(_TRIG_COUNTERS)},
         joint_ball_points=joint_ball_pts,
         joint_club_points=joint_club_pts,
         joint_counters=(
@@ -1681,7 +1659,6 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
     shot,
     ball_position,
     ball_points,
-    trig_state,
     track,
     points,
     band,
@@ -1770,7 +1747,6 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
         window_start,
         count,
         float(floor),
-        trig_state,
         False,
         tuple(_target_summary(targets[i]) for i in range(found)),
         fw.TRACK_WHY_NAMES[track.why],
@@ -1862,13 +1838,13 @@ class Expectation:
     """What a recording is expected to produce: ranges, not exact values.
 
     Keys of the manifest's ``expect`` entry: ``impact_frame`` [lo, hi] (the
-    range gate), ``geometric_frame`` [lo, hi], ``club_points_min``,
+    self-trigger's fire), ``geometric_frame`` [lo, hi], ``club_points_min``,
     ``club_direction`` ("approaching"), ``acquisitions_max``,
     ``ball_origin_bin`` [lo, hi] (the first ball point), ``ball_speed_mps``
     [lo, hi], ``club_speed_mps`` [lo, hi], ``fires`` (true/false),
     ``club_last_bin`` [lo, hi] (the club track's last point at or before the
-    gate fired: short of the ball when the club, not a return beside the
-    ball, was tracked).
+    self-trigger fired: short of the ball when the club, not a return beside
+    the ball, was tracked).
     """
 
     impact_frame: tuple[int, int] | None = None
@@ -2125,7 +2101,6 @@ __all__ = [
     "DEFAULT_BALL_SNR",
     "DEFAULT_SNR",
     "JOINT_SEARCH_SNR",
-    "DEFAULT_TRACK_FRAMES",
     "EXPECT_KEY",
     "FALLBACK_FRAME_PERIOD_US",
     "AngleSummary",

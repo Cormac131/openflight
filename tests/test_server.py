@@ -1,6 +1,7 @@
 """Tests for server module."""
 
 import argparse
+import inspect
 import json
 import math
 import sys
@@ -5267,7 +5268,6 @@ def _self_trigger_args(**overrides):
         "iwr6843_self_trigger": False,
         "iwr6843_self_trigger_bin": None,
         "iwr6843_self_trigger_snr": None,
-        "iwr6843_self_trigger_frames": None,
         "iwr6843_tee_m": 1.575,
         "iwr6843_config": "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg",
         "sound_pre_trigger": None,
@@ -5287,7 +5287,6 @@ class TestSelfTriggerCli:
         [
             ("iwr6843_self_trigger_bin", 14),
             ("iwr6843_self_trigger_snr", 4.0),
-            ("iwr6843_self_trigger_frames", 3),
         ],
     )
     def test_tuning_without_the_switch_is_refused(self, flag, value):
@@ -5297,11 +5296,11 @@ class TestSelfTriggerCli:
     def test_switch_alone_watches_two_bins_short_of_the_ball_at_snr_1(self):
         """A tee measured 1.575 m from the enclosure face is 1.875 m from the
         antenna array (0.30 m behind the face): bin 40. The trigger watches two
-        bins short of it, where the club reaches the gate as the ball is struck."""
+        bins short of it, where the club reaches the ball as it is struck."""
         config = server_module._self_trigger_config(_self_trigger_args(iwr6843_self_trigger=True))
 
-        assert (config.tee_bin, config.snr, config.track_frames) == (38, 1.0, 2)
-        assert config.command == "triggerCfg 38 1.0 2"
+        assert (config.tee_bin, config.snr) == (38, 1.0)
+        assert config.command == "triggerCfg 38 1.0 1"
 
     @pytest.mark.parametrize(
         ("tee_m", "expected_bin"),
@@ -5325,6 +5324,13 @@ class TestSelfTriggerCli:
 
         assert server_module._iwr6843_tee_range_m(args) == pytest.approx(1.575 + ARRAY_DEPTH_M)
 
+    def test_the_range_gate_options_are_gone(self):
+        """The range gate was removed (2026-09-30): the club track fires. Its
+        track-frame count tuned nothing else, and no fire source is left to pick."""
+        source = inspect.getsource(server_module)
+        for gone in ("--iwr6843-self-trigger-frames", "--iwr6843-self-trigger-source"):
+            assert gone not in source, gone
+
     def test_bin_outside_the_capture_window_is_refused(self):
         with pytest.raises(ValueError, match="outside the first capture window"):
             server_module._self_trigger_config(
@@ -5337,17 +5343,10 @@ class TestSelfTriggerCli:
                 iwr6843_self_trigger=True,
                 iwr6843_self_trigger_bin=30,
                 iwr6843_self_trigger_snr=4.5,
-                iwr6843_self_trigger_frames=4,
             )
         )
 
-        assert (config.tee_bin, config.snr, config.track_frames) == (30, 4.5, 4)
-
-    def test_zero_frames_is_refused_instead_of_silently_disabling_capture(self):
-        with pytest.raises(ValueError, match="track frames must be >= 1"):
-            server_module._self_trigger_config(
-                _self_trigger_args(iwr6843_self_trigger=True, iwr6843_self_trigger_frames=0)
-            )
+        assert (config.tee_bin, config.snr) == (30, 4.5)
 
     def test_snr_under_the_floor_is_refused(self):
         with pytest.raises(ValueError, match="snr must be >= 1"):
