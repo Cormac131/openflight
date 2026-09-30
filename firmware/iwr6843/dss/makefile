@@ -49,8 +49,9 @@ C674x_DSPLIB_INSTALL_PATH ?= $(TI_ROOT)/sdk/dsplib_c674x_3_4_0_0
 DSPLIB_PACKAGES = $(C674x_DSPLIB_INSTALL_PATH)/packages
 
 # libmailbox: the MSS <-> DSS detect link (l3_dsp_ipc.h).
-DSS_STD_LIBS = $(C674_COMMON_STD_LIB) -llibmailbox_$(MMWAVE_SDK_DEVICE_TYPE).$(C674_LIB_EXT) -ldsplib.$(C674_LIB_EXT)
-DSS_LOC_LIBS = $(C674_COMMON_LOC_LIB) -i$(MMWAVE_SDK_INSTALL_PATH)/ti/drivers/mailbox/lib -i$(DSPLIB_PACKAGES)/ti/dsplib/lib
+# libedma: the gather (frames copied from L3 into L2 before scoring).
+DSS_STD_LIBS = $(C674_COMMON_STD_LIB) -llibmailbox_$(MMWAVE_SDK_DEVICE_TYPE).$(C674_LIB_EXT) -llibedma_$(MMWAVE_SDK_DEVICE_TYPE).$(C674_LIB_EXT) -ldsplib.$(C674_LIB_EXT)
+DSS_LOC_LIBS = $(C674_COMMON_LOC_LIB) -i$(MMWAVE_SDK_INSTALL_PATH)/ti/drivers/mailbox/lib -i$(MMWAVE_SDK_INSTALL_PATH)/ti/drivers/edma/lib -i$(DSPLIB_PACKAGES)/ti/dsplib/lib
 
 CFG        = dss.cfg
 CONFIGPKG  = dss_configPkg_$(MMWAVE_SDK_DEVICE_TYPE)

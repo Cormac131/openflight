@@ -37,6 +37,7 @@
 #define L3_DSP_ERR_RANGE    4U /* the frame is misaligned or not inside L3 */
 #define L3_DSP_ERR_SPANS    5U /* SCORE: no spans, too many, or one outside the frame */
 #define L3_DSP_ERR_STALE    6U /* MSS side: the result answers another request */
+#define L3_DSP_ERR_GATHER   7U /* the window does not fit the gather buffer or the EDMA */
 
 /* Every RX is scored (the board has four). */
 #define L3_DSP_N_RX 4U
@@ -74,6 +75,8 @@ typedef struct {
     float    energySum;
     float    r1ReSum;
     float    r1ImSum;
+    uint32_t prepCycles; /* DSS: preparing the frame -- the gather, or the invalidate */
+    uint32_t gathered;   /* DSS: 1 when it scored from the gathered copy in L2 */
 } l3_dsp_reply_t;
 
 /* SCORE's answer, in HS-RAM (both cores map it) below the boot status. The
@@ -91,7 +94,9 @@ typedef struct {
     uint32_t epoch;
     uint32_t status;       /* L3_DSP_OK or L3_DSP_ERR_* */
     uint32_t count;        /* bins scored: the bits set in scored[] */
-    uint32_t invCycles;    /* DSS cycles invalidating the frame's cache */
+    uint32_t invCycles;    /* DSS cycles preparing the frame: its gather into L2
+                            * (EDMA and the L1D invalidate over the copy), or,
+                            * scoring in place, the invalidate over the frame */
     uint32_t scoreCycles;  /* DSS cycles scoring */
     uint32_t reserved;
     uint32_t scored[L3_DSP_BITMAP_WORDS];
@@ -182,12 +187,16 @@ uint32_t l3_dsp_result_size(void);
  * bin could not be scored (it is then left unmarked). */
 typedef int32_t (*l3_bin_scorer_fn)(void *ctx, uint32_t localBin, l3_bin_obs_t *out);
 
-/* The shared scorer for an IQ16 frame: l3_bin_score_iq16 over every RX. */
+/* The shared scorer for an IQ16 frame: l3_bin_score_iq16 over every RX.
+ * frame holds binCount bins a row starting at LOCAL bin binBase (0 for the
+ * frame in place; the window's first bin for a gathered copy), so the
+ * scorer takes LOCAL bins either way and refuses ones outside it. */
 typedef struct {
     const int16_t *frame;
     uint32_t binCount;
     uint32_t ntx;
     uint32_t loops;
+    uint32_t binBase;
 } l3_dsp_iq16_ctx_t;
 int32_t l3_dsp_iq16_scorer(void *ctx, uint32_t localBin, l3_bin_obs_t *out);
 
@@ -218,6 +227,45 @@ uint32_t l3_dsp_spans_score(const l3_span_t *spans, uint32_t nSpans, uint32_t bi
  * for PING and PROBE; a SCORE without one is refused with ERR_RANGE. */
 void l3_dsp_serve(const l3_dsp_request_t *request, const uint8_t *l3Base, uint32_t l3Bytes,
                   l3_dsp_reply_t *reply, l3_dsp_result_t *result);
+
+/* --- the gather ----------------------------------------------------------------
+ * On the board the DSS scored 48 us a bin reading L3 in place (one sample of
+ * every (loop, tx, rx) row a bin, through a 16 KB L1D and no L2 cache). The
+ * gather copies the window of LOCAL bins a request reads -- PROBE's bins,
+ * SCORE's spans from the first to the end of the last -- row by row into L2
+ * SRAM in one EDMA transfer, AB-synchronised: aCount a row's window
+ * (rowBytes), bCount the rows, source stride a frame row (srcStride),
+ * destination stride rowBytes. The DSS scores from the copy with the same
+ * code, so the answer is bit for bit the in-place one. */
+#define L3_DSP_GATHER_MAX_BYTES (16U * 3U * L3_DSP_N_RX * L3_DSP_MAX_BINS * 4U) /* 48 KB */
+#define L3_DSP_EDMA_MAX_BIDX    32767U /* EDMA B-indices are signed 16-bit */
+
+typedef struct {
+    uint32_t lo;        /* first LOCAL bin copied */
+    uint32_t width;     /* bins copied a row */
+    uint32_t rows;      /* loops x ntx x rx */
+    uint32_t srcOffset; /* bytes from L3's start to the first copied sample */
+    uint32_t srcStride; /* bytes from one row to the next in L3 */
+    uint32_t rowBytes;  /* a row's copied bytes: the EDMA aCount and destination stride */
+    uint32_t bytes;     /* rows x rowBytes */
+} l3_dsp_gather_t;
+
+uint32_t l3_dsp_gather_size(void);
+/* The gather for a PROBE or SCORE: L3_DSP_OK, else the request's own
+ * refusal (l3_dsp_request_check), L3_DSP_ERR_CMD for anything else (a PING
+ * reads nothing), or L3_DSP_ERR_GATHER when the copy exceeds maxBytes or an
+ * EDMA count or index. A refusal zeroes out. */
+uint32_t l3_dsp_gather_plan(const l3_dsp_request_t *request, uint32_t l3Bytes, uint32_t maxBytes,
+                            l3_dsp_gather_t *out);
+/* The CPU's copy of what the EDMA transfer does: the reference, and the
+ * DSS's fallback when the EDMA is not available. */
+void l3_dsp_gather_copy(const uint8_t *l3Base, const l3_dsp_gather_t *gather, uint8_t *dst);
+/* l3_dsp_serve (PROBE, SCORE) from the gathered copy: bit for bit what
+ * scoring the frame in place gives, for every bin inside the window; a bin
+ * outside it is never scored. reply->gathered is set; the cycle fields are
+ * the caller's. */
+void l3_dsp_serve_gathered(const l3_dsp_request_t *request, const l3_dsp_gather_t *gather,
+                           const uint8_t *copy, l3_dsp_reply_t *reply, l3_dsp_result_t *result);
 
 /* L3_DSP_OK when result answers the request with this seq and epoch, says
  * OK, and its count is the bits it marks; L3_DSP_ERR_STALE when magic, seq

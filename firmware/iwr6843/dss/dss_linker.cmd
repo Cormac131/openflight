@@ -35,5 +35,8 @@ SECTIONS
 {
     systemHeap    : {} > L2SRAM_UMAP0 | L2SRAM_UMAP1
     .solveScratch : {} > L2SRAM_UMAP0 | L2SRAM_UMAP1
+    /* The gather's copy of a frame's window (dss_main.c gDssGather, 48 KB):
+     * L2 SRAM the EDMA writes and the scoring reads. */
+    .dssGather    : {} > L2SRAM_UMAP1
 }
 /*----------------------------------------------------------------------------*/

@@ -24,7 +24,8 @@ _PROBE = re.compile(
     r"^dsp probe slot=(?P<slot>\d+) bins=(?P<bins>\d+) mss_us=(?P<mss_us>\d+) "
     r"dss_us=(?P<dss_us>\d+) dss_cycles=(?P<dss_cycles>\d+) match=(?P<match>[01]) "
     r"status=(?P<status>\d+) mss_energy=(?P<mss_energy>[0-9a-f]{8}) "
-    r"dss_energy=(?P<dss_energy>[0-9a-f]{8})\s*$",
+    r"dss_energy=(?P<dss_energy>[0-9a-f]{8})"
+    r"(?: dss_prep_us=(?P<dss_prep_us>\d+) gathered=(?P<gathered>[01]))?\s*$",
     re.MULTILINE,
 )
 _ERROR = re.compile(r"^Error:\s*(.*)$", re.MULTILINE)
@@ -95,6 +96,15 @@ class DspProbe:
     status: int  # the DSS's L3_DSP_* status
     mss_energy: str  # the energy sum's float bits, hex
     dss_energy: str
+    # Images with the gather: what preparing the frame cost the DSS before
+    # scoring (the gather into L2, or the invalidate over L3), and which.
+    dss_prep_us: int | None = None
+    gathered: bool | None = None
+
+    @property
+    def dss_total_us(self) -> int:
+        """What the DSS spent on the frame: preparing it, then scoring."""
+        return self.dss_us + (self.dss_prep_us or 0)
 
 
 @dataclass(frozen=True)
@@ -152,12 +162,16 @@ class DspProbeSummary:
     count: int
     mismatches: int
     mss_us_median: float
-    dss_us_median: float
+    dss_us_median: float  # scoring
+    dss_total_us_median: float = 0.0  # preparing and scoring
+    gathered: int = 0  # probes the DSS scored from the gathered copy
 
     @property
     def speedup(self) -> float:
-        """How many times faster the DSS scored the same bins."""
-        return self.mss_us_median / self.dss_us_median if self.dss_us_median else float("inf")
+        """How many times faster the DSS handled the same bins, its
+        preparation (the gather) counted."""
+        total = self.dss_total_us_median or self.dss_us_median
+        return self.mss_us_median / total if total else float("inf")
 
 
 @dataclass(frozen=True)
@@ -290,6 +304,8 @@ def parse_dsp_probe(text: str) -> DspProbe:
         status=int(fields["status"]),
         mss_energy=fields["mss_energy"],
         dss_energy=fields["dss_energy"],
+        dss_prep_us=None if fields["dss_prep_us"] is None else int(fields["dss_prep_us"]),
+        gathered=None if fields["gathered"] is None else fields["gathered"] == "1",
     )
 
 
@@ -339,6 +355,8 @@ def summarize_probes(probes: list[DspProbe]) -> DspProbeSummary:
         mismatches=sum(not probe.match for probe in probes),
         mss_us_median=statistics.median(probe.mss_us for probe in probes),
         dss_us_median=statistics.median(probe.dss_us for probe in probes),
+        dss_total_us_median=statistics.median(probe.dss_total_us for probe in probes),
+        gathered=sum(bool(probe.gathered) for probe in probes),
     )
 
 

@@ -5073,12 +5073,15 @@ static int32_t l3_dspProbe(int32_t argc, char *argv[])
              l3_floatBits(dss.energySum) == l3_floatBits(mss.energySum) &&
              l3_floatBits(dss.r1ReSum) == l3_floatBits(mss.r1ReSum) &&
              l3_floatBits(dss.r1ImSum) == l3_floatBits(mss.r1ImSum)) ? 1U : 0U;
+    /* dss_us is the scoring; dss_prep_us what preparing the frame cost first
+     * (the gather into L2, or the invalidate over L3), gathered which. */
     CLI_write("dsp probe slot=%u bins=%u mss_us=%u dss_us=%u dss_cycles=%u match=%u "
-              "status=%u mss_energy=%08x dss_energy=%08x\n",
+              "status=%u mss_energy=%08x dss_energy=%08x dss_prep_us=%u gathered=%u\n",
               (unsigned)slot, (unsigned)mss.nBins, (unsigned)mssUs,
               (unsigned)(dss.cycles / L3_DSS_CLOCK_MHZ), (unsigned)dss.cycles,
               (unsigned)match, (unsigned)dss.status,
-              (unsigned)l3_floatBits(mss.energySum), (unsigned)l3_floatBits(dss.energySum));
+              (unsigned)l3_floatBits(mss.energySum), (unsigned)l3_floatBits(dss.energySum),
+              (unsigned)(dss.prepCycles / L3_DSS_CLOCK_MHZ), (unsigned)dss.gathered);
     return match ? 0 : -1;
 }
 

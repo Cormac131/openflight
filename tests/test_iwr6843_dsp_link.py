@@ -229,3 +229,31 @@ def test_an_exception_status_carries_its_program_counter_and_flags():
 def test_a_status_without_an_exception_has_none():
     status = parse_dsp_status("dsp status stage=startup_first err=0 beats=0 served=0\n")
     assert status.stage == "startup_first" and status.exc_pc is None and status.exc_efr is None
+
+
+GATHERED = PROBE.replace("\nDone\n", " dss_prep_us=35 gathered=1\nDone\n")
+
+
+def test_a_probe_reports_the_gather_and_its_cost():
+    probe = parse_dsp_probe(GATHERED)
+    assert (probe.dss_prep_us, probe.gathered) == (35, True)
+    assert probe.dss_total_us == 240 + 35
+
+
+def test_an_older_probe_line_has_no_gather_fields():
+    probe = parse_dsp_probe(PROBE)
+    assert probe.dss_prep_us is None and probe.gathered is None
+    assert probe.dss_total_us == 240
+
+
+def test_the_speedup_counts_the_gather_against_the_dss():
+    """The copy is part of what the DSS spends a frame: the speedup is the
+    MSS against the DSS's preparing and scoring together."""
+    probes = [
+        parse_dsp_probe(GATHERED),
+        parse_dsp_probe(GATHERED.replace("gathered=1", "gathered=0")),
+    ]
+    summary = summarize_probes(probes)
+    assert summary.dss_total_us_median == 275
+    assert summary.speedup == pytest.approx(1971 / 275)
+    assert summary.gathered == 1

@@ -550,8 +550,8 @@ Phase 0 proves the link before anything moves:
 - `l3_dsp_ipc.c` is the mailbox message (channel 0, MSS <-> DSS). A frame
   travels as its byte offset into L3, since the MSS sees L3 at `0x51000000`
   and the DSS at `0x20000000`, and the DSS refuses a request that would read
-  outside it. The DSS invalidates its L2 cache over the frame before reading
-  (the EDMA writes the ring behind it)
+  outside it. The DSS invalidates its cache over the frame before reading
+  (the EDMA writes the ring behind it), or gathers it (below)
 - `trackCfg dsp ping` and `trackCfg dsp probe [bins]` are sub-modes, because
   the CLI table is at the SDK's `CLI_MAX_CMD`. The probe scores the newest
   pre-impact ring frame on the MSS and then the DSS, and prints both times
@@ -560,6 +560,70 @@ Phase 0 proves the link before anything moves:
 
 Frames in the compact formats' processing scratch live in MSS DATA_RAM,
 which the DSS cannot read, so those formats stay on the MSS path.
+
+#### Getting the DSS to boot
+
+The DSS image had never run before the link: the first board run answered
+"link open" and nothing else. The DSS now records how far it got, on two
+channels the MSS reads without its help: a status block in HS-RAM at
+`0x7F00` and the stage mirrored into DSSREG `DSSGPREG0`. The stages are
+`reset` (an xdc Reset hook, before C init and BIOS), `startup_first` and
+`startup_last` (xdc `Startup.firstFxns`/`lastFxns`, either side of the
+BIOS module startups), `main`, `soc_init`, `task`, `mailbox_init` and
+`link_open`, plus `exception` (a BIOS exception hook records the program
+counter and flags). `trackCfg dsp status` prints the block; `trackCfg dsp
+hw` reads the DSS's halt and power state, the ROM self-test flag, the ESM
+status and `DSSGPREG0`, and checks HS-RAM with a write and read. Both print
+whenever a `dsp` command goes unanswered.
+
+What it found, run by run on 2026-09-30:
+
+1. `SOC_init` on the DSS used `SOC_SysClock_INIT`, which re-runs the MSS's
+   BSS unhalt and APLL wait; TI's mmw demo DSS uses `BYPASS_INIT`. Fixed,
+   but not the cause
+2. powered, not halted, stage `reset`: it died after the reset hook
+3. stage `startup_first`: it died in the BIOS module startups, with no
+   exception and no DSS ESM flag (ESMSR4 bit 2 is channel 34, HVMODE, a
+   supply monitor)
+4. the cause: this image alone overrode the platform's
+   `ti_sysbios_family_c64p_Cache_l2Size = 0` with 32 KB of L2 as cache
+   (linker warning #10190 on every build), which the Cache module applies
+   in exactly that window. With the platform's caches (L1P and L1D 16 KB
+   each, L2 all SRAM, as TI's demo) the DSS boots, answers `ping` in 22 us,
+   and scores the live ring bit for bit as the MSS does
+
+The first board probe: 27 bins MSS 2,796 us, DSS 1,303 us (48 us a bin);
+53 bins MSS 5,488 us, DSS 2,558 us; 40/40 matched. The MSS figure is
+inflated: the probe runs on the CLI task, which the detect task preempts
+while the capture runs (~73 us a bin undisturbed).
+
+#### The gather
+
+Scoring in place, the DSS reads one 4-byte sample of every (loop, TX, RX)
+row a bin, from L3, through a 16 KB L1D and no L2 cache: 48 us a bin, only
+2.1x the R4F. `l3_dsp_gather_plan` finds the window of local bins a request
+reads (PROBE's bins; SCORE's spans from the first to the end of the last)
+and the DSS copies that window of every row from L3 into a 48 KB L2 buffer
+(`.dssGather`) in one EDMA transfer on its own instance (1; the MSS's
+capture runs on 0), AB-synchronised: aCount a row's window, bCount the
+rows, the source stride a frame row. It polls for completion (1 ms bound),
+invalidates L1D over the copy and scores from it through the same scorer
+(`l3_dsp_serve_gathered`), so the answer is bit for bit the in-place one
+(host-tested over random frames and the committed recordings). A gather
+that is refused or does not finish falls back to scoring in place. The
+probe line gains `dss_prep_us` (the gather, or the invalidate) and
+`gathered`; SCORE reports the same preparation as its `dss_inv_us`.
+
+#### MSS memory
+
+The detect timing's buffers overflowed DATA_RAM by 1,568 B (`.myFiqStack`
+would not fit). MSS-only diagnostics and CLI scratch (`gProfile`,
+`gTiming`, the detect and timing line buffers, l3sparse's `powerRow`, the
+triggerLog, ball and stats lines) moved to HS-RAM's unused lower 29 KB
+(`.hsramMss`). The DSS's words at the top (the SCORE result at `0x7400`,
+the probe word at `0x7E00`, the status at `0x7F00`) are reserved in the MSS
+link (`.hsramDss`), so a growing `.hsramMss` fails the link instead of
+overwriting them. DATA_RAM free: 4,623 B.
 
 #### Detect timing (step 2)
 

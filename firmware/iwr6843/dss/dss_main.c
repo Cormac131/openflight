@@ -19,6 +19,7 @@
 #include <ti/drivers/soc/soc.h>
 #include <ti/drivers/esm/esm.h>
 #include <ti/drivers/mailbox/mailbox.h>
+#include <ti/drivers/edma/edma.h>
 
 #include "../solve/solve_ipc.h"
 #include "../l3_dsp_ipc.h"
@@ -55,6 +56,108 @@ static volatile l3_dsp_status_t *const gDssStatus =
  * the mailbox reply says it is ready. */
 static l3_dsp_result_t *const gDssResult =
     (l3_dsp_result_t *)(SOC_XWR68XX_DSS_HSRAM_BASE_ADDRESS + L3_DSP_RESULT_HSRAM_OFFSET);
+
+/* --- the gather (l3_dsp_ipc.h): a frame's window copied from L3 into L2 by
+ * the EDMA before scoring. The DSS's own EDMA instance: the MSS's capture
+ * runs on instance 0. One channel, started by hand and polled; a transfer
+ * that does not finish within the timeout is abandoned and the frame scored
+ * in place, as before the gather. */
+#define DSS_GATHER_EDMA_INSTANCE 1U
+#define DSS_GATHER_CHANNEL       0U
+#define DSS_GATHER_TIMEOUT_CYCLES (600U * 1000U) /* 1 ms at 600 MHz */
+
+#pragma DATA_SECTION(gDssGather, ".dssGather")
+#pragma DATA_ALIGN(gDssGather, 128)
+static uint8_t gDssGather[L3_DSP_GATHER_MAX_BYTES];
+static EDMA_Handle gDssEdma = NULL;
+
+/* Open the EDMA and its channel; NULL (scoring in place) if it fails. */
+static void dss_gatherInit(void)
+{
+    EDMA_instanceInfo_t info;
+    EDMA_channelConfig_t channel;
+    int32_t errCode = 0;
+    EDMA_Handle handle;
+
+    if (EDMA_init(DSS_GATHER_EDMA_INSTANCE) != EDMA_NO_ERROR) {
+        return;
+    }
+    handle = EDMA_open(DSS_GATHER_EDMA_INSTANCE, &errCode, &info);
+    if (handle == NULL || errCode != EDMA_NO_ERROR) {
+        return;
+    }
+    memset(&channel, 0, sizeof(channel));
+    channel.channelId = DSS_GATHER_CHANNEL;
+    channel.channelType = (uint8_t)EDMA3_CHANNEL_TYPE_DMA;
+    channel.paramId = DSS_GATHER_CHANNEL;
+    channel.eventQueueId = 0U;
+    channel.paramSetConfig.linkAddress = EDMA_NULL_LINK_ADDRESS;
+    channel.paramSetConfig.transferCompletionCode = DSS_GATHER_CHANNEL;
+    channel.paramSetConfig.transferType = (uint8_t)EDMA3_SYNC_AB;
+    channel.paramSetConfig.isFinalTransferInterruptEnabled = true; /* sets IPR: polled */
+    /* Not enabled for events: it runs only when started by hand. */
+    if (EDMA_configChannel(handle, &channel, false) != EDMA_NO_ERROR) {
+        return;
+    }
+    gDssEdma = handle;
+}
+
+/* Copy the window into gDssGather: 1 when the EDMA finished within the
+ * timeout (and the copy is then readable, L1D invalidated over it). */
+static uint8_t dss_gather(const l3_dsp_gather_t *gather)
+{
+    EDMA_paramConfig_t param;
+    EDMA_paramSetConfig_t *set = &param.paramSetConfig;
+    uint32_t start;
+    int32_t srcErr = 0;
+    int32_t dstErr = 0;
+    bool done = false;
+
+    if (gDssEdma == NULL) {
+        return 0U;
+    }
+    memset(&param, 0, sizeof(param));
+    set->sourceAddress = SOC_translateAddress(
+        SOC_XWR68XX_DSS_L3RAM_BASE_ADDRESS + gather->srcOffset, SOC_TranslateAddr_Dir_TO_EDMA,
+        &srcErr);
+    set->destinationAddress = SOC_translateAddress((uint32_t)gDssGather,
+                                                   SOC_TranslateAddr_Dir_TO_EDMA, &dstErr);
+    if (srcErr != 0 || dstErr != 0) {
+        return 0U; /* never an untranslated address to the EDMA */
+    }
+    set->aCount = (uint16_t)gather->rowBytes;
+    set->bCount = (uint16_t)gather->rows;
+    set->cCount = 1U;
+    set->bCountReload = 0U;
+    set->sourceBindex = (int16_t)gather->srcStride;
+    set->destinationBindex = (int16_t)gather->rowBytes;
+    set->sourceCindex = 0;
+    set->destinationCindex = 0;
+    set->linkAddress = EDMA_NULL_LINK_ADDRESS;
+    set->transferCompletionCode = DSS_GATHER_CHANNEL;
+    set->transferType = (uint8_t)EDMA3_SYNC_AB;
+    set->sourceAddressingMode = (uint8_t)EDMA3_ADDRESSING_MODE_LINEAR;
+    set->destinationAddressingMode = (uint8_t)EDMA3_ADDRESSING_MODE_LINEAR;
+    set->fifoWidth = (uint8_t)EDMA3_FIFO_WIDTH_8BIT;
+    set->isStaticSet = false;
+    set->isEarlyCompletion = false;
+    set->isFinalTransferInterruptEnabled = true;
+    set->isIntermediateTransferInterruptEnabled = false;
+    set->isFinalChainingEnabled = false;
+    set->isIntermediateChainingEnabled = false;
+    if (EDMA_configParamSet(gDssEdma, DSS_GATHER_CHANNEL, &param) != EDMA_NO_ERROR ||
+        EDMA_startDmaTransfer(gDssEdma, DSS_GATHER_CHANNEL) != EDMA_NO_ERROR) {
+        return 0U;
+    }
+    start = TSCL;
+    while (!done) {
+        if (EDMA_isTransferComplete(gDssEdma, DSS_GATHER_CHANNEL, &done) != EDMA_NO_ERROR ||
+            TSCL - start > DSS_GATHER_TIMEOUT_CYCLES) {
+            return 0U;
+        }
+    }
+    return 1U;
+}
 
 /* DSSREG DSSGPREG0: the stage again, on a channel that is not HS-RAM. */
 static volatile uint32_t *const gDssGpreg0 =
@@ -139,34 +242,47 @@ static void dss_statusCount(volatile uint32_t *counter)
     Cache_wb((Ptr)gDssStatus, sizeof(l3_dsp_status_t), Cache_Type_ALLD, TRUE);
 }
 
-/* Answer one request from the MSS. A PROBE's or SCORE's frame was written
- * by the EDMA behind this core's L2 cache, so the cache over it is
- * invalidated before a byte is read -- the whole frame, and timed apart
- * from the scoring (TSCL cycles) so what the invalidate costs is measured
- * before anything narrower is tried. A SCORE's result is written back out
- * of the cache before the reply goes, so the MSS reads what was written. */
+/* Answer one request from the MSS. A PROBE or SCORE is gathered first: its
+ * window copied from L3 into L2 by the EDMA (which reads memory, not this
+ * core's cache), L1D invalidated over the copy, then scored from it. When
+ * the gather is refused or does not finish, the frame is scored in place,
+ * its cache over L3 invalidated first (the EDMA writes the ring behind it).
+ * Preparing (gather or invalidate) and scoring are timed apart (TSCL). A
+ * SCORE's result is written back out of the cache before the reply goes, so
+ * the MSS reads what was written. */
 static void dss_answer(const l3_dsp_request_t *request, l3_dsp_reply_t *reply)
 {
     const uint8_t *l3 = (const uint8_t *)SOC_XWR68XX_DSS_L3RAM_BASE_ADDRESS;
-    uint8_t reads = (uint8_t)((request->cmd == L3_DSP_CMD_PROBE ||
-                               request->cmd == L3_DSP_CMD_SCORE) &&
-                              l3_dsp_request_check(request, DSS_L3_BYTES) == L3_DSP_OK);
+    l3_dsp_gather_t gather;
+    uint8_t gathered = 0U;
+    uint32_t prepCycles = 0U;
     uint32_t start;
-    uint32_t invCycles = 0U;
 
     start = TSCL;
-    if (reads) {
+    if (l3_dsp_gather_plan(request, DSS_L3_BYTES, sizeof(gDssGather), &gather) == L3_DSP_OK) {
+        gathered = dss_gather(&gather);
+        if (gathered) {
+            Cache_inv((Ptr)gDssGather, gather.bytes, Cache_Type_ALLD, TRUE);
+        }
+    }
+    if (!gathered && (request->cmd == L3_DSP_CMD_PROBE || request->cmd == L3_DSP_CMD_SCORE) &&
+        l3_dsp_request_check(request, DSS_L3_BYTES) == L3_DSP_OK) {
         Cache_inv((Ptr)&l3[request->frameOffset],
                   l3_dsp_frame_bytes(request->ntx, L3_DSP_N_RX, request->binCount,
                                      request->loops),
                   Cache_Type_ALLD, TRUE);
-        invCycles = TSCL - start;
     }
+    prepCycles = TSCL - start;
     start = TSCL;
-    l3_dsp_serve(request, l3, DSS_L3_BYTES, reply, gDssResult);
+    if (gathered) {
+        l3_dsp_serve_gathered(request, &gather, gDssGather, reply, gDssResult);
+    } else {
+        l3_dsp_serve(request, l3, DSS_L3_BYTES, reply, gDssResult);
+    }
     reply->cycles = TSCL - start;
+    reply->prepCycles = prepCycles;
     if (request->cmd == L3_DSP_CMD_SCORE) {
-        gDssResult->invCycles = invCycles;
+        gDssResult->invCycles = reply->prepCycles;
         gDssResult->scoreCycles = reply->cycles;
         Cache_wb((Ptr)gDssResult, sizeof(*gDssResult), Cache_Type_ALLD, TRUE);
     }
@@ -186,6 +302,7 @@ static void dss_solveTask(UArg arg0, UArg arg1)
     (void)arg1;
     TSCL = 0U; /* any write starts the free-running cycle counter */
     dss_status(L3_DSP_STAGE_TASK, 0);
+    dss_gatherInit(); /* NULL on failure: frames are then scored in place */
     errCode = Mailbox_init(MAILBOX_TYPE_DSS);
     if (errCode < 0 || Mailbox_Config_init(&cfg) < 0) {
         dss_status(L3_DSP_STAGE_MAILBOX | L3_DSP_STAGE_FAILED, errCode);

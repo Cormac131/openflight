@@ -85,9 +85,13 @@ def main() -> int:
                 probes = [radar.dsp_probe(bins) for _ in range(args.repeats)]
                 summary = summarize_probes(probes)
                 label = f"{probes[0].bins} bins" + (" (scan plan)" if bins else " (whole window)")
+                prep = summary.dss_total_us_median - summary.dss_us_median
                 print(
                     f"probe {label}: MSS {summary.mss_us_median:.0f} us, "
-                    f"DSS {summary.dss_us_median:.0f} us -> {summary.speedup:.1f}x faster, "
+                    f"DSS {summary.dss_total_us_median:.0f} us "
+                    f"(prepare {prep:.0f} + score {summary.dss_us_median:.0f}, "
+                    f"gathered {summary.gathered}/{summary.count}) "
+                    f"-> {summary.speedup:.1f}x faster, "
                     f"{summary.count - summary.mismatches}/{summary.count} matched"
                 )
                 for probe in probes:

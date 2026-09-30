@@ -171,11 +171,11 @@ uint32_t l3_dsp_request_check(const l3_dsp_request_t *request, uint32_t l3Bytes)
     return L3_DSP_OK;
 }
 
-void l3_dsp_probe_run(const l3_dsp_request_t *request, const uint8_t *l3Base, uint32_t l3Bytes,
-                      l3_dsp_reply_t *reply)
+/* The reply's header for a request: magic, cmd, seq, and the request's own
+ * status against an L3 of l3Bytes. */
+static void l3_dsp_reply_begin(const l3_dsp_request_t *request, uint32_t l3Bytes,
+                               l3_dsp_reply_t *reply)
 {
-    uint32_t bin;
-
     memset(reply, 0, sizeof(*reply));
     reply->magic = L3_DSP_MAGIC;
     if (request == NULL) {
@@ -185,25 +185,52 @@ void l3_dsp_probe_run(const l3_dsp_request_t *request, const uint8_t *l3Base, ui
     reply->cmd = request->cmd;
     reply->seq = request->seq;
     reply->status = l3_dsp_request_check(request, l3Bytes);
-    if (reply->status != L3_DSP_OK || request->cmd != L3_DSP_CMD_PROBE) {
-        return;
-    }
-    if (l3Base == NULL) {
-        reply->status = L3_DSP_ERR_RANGE;
-        return;
-    }
+}
+
+/* PROBE's bins summed through the shared scorer: in place or gathered, the
+ * one loop, so the two cannot drift apart. */
+static void l3_dsp_probe_score(const l3_dsp_request_t *request, l3_dsp_iq16_ctx_t *frame,
+                               l3_dsp_reply_t *reply)
+{
+    uint32_t bin;
+
     for (bin = request->firstBin; bin < request->firstBin + request->nBins; bin++) {
         l3_bin_obs_t obs;
-        const int16_t *frame = (const int16_t *)(const void *)&l3Base[request->frameOffset];
 
-        if (l3_bin_score_iq16(frame, request->binCount, bin, request->ntx, L3_DSP_N_RX,
-                              request->loops, &obs, NULL) == 0) {
+        if (l3_dsp_iq16_scorer(frame, bin, &obs) == 0) {
             reply->energySum += obs.energy;
             reply->r1ReSum += obs.r1Re;
             reply->r1ImSum += obs.r1Im;
             reply->nBins++;
         }
     }
+}
+
+static void l3_dsp_frame_ctx(const l3_dsp_request_t *request, const uint8_t *base,
+                             uint32_t binCount, uint32_t binBase, l3_dsp_iq16_ctx_t *frame)
+{
+    frame->frame = (const int16_t *)(const void *)base;
+    frame->binCount = binCount;
+    frame->ntx = request->ntx;
+    frame->loops = request->loops;
+    frame->binBase = binBase;
+}
+
+void l3_dsp_probe_run(const l3_dsp_request_t *request, const uint8_t *l3Base, uint32_t l3Bytes,
+                      l3_dsp_reply_t *reply)
+{
+    l3_dsp_iq16_ctx_t frame;
+
+    l3_dsp_reply_begin(request, l3Bytes, reply);
+    if (request == NULL || reply->status != L3_DSP_OK || request->cmd != L3_DSP_CMD_PROBE) {
+        return;
+    }
+    if (l3Base == NULL) {
+        reply->status = L3_DSP_ERR_RANGE;
+        return;
+    }
+    l3_dsp_frame_ctx(request, &l3Base[request->frameOffset], request->binCount, 0U, &frame);
+    l3_dsp_probe_score(request, &frame, reply);
 }
 
 /* --- SCORE ------------------------------------------------------------------ */
@@ -217,11 +244,11 @@ int32_t l3_dsp_iq16_scorer(void *ctx, uint32_t localBin, l3_bin_obs_t *out)
 {
     const l3_dsp_iq16_ctx_t *frame = (const l3_dsp_iq16_ctx_t *)ctx;
 
-    if (frame == NULL) {
+    if (frame == NULL || localBin < frame->binBase) {
         return -1;
     }
-    return l3_bin_score_iq16(frame->frame, frame->binCount, localBin, frame->ntx, L3_DSP_N_RX,
-                             frame->loops, out, NULL);
+    return l3_bin_score_iq16(frame->frame, frame->binCount, localBin - frame->binBase, frame->ntx,
+                             L3_DSP_N_RX, frame->loops, out, NULL);
 }
 
 static uint32_t l3_dsp_bin_limit(uint32_t binCount)
@@ -299,31 +326,19 @@ uint32_t l3_dsp_spans_score(const l3_span_t *spans, uint32_t nSpans, uint32_t bi
     return newly;
 }
 
-void l3_dsp_serve(const l3_dsp_request_t *request, const uint8_t *l3Base, uint32_t l3Bytes,
-                  l3_dsp_reply_t *reply, l3_dsp_result_t *result)
+/* SCORE's answer: the result header, then (request accepted) its spans
+ * scored through the shared scorer over frame -- in place or gathered. */
+static void l3_dsp_score_spans(const l3_dsp_request_t *request, l3_dsp_iq16_ctx_t *frame,
+                               l3_dsp_reply_t *reply, l3_dsp_result_t *result)
 {
-    l3_dsp_iq16_ctx_t frame;
     l3_span_t spans[L3_DSP_MAX_SPANS];
     uint32_t k;
 
-    if (request == NULL || request->cmd != L3_DSP_CMD_SCORE) {
-        l3_dsp_probe_run(request, l3Base, l3Bytes, reply);
-        return;
-    }
-    memset(reply, 0, sizeof(*reply));
-    reply->magic = L3_DSP_MAGIC;
-    reply->cmd = request->cmd;
-    reply->seq = request->seq;
-    reply->status = l3_dsp_request_check(request, l3Bytes);
-    if (result == NULL) {
-        reply->status = L3_DSP_ERR_RANGE;
-        return;
-    }
     memset(result, 0, sizeof(*result));
     result->magic = L3_DSP_RESULT_MAGIC;
     result->seq = request->seq;
     result->epoch = request->epoch;
-    if (reply->status == L3_DSP_OK && l3Base == NULL) {
+    if (reply->status == L3_DSP_OK && (frame == NULL || frame->frame == NULL)) {
         reply->status = L3_DSP_ERR_RANGE;
     }
     result->status = reply->status;
@@ -334,13 +349,136 @@ void l3_dsp_serve(const l3_dsp_request_t *request, const uint8_t *l3Base, uint32
         spans[k].first = request->spanFirst[k];
         spans[k].count = request->spanCount[k];
     }
-    frame.frame = (const int16_t *)(const void *)&l3Base[request->frameOffset];
-    frame.binCount = request->binCount;
-    frame.ntx = request->ntx;
-    frame.loops = request->loops;
     result->count = l3_dsp_spans_score(spans, request->nSpans, request->binCount,
-                                       l3_dsp_iq16_scorer, &frame, result->obs, result->scored);
+                                       l3_dsp_iq16_scorer, frame, result->obs, result->scored);
     reply->nBins = result->count;
+}
+
+void l3_dsp_serve(const l3_dsp_request_t *request, const uint8_t *l3Base, uint32_t l3Bytes,
+                  l3_dsp_reply_t *reply, l3_dsp_result_t *result)
+{
+    l3_dsp_iq16_ctx_t frame;
+
+    if (request == NULL || request->cmd != L3_DSP_CMD_SCORE) {
+        l3_dsp_probe_run(request, l3Base, l3Bytes, reply);
+        return;
+    }
+    l3_dsp_reply_begin(request, l3Bytes, reply);
+    if (result == NULL) {
+        reply->status = L3_DSP_ERR_RANGE;
+        return;
+    }
+    if (l3Base != NULL && reply->status == L3_DSP_OK) {
+        l3_dsp_frame_ctx(request, &l3Base[request->frameOffset], request->binCount, 0U, &frame);
+        l3_dsp_score_spans(request, &frame, reply, result);
+    } else {
+        l3_dsp_score_spans(request, NULL, reply, result);
+    }
+}
+
+/* --- the gather ---------------------------------------------------------------- */
+
+uint32_t l3_dsp_gather_size(void)
+{
+    return (uint32_t)sizeof(l3_dsp_gather_t);
+}
+
+uint32_t l3_dsp_gather_plan(const l3_dsp_request_t *request, uint32_t l3Bytes, uint32_t maxBytes,
+                            l3_dsp_gather_t *out)
+{
+    uint32_t status;
+    uint32_t lo;
+    uint32_t hi;
+    uint32_t k;
+
+    memset(out, 0, sizeof(*out));
+    status = l3_dsp_request_check(request, l3Bytes);
+    if (status != L3_DSP_OK) {
+        return status;
+    }
+    if (request->cmd == L3_DSP_CMD_PROBE) {
+        lo = request->firstBin;
+        hi = request->firstBin + request->nBins;
+    } else if (request->cmd == L3_DSP_CMD_SCORE) {
+        uint32_t limit = l3_dsp_bin_limit(request->binCount);
+
+        lo = limit;
+        hi = 0U;
+        for (k = 0U; k < request->nSpans; k++) {
+            uint32_t first = request->spanFirst[k];
+            uint32_t end = first + request->spanCount[k];
+
+            if (end > limit) {
+                end = limit;
+            }
+            if (first < lo) {
+                lo = first;
+            }
+            if (end > hi) {
+                hi = end;
+            }
+        }
+        if (hi <= lo) {
+            return L3_DSP_ERR_SPANS;
+        }
+    } else {
+        return L3_DSP_ERR_CMD;
+    }
+    out->lo = lo;
+    out->width = hi - lo;
+    out->rows = request->loops * request->ntx * L3_DSP_N_RX;
+    out->srcStride = request->binCount * 4U;
+    out->srcOffset = request->frameOffset + lo * 4U;
+    out->rowBytes = out->width * 4U;
+    out->bytes = out->rows * out->rowBytes;
+    if (out->bytes > maxBytes || out->rowBytes > L3_DSP_EDMA_MAX_BIDX ||
+        out->srcStride > L3_DSP_EDMA_MAX_BIDX || out->rows > 0xFFFFU) {
+        memset(out, 0, sizeof(*out));
+        return L3_DSP_ERR_GATHER;
+    }
+    return L3_DSP_OK;
+}
+
+void l3_dsp_gather_copy(const uint8_t *l3Base, const l3_dsp_gather_t *gather, uint8_t *dst)
+{
+    uint32_t row;
+
+    for (row = 0U; row < gather->rows; row++) {
+        memcpy(&dst[row * gather->rowBytes],
+               &l3Base[gather->srcOffset + row * gather->srcStride], gather->rowBytes);
+    }
+}
+
+void l3_dsp_serve_gathered(const l3_dsp_request_t *request, const l3_dsp_gather_t *gather,
+                           const uint8_t *copy, l3_dsp_reply_t *reply, l3_dsp_result_t *result)
+{
+    l3_dsp_iq16_ctx_t frame;
+    uint8_t usable;
+
+    /* The request was checked against L3 when the gather was planned; here
+     * only its header matters, and the copy stands in for the frame. */
+    l3_dsp_reply_begin(request, 0xFFFFFFFFU, reply);
+    reply->gathered = 1U;
+    usable = (uint8_t)(request != NULL && gather != NULL && copy != NULL && gather->width > 0U);
+    if (usable) {
+        l3_dsp_frame_ctx(request, copy, gather->width, gather->lo, &frame);
+    }
+    if (request != NULL && request->cmd == L3_DSP_CMD_SCORE) {
+        if (result == NULL) {
+            reply->status = L3_DSP_ERR_RANGE;
+            return;
+        }
+        l3_dsp_score_spans(request, usable ? &frame : NULL, reply, result);
+        return;
+    }
+    if (request == NULL || reply->status != L3_DSP_OK || request->cmd != L3_DSP_CMD_PROBE) {
+        return;
+    }
+    if (!usable) {
+        reply->status = L3_DSP_ERR_RANGE;
+        return;
+    }
+    l3_dsp_probe_score(request, &frame, reply);
 }
 
 static uint32_t l3_dsp_popcount(const uint32_t *bitmap)

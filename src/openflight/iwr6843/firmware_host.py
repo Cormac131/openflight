@@ -595,8 +595,11 @@ L3_DSP_ERR_GEOMETRY = 3
 L3_DSP_ERR_RANGE = 4
 L3_DSP_ERR_SPANS = 5
 L3_DSP_ERR_STALE = 6
+L3_DSP_ERR_GATHER = 7
 L3_DSP_MAX_SPANS = 4
 L3_DSP_MAX_BINS = 64
+# 16 loops, 3 TX, 4 RX, 64 bins of IQ16 (l3_dsp_ipc.h)
+L3_DSP_GATHER_MAX_BYTES = 16 * 3 * 4 * L3_DSP_MAX_BINS * 4
 L3_DSP_BITMAP_WORDS = L3_DSP_MAX_BINS // 32
 L3_DSP_RESULT_MAGIC = 0x4C445352
 L3_DSP_RESULT_HSRAM_OFFSET = 0x7400
@@ -677,6 +680,8 @@ class DspReply(ctypes.Structure):
         ("energySum", ctypes.c_float),
         ("r1ReSum", ctypes.c_float),
         ("r1ImSum", ctypes.c_float),
+        ("prepCycles", ctypes.c_uint32),
+        ("gathered", ctypes.c_uint32),
     ]
 
 
@@ -711,6 +716,21 @@ class DspIq16Ctx(ctypes.Structure):
         ("binCount", ctypes.c_uint32),
         ("ntx", ctypes.c_uint32),
         ("loops", ctypes.c_uint32),
+        ("binBase", ctypes.c_uint32),
+    ]
+
+
+class DspGather(ctypes.Structure):
+    """``l3_dsp_gather_t``: the window a request reads, copied into L2."""
+
+    _fields_ = [
+        ("lo", ctypes.c_uint32),
+        ("width", ctypes.c_uint32),
+        ("rows", ctypes.c_uint32),
+        ("srcOffset", ctypes.c_uint32),
+        ("srcStride", ctypes.c_uint32),
+        ("rowBytes", ctypes.c_uint32),
+        ("bytes", ctypes.c_uint32),
     ]
 
 
@@ -1581,6 +1601,13 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_dsp_spans_score": (
         [_P(Span), _U32, _U32, BinScorer, ctypes.c_void_p, _P(BinObs), _P(_U32)],
         _U32,
+    ),
+    "l3_dsp_gather_size": ([], _U32),
+    "l3_dsp_gather_plan": ([_P(DspRequest), _U32, _U32, _P(DspGather)], _U32),
+    "l3_dsp_gather_copy": ([_P(ctypes.c_uint8), _P(DspGather), _P(ctypes.c_uint8)], None),
+    "l3_dsp_serve_gathered": (
+        [_P(DspRequest), _P(DspGather), _P(ctypes.c_uint8), _P(DspReply), _P(DspResult)],
+        None,
     ),
     "l3_dsp_serve": (
         [_P(DspRequest), _P(ctypes.c_uint8), _U32, _P(DspReply), _P(DspResult)],

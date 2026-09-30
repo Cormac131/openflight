@@ -193,9 +193,11 @@ def test_the_mss_builds_the_detect_core_and_the_timing():
 def test_the_dss_answer_times_the_invalidate_apart_from_the_scoring():
     answer = _function(DSS_MAIN.read_text(encoding="utf-8"), "static void dss_answer(")
     assert "L3_DSP_CMD_SCORE" in answer, "SCORE's frame is invalidated too"
-    assert answer.index("Cache_inv(") < answer.index("invCycles = TSCL - start;")
-    assert answer.index("invCycles = TSCL - start;") < answer.index("l3_dsp_serve(")
-    assert "gDssResult->invCycles = invCycles;" in answer
+    # Preparing the frame (the gather, or the invalidate) is timed apart from
+    # the scoring, and reported in the result's invCycles.
+    assert answer.index("Cache_inv(") < answer.index("prepCycles = TSCL - start;")
+    assert answer.index("prepCycles = TSCL - start;") < answer.index("l3_dsp_serve(")
+    assert "gDssResult->invCycles = reply->prepCycles;" in answer
     assert "gDssResult->scoreCycles = reply->cycles;" in answer
 
 
@@ -467,3 +469,87 @@ def test_the_hs_ram_diagnostics_start_zeroed_like_bss():
     init = init[: init.index("Mailbox_init(MAILBOX_TYPE_MSS);")]
     assert "memset(&gProfile, 0, sizeof(gProfile));" in init
     assert "memset(&gTiming, 0, sizeof(gTiming));" in init
+
+
+# --- the gather: frames copied into L2 by the EDMA before scoring -------------
+#
+# The shared C (l3_dsp_gather_*) is unit tested in
+# test_iwr6843_firmware_dsp_gather.py; these pin the DSS glue around it.
+
+
+def _dss_answer() -> str:
+    text = DSS_MAIN.read_text(encoding="utf-8")
+    body = text[text.index("static void dss_answer(") :]
+    return body[: body.index("\n}\n")]
+
+
+def test_the_dss_links_the_edma_driver():
+    makefile = (FIRMWARE_DIR / "dss" / "makefile").read_text(encoding="utf-8")
+    libs = [line for line in makefile.splitlines() if line.startswith("DSS_STD_LIBS")]
+    assert "-llibedma_$(MMWAVE_SDK_DEVICE_TYPE)" in libs[0]
+
+
+def test_the_dss_uses_its_own_edma_instance_not_the_captures():
+    """The MSS's capture EDMA is instance 0 (l3_dump.c EDMA_open(0, ...))."""
+    text = DSS_MAIN.read_text(encoding="utf-8")
+    assert "#define DSS_GATHER_EDMA_INSTANCE 1U" in text
+    assert "EDMA_open(DSS_GATHER_EDMA_INSTANCE" in text
+    assert "EDMA_open(0" not in text
+    mss = MSS_MAIN.read_text(encoding="utf-8")
+    assert "EDMA_open(0, " in mss
+
+
+def test_the_gather_buffer_has_its_own_l2_section():
+    text = DSS_MAIN.read_text(encoding="utf-8")
+    assert '#pragma DATA_SECTION(gDssGather, ".dssGather")' in text
+    assert "static uint8_t gDssGather[L3_DSP_GATHER_MAX_BYTES];" in text
+    cmd = (FIRMWARE_DIR / "dss" / "dss_linker.cmd").read_text(encoding="utf-8")
+    assert ".dssGather" in cmd and "L2SRAM_UMAP1" in cmd
+
+
+def _dss_gather() -> str:
+    text = DSS_MAIN.read_text(encoding="utf-8")
+    body = text[text.index("static uint8_t dss_gather(") :]
+    return body[: body.index("\n}\n")]
+
+
+def test_the_gather_starts_the_edma_and_polls_it_with_a_bound():
+    """An EDMA that never completes cannot hang the link."""
+    gather = _dss_gather()
+    assert gather.index("EDMA_startDmaTransfer(") < gather.index("EDMA_isTransferComplete(")
+    assert "DSS_GATHER_TIMEOUT_CYCLES" in gather
+    assert "set->aCount = (uint16_t)gather->rowBytes;" in gather
+    assert "set->bCount = (uint16_t)gather->rows;" in gather
+    assert "set->sourceBindex = (int16_t)gather->srcStride;" in gather
+    assert "set->destinationBindex = (int16_t)gather->rowBytes;" in gather
+    assert "set->transferType = (uint8_t)EDMA3_SYNC_AB;" in gather
+
+
+def test_the_dss_scores_from_the_copy_only_after_the_gather_and_the_l1d_invalidate():
+    answer = _dss_answer()
+    gather = answer.index("gathered = dss_gather(&gather);")
+    invalidate = answer.index("Cache_inv((Ptr)gDssGather")
+    serve = answer.index("l3_dsp_serve_gathered(")
+    assert gather < invalidate < serve
+
+
+def test_a_gather_that_fails_falls_back_to_scoring_in_place():
+    answer = _dss_answer()
+    assert "if (!gathered && " in answer
+    assert "l3_dsp_serve(request, l3, DSS_L3_BYTES, reply, gDssResult);" in answer
+
+
+def test_the_dss_reports_how_it_prepared_the_frame():
+    answer = _dss_answer()
+    assert "reply->prepCycles = " in answer
+    assert "gDssResult->invCycles = reply->prepCycles;" in answer
+
+
+def test_an_address_the_soc_cannot_translate_is_never_handed_to_the_edma():
+    """SOC_translateAddress returns SOC_TRANSLATEADDR_INVALID on a miss: the
+    gather then gives up (the frame is scored in place)."""
+    gather = _dss_gather()
+    assert len(re.findall(r"SOC_TranslateAddr_Dir_TO_EDMA,\s*&srcErr\)", gather)) == 1
+    assert len(re.findall(r"SOC_TranslateAddr_Dir_TO_EDMA,\s*&dstErr\)", gather)) == 1
+    check = gather.index("if (srcErr != 0 || dstErr != 0)")
+    assert check < gather.index("EDMA_configParamSet(")

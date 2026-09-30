@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **IWR6843 DSS: frames gathered into L2 before scoring.** Scoring in place
+  the DSS read L3 one scattered sample at a time through a 16 KB L1D: 48 us
+  a bin, 2.1x the R4F. It now copies just the window of bins a request
+  reads, row by row, from L3 into L2 in one EDMA transfer on its own
+  instance, and scores from the copy with the same code, bit for bit the
+  in-place answer (host-tested over the recordings). A gather that fails
+  falls back to scoring in place. `trackCfg dsp probe` reports the gather's
+  cost (`dss_prep_us`) and `gathered`, and the probe script's speedup
+  counts it. Needs a firmware rebuild and reflash.
 - **IWR6843 detect timing, and the detector's bin scoring on the DSS.**
   `triggerLog perf` and the new `triggerLog timing` report when each frame
   was acquired, taken, scored and decided, and keep two deadlines apart:
@@ -45,6 +54,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a firmware rebuild and reflash.
 
 ### Changed
+- **The IWR6843 DSS boots: it keeps the platform's caches.** The DSS image
+  had never run: it died in its BIOS module startups, where the Cache
+  module applied this image's 32 KB L2 cache override (TI's mmw demo keeps
+  the platform's all-SRAM L2). The DSS now reports its boot stage in HS-RAM
+  and in DSSGPREG0 (`trackCfg dsp status`, `trackCfg dsp hw`), which is
+  how this was found. On the board it answers in 22 us and scores the live
+  ring bit for bit as the MSS does (40/40); 27 bins took 1,303 us.
+- **IWR6843 MSS diagnostics moved to HS-RAM.** The detect timing overflowed
+  DATA_RAM; MSS-only diagnostics and CLI scratch now live in HS-RAM's
+  unused lower 29 KB, with the DSS's words reserved in the link. DATA_RAM
+  free: 4,623 B (was 1,475 B).
 - **Self-trigger mode no longer logs sound-trigger lines.** With
   `--iwr6843-self-trigger` the OPS log lines name the IWR6843 self-trigger,
   and the idle wait and its 30 s timeout, which said nothing, are debug only.
