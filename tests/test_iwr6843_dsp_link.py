@@ -394,3 +394,106 @@ def test_missing_board_lines_fail_rather_than_pass():
     assert not checks["detect_dropped_stale"].passed
     assert not checks["angles_not_dropped"].passed
     assert not checks["keeps_up"].passed
+
+
+# --- the timing report the acceptance run prints -----------------------------------
+
+from openflight.iwr6843.dsp_link import TimelineEvent, format_timing_report  # noqa: E402
+
+
+def full_timing() -> DetectTiming:
+    stats = {
+        name: TimingStat(count=900, last=last, min=lo, mean=mean, max=hi)
+        for name, (last, lo, mean, hi) in {
+            "wait": (20, 5, 30, 400),
+            "score": (380, 300, 400, 900),
+            "service": (800, 600, 850, 2100),
+            "latency": (900, 700, 1000, 3200),
+            "arrival": (3000, 2990, 3000, 3020),
+        }.items()
+    }
+    timeline = (
+        TimelineEvent(
+            slot=4,
+            epoch=1200,
+            core="dss",
+            wait_us=20,
+            score_us=380,
+            service_us=800,
+            latency_us=900,
+            depth=0,
+            flags=frozenset(),
+        ),
+        TimelineEvent(
+            slot=5,
+            epoch=1201,
+            core="fallback",
+            wait_us=40,
+            score_us=None,
+            service_us=2100,
+            latency_us=3200,
+            depth=1,
+            flags=frozenset({"behind", "fired"}),
+        ),
+    )
+    return DetectTiming(
+        frames=900,
+        budget_us=3000,
+        over_budget=2,
+        depth_max=1,
+        ring=24,
+        margin_last_us=60000,
+        margin_min_us=41000,
+        margin_negative=0,
+        stats=stats,
+        timeline=timeline,
+    )
+
+
+def test_the_report_leads_with_the_deadlines():
+    lines = format_timing_report(full_timing(), "dss")
+    assert lines[0] == (
+        "timing dss: frames=900 budget=3000 us over_budget=2 depth_max=1 ring=24 "
+        "margin_min=41000 us margin_last=60000 us margin_negative=0"
+    )
+
+
+def test_every_statistic_is_printed_in_pipeline_order():
+    lines = format_timing_report(full_timing(), "dss")
+    stats = [line for line in lines if line.startswith("  ")][:5]
+    assert [line.split()[0] for line in stats] == ["wait", "score", "service", "latency", "arrival"]
+    assert stats[2] == "  service   n=900 min=600 mean=850 max=2100 last=800 us"
+
+
+def test_the_timeline_lists_each_frame_with_its_flags():
+    lines = format_timing_report(full_timing(), "dss")
+    assert "timeline (oldest first):" in lines
+    assert lines[-2] == (
+        "    slot=4 epoch=1200 core=dss wait=20 score=380 service=800 latency=900 depth=0"
+    )
+    assert lines[-1] == (
+        "    slot=5 epoch=1201 core=fallback wait=40 score=- service=2100 latency=3200 "
+        "depth=1 flags=behind,fired"
+    )
+
+
+def test_a_board_that_decided_no_frame_says_so():
+    assert format_timing_report(None, "verify") == ["timing verify: no frame decided yet"]
+
+
+def test_unknown_margins_and_statistics_are_marked_not_invented():
+    timing = DetectTiming(
+        frames=0,
+        budget_us=3000,
+        over_budget=0,
+        depth_max=0,
+        ring=24,
+        margin_last_us=None,
+        margin_min_us=None,
+        margin_negative=0,
+        stats={},
+        timeline=(),
+    )
+    lines = format_timing_report(timing, "mss")
+    assert "margin_min=- margin_last=-" in lines[0].replace(" us", "")
+    assert "  (no statistics)" in lines

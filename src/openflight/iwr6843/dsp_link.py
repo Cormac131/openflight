@@ -579,3 +579,48 @@ def evaluate_acceptance(
             else f"queued={angles.queued} done={angles.done} dropped={angles.dropped}",
         ),
     ]
+
+
+# The detect timing's statistics, in the order a frame lives them.
+_TIMING_ORDER = ("wait", "score", "service", "latency", "arrival")
+
+
+def _us(value: int | None) -> str:
+    return "-" if value is None else f"{value} us"
+
+
+def format_timing_report(timing: DetectTiming | None, label: str) -> list[str]:
+    """``triggerLog timing`` as the acceptance run prints it: the two
+    deadlines, every statistic (wait, score, service, latency, arrival, then
+    any other the board reports), and the last frames' timelines."""
+    if timing is None:
+        return [f"timing {label}: no frame decided yet"]
+    lines = [
+        f"timing {label}: frames={timing.frames} budget={timing.budget_us} us "
+        f"over_budget={timing.over_budget} depth_max={timing.depth_max} ring={timing.ring} "
+        f"margin_min={_us(timing.margin_min_us)} margin_last={_us(timing.margin_last_us)} "
+        f"margin_negative={timing.margin_negative}"
+    ]
+    names = [n for n in _TIMING_ORDER if n in timing.stats]
+    names += sorted(n for n in timing.stats if n not in _TIMING_ORDER)
+    if not names:
+        lines.append("  (no statistics)")
+    for name in names:
+        stat = timing.stats[name]
+        lines.append(
+            f"  {name:<9} n={stat.count} min={stat.min} mean={stat.mean} "
+            f"max={stat.max} last={stat.last} us"
+        )
+    if timing.timeline:
+        lines.append("timeline (oldest first):")
+        for event in timing.timeline:
+            line = (
+                f"    slot={event.slot} epoch={'post' if event.epoch is None else event.epoch} "
+                f"core={event.core} wait={event.wait_us} "
+                f"score={'-' if event.score_us is None else event.score_us} "
+                f"service={event.service_us} latency={event.latency_us} depth={event.depth}"
+            )
+            if event.flags:
+                line += " flags=" + ",".join(sorted(event.flags))
+            lines.append(line)
+    return lines

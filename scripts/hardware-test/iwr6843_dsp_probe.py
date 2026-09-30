@@ -39,6 +39,8 @@ from openflight.iwr6843.driver import IWR6843Radar  # noqa: E402
 from openflight.iwr6843.dsp_link import (  # noqa: E402
     DspLinkError,
     evaluate_acceptance,
+    format_timing_report,
+    parse_detect_health,
     summarize_probes,
 )
 from openflight.iwr6843.monitor import SelfTriggerConfig  # noqa: E402
@@ -65,6 +67,27 @@ def hold(radar: IWR6843Radar, seconds: float) -> int:
     return fired
 
 
+def report(radar: IWR6843Radar, label: str):
+    """Print the phase's full detect timing (the firmware restarts it on
+    every detectCore switch, so read it before the next) and the detect
+    task's health; return (timing, stats text)."""
+    timing = radar.detect_timing()
+    stats = radar.stats()
+    for line in format_timing_report(timing, label):
+        print(f"  {line}")
+    health = parse_detect_health(stats)
+    print(
+        "  detect: no health line in stats"
+        if health is None
+        else (
+            f"  detect dropped={health.dropped} stale={health.stale} "
+            f"stale_read={health.stale_read} shed={health.shed} "
+            f"notice_dropped={health.notice_dropped}"
+        )
+    )
+    return timing, stats
+
+
 def run_acceptance(radar: IWR6843Radar, args: argparse.Namespace) -> bool:
     """Arm the self-trigger, run verify then dss while the operator swings,
     and print each check. True when every one passed."""
@@ -77,15 +100,17 @@ def run_acceptance(radar: IWR6843Radar, args: argparse.Namespace) -> bool:
     radar.detect_core("verify")
     print(f"  fired on {hold(radar, args.seconds)} swings")
     verify = radar.detect_core()
+    report(radar, "verify")
     print(f"acceptance: dss for {args.seconds:.0f} s: swing again")
     radar.detect_core("dss")
     print(f"  fired on {hold(radar, args.seconds)} swings")
     dss = radar.detect_core()
+    timing, stats = report(radar, "dss")
     checks = evaluate_acceptance(
         verify=verify,
         dss=dss,
-        timing=radar.detect_timing(),
-        stats_text=radar.stats(),
+        timing=timing,
+        stats_text=stats,
         perf_text=radar.cmd("triggerLog perf", 2.0),
     )
     for check in checks:
