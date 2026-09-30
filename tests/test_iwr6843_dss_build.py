@@ -26,43 +26,23 @@ def test_meta_image_includes_a_dss_image():
     assert (FIRMWARE_DIR / "dss" / "dss_linker.cmd").exists()
 
 
-def test_l2_cache_reservation_is_enforced_by_the_linker_not_just_the_symbol():
-    """ti_sysbios_family_c64p_Cache_l2Size only programs a runtime cache-size
-    register; it does not shrink the linker's L2SRAM_UMAP0/UMAP1 MEMORY
-    regions (confirmed by testing: TI's linker rejects an app-cmd-file
-    redefinition of a region the platform file already declared, errors
-    #10263/#10264). Without something else enforcing the boundary,
-    .solveScratch could silently grow into the address range the cache
-    controller claims at boot, corrupting solve intermediates with no
-    build-time signal.
-
-    .cacheReserve is that something else: a real, zero-content output
-    section pinned to the exact 32 KB the cache controller carves off the
-    HIGH end of L2 (0x00818000-0x00820000, the top of L2SRAM_UMAP0). Because
-    it is a genuine section rather than a MEMORY redefinition, the linker's
-    allocator treats that range as occupied, so any other L2 section
-    growing into it now fails the link with error #10099 ("program will not
-    fit into available memory") instead of overlapping the cache silently.
-    Verified directly: temporarily oversizing .solveScratch past the
-    remaining L2 budget reproduced that #10099 error; reverting restored a
-    clean, byte-identical-to-baseline DSS build.
+def test_the_dss_keeps_the_platform_l2_all_sram_like_ti_mmw_demo():
+    """On the board (2026-09-30) the DSS reached Startup.firstFxns and never
+    Startup.lastFxns: it died in the xdc/BIOS module startups, with no
+    exception and no DSS ESM flag. The one startup difference from TI's
+    working mmw demo DSS was this image's L2 cache: it alone overrode the
+    platform's ti_sysbios_family_c64p_Cache_l2Size = 0 (all SRAM) with 32 KB
+    of cache, which the Cache module applies in exactly that window (and
+    which linker warning #10190 flagged on every build). The DSS now keeps
+    the platform's caches: L1P and L1D 16 KB each, L2 all SRAM. L3 frames
+    are still read through L1D, with the same Cache_inv before scoring.
     """
     cmd = (FIRMWARE_DIR / "dss" / "dss_linker.cmd").read_text(encoding="utf-8")
-    assert "ti_sysbios_family_c64p_Cache_l2Size" in cmd
-
-    assert ".cacheReserve" in cmd
-    assert "0x00818000" in cmd, "cache reservation must sit at the top of L2SRAM_UMAP0"
-    assert "0x00008000" in cmd, "cache reservation must be the full 32 KB the symbol claims"
-
-    # The comment must explain the gap and name the enforcement mechanism,
-    # so nobody reintroduces it by trusting the symbol alone.
-    assert "RUNTIME register" in cmd or "runtime register" in cmd.lower()
-    assert "#10099" in cmd
-
-    # A MEMORY block that tries to redeclare an existing platform region is
-    # exactly what this fix proved does NOT work -- it must not sneak back
-    # in as the "real" enforcement mechanism.
-    assert "MEMORY" not in cmd or "MEMORY directive cannot be edited" in cmd
+    code = re.sub(r"/\*.*?\*/", "", cmd, flags=re.DOTALL)  # the code, not its comments
+    assert "ti_sysbios_family_c64p_Cache_l2Size" not in code, "no L2 cache override"
+    assert ".cacheReserve" not in code, "no L2 carved off for a cache that is not there"
+    cfg = (FIRMWARE_DIR / "dss" / "dss.cfg").read_text(encoding="utf-8")
+    assert "L2Size_32K" not in cfg
 
 
 # --- the MSS <-> DSS detect link (Phase 0: ping and probe) --------------------
