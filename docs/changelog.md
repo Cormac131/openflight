@@ -19,9 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   labelled swings now fires, none more than three frames after launch (30
   within two, from 27); the fallback decides 7, never ahead of a club rule
   that would have fired first. `triggerLog track` gains a `leave` line. On the
-  four rescued swings the post-fire launch speed is still poor (17-19 m/s
-  against 27-30 labelled on two, none on one). Needs a firmware rebuild and
-  reflash.
+  four rescued swings (the 2 ms profile) the ball tracker still misses the
+  ball after the late fire: its first point must be at least 0.2 confident and
+  within 8 bins of the band, and 4-6 bins out the departing ball reads
+  0.0-0.17, so the club's follow-through is taken instead (17-19 m/s where an
+  impact placed at launch gives 42-45; one swing gets no ball either way).
+  Needs a firmware rebuild and reflash.
 
 ### Fixed
 - **IWR6843 self-trigger still missed swings on the kiosk: it now also fires
