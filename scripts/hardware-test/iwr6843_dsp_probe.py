@@ -55,6 +55,11 @@ def main() -> int:
             print(
                 f"  DSS status: stage={status.stage}{' FAILED' if status.failed else ''} "
                 f"err={status.err} beats={status.beats} served={status.served}"
+                + (
+                    f" exception pc={status.exc_pc:08x} efr={status.exc_efr:08x}"
+                    if status.exc_pc is not None
+                    else ""
+                )
             )
             time.sleep(1.0)
             again = radar.dsp_status()

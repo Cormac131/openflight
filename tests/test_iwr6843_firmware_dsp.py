@@ -374,3 +374,38 @@ def test_the_esm_words_are_printed_in_group_order(lib):
 def test_the_status_names_the_reset_stage_too(lib):
     text = formatted(lib, status(stage=fw.L3_DSP_STAGE_RESET))
     assert text.startswith("dsp status stage=reset ")
+
+
+# --- where between reset and main --------------------------------------------
+#
+# 2026-09-30 on the board: the DSS reached the reset hook and never main,
+# no DSS error in the ESM. Between them run the C runtime's startup and the
+# xdc/BIOS module startups (Cache, Hwi, heaps, Task). Startup.firstFxns and
+# Startup.lastFxns bracket the module startups; an exception hook records
+# the faulting program counter (NRP) and flags (EFR).
+
+
+@pytest.mark.parametrize(
+    ("stage", "name"),
+    [
+        (fw.L3_DSP_STAGE_FIRST, "startup_first"),
+        (fw.L3_DSP_STAGE_LAST, "startup_last"),
+        (fw.L3_DSP_STAGE_EXCEPTION, "exception"),
+    ],
+)
+def test_the_startup_markers_are_named(lib, stage, name):
+    assert formatted(lib, status(stage=stage)).startswith(f"dsp status stage={name} ")
+    assert f"gpreg_stage={name} " in hw_text(lib, hw(gpreg=fw.L3_DSP_GPREG_TAG | stage))
+
+
+def test_an_exception_prints_where_and_why(lib):
+    text = formatted(
+        lib, status(stage=fw.L3_DSP_STAGE_EXCEPTION, excPc=0x007E1234, excFlags=0x00000002)
+    )
+    assert text == (
+        "dsp status stage=exception err=0 beats=0 served=0 exc_pc=007e1234 exc_efr=00000002"
+    )
+
+
+def test_no_exception_prints_no_exception_fields(lib):
+    assert "exc_" not in formatted(lib, status(stage=fw.L3_DSP_STAGE_LINK))

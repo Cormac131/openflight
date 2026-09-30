@@ -28,6 +28,12 @@ static const char *l3_dsp_stage_name(uint32_t stage)
     switch (stage) {
     case L3_DSP_STAGE_RESET:
         return "reset";
+    case L3_DSP_STAGE_FIRST:
+        return "startup_first";
+    case L3_DSP_STAGE_LAST:
+        return "startup_last";
+    case L3_DSP_STAGE_EXCEPTION:
+        return "exception";
     case L3_DSP_STAGE_MAIN:
         return "main";
     case L3_DSP_STAGE_SOC:
@@ -58,6 +64,16 @@ int32_t l3_dsp_status_format(const l3_dsp_status_t *status, char *out, uint32_t 
     if (name == NULL) {
         (void)snprintf(number, sizeof(number), "%u", (unsigned)status->stage);
         name = number;
+    }
+    if (status->excFlags != 0U || status->excPc != 0U) {
+        return (int32_t)snprintf(out, cap,
+                                 "dsp status stage=%s%s err=%d beats=%u served=%u "
+                                 "exc_pc=%08x exc_efr=%08x",
+                                 name,
+                                 (status->stage & L3_DSP_STAGE_FAILED) != 0U ? " FAILED" : "",
+                                 (int)status->errCode, (unsigned)status->heartbeat,
+                                 (unsigned)status->served, (unsigned)status->excPc,
+                                 (unsigned)status->excFlags);
     }
     return (int32_t)snprintf(out, cap, "dsp status stage=%s%s err=%d beats=%u served=%u", name,
                              (status->stage & L3_DSP_STAGE_FAILED) != 0U ? " FAILED" : "",

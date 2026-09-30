@@ -13,6 +13,7 @@
 #include <ti/sysbios/BIOS.h>
 #include <ti/sysbios/knl/Task.h>
 #include <ti/sysbios/family/c64p/Cache.h>
+#include <ti/sysbios/family/c64p/Exception.h>
 #include <ti/common/sys_common.h>
 #include <ti/drivers/soc/soc.h>
 #include <ti/drivers/esm/esm.h>
@@ -79,7 +80,51 @@ void dss_resetHook(void)
     status->errCode = 0;
     status->heartbeat = 0U;
     status->served = 0U;
+    status->excPc = 0U;
+    status->excFlags = 0U;
     status->magic = L3_DSP_STATUS_MAGIC;
+}
+
+/* A marker for the startup functions below: the stage on both channels,
+ * written straight to memory (the module startups set the caches up). */
+static void dss_marker(uint32_t stage)
+{
+    volatile uint32_t *gpreg = (volatile uint32_t *)SOC_XWR68XX_DSS_DSSREG_BASE_ADDRESS;
+    volatile l3_dsp_status_t *status = (volatile l3_dsp_status_t *)(
+        SOC_XWR68XX_DSS_HSRAM_BASE_ADDRESS + L3_DSP_STATUS_HSRAM_OFFSET);
+
+    *gpreg = L3_DSP_GPREG_TAG | stage;
+    status->stage = stage;
+}
+
+/* xdc Startup.firstFxns: before the module startups. */
+void dss_startupFirst(void);
+void dss_startupFirst(void)
+{
+    dss_marker(L3_DSP_STAGE_FIRST);
+}
+
+/* xdc Startup.lastFxns: after the module startups, just before main. */
+void dss_startupLast(void);
+void dss_startupLast(void)
+{
+    dss_marker(L3_DSP_STAGE_LAST);
+    Cache_wb((Ptr)SOC_XWR68XX_DSS_HSRAM_BASE_ADDRESS, 0x8000U, Cache_Type_ALLD, TRUE);
+}
+
+/* BIOS exception hook: where (NRP) and why (EFR), then BIOS halts. */
+void dss_exceptionHook(void);
+void dss_exceptionHook(void)
+{
+    volatile l3_dsp_status_t *status = (volatile l3_dsp_status_t *)(
+        SOC_XWR68XX_DSS_HSRAM_BASE_ADDRESS + L3_DSP_STATUS_HSRAM_OFFSET);
+    Exception_Status exc;
+
+    Exception_getLastStatus(&exc);
+    status->excPc = exc.nrp;
+    status->excFlags = exc.efr;
+    dss_marker(L3_DSP_STAGE_EXCEPTION);
+    Cache_wb((Ptr)status, sizeof(l3_dsp_status_t), Cache_Type_ALLD, TRUE);
 }
 
 static void dss_statusCount(volatile uint32_t *counter)
@@ -170,6 +215,8 @@ int main(void)
 
     gDssStatus->heartbeat = 0U;
     gDssStatus->served = 0U;
+    gDssStatus->excPc = 0U;
+    gDssStatus->excFlags = 0U;
     dss_status(L3_DSP_STAGE_MAIN, 0);
     memset((void *)&socCfg, 0, sizeof(SOC_Cfg));
     /* The MSS owns the system clock and the BSS. SOC_SysClock_INIT here

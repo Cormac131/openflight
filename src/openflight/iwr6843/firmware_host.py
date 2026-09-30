@@ -593,6 +593,9 @@ L3_DSP_STAGE_TASK = 3
 L3_DSP_STAGE_MAILBOX = 4
 L3_DSP_STAGE_LINK = 5
 L3_DSP_STAGE_RESET = 0x10
+L3_DSP_STAGE_FIRST = 0x11
+L3_DSP_STAGE_LAST = 0x12
+L3_DSP_STAGE_EXCEPTION = 0x13
 L3_DSP_STAGE_FAILED = 0x80
 L3_DSP_GPREG_TAG = 0xD5500000
 
@@ -619,6 +622,8 @@ class DspStatus(ctypes.Structure):
         ("errCode", ctypes.c_int32),
         ("heartbeat", ctypes.c_uint32),
         ("served", ctypes.c_uint32),
+        ("excPc", ctypes.c_uint32),
+        ("excFlags", ctypes.c_uint32),
     ]
 
 

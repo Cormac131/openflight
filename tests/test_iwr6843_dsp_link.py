@@ -217,3 +217,15 @@ def test_the_driver_asks_for_the_hardware_state():
     radar = _Radar(HW)
     assert radar.dsp_hw().stc == 1
     assert radar.sent[0][0] == "trackCfg dsp hw"
+
+
+def test_an_exception_status_carries_its_program_counter_and_flags():
+    status = parse_dsp_status(
+        "dsp status stage=exception err=0 beats=0 served=0 exc_pc=007e1234 exc_efr=00000002\n"
+    )
+    assert (status.stage, status.exc_pc, status.exc_efr) == ("exception", 0x007E1234, 0x2)
+
+
+def test_a_status_without_an_exception_has_none():
+    status = parse_dsp_status("dsp status stage=startup_first err=0 beats=0 served=0\n")
+    assert status.stage == "startup_first" and status.exc_pc is None and status.exc_efr is None

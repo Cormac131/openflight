@@ -207,3 +207,22 @@ def test_the_mss_reads_the_dss_hardware_state_without_the_dss():
     assert "SOC_XWR68XX_MSS_ESM_BASE_ADDRESS" in text
     assert 'strcmp(argv[2], "hw") == 0' in text
     assert text.count("l3_dspPrintHw();") >= 3, "hw, and after each unanswered command"
+
+
+def test_the_dss_brackets_its_module_startup_and_hooks_exceptions():
+    cfg = (FIRMWARE_DIR / "dss" / "dss.cfg").read_text(encoding="utf-8")
+    assert "Startup.firstFxns.$add('&dss_startupFirst')" in cfg
+    assert "Startup.lastFxns.$add('&dss_startupLast')" in cfg
+    assert "xdc.useModule('ti.sysbios.family.c64p.Exception')" in cfg
+    assert "Exception.exceptionHook = '&dss_exceptionHook'" in cfg
+    text = DSS_MAIN.read_text(encoding="utf-8")
+    for fxn, stage in (
+        ("dss_startupFirst", "L3_DSP_STAGE_FIRST"),
+        ("dss_startupLast", "L3_DSP_STAGE_LAST"),
+        ("dss_exceptionHook", "L3_DSP_STAGE_EXCEPTION"),
+    ):
+        body = text[text.index(f"void {fxn}(void)\n{{") :]
+        body = body[: body.index("\n}\n")]
+        assert stage in body, fxn
+    hook = text[text.index("void dss_exceptionHook(void)\n{") :]
+    assert "Exception_getLastStatus(" in hook[: hook.index("\n}\n")]

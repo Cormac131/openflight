@@ -67,6 +67,9 @@ typedef struct {
 #define L3_DSP_STAGE_MAILBOX  4U  /* Mailbox_init returned */
 #define L3_DSP_STAGE_LINK     5U  /* Mailbox_open returned: serving */
 #define L3_DSP_STAGE_RESET    0x10U /* xdc Reset hook: before cinit and BIOS */
+#define L3_DSP_STAGE_FIRST    0x11U /* Startup.firstFxns: before the module startups */
+#define L3_DSP_STAGE_LAST     0x12U /* Startup.lastFxns: after them, just before main */
+#define L3_DSP_STAGE_EXCEPTION 0x13U /* the BIOS exception hook: see excPc, excFlags */
 #define L3_DSP_STAGE_FAILED   0x80U /* or'd in: the stage failed, see errCode */
 
 /* The DSS mirrors its stage into DSSREG DSSGPREG0 (MSS 0x50000400, DSS
@@ -91,6 +94,8 @@ typedef struct {
     int32_t  errCode;
     uint32_t heartbeat; /* read timeouts while serving */
     uint32_t served;    /* requests answered */
+    uint32_t excPc;     /* an exception's NRP, the interrupted program counter */
+    uint32_t excFlags;  /* an exception's EFR; 0 when none was taken */
 } l3_dsp_status_t;
 
 uint32_t l3_dsp_request_size(void);
@@ -105,7 +110,8 @@ uint32_t l3_dsp_hw_size(void);
  * esm=XXXXXXXX,XXXXXXXX,XXXXXXXX,XXXXXXXX hsram=ok|BAD"; an untagged
  * register prints as none(XXXXXXXX). Returns the characters written. */
 int32_t l3_dsp_hw_format(const l3_dsp_hw_t *hw, char *out, uint32_t cap);
-/* "dsp status stage=<name>[ FAILED] err=E beats=B served=S", or, without the
+/* "dsp status stage=<name>[ FAILED] err=E beats=B served=S", then
+ * " exc_pc=XXXXXXXX exc_efr=XXXXXXXX" after an exception, or, without the
  * magic (NULL too), "dsp status stage=never_booted magic=XXXXXXXX".
  * Returns the characters written, as snprintf. */
 int32_t l3_dsp_status_format(const l3_dsp_status_t *status, char *out, uint32_t cap);

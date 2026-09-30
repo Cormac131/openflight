@@ -24,7 +24,8 @@ _PROBE = re.compile(
 _ERROR = re.compile(r"^Error:\s*(.*)$", re.MULTILINE)
 _STATUS = re.compile(
     r"^dsp status stage=(?P<stage>\w+)(?P<failed> FAILED)? err=(?P<err>-?\d+) "
-    r"beats=(?P<beats>\d+) served=(?P<served>\d+)\s*$",
+    r"beats=(?P<beats>\d+) served=(?P<served>\d+)"
+    r"(?: exc_pc=(?P<exc_pc>[0-9a-f]{8}) exc_efr=(?P<exc_efr>[0-9a-f]{8}))?\s*$",
     re.MULTILINE,
 )
 _HW = re.compile(
@@ -60,7 +61,10 @@ class DspProbe:
 class DspStatus:
     """``trackCfg dsp status``: the boot stage the DSS reached (HS-RAM).
 
-    Stages in order: main, soc_init, task, mailbox_init, link_open (serving);
+    Stages in order: reset, startup_first, startup_last (the xdc/BIOS
+    module startups run between those two), main, soc_init, task,
+    mailbox_init, link_open (serving); exception when the DSS took one
+    (``exc_pc`` the interrupted program counter, ``exc_efr`` the flags);
     never_booted when the DSS never wrote its status. ``beats`` rises while
     the link task waits for requests, so a rising count means BIOS runs.
     """
@@ -70,6 +74,8 @@ class DspStatus:
     err: int
     beats: int
     served: int
+    exc_pc: int | None = None
+    exc_efr: int | None = None
 
     @property
     def booted(self) -> bool:
@@ -164,6 +170,8 @@ def parse_dsp_status(text: str) -> DspStatus:
         err=int(match.group("err")),
         beats=int(match.group("beats")),
         served=int(match.group("served")),
+        exc_pc=None if match.group("exc_pc") is None else int(match.group("exc_pc"), 16),
+        exc_efr=None if match.group("exc_efr") is None else int(match.group("exc_efr"), 16),
     )
 
 
