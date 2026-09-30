@@ -28,7 +28,7 @@ def lib(tmp_path_factory):
     return fw.build_firmware_library(tmp_path_factory.mktemp("l3_host"))
 
 
-def make_shot(lib, *, state="result", club_points=7, source=fw.SHOT_IMPACT_GEOMETRY, **delivery):
+def make_shot(lib, *, state="result", club_points=7, source=fw.SHOT_IMPACT_RANGE, **delivery):
     shot = fw.Shot()
     cfg = fw.ShotCfg()
     lib.l3_shot_cfg_defaults(ctypes.byref(cfg))
@@ -107,9 +107,11 @@ def quality(result) -> set[str]:
     return {name for name, bit in fw.QUALITY_FLAGS.items() if result.qualityFlags & bit}
 
 
-# Every flag a clean shot earns; the warnings are never earned.
+# Every flag a clean shot earns; the warnings are never earned, and
+# geometric_impact is reserved: the geometric detector was removed (2026-09-30).
 WARNINGS = {"impact_uncertain", "ball_slower_than_club"}
-GOOD_QUALITY = set(fw.QUALITY_FLAGS) - WARNINGS
+RESERVED = {"geometric_impact"}
+GOOD_QUALITY = set(fw.QUALITY_FLAGS) - WARNINGS - RESERVED
 
 
 def test_a_complete_shot_is_valid_with_every_core_metric_measured(lib):
@@ -137,7 +139,7 @@ def test_a_complete_shot_is_valid_with_every_core_metric_measured(lib):
     assert result.metric[M["club_path"]].value == pytest.approx(2.0 * DEG)
     assert result.metric[M["impact_range"]].value == pytest.approx(1.36)
     assert result.smash == pytest.approx(1.5)
-    assert result.impactTimestampUs == 23218 and result.impactSource == fw.SHOT_IMPACT_GEOMETRY
+    assert result.impactTimestampUs == 23218 and result.impactSource == fw.SHOT_IMPACT_RANGE
     assert result.clubPoints == 7 and result.ballPoints == 6
     assert quality(result) == GOOD_QUALITY
 
@@ -230,8 +232,10 @@ def test_residuals_coasts_and_short_tracks_show_in_the_quality_flags(lib):
     short = build(lib, make_shot(lib, club_points=2, points=2), make_ball(lib), make_launch())
     assert not (short.validFlags & (1 << M["club_speed"]))
     assert "club_track" not in quality(short)
-    gate = build(lib, make_shot(lib, source=fw.SHOT_IMPACT_GATE), make_ball(lib), make_launch())
-    assert "geometric_impact" not in quality(gate) and "impact_identified" in quality(gate)
+    # Older sources (the removed gate and geometry) earn no extra flag.
+    for source in (fw.SHOT_IMPACT_GATE, fw.SHOT_IMPACT_GEOMETRY):
+        old = build(lib, make_shot(lib, source=source), make_ball(lib), make_launch())
+        assert "geometric_impact" not in quality(old) and "impact_identified" in quality(old)
 
 
 def test_names_and_text_formats(lib):
@@ -243,7 +247,7 @@ def test_names_and_text_formats(lib):
     result = build(lib, make_shot(lib), make_ball(lib), make_launch())
     text = fw.c_text(lib.l3_result_format, ctypes.byref(result), cap=240)
     assert text.startswith("result v2 shot=3 verdict=valid valid=0x")
-    assert " impact=23218 source=geometry club=7 ball=6 smash=1.50" in text
+    assert " impact=23218 source=range club=7 ball=6 smash=1.50" in text
     speed = fw.c_text(lib.l3_result_format_metric, ctypes.byref(result), M["ball_speed"])
     assert speed == "  ball_speed=60.00 conf=0.90 flags=measured"
     vla = fw.c_text(lib.l3_result_format_metric, ctypes.byref(result), M["vertical_launch"])
@@ -264,7 +268,7 @@ def test_packet_is_164_little_endian_bytes_the_host_parses_back(lib):
     assert lib.l3_result_serialize(ctypes.byref(result), buffer, 163) == 0
     packet = shot_result.parse_packet(buffer.raw)
     assert packet.version == 2 and packet.shot_id == 7 and packet.verdict == "valid"
-    assert packet.impact_timestamp_us == 23218 and packet.impact_source == "geometry"
+    assert packet.impact_timestamp_us == 23218 and packet.impact_source == "range"
     assert packet.club_points == 7 and packet.ball_points == 6
     assert packet.smash == pytest.approx(1.5)
     assert packet["ball_speed"].value == pytest.approx(60.0)
@@ -316,7 +320,7 @@ def test_packet_to_dict_keeps_provenance_beside_every_metric(lib):
 
     assert payload["version"] == 2 and payload["shot_id"] == 7 and payload["verdict"] == "valid"
     assert payload["impact_fit"]["verdict"] == "none"
-    assert payload["impact_source"] == "geometry" and payload["impact_timestamp_us"] == 23218
+    assert payload["impact_source"] == "range" and payload["impact_timestamp_us"] == 23218
     assert payload["club_points"] == 7 and payload["ball_points"] == 6
     assert payload["smash"] == pytest.approx(1.5)
     assert payload["quality"] == sorted(GOOD_QUALITY)

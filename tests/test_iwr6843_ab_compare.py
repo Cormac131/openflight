@@ -18,7 +18,6 @@ from openflight.iwr6843.ab_compare import (
 def _result(
     *,
     fired=4,
-    geometric=None,
     impact_us=12000,
     points=5,
     ball=6,
@@ -39,7 +38,6 @@ def _result(
     )
     return SimpleNamespace(
         fired_frame=fired,
-        geometric_frame=geometric,
         impact_timestamp_us=impact_us,
         points=[SimpleNamespace(range_bin=30.0 + i) for i in range(points)],
         acquisitions=1,
@@ -53,13 +51,12 @@ def _result(
 def test_rows_cover_trigger_club_and_ball_with_signed_deltas():
     rows = compare_replays(_result(), _result(fired=5, speed=30.4, hla=-1.6, ball=5))
     by_name = {(r.name, r.unit): r for r in rows}
-    assert by_name[("Gate fire frame", "frame")].delta == 1
+    assert by_name[("Trigger fire frame", "frame")].delta == 1
     assert by_name[("Club speed (fit)", "m/s")].delta == pytest.approx(-0.6)
     assert by_name[("HLA", "deg")].delta == pytest.approx(-0.6)
     assert by_name[("Ball points", "points")].delta == -1
     assert by_name[("Ball speed", "mph")].a == pytest.approx(134.2, abs=0.05)
-    assert by_name[("Geometric impact frame", "frame")].delta is None
-    assert by_name[("Geometric impact frame", "frame")].agrees
+    assert ("Geometric impact frame", "frame") not in by_name, "the detector was removed"
     assert all(r.agrees for r in rows)
 
 
@@ -89,5 +86,5 @@ def test_aggregate_counts_disagreements_and_averages_deltas():
     assert hla.captures == 2 and hla.disagreements == 1
     text = format_aggregate(list(agg.values()))
     assert "only-one" in text and "Club speed (fit)" in text
-    assert rows_to_dict(tables[0])[0]["name"] == "Gate fire frame"
+    assert rows_to_dict(tables[0])[0]["name"] == "Trigger fire frame"
     assert aggregate([]) == []

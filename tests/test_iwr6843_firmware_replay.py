@@ -330,7 +330,7 @@ def test_recorded_swings_meet_their_manifest_expectations(lib, path, config):
     assert math.isfinite(result.speed_mps)
 
 
-# --- angles, delivery and geometric impact -------------------------------------
+# --- angles, delivery and the range impact ------------------------------------
 
 
 def test_channel_snapshot_matches_a_loop_by_loop_port_of_the_firmware():
@@ -385,25 +385,23 @@ def test_the_first_point_of_a_track_carries_no_angles(lib, swing):
     assert second.angle is not None and second.angle.azimuth_deg is not None
 
 
-def test_geometric_impact_fires_at_the_tee_with_a_sub_frame_time(lib, swing):
+def test_the_range_impact_fires_at_the_tee_with_a_sub_frame_time(lib, swing):
     result = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
-    assert result.geometric_frame is not None
+    assert result.fired_frame is not None
     assert result.impact_timestamp_us is not None
     # The club crosses the tee bin between frames 5 and 6 (20 and 24 ms).
     assert 20_000 < result.impact_timestamp_us < 24_000
-    assert result.frames[result.geometric_frame].impact_why == "fired"
-    assert any(f.impact_why == "pending" for f in result.frames[: result.geometric_frame])
+    assert result.frames[result.fired_frame].impact_why == "fired"
+    assert any(f.impact_why == "pending" for f in result.frames[: result.fired_frame])
     assert "impact fired=1 why=fired" in result.impact_status
-    assert "geometric impact frame" in format_report(result)
 
 
-def test_an_armed_geometric_impact_ends_a_stop_at_fire_replay_on_its_fire(lib, swing):
-    gated = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN, stop_at_fire=True), lib=lib)
-    armed = replay_dump(
-        swing, ReplayConfig(tee_bin=TEE_BIN, stop_at_fire=True, geometry_armed=True), lib=lib
-    )
-    assert len(armed.frames) == armed.geometric_frame + 1
-    assert len(armed.frames) <= len(gated.frames)
+def test_the_geometric_detector_is_gone_from_the_replay():
+    """Removed with the range gate (2026-09-30): nothing armed it on the kiosk
+    and it never fired on the recorded swings."""
+    fields = set(ReplayConfig.__dataclass_fields__) | set(fr.ReplayResult.__dataclass_fields__)
+    for gone in ("geometry_armed", "impact_armed", "geometric_frame"):
+        assert gone not in fields
 
 
 def test_replay_calibration_attitude_rotates_the_delivery_into_the_golf_frame(lib):
@@ -774,7 +772,7 @@ def test_impact_fit_is_reported_exactly_when_the_shot_reaches_result(lib):
 def test_a_shot_that_stops_before_result_is_not_fitted(lib):
     """Post-impact frames cut short: IMPACT is declared, RESULT never comes."""
     raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=1.372)
-    config = fr.ReplayConfig(tee_bin=29, dest_bin=29, geometry_armed=True, post_impact=False)
+    config = fr.ReplayConfig(tee_bin=29, dest_bin=29, post_impact=False)
     result = fr.replay_dump(raw, config, lib=lib)
 
     assert fw.SHOT_STATE_NAMES[result.shot.state] not in fr.PRE_IMPACT_SHOT_STATES
@@ -788,7 +786,7 @@ def test_the_fit_uses_the_tracks_as_they_stood_when_result_was_reached(lib, band
     """Board parity: the fit runs on the first RESULT frame, so later ball and
     club points never reach it."""
     raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=1.372)
-    config = fr.ReplayConfig(tee_bin=29, dest_bin=29, geometry_armed=True, band_bins=band_bins)
+    config = fr.ReplayConfig(tee_bin=29, dest_bin=29, band_bins=band_bins)
     result = fr.replay_dump(raw, config, lib=lib)
 
     assert result.impact_fit is not None
@@ -810,7 +808,7 @@ def test_synthetic_shot_impact_lands_on_the_synthesized_time(lib, band_bins):
     from iwr6843_synth import IMPACT_S  # pylint: disable=import-outside-toplevel
 
     raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=1.372)
-    config = fr.ReplayConfig(tee_bin=29, dest_bin=29, geometry_armed=True, band_bins=band_bins)
+    config = fr.ReplayConfig(tee_bin=29, dest_bin=29, band_bins=band_bins)
     result = fr.replay_dump(raw, config, lib=lib)
 
     assert (result.band is not None) == (band_bins is not None)
@@ -825,7 +823,7 @@ def test_a_fit_verdict_replaces_the_shot_impact_time_as_the_board_does(lib, band
     """l3_impactFitRun: a verdict other than none puts the refined time on the
     shot; the refinement is measured against the ORIGINAL frozen time."""
     raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=1.372)
-    config = fr.ReplayConfig(tee_bin=29, dest_bin=29, geometry_armed=True, band_bins=band_bins)
+    config = fr.ReplayConfig(tee_bin=29, dest_bin=29, band_bins=band_bins)
     result = fr.replay_dump(raw, config, lib=lib)
 
     fit = result.impact_fit
@@ -952,7 +950,7 @@ def test_post_frames_are_unknown_without_windows_or_a_report():
 def test_replay_uses_the_post_frame_count_and_says_when_it_could_not(lib):
     result = fr.replay_dump(
         synth_shot_dump(ball_speed_ms=60.0, tee_range_m=1.372),
-        fr.ReplayConfig(tee_bin=29, dest_bin=29, geometry_armed=True),
+        fr.ReplayConfig(tee_bin=29, dest_bin=29),
         lib=lib,
     )
     assert result.ball_track_frames_known is False
@@ -1010,7 +1008,7 @@ def test_synthetic_club_after_impact_is_slower_than_the_ball_and_gives_club_out(
     raw = synth_shot_dump(ball_speed_ms=60.0, club_out_speed_ms=20.0, tee_range_m=1.372)
     result = fr.replay_dump(
         raw,
-        fr.ReplayConfig(tee_bin=29, dest_bin=29, geometry_armed=True, band_bins=5.0),
+        fr.ReplayConfig(tee_bin=29, dest_bin=29, band_bins=5.0),
         lib=lib,
     )
     club = _club_after_impact(result)
@@ -1086,7 +1084,7 @@ def test_the_band_lands_on_the_ridge_not_centred_on_the_tee(lib):
     )
     result = fr.replay_dump(
         raw,
-        fr.ReplayConfig(tee_bin=29, dest_bin=29, geometry_armed=True, band_bins=5.0),
+        fr.ReplayConfig(tee_bin=29, dest_bin=29, band_bins=5.0),
         lib=lib,
     )
     # The band must hold the tee (29): the ridge 33..37 lies entirely beyond
@@ -1111,7 +1109,7 @@ def test_band_freezes_on_the_frame_the_club_is_acquired(lib):
     )
     result = fr.replay_dump(
         raw,
-        fr.ReplayConfig(tee_bin=29, dest_bin=29, geometry_armed=True, band_bins=5.0),
+        fr.ReplayConfig(tee_bin=29, dest_bin=29, band_bins=5.0),
         lib=lib,
     )
     acquired = next(f.frame for f in result.frames if f.track_why == "acquired")
@@ -1144,7 +1142,7 @@ def test_band_thaws_when_the_club_drops_and_moves_to_a_ridge_learned_since(lib):
     )
     result = fr.replay_dump(
         raw,
-        fr.ReplayConfig(tee_bin=29, dest_bin=29, geometry_armed=True, band_bins=5.0),
+        fr.ReplayConfig(tee_bin=29, dest_bin=29, band_bins=5.0),
         lib=lib,
     )
     whys = [f.track_why for f in result.frames]

@@ -54,8 +54,7 @@ static void l3_shot_freeze(l3_shot_t *shot, const l3_shot_input_t *in, uint32_t 
 {
     uint32_t i;
 
-    shot->impactSource = (uint8_t)((in->geometricFired ? L3_SHOT_IMPACT_GEOMETRY : 0U) |
-                                   (in->rangeFired ? L3_SHOT_IMPACT_RANGE : 0U));
+    shot->impactSource = (uint8_t)(in->rangeFired ? L3_SHOT_IMPACT_RANGE : 0U);
     shot->impactFrame = frame;
     shot->impactTimestampUs = in->impactTimestampUs;
     shot->ballOrigin = in->ballPosition;
@@ -76,7 +75,7 @@ static void l3_shot_freeze(l3_shot_t *shot, const l3_shot_input_t *in, uint32_t 
 uint8_t l3_shot_update(l3_shot_t *shot, const l3_shot_input_t *in, uint32_t frame)
 {
     uint8_t ballReady = (uint8_t)(in->ballLocked || !shot->cfg.requireBall);
-    uint8_t fired = (uint8_t)(in->geometricFired || in->rangeFired);
+    uint8_t fired = in->rangeFired;
 
     switch (shot->state) {
     case L3_SHOT_WAITING_FOR_BALL:
@@ -130,16 +129,6 @@ uint8_t l3_shot_update(l3_shot_t *shot, const l3_shot_input_t *in, uint32_t fram
 int32_t l3_shot_wants_departing(const l3_shot_t *shot)
 {
     return (shot->state >= L3_SHOT_IMPACT) ? 1 : 0;
-}
-
-uint8_t l3_shot_fire_sources(uint8_t geometryArmed, int32_t geometricFired, int32_t rangeFired)
-{
-    uint8_t sources = rangeFired ? L3_SHOT_IMPACT_RANGE : 0U;
-
-    if (geometryArmed && geometricFired) {
-        sources |= L3_SHOT_IMPACT_GEOMETRY;
-    }
-    return sources;
 }
 
 const char *l3_shot_state_name(uint8_t state)

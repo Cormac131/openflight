@@ -482,7 +482,7 @@ def test_channel_snapshot_sums_loops_coherently_with_the_lag1_phase_unwound():
     assert snapshot.count("sample += loopStride;") == 2
 
 
-def test_geometric_impact_records_every_frame_and_fires_only_when_armed():
+def test_the_ball_position_and_delivery_are_kept_every_frame_for_the_shot():
     consider = _function("static void l3_considerSelfTrigger(")
 
     assert "(void)l3_track_delivery(&gClubTrack, 8U, &gDelivery);" in consider
@@ -492,18 +492,25 @@ def test_geometric_impact_records_every_frame_and_fires_only_when_armed():
         "l3_frames_observe(&gRadarCal, (float)teeBin * gClubTrack.cfg.binWidthM, 0.0F, 0.0F,\n"
         "                              &gBallPosition);"
     ) in consider, "boresight when the ball has no measured direction"
-    assert "geometric = l3_impact_update(&gImpact, &gDelivery, &gBallPosition, 1U);" in consider
-    assert (
-        "gTrigFireSource = (uint8_t)((geometric ? L3_SHOT_IMPACT_GEOMETRY : 0U) |\n"
-        "                                (ranged ? L3_SHOT_IMPACT_RANGE : 0U));"
-    ) in consider
-    # The range-only impact freezes; the geometric one only once armed.
-    assert "accepted = l3_shot_fire_sources(gGeometryArmed, geometric, ranged);" in consider
-    assert consider.index("geometric = l3_impact_update(") < consider.index("if (accepted == 0U) {")
-    assert "l3_impact_rearm(&gImpact);" in _function("static void l3_trigRearm(")
     configure = _function("static void l3_clubTrackConfigure(")
     assert "cfg.cal = gRadarCal;" in configure
-    assert "l3_impact_init(&gImpact, &gImpactCfg);" in configure
+
+
+def test_the_geometric_detector_is_gone_from_the_board():
+    """Removed on 2026-09-30: the kiosk never armed it and it never fired on
+    the recorded swings. The range-only impact is the self-trigger."""
+    source = _source()
+    for gone in (
+        "l3_impact_update(",
+        "gImpact,",
+        "gImpact)",
+        "gImpact.",
+        "gGeometryArmed",
+        "geometricFired",
+        "l3_shot_fire_sources",
+        "gTrigFireSource",
+    ):
+        assert gone not in source, gone
 
 
 def test_calibration_and_impact_are_configured_through_track_cfg_sub_modes():
@@ -520,8 +527,10 @@ def test_calibration_and_impact_are_configured_through_track_cfg_sub_modes():
     assert "l3_cal_set_element(&gRadarCal, index, values[2], values[1])" in elem
     assert "values[0] >= (float)L3_CAL_MAX_VIRTUAL" in elem
     impact = _function("static int32_t l3_cli_trackCfgImpact(")
-    assert "gGeometryArmed = (values[4] != 0.0F) ? 1U : 0U;" in impact
-    assert "l3_impact_init(&gImpact, &gImpactCfg);" in impact
+    # Only the range impact's horizon is left: the old five-value line is refused.
+    assert "l3_parseFloats(argc, argv, 2, 1U, values) != 0" in impact
+    assert "gImpactCfg.horizonS = values[0];" in impact
+    assert "l3_impact_init(&gRangeImpact, &gImpactCfg);" in impact
     assert "tableEntry[19]" not in source, "sub-modes, not new commands"
     assert "or cal/elem/impact/impactFit ..." in source
 
@@ -531,8 +540,8 @@ def test_trigger_log_track_prints_delivery_angle_and_impact_lines():
 
     assert "l3_track_format_delivery(&gDelivery, line, sizeof(line));" in log
     assert "l3_angle_format(&gLastAngle, line, sizeof(line));" in log
-    assert "l3_impact_format(&gImpact, line, sizeof(line));" in log
-    assert 'CLI_write("%s armed=%u source=%u\\n", line, (unsigned)gGeometryArmed,' in log
+    assert "l3_impact_format(&gRangeImpact, line, sizeof(line));" in log
+    assert 'CLI_write("range %s\\n", line);' in log
     track = log[log.index('strcmp(argv[1], "track") == 0') :]
     assert (
         track.index("l3_track_format_status(")
@@ -603,14 +612,11 @@ def test_shot_machine_sees_every_pre_frame_and_arms_the_ball_tracker_at_impact()
     consider = _function("static void l3_considerSelfTrigger(")
     observe = _function("static void l3_shotObserve(")
 
-    assert (
-        "l3_shotObserve(teeBin, accepted & L3_SHOT_IMPACT_GEOMETRY, accepted & L3_SHOT_IMPACT_RANGE);"
-        in consider
-    )
-    assert consider.index("l3_shotObserve(") < consider.index("if (accepted == 0U) {")
+    assert "l3_shotObserve(teeBin, ranged);" in consider
+    assert consider.index("l3_shotObserve(") < consider.index("if (!ranged) {")
     assert "in.ballLocked = gTrigDestBall;" in observe
     assert "in.clubActive = gClubTrack.active;" in observe
-    assert "if (geometric && gImpact.fired) {" in observe
+    assert "if (ranged && gRangeImpact.fired) {" in observe
     assert "in.impactTimestampUs = frameUs;" in observe
     assert "gShot.impactFrame == gPreFramesCaptured" in observe
     assert "l3_ball_track_arm(&gBallTrack, l3_ballArmBin(teeBin), &gBallPosition," in observe

@@ -74,16 +74,9 @@ def compare_replays(a: ReplayResult, b: ReplayResult) -> list[Row]:
     """Every measurement of interest, A beside B."""
     return [
         Row(
-            "Gate fire frame",
+            "Trigger fire frame",
             _optional_int(a.fired_frame),
             _optional_int(b.fired_frame),
-            "frame",
-            0,
-        ),
-        Row(
-            "Geometric impact frame",
-            _optional_int(a.geometric_frame),
-            _optional_int(b.geometric_frame),
             "frame",
             0,
         ),

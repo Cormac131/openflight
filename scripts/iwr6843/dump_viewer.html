@@ -98,7 +98,6 @@
       <label>pitch (deg) <input type="number" id="pitch_deg" step="0.1"></label>
       <label>band bins <input type="number" id="band_bins" step="0.5" min="0" placeholder="0 = off"></label>
       <label>ball search <select id="ball_hypotheses"><option value="">firmware default</option><option value="true">hypotheses</option><option value="false">legacy</option></select></label>
-      <label class="chk"><input type="checkbox" id="geometry_armed"> geometry armed</label>
       <label class="chk"><input type="checkbox" id="stop_at_fire"> stop at fire</label>
       <label class="chk"><input type="checkbox" id="joint_search"> joint search</label>
     </div>
@@ -205,7 +204,7 @@ const C = {};
   .forEach((k) => (C[k] = css("--" + k)));
 C.jball = C["joint-ball"]; C.jclub = C["joint-club"];
 const OPTS = ["tee_bin", "dest_bin", "snr", "ball_snr", "stat", "subbin",
-  "post_from_frame", "pitch_deg", "band_bins", "geometry_armed", "stop_at_fire", "tee_range_m",
+  "post_from_frame", "pitch_deg", "band_bins", "stop_at_fire", "tee_range_m",
   "py_level", "py_hits", "ball_hypotheses", "joint_search"];
 // The form's defaults are ViewerOptions' (GET /api/defaults): one place for them.
 const FORM_DEFAULTS = {};
@@ -404,7 +403,6 @@ function events() {
   if (D.freeze_frame != null) ev.push({ f: D.freeze_frame, name: "board freeze (pre/post)", color: C.freeze, dash: "solid" });
   const F = fw();
   if (F && F.fired_frame != null) ev.push({ f: F.fired_frame, name: "C trigger fired", color: C.gate, dash: "solid" });
-  if (F && F.geometric_frame != null) ev.push({ f: F.geometric_frame, name: "geometric impact", color: C.geo, dash: "dot" });
   const P = py();
   if (P && P.fired_frame != null) ev.push({ f: P.fired_frame, name: "host trigger fired", color: C.py, dash: "dash" });
   return ev;
@@ -455,7 +453,6 @@ function renderChips() {
   if (m.retention) out.push(chip(null, "retention", `${m.retention.reason} ${m.retention.pre_frames}/${m.retention.planned_frames}`));
   if (D.freeze_frame != null) out.push(chip(C.freeze, "freeze", at(D.freeze_frame)));
   out.push(F ? chip(C.gate, "C trigger", at(F.fired_frame)) : chip(C.gate, "C trigger", `<span class="err">${D.firmware.error}</span>`));
-  if (F && F.geometric_frame != null) out.push(chip(C.geo, "geometric", at(F.geometric_frame)));
   out.push(P ? chip(C.py, "host trigger", at(P.fired_frame)) : chip(C.py, "host", `<span class="err">${D.python_trigger.error}</span>`));
   if (F) {
     out.push(chip(C.club, "club pts", `${F.points.length} · run ${F.longest_run} · ${fmt(F.speed_mps)} m/s`));

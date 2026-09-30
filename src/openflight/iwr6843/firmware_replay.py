@@ -304,9 +304,6 @@ class ReplayConfig:
     azimuth_offset_rad: float = 0.0
     elevation_offset_deg: float = 0.0
     range_bias_m: float = 0.0
-    # "trackCfg impact ... armed 1": the geometric impact fires the capture
-    # too. The club track's range-only impact always does.
-    geometry_armed: bool = False
     # Frames after the trigger fires go to the ball tracker, as the board's
     # post movie does; a locked ball at dest_bin makes the shot require one.
     post_impact: bool = True
@@ -507,7 +504,7 @@ def _impact_fit_summary(fit: fw.ImpactFit) -> ImpactFitSummary:
 
 @dataclass(frozen=True)
 class ReplayFrame:
-    """What one frame did to the trigger, the track and the impact detector."""
+    """What one frame did to the trigger, the track and the range-only impact."""
 
     frame: int
     timestamp_us: int
@@ -559,12 +556,11 @@ class ReplayResult:
     frames: list[ReplayFrame]
     points: list[PointSummary]  # every appended point, beyond the C ring's depth
     # The self-trigger's fire, the frame the board freezes on: the club
-    # track's range-only impact, or an armed geometric one if it came first.
+    # track's range-only impact.
     fired_frame: int | None
-    geometric_frame: int | None  # the geometric impact detector's fire
-    impact_timestamp_us: int | None  # interpolated impact time from the geometry
+    impact_timestamp_us: int | None  # the range impact's crossing time, when it fired
     delivery: DeliverySummary | None  # at the end of the replay
-    impact_status: str  # l3_impact_format at the end of the replay
+    impact_status: str  # l3_impact_format (the range impact) at the end of the replay
     launch: LaunchSummary | None  # from the ball tracker, when a flight was confirmed
     ball_points: list[PointSummary]
     ball_angle: AngleSummary | None  # the locked ball's measured direction, when trusted
@@ -907,6 +903,7 @@ def replay_dump(
 
     impact_cfg = fw.ImpactCfg()
     lib.l3_impact_cfg_defaults(ctypes.byref(impact_cfg))
+    # The range-only impact: the self-trigger (l3_impact_update_range).
     impact = fw.Impact()
     lib.l3_impact_init(ctypes.byref(impact), ctypes.byref(impact_cfg))
     destination = config.destination
@@ -929,8 +926,6 @@ def replay_dump(
     fit = fw.ImpactFit()
     lib.l3_impact_fit_reset(ctypes.byref(fit))
     fitted_frozen_us: int | None = None  # the frozen time the fit replaced
-    range_impact = fw.Impact()
-    lib.l3_impact_init(ctypes.byref(range_impact), ctypes.byref(impact_cfg))
     range_frame: int | None = None
     club_reader = fw.fit_reader(lib, "l3_fit_span_point")
     delivery = fw.Delivery()
@@ -1009,7 +1004,6 @@ def replay_dump(
     frames: list[ReplayFrame] = []
     points: list[PointSummary] = []
     fired_frame: int | None = None
-    geometric_frame: int | None = None
     retain_cfg = _retain_cfg(lib, config.retain) if config.retain is not None else None
     retain_windows: dict[int, fw.RetainWindow] = {}
     post_index = 0
@@ -1249,11 +1243,6 @@ def replay_dump(
             ball_elevation,
             ctypes.byref(ball_position),
         )
-        geometric = lib.l3_impact_update(
-            ctypes.byref(impact), ctypes.byref(delivery), ctypes.byref(ball_position), 1
-        )
-        if geometric and geometric_frame is None:
-            geometric_frame = frame
         club_span = fw.FitSpan(ctypes.pointer(track), 0, track.count)
         club_in = fw.FitEstimate()
         lib.l3_impact_fit_track(
@@ -1266,17 +1255,14 @@ def replay_dump(
             ctypes.byref(club_in),
         )
         ranged = lib.l3_impact_update_range(
-            ctypes.byref(range_impact), ctypes.byref(club_in), timestamp_us
+            ctypes.byref(impact), ctypes.byref(club_in), timestamp_us
         )
         if ranged and range_frame is None:
             range_frame = frame
-        # l3_considerSelfTrigger: the range-only impact fires, the geometric
-        # one only once armed. A sound-triggered recording's impact is
-        # post_from_frame, so nothing before it fires.
-        accepted = (
-            0 if early else lib.l3_shot_fire_sources(config.geometry_armed, geometric, ranged)
-        )
-        fired = bool(accepted)
+        # l3_considerSelfTrigger: the range-only impact fires. A
+        # sound-triggered recording's impact is post_from_frame, so nothing
+        # before it fires.
+        fired = bool(ranged) and not early
         if fired and fired_frame is None:
             fired_frame = frame
         # The shot machine, as l3_shotObserve feeds it; IMPACT arms the ball tracker.
@@ -1285,12 +1271,9 @@ def replay_dump(
         shot_in.ballPosition = ball_position
         shot_in.clubActive = track.active
         shot_in.clubPoints = track.count
-        shot_in.geometricFired = 1 if accepted & fw.SHOT_IMPACT_GEOMETRY else 0
-        shot_in.rangeFired = 1 if accepted & fw.SHOT_IMPACT_RANGE else 0
-        if shot_in.geometricFired and impact.fired:
+        shot_in.rangeFired = 1 if fired else 0
+        if fired and impact.fired:
             shot_in.impactTimestampUs = int(impact.impactTimestampUs)
-        elif shot_in.rangeFired and range_impact.fired:
-            shot_in.impactTimestampUs = int(range_impact.impactTimestampUs)
         else:
             shot_in.impactTimestampUs = timestamp_us
         shot_in.delivery = ctypes.pointer(delivery)
@@ -1345,7 +1328,6 @@ def replay_dump(
         frames=frames,
         points=points,
         fired_frame=fired_frame,
-        geometric_frame=geometric_frame,
         impact_timestamp_us=int(impact.impactTimestampUs) if impact.fired else None,
         delivery=_delivery_summary(delivery),
         impact_status=fw.c_text(lib.l3_impact_format, ctypes.byref(impact), cap=240),
@@ -1838,7 +1820,7 @@ class Expectation:
     """What a recording is expected to produce: ranges, not exact values.
 
     Keys of the manifest's ``expect`` entry: ``impact_frame`` [lo, hi] (the
-    self-trigger's fire), ``geometric_frame`` [lo, hi], ``club_points_min``,
+    self-trigger's fire), ``club_points_min``,
     ``club_direction`` ("approaching"), ``acquisitions_max``,
     ``ball_origin_bin`` [lo, hi] (the first ball point), ``ball_speed_mps``
     [lo, hi], ``club_speed_mps`` [lo, hi], ``fires`` (true/false),
@@ -1848,7 +1830,6 @@ class Expectation:
     """
 
     impact_frame: tuple[int, int] | None = None
-    geometric_frame: tuple[int, int] | None = None
     club_points_min: int | None = None
     club_direction: str | None = None
     acquisitions_max: int | None = None
@@ -1867,7 +1848,6 @@ class Expectation:
         values = dict(raw)
         for key in (
             "impact_frame",
-            "geometric_frame",
             "ball_origin_bin",
             "ball_speed_mps",
             "club_speed_mps",
@@ -1893,7 +1873,6 @@ class Expectation:
         if self.fires is not None and (result.fired_frame is not None) != self.fires:
             failures.append(f"fires: {result.fired_frame is not None}, expected {self.fires}")
         in_range("impact_frame", result.fired_frame, self.impact_frame)
-        in_range("geometric_frame", result.geometric_frame, self.geometric_frame)
         if self.club_points_min is not None and len(result.points) < self.club_points_min:
             failures.append(f"club_points: {len(result.points)} < {self.club_points_min}")
         if self.club_direction == "approaching" and result.approach_fraction < 0.75:
@@ -1993,11 +1972,10 @@ def _delivery_line(result: ReplayResult) -> str:
         return "delivery: none"
     path = "-" if d.path_deg is None else f"{d.path_deg:+.1f} deg"
     attack = "-" if d.attack_deg is None else f"{d.attack_deg:+.1f} deg"
-    geometric = "-" if result.geometric_frame is None else str(result.geometric_frame)
     return (
         f"delivery: {d.points} points, speed {d.speed_mps:.1f} m/s (radial {d.radial_speed_mps:.1f}), "
         f"path {path}, attack {attack}, residual {1000 * d.residual_m:.1f} mm, "
-        f"confidence {d.confidence:.2f}; geometric impact frame {geometric}"
+        f"confidence {d.confidence:.2f}"
     )
 
 

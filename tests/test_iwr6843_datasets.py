@@ -106,7 +106,6 @@ class _Result:
 
     def __init__(self, **kw):
         self.fired_frame = kw.get("fired_frame", 11)
-        self.geometric_frame = kw.get("geometric_frame", 11)
         self.points = [object()] * kw.get("points", 8)
         self.approach_fraction = kw.get("approach", 1.0)
         self.acquisitions = kw.get("acquisitions", 1)

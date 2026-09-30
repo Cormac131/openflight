@@ -643,7 +643,8 @@ class IWR6843Radar:
 
     def club_track(self) -> str:
         """``triggerLog track``: the club track, its delivery fit, the newest
-        angle estimate, the geometric impact verdict and every held point."""
+        angle estimate, the range impact verdict that fires the self-trigger,
+        the impact fit and every held point."""
         return self.cmd("triggerLog track", 3.0)
 
     def shot_status(self) -> str:

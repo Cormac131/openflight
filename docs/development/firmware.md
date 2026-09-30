@@ -138,7 +138,7 @@ triggerCfg <globalBin> <snr> <on> [approach past stat]
 triggerLog [trace|track|shot|result|perf|clear]
 trackCfg cal <pitchDeg> <yawDeg> <rollDeg> <azOffsetRad> <elOffsetDeg> <rangeBiasM>
 trackCfg elem <index> <phaseRad> <gain>
-trackCfg impact <toleranceM> <horizonS> <minSpeedMps> <minConfidence> <armed>
+trackCfg impact <horizonS>
 captureCfg adaptive <enabled> <approachBins> <marginBins>
 ```
 
@@ -149,8 +149,9 @@ The optional values default to 12 approach bins (about 0.56 m short of the
 tee), 3 bins past it, and the strongest-loop statistic (`stat` 1; 0 selects the
 energy over all loops once the club is known to be seen). A longer line, one
 still carrying the gate's `minCoh minStep minSpeed minApproach`, is refused
-rather than half applied. `trackCfg impact ... armed 1` lets the geometric
-impact fire the capture as well as the range-only one.
+rather than half applied. `trackCfg impact <horizonS>` sets how close to the
+frame's time the club's predicted crossing must be (default 4 ms); the old
+five-value line of the removed geometric detector is refused.
 
 `triggerLog` prints the front end's frame count, floor and threshold, then its
 configuration. After a missed swing, read `triggerLog track` (the club track,
@@ -225,7 +226,7 @@ snapshot by summing each channel's burst-MTI residual coherently over the
 loops with that per-loop phase unwound, and estimates angles for the
 associated club target only, once its track has a range rate.
 
-### Club delivery, geometric impact, ball flight, result
+### Club delivery, range impact, ball flight, result
 
 Each club-track point carries a golf-frame position from its range and
 whatever angles it measured. `l3_track_delivery` fits x, y and z against
@@ -236,15 +237,14 @@ elevation adds attack; azimuth adds path), with the radial speed kept for
 cross-checking. `triggerLog track` prints the delivery line and the newest
 angle estimate beside the track.
 
-`l3_impact.c` judges the delivery against the ball position (the locked
-ball, else the tee, on boresight until the ball detector measures angles):
-the closest approach of the fitted line and the moment it happens, which
-dates impact between frames. Contact within the tolerance and the horizon
-fires; a line that misses by more is a practice swing; a slow mover is a
-body. It records its verdict every frame and fires the capture only when
-`trackCfg impact ... 1` arms it. The range-only impact (the club-in line
-crossing the ball's range) always fires, and `triggerLog track` reports which
-fired.
+`l3_impact.c` is the range-only impact that fires the self-trigger: the
+club-in line fitted to the track's range points (`l3_impact_fit_track`)
+crosses the ball's range, and impact is declared when that crossing is within
+the horizon of the current frame's time, which dates impact between frames.
+It needs no angles. A geometric detector once judged the delivery's 3D line
+against the ball's position; it was removed on 2026-09-30, since the kiosk
+never armed it and it never fired on the recorded swings. `triggerLog track`
+prints the `range impact` verdict every frame.
 
 `l3_shot.c` is the explicit per-shot sequence: WAITING_FOR_BALL, READY,
 CLUB_ACQUIRE, CLUB_TRACK, IMPACT, BALL_TRACK, SOLVE, RESULT. IMPACT freezes
@@ -490,8 +490,7 @@ been run. The angle estimator wants a corner reflector at 0, +/-10 and
 +/-20 degrees and known heights, and the reference calibration loaded with
 `trackCfg cal` and `trackCfg elem`. The six core measurements need a
 reference monitor over 30 to 50 shots per club (`tests/radar/datasets/`).
-The geometric impact detector runs in observe-only mode until those swings
-show it firing where the gate does. The spin probe's thresholds are
+The spin probe's thresholds are
 placeholders until stationary, low-spin and high-spin balls have been
 recorded. Loop counts are chosen from
 `scripts/analysis/evaluate_iwr_profiles.py` on real captures, not from
@@ -586,7 +585,7 @@ change what comes next.
           |                 |
           |        speed / path / attack (l3_track_delivery)
           |                 |
-          +------> IMPACT <-+   range-only or (armed) geometry (l3_impact)
+          +------> IMPACT <-+   range-only impact (l3_impact)
                     |
                     v      shot machine (l3_shot)
                BALL TRACKER (l3_ball_track)

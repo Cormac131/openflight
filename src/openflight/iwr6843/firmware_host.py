@@ -79,17 +79,7 @@ ANGLE_AZIMUTH, ANGLE_ELEVATION = 1, 2
 LAUNCH_NO_LATE = 0xFF
 
 # l3_impact.h
-IMPACT_WHY_NAMES = (
-    "none",
-    "noball",
-    "nodelivery",
-    "slow",
-    "unsure",
-    "far",
-    "pending",
-    "passed",
-    "fired",
-)
+IMPACT_WHY_NAMES = ("none", "nodelivery", "pending", "passed", "fired")
 
 # l3_impact_fit.h
 FIT_MAX_POINTS = 8
@@ -579,26 +569,18 @@ class FollowCtx(ctypes.Structure):
 class ImpactCfg(ctypes.Structure):
     """``l3_impact_cfg_t``."""
 
-    _fields_ = [
-        ("toleranceM", ctypes.c_float),
-        ("horizonS", ctypes.c_float),
-        ("minSpeedMps", ctypes.c_float),
-        ("minConfidence", ctypes.c_float),
-    ]
+    _fields_ = [("horizonS", ctypes.c_float)]
 
 
 class Impact(ctypes.Structure):
-    """``l3_impact_t``: the geometric impact detector."""
+    """``l3_impact_t``: the range-only impact, the self-trigger."""
 
     _fields_ = [
         ("cfg", ImpactCfg),
         ("fired", ctypes.c_uint8),
         ("why", ctypes.c_uint8),
-        ("closestM", ctypes.c_float),
         ("offsetS", ctypes.c_float),
         ("impactTimestampUs", ctypes.c_uint32),
-        ("contact", Vec3),
-        ("velocity", Vec3),
         ("counters", ctypes.c_uint32 * len(IMPACT_WHY_NAMES)),
     ]
 
@@ -679,7 +661,6 @@ class ShotInput(ctypes.Structure):
         ("ballPosition", Vec3),
         ("clubActive", ctypes.c_uint8),
         ("clubPoints", ctypes.c_uint32),
-        ("geometricFired", ctypes.c_uint8),
         ("impactTimestampUs", ctypes.c_uint32),
         ("delivery", ctypes.POINTER(Delivery)),
         ("club", ctypes.POINTER(ClubTrack)),
@@ -1362,8 +1343,6 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_impact_cfg_defaults": ([_P(ImpactCfg)], None),
     "l3_impact_init": ([_P(Impact), _P(ImpactCfg)], None),
     "l3_impact_rearm": ([_P(Impact)], None),
-    "l3_impact_closest": ([_P(Vec3), _P(Vec3), _P(Vec3), _P(_F32), _P(_F32), _P(Vec3)], None),
-    "l3_impact_update": ([_P(Impact), _P(Delivery), _P(Vec3), ctypes.c_uint8], ctypes.c_int32),
     "l3_impact_update_range": ([_P(Impact), _P(FitEstimate), _U32], ctypes.c_int32),
     "l3_impact_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_impact_format": ([_P(Impact), *_TEXT], ctypes.c_int32),
@@ -1516,7 +1495,6 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_shot_update": ([_P(Shot), _P(ShotInput), _U32], ctypes.c_uint8),
     "l3_shot_wants_departing": ([_P(Shot)], ctypes.c_int32),
     "l3_shot_state_name": ([ctypes.c_uint8], ctypes.c_char_p),
-    "l3_shot_fire_sources": ([ctypes.c_uint8, ctypes.c_int32, ctypes.c_int32], ctypes.c_uint8),
     "l3_shot_source_name": ([ctypes.c_uint8, ctypes.c_char_p, _U32], ctypes.c_char_p),
     "l3_shot_format": ([_P(Shot), *_TEXT], ctypes.c_int32),
     "l3_track_format_point": ([_P(TrackPoint), _U32, *_TEXT], ctypes.c_int32),

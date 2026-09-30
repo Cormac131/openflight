@@ -207,20 +207,19 @@ the swing and prints it under `shot evidence (after the fire)`:
 clubtrack active=0 why=idle count=6 ... speed=22.34 fit=6 residual=0.11 ...
 delivery points=5 az=5 el=5 speed=22.40 radial=22.20 path=2.70 attack=0.00 residualmm=0.80 conf=0.58 valid=spa
  angle az=-0.20 el=0.00 coh=1.00 peak=8.1 psi=3.50 valid=ae estimates=5
-impact fired=1 why=fired closestcm=0.07 offsetms=3.22 t=23216 ... armed=0 source=1
-shot state=result since=14 impact=20000 source=gate origin=1.36,0.00,0.00 club=6 post=9 transitions=6
+range impact fired=1 why=fired offsetms=3.22 t=23216 pending=2 passed=0 fired_n=1
+shot state=result since=14 impact=23216 source=range origin=1.36,0.00,0.00 club=6 post=9 transitions=6
 balltrack armed=1 confirmed=1 done=1 why=lost count=7 origin=29.00 bin=60.03 impact=20000 acq=1 slow=0 fast=0 lost=4 post=9
 launch points=5 speed=61.00 radial=60.40 hla=2.00 vla=12.10 residualmm=5.60 conf=0.71 valid=shv
-result v1 shot=1 verdict=valid valid=0x1ff quality=0x7ff impact=20000 source=gate club=6 ball=7 smash=1.50 ready=1
+result v2 shot=1 verdict=valid valid=0x1ff quality=0x3ff impact=23216 source=range club=6 ball=7 smash=1.50 ready=1
 ```
 
 Read it as a chain of evidence. `delivery valid=spa` means speed, path and
 attack were all measured (angles came through); `valid=s` alone means the
-club was seen in range only. `impact source=` says which detector fired: 4
-the range-only impact (the club track's line crossing the ball's range), 2
-the geometry, 6 both; the geometric detector fires the capture only once
-`trackCfg impact ... 1` arms it. 1 was the range gate, removed on 2026-09-30,
-and only appears in results from older firmware. `shot state=result` with
+club was seen in range only. `source=range` is the range-only impact, the
+club track's line crossing the ball's range, which fires the self-trigger.
+`gate`, `geometry` and `both` (and the `geometric_impact` quality bit) come
+only from firmware before 2026-09-30, when those detectors were removed. `shot state=result` with
 `launch valid=shv` is a complete post-impact measurement; `balltrack
 confirmed=0` means nothing left the origin fast enough to be a ball (a
 practice swing, or the ball was not where the destination bin said).

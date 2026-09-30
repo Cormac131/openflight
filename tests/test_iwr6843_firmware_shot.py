@@ -99,9 +99,9 @@ def test_before_impact_the_club_is_the_target_and_after_it_the_ball(lib):
     for _ in range(3):
         assert lib.l3_shot_wants_departing(ctypes.byref(m.shot)) == 0
         m.step(clubActive=1, clubPoints=3)
-    m.step(clubActive=1, clubPoints=4, geometricFired=1)
+    m.step(clubActive=1, clubPoints=4, rangeFired=1)
     assert lib.l3_shot_wants_departing(ctypes.byref(m.shot)) == 1
-    assert m.shot.impactSource == fw.SHOT_IMPACT_GEOMETRY
+    assert m.shot.impactSource == fw.SHOT_IMPACT_RANGE
 
 
 def test_without_a_required_ball_the_tee_stands_in_and_ready_is_immediate(lib):
@@ -128,8 +128,8 @@ def test_impact_can_fire_from_ready_or_acquire(lib):
     m = Machine(lib)
     m.step()
     m.step(clubActive=1, clubPoints=1)
-    assert m.step(clubActive=1, clubPoints=1, rangeFired=1, geometricFired=1) == "impact"
-    assert m.shot.impactSource == fw.SHOT_IMPACT_RANGE | fw.SHOT_IMPACT_GEOMETRY
+    assert m.step(clubActive=1, clubPoints=1, rangeFired=1) == "impact"
+    assert m.shot.impactSource == fw.SHOT_IMPACT_RANGE
 
 
 def test_impact_freezes_origin_delivery_time_and_club_trajectory(lib):
@@ -144,7 +144,7 @@ def test_impact_freezes_origin_delivery_time_and_club_trajectory(lib):
     state = m.step(
         clubActive=1,
         clubPoints=7,
-        geometricFired=1,
+        rangeFired=1,
         impactTimestampUs=23218,
         ballPosition=origin,
         delivery=ctypes.pointer(delivery),
@@ -240,29 +240,16 @@ def test_range_fire_enters_impact_with_the_range_source(lib):
     assert "source=range" in text
 
 
-# l3_shot_fire_sources: which of this frame's impact fires freeze the capture.
-# The club track's range-only impact always does; the geometric detector only
-# once armed ("trackCfg impact ... armed 1"). The range gate is gone.
-_FIRES = [(geo, r) for geo in (0, 1) for r in (0, 1)]
-
-
-def _bits(geometric: int, ranged: int) -> int:
-    return (fw.SHOT_IMPACT_GEOMETRY if geometric else 0) | (fw.SHOT_IMPACT_RANGE if ranged else 0)
-
-
-@pytest.mark.parametrize(("geometric", "ranged"), _FIRES)
-def test_the_range_impact_fires_and_the_geometric_one_only_records(lib, geometric, ranged):
-    assert lib.l3_shot_fire_sources(0, geometric, ranged) == _bits(0, ranged)
-
-
-@pytest.mark.parametrize(("geometric", "ranged"), _FIRES)
-def test_an_armed_geometric_detector_fires_too(lib, geometric, ranged):
-    assert lib.l3_shot_fire_sources(1, geometric, ranged) == _bits(geometric, ranged)
-
-
-def test_the_shot_machine_has_no_gate_input():
-    """Removed with the range gate (2026-09-30); bit 0 of impactSource stays
-    reserved so result packets from older firmware still decode."""
-    assert "gateFired" not in {name for name, _type in fw.ShotInput._fields_}
-    assert fw.SHOT_IMPACT_GATE == 1
+def test_the_shot_machine_has_only_the_range_impact_input():
+    """The range gate and the geometric detector were removed (2026-09-30);
+    their impactSource bits (1 and 2) stay reserved so result packets from
+    older firmware still decode."""
+    inputs = {name for name, _type in fw.ShotInput._fields_}
+    assert "rangeFired" in inputs
+    assert not inputs & {"gateFired", "geometricFired"}
+    assert (fw.SHOT_IMPACT_GATE, fw.SHOT_IMPACT_GEOMETRY, fw.SHOT_IMPACT_RANGE) == (1, 2, 4)
     assert not hasattr(fw, "FIRE_MODE_NAMES")
+
+
+def test_there_is_no_fire_source_choice_left(lib):
+    assert not hasattr(lib, "l3_shot_fire_sources")

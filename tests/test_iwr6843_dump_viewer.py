@@ -93,7 +93,6 @@ def test_options_coerce_form_strings_and_skip_blanks():
             "dest_bin": "",
             "snr": "6.5",
             "stat": "energy",
-            "geometry_armed": "true",
             "stop_at_fire": False,
             "post_from_frame": None,
             "tee_range_m": " ",
@@ -103,7 +102,6 @@ def test_options_coerce_form_strings_and_skip_blanks():
     assert options.dest_bin == 38  # blank means unset → form default
     assert options.snr == 6.5
     assert options.stat == "energy"
-    assert options.geometry_armed is True
     assert options.stop_at_fire is False
     assert options.post_from_frame is None
     assert options.tee_range_m == dv.ViewerOptions().tee_range_m
@@ -114,14 +112,10 @@ def test_options_read_falsy_checkbox_strings_as_false(text):
     assert dv.ViewerOptions.from_mapping({"stop_at_fire": text}).stop_at_fire is False
 
 
-def test_options_fire_on_the_club_track_with_the_geometry_unarmed_by_default():
-    assert dv.ViewerOptions().geometry_armed is False
-    assert dv.ViewerOptions.for_recording({}).geometry_armed is False
-
-
 def test_the_gate_options_are_gone():
-    """The range gate and its track-frame count were removed (2026-09-30)."""
-    for gone in ("track_frames", "fire_mode", "impact_armed"):
+    """The range gate, its track-frame count and the geometric detector were
+    removed (2026-09-30)."""
+    for gone in ("track_frames", "fire_mode", "impact_armed", "geometry_armed"):
         with pytest.raises(ValueError, match=f"unknown options: {gone}"):
             dv.ViewerOptions.from_mapping({gone: "1"})
 

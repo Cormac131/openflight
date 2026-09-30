@@ -30,6 +30,8 @@ _SIZES = {1: PACKET_V1.size, 2: PACKET_V2_SIZE}
 ANGLE_METRICS = frozenset(
     {"vertical_launch", "horizontal_launch", "club_path", "angle_of_attack", "spin_axis"}
 )
+# gate and geometry come only from firmware before 2026-09-30, when both
+# detectors were removed; current firmware reports range alone.
 _IMPACT_SOURCE_BITS = (
     ("gate", fw.SHOT_IMPACT_GATE),
     ("geometry", fw.SHOT_IMPACT_GEOMETRY),

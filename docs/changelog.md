@@ -18,7 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   club-in line crossing the tee's range within 4 ms) fires on 19 of those 20,
   18 within three frames of the recorded freeze. It already ran on every
   frame, recording only; it is now what freezes the capture.
-  `trackCfg impact ... armed 1` still lets the geometric impact fire too.
 
 ### Removed
 - **The IWR6843 range gate.** Its tracker, state machine, flight recorder and
@@ -33,6 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test_iwr_firmware.py` went with it; those tools now report the club track
   that fired. Bit 0 (`gate`) of the shot's impact source is reserved so older
   result packets still decode. Needs a firmware rebuild and reflash.
+- **The IWR6843 geometric impact detector.** It judged the club's fitted 3D
+  line against the ball's position and only fired once armed
+  (`trackCfg impact ... armed 1`), which the kiosk never did; it never fired
+  on the recorded swings. `trackCfg impact` is now `<horizonS>` for the
+  range-only impact (the old five-value line is refused), `triggerLog track`
+  prints only the `range impact` line, and the replay loses
+  `geometry_armed` and `geometric_frame` (the viewer its checkbox, the A/B
+  compare its row). The `geometry` source bit and the `geometric_impact`
+  quality bit stay reserved for older result packets.
 
 ### Changed
 - **IWR6843 tee and net distances are measured from the enclosure front; the

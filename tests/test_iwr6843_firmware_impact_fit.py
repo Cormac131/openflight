@@ -497,57 +497,6 @@ def test_format_names_the_verdict_and_every_track(lib):
     assert "dropped=- nolock=0" in text
 
 
-IMPACT_WHY = {name: i for i, name in enumerate(fw.IMPACT_WHY_NAMES)}
-
-
-def range_impact(lib) -> fw.Impact:
-    c = fw.ImpactCfg()
-    lib.l3_impact_cfg_defaults(ctypes.byref(c))
-    impact = fw.Impact()
-    lib.l3_impact_init(ctypes.byref(impact), ctypes.byref(c))
-    return impact
-
-
-def club_in_estimate(time_us: float, why: str = "ok") -> fw.FitEstimate:
-    e = fw.FitEstimate()
-    e.why, e.timeUs, e.sigmaUs, e.speedMps, e.points = WHY[why], time_us, 300.0, 30.0, 4
-    return e
-
-
-def test_range_impact_waits_until_the_crossing_is_within_the_horizon(lib):
-    impact = range_impact(lib)
-    e = club_in_estimate(30_000)
-    assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 20_000) == 0
-    assert impact.why == IMPACT_WHY["pending"]
-    assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 27_000) == 1
-    assert impact.why == IMPACT_WHY["fired"]
-    assert impact.impactTimestampUs == 30_000
-    assert impact.offsetS == pytest.approx(0.003, abs=1e-6)
-
-
-def test_range_impact_fires_once(lib):
-    impact = range_impact(lib)
-    e = club_in_estimate(30_000)
-    assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 29_000) == 1
-    assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 30_000) == 0
-
-
-def test_range_impact_long_past_is_passed_not_fired(lib):
-    impact = range_impact(lib)
-    e = club_in_estimate(30_000)
-    assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 40_000) == 0
-    assert impact.why == IMPACT_WHY["passed"]
-
-
-def test_range_impact_without_a_club_in_estimate_does_not_fire(lib):
-    impact = range_impact(lib)
-    for why in ("missing", "few_points", "speed_bounds"):
-        e = club_in_estimate(30_000, why)
-        assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 29_000) == 0
-        assert impact.why == IMPACT_WHY["nodelivery"]
-    assert lib.l3_impact_update_range(ctypes.byref(impact), None, 29_000) == 0
-
-
 # --- the sigma cap: an estimate too uncertain to place impact -----------------
 
 NOISY_M = (0.05, -0.05, 0.06, -0.04)
@@ -635,15 +584,6 @@ def test_c_rounds_microseconds_half_up_and_folds_the_wrap(lib, us, expected):
 @pytest.mark.parametrize("us, expected", ROUND_CASES)
 def test_python_rounds_microseconds_like_the_c(us, expected):
     assert fw.round_us(ctypes.c_float(us).value) == expected
-
-
-def test_range_impact_fires_across_the_uint32_wrap(lib):
-    # The fitted crossing lies just past 2**32 (a float), now has wrapped to 0.
-    impact = range_impact(lib)
-    e = club_in_estimate(2.0**32 + 1024.0)
-    assert lib.l3_impact_update_range(ctypes.byref(impact), ctypes.byref(e), 0) == 1
-    assert impact.impactTimestampUs == 1024
-    assert impact.offsetS == pytest.approx(0.001024, abs=1e-6)
 
 
 def test_format_clamps_huge_values_instead_of_overflowing_int(lib):

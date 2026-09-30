@@ -135,9 +135,6 @@ void l3_result_build(const l3_shot_t *shot, const l3_ball_track_t *ball, const l
     }
     if (shot->state >= L3_SHOT_IMPACT) {
         quality |= L3_QUALITY_IMPACT_IDENTIFIED;
-        if (shot->impactSource & L3_SHOT_IMPACT_GEOMETRY) {
-            quality |= L3_QUALITY_GEOMETRIC_IMPACT;
-        }
     }
     if (fit != NULL && fit->verdict == L3_FIT_VERDICT_INCONSISTENT) {
         quality |= L3_QUALITY_IMPACT_UNCERTAIN;

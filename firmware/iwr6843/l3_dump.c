@@ -425,22 +425,17 @@ static uint32_t          gAngleEstimates;
 static l3_angle_obs_t    gBallAngle;
 static uint8_t           gBallAngleValid;
 #define L3_BALL_ANGLE_MIN_PEAK_RATIO 3.0F
-/* Geometric impact detector over the club delivery and the ball position.
- * It records its verdict every frame; it fires the capture only once armed
- * ("trackCfg impact ... 1"). The range-only impact always fires. */
+/* The range-only impact's configuration ("trackCfg impact <horizonS>"). */
 static l3_impact_cfg_t   gImpactCfg;
-static l3_impact_t       gImpact;
 static uint8_t           gImpactCfgSet;
-static uint8_t           gGeometryArmed;
 static l3_delivery_t     gDelivery;        /* the newest frame's delivery fit */
 static l3_vec3_t         gBallPosition;    /* destination in the golf frame */
-static uint8_t           gTrigFireSource;  /* L3_SHOT_IMPACT_* bits: geometry, range */
 /* The tee band (l3_band.h) and the impact from the tracks either side of it
  * (l3_impact_fit.h), as firmware_replay runs them. bandBins 0 (the default)
  * is no band: the club track, the ball tracker and the post-impact targets
  * behave exactly as before the band existed. gRangeImpact is the range-only
- * fire from the club-in estimate (l3_impact_update_range), kept apart from
- * gImpact's verdicts. "trackCfg impactFit <bandBins>" sets the band's width;
+ * impact from the club-in estimate (l3_impact_update_range): the
+ * self-trigger. "trackCfg impactFit <bandBins>" sets the band's width;
  * the defaults are set once (gImpactFitCfgSet), so a configured band
  * survives triggerCfg and sensorStart in either order. The band is placed
  * on every idle pre-impact frame on the noisiest bins near the destination
@@ -3425,14 +3420,12 @@ static void l3_trigRearm(void)
 {
     l3_applyAdaptiveWindows();
     l3_track_reset(&gClubTrack);
-    l3_impact_rearm(&gImpact);
     l3_impact_rearm(&gRangeImpact);
     l3_impact_fit_reset(&gImpactFit);
     l3_shot_rearm(&gShot);
     l3_ball_track_reset(&gBallTrack);
     memset(&gLaunch, 0, sizeof(gLaunch));
     gLaunch.lateFrom = L3_LAUNCH_NO_LATE;
-    gTrigFireSource = 0U;
     gPostTimestampUs = 0U;
     gPostFramesScored = 0U;
     gBallFloor = 0.0F;
@@ -3484,7 +3477,6 @@ static void l3_clubTrackConfigure(void)
     l3_ensureRadarCal();
     cfg.cal = gRadarCal;
     l3_track_init(&gClubTrack, &cfg);
-    l3_impact_init(&gImpact, &gImpactCfg);
     /* The fit's geometry follows the club track's; its band is left as set. */
     gImpactFitCfg.binWidthM = cfg.binWidthM;
     l3_impact_init(&gRangeImpact, &gImpactCfg);
@@ -3516,9 +3508,9 @@ static float l3_ballArmBin(uint32_t teeBin)
 
 /* The shot machine's view of one pre-impact frame. Entering IMPACT arms the
  * ball tracker at the destination (the band's far edge with a band) with the
- * impact time: the geometric detector's interpolated one when it fired, else
- * the range-only one when it fired, else this frame's. */
-static void l3_shotObserve(uint32_t teeBin, int32_t geometric, int32_t ranged)
+ * impact time: the range-only impact's crossing when it fired, else this
+ * frame's. */
+static void l3_shotObserve(uint32_t teeBin, int32_t ranged)
 {
     l3_shot_input_t in;
     uint32_t frameUs = gPreFramesCaptured * (uint32_t)gFramePeriodUs;
@@ -3528,11 +3520,8 @@ static void l3_shotObserve(uint32_t teeBin, int32_t geometric, int32_t ranged)
     in.ballPosition = gBallPosition;
     in.clubActive = gClubTrack.active;
     in.clubPoints = gClubTrack.count;
-    in.geometricFired = (uint8_t)(geometric ? 1U : 0U);
     in.rangeFired = (uint8_t)(ranged ? 1U : 0U);
-    if (geometric && gImpact.fired) {
-        in.impactTimestampUs = gImpact.impactTimestampUs;
-    } else if (ranged && gRangeImpact.fired) {
+    if (ranged && gRangeImpact.fired) {
         in.impactTimestampUs = gRangeImpact.impactTimestampUs;
     } else {
         in.impactTimestampUs = frameUs;
@@ -3844,9 +3833,7 @@ static void l3_considerSelfTrigger(uint32_t slot)
     uint32_t first;
     uint32_t count;
     uint32_t bin;
-    int32_t geometric = 0;
     int32_t ranged = 0;
-    uint8_t accepted;
     l3_track_point_t newest;
     uint32_t ticks;
     uintptr_t key;
@@ -3975,9 +3962,9 @@ static void l3_considerSelfTrigger(uint32_t slot)
             }
             l3_profileStage(L3_PROF_ANGLE, ticks);
         }
-        /* The delivery and the geometric impact verdict, every frame. The
-         * destination bin (locked ball, else the tee) on boresight is the
-         * ball position until the ball detector measures its angles. */
+        /* The delivery and the ball position every frame: the destination bin
+         * (locked ball, else the tee), on boresight until the ball detector
+         * measures its angles. The shot machine freezes both at impact. */
         ticks = Cycleprofiler_getTimeStamp();
         (void)l3_track_delivery(&gClubTrack, 8U, &gDelivery);
         if (gTrigDestBall && gBallAngleValid) {
@@ -3988,7 +3975,6 @@ static void l3_considerSelfTrigger(uint32_t slot)
             l3_frames_observe(&gRadarCal, (float)teeBin * gClubTrack.cfg.binWidthM, 0.0F, 0.0F,
                               &gBallPosition);
         }
-        geometric = l3_impact_update(&gImpact, &gDelivery, &gBallPosition, 1U);
         {
             /* Range only: the club-in line's crossing of the ball's range,
              * against this frame's clock (the club coasts across the band). */
@@ -4007,12 +3993,9 @@ static void l3_considerSelfTrigger(uint32_t slot)
         l3_profile_frame(&gProfile);
     }
     gTrigBusy = 0U;
-    /* Every impact detector that fired, whether or not it may freeze. */
-    gTrigFireSource = (uint8_t)((geometric ? L3_SHOT_IMPACT_GEOMETRY : 0U) |
-                                (ranged ? L3_SHOT_IMPACT_RANGE : 0U));
-    accepted = l3_shot_fire_sources(gGeometryArmed, geometric, ranged);
-    l3_shotObserve(teeBin, accepted & L3_SHOT_IMPACT_GEOMETRY, accepted & L3_SHOT_IMPACT_RANGE);
-    if (accepted == 0U) {
+    /* The club track's range-only impact is the self-trigger. */
+    l3_shotObserve(teeBin, ranged);
+    if (!ranged) {
         l3_noteTrigger(gClubTrack.active ? 7U : 5U, gTrig.floor);
         return;
     }
@@ -4468,27 +4451,20 @@ static int32_t l3_cli_trackCfgElem(int32_t argc, char *argv[])
     return 0;
 }
 
-/* "trackCfg impact <toleranceM> <horizonS> <minSpeedMps> <minConfidence>
- * <armed>": the geometric impact detector. armed 0 records its verdicts
- * beside the range-only impact without firing; 1 lets it fire the capture
- * too. The range-only impact fires either way. */
+/* "trackCfg impact <horizonS>": the range-only impact fires when the club's
+ * crossing of the ball's range is within this of the frame's time. The
+ * geometric detector's tolerance, speed, confidence and armed values went
+ * with it (2026-09-30), so the old five-value line is refused. */
 static int32_t l3_cli_trackCfgImpact(int32_t argc, char *argv[])
 {
-    float values[5];
+    float values[1];
 
-    if (l3_parseFloats(argc, argv, 2, 5U, values) != 0 || values[0] <= 0.0F ||
-        values[1] <= 0.0F) {
-        CLI_write("Error: trackCfg impact <toleranceM> <horizonS> <minSpeedMps> "
-                  "<minConfidence> <armed>\n");
+    if (l3_parseFloats(argc, argv, 2, 1U, values) != 0 || values[0] <= 0.0F) {
+        CLI_write("Error: trackCfg impact <horizonS>\n");
         return -1;
     }
-    l3_ensureRadarCal();
-    gImpactCfg.toleranceM = values[0];
-    gImpactCfg.horizonS = values[1];
-    gImpactCfg.minSpeedMps = values[2];
-    gImpactCfg.minConfidence = values[3];
-    gGeometryArmed = (values[4] != 0.0F) ? 1U : 0U;
-    l3_impact_init(&gImpact, &gImpactCfg);
+    l3_ensureRadarCal();  /* also fills the impact cfg's defaults once */
+    gImpactCfg.horizonS = values[0];
     l3_impact_init(&gRangeImpact, &gImpactCfg);
     CLI_write("Done\n");
     return 0;
@@ -4852,9 +4828,6 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         CLI_write("%s\n", line);
         (void)l3_angle_format(&gLastAngle, line, sizeof(line));
         CLI_write(" %s estimates=%u\n", line, (unsigned)gAngleEstimates);
-        (void)l3_impact_format(&gImpact, line, sizeof(line));
-        CLI_write("%s armed=%u source=%u\n", line, (unsigned)gGeometryArmed,
-                  (unsigned)gTrigFireSource);
         (void)l3_impact_format(&gRangeImpact, line, sizeof(line));
         CLI_write("range %s\n", line);
         (void)l3_impact_fit_format(&gImpactFit, line, sizeof(line));

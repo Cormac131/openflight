@@ -63,6 +63,8 @@ enum {
 #define L3_QUALITY_RESIDUALS_OK         128U
 #define L3_QUALITY_ANGLES_PLAUSIBLE     256U
 #define L3_QUALITY_SMASH_PLAUSIBLE      512U
+/* Reserved: the removed geometric detector's impact (2026-09-30). Never set
+ * now; kept so result packets from older firmware still decode. */
 #define L3_QUALITY_GEOMETRIC_IMPACT     1024U
 /* A warning, not evidence: the impact fit's tracks disagreed (verdict
  * inconsistent), so the impact time came from the sharpest track alone. */

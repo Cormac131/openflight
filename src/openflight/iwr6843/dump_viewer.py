@@ -48,9 +48,6 @@ class ViewerOptions:  # pylint: disable=too-many-instance-attributes
     stat: str = "peak"
     subbin: str = "parabolic"
     post_from_frame: int | None = None
-    # "trackCfg impact ... armed 1": the geometric impact fires too. The club
-    # track's range-only impact always fires the self-trigger.
-    geometry_armed: bool = False
     stop_at_fire: bool = False
     pitch_deg: float = DEFAULT_PITCH_DEG
     tee_range_m: float = st.DEFAULT_TEE_RANGE_M
@@ -265,7 +262,6 @@ def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOp
         stat=options.stat,
         subbin=options.subbin,
         post_from_frame=options.post_from_frame,
-        geometry_armed=options.geometry_armed,
         stop_at_fire=options.stop_at_fire,
         pitch_deg=options.pitch_deg,
         ball_hypotheses=options.ball_hypotheses,
@@ -298,7 +294,6 @@ def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOp
         "joint_confirmed": result.joint_confirmed,
         "joint_counters": result.joint_counters,
         "fired_frame": result.fired_frame,
-        "geometric_frame": result.geometric_frame,
         "impact_timestamp_us": result.impact_timestamp_us,
         "delivery": _jsonable(result.delivery),
         "launch": _jsonable(result.launch),

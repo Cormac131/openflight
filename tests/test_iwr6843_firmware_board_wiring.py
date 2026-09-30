@@ -104,24 +104,18 @@ def test_club_track_reads_the_helper_and_the_trigger_keeps_its_region():
 
 def test_range_impact_runs_every_pre_impact_frame_and_feeds_the_shot():
     self_trigger = body("l3_considerSelfTrigger")
-    geometric = self_trigger.index("geometric = l3_impact_update(&gImpact, &gDelivery,")
+    delivery = self_trigger.index("(void)l3_track_delivery(&gClubTrack, 8U, &gDelivery);")
     club_in = self_trigger.index(
         "l3_impact_fit_track(&gImpactFitCfg, L3_FIT_CLUB_IN, l3_fit_span_point,"
     )
     ranged = self_trigger.index("ranged = l3_impact_update_range(&gRangeImpact, &clubIn,")
-    assert geometric < club_in < ranged
-    assert "(ranged ? L3_SHOT_IMPACT_RANGE : 0U)" in self_trigger
-    # The range-only impact always fires; the geometric one only once armed.
-    decide = self_trigger.index(
-        "accepted = l3_shot_fire_sources(gGeometryArmed, geometric, ranged);"
-    )
-    observe_call = self_trigger.index("l3_shotObserve(teeBin, accepted & L3_SHOT_IMPACT_GEOMETRY,")
-    assert ranged < decide < observe_call
+    assert delivery < club_in < ranged
+    # The range-only impact is the self-trigger: it feeds the shot, then freezes.
+    observe_call = self_trigger.index("l3_shotObserve(teeBin, ranged);")
+    assert ranged < observe_call < self_trigger.index("if (!ranged) {")
     observe = body("l3_shotObserve")
     assert "in.rangeFired = (uint8_t)(ranged ? 1U : 0U);" in observe
-    assert observe.index("in.impactTimestampUs = gImpact.impactTimestampUs;") < observe.index(
-        "in.impactTimestampUs = gRangeImpact.impactTimestampUs;"
-    ), "the geometric time wins over the range time"
+    assert "in.impactTimestampUs = gRangeImpact.impactTimestampUs;" in observe
 
 
 def test_post_impact_targets_are_band_filtered():
@@ -186,7 +180,7 @@ def test_band_command_is_a_track_cfg_sub_mode():
 
 def test_track_log_prints_the_impact_fit_after_the_impact():
     log = body("l3_cli_triggerLog")
-    assert log.index("l3_impact_format(&gImpact, line, sizeof(line));") < log.index(
+    assert log.index("l3_impact_format(&gRangeImpact, line, sizeof(line));") < log.index(
         "l3_impact_fit_format(&gImpactFit, line, sizeof(line));"
     )
 
