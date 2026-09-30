@@ -63,6 +63,7 @@
 #include "l3_adaptive.h"
 #include "l3_band.h"
 #include "l3_impact.h"
+#include "l3_leave.h"
 #include "l3_impact_fit.h"
 #include "l3_iq8.h"
 #include "l3_iq16_stats.h"
@@ -447,6 +448,7 @@ static l3_band_t           gBand;
 static l3_band_noise_t     gBandNoise;
 static uint8_t             gBandFrozen;
 static l3_impact_t         gRangeImpact;   /* range-only fire (l3_impact_update_range) */
+static l3_leave_t          gLeave;         /* ball-leave fallback (l3_leave_update) */
 static l3_impact_fit_t     gImpactFit;
 static uint8_t             gImpactFitCfgSet;
 #define L3_IMPACT_FIT_MAX_BAND_BINS 64.0F
@@ -3421,6 +3423,7 @@ static void l3_trigRearm(void)
     l3_applyAdaptiveWindows();
     l3_track_reset(&gClubTrack);
     l3_impact_rearm(&gRangeImpact);
+    l3_leave_rearm(&gLeave);
     l3_impact_fit_reset(&gImpactFit);
     l3_shot_rearm(&gShot);
     l3_ball_track_reset(&gBallTrack);
@@ -3480,6 +3483,13 @@ static void l3_clubTrackConfigure(void)
     /* The fit's geometry follows the club track's; its band is left as set. */
     gImpactFitCfg.binWidthM = cfg.binWidthM;
     l3_impact_init(&gRangeImpact, &gImpactCfg);
+    {
+        l3_leave_cfg_t leaveCfg;
+
+        l3_leave_cfg_defaults(&leaveCfg);
+        leaveCfg.binWidthM = cfg.binWidthM;
+        l3_leave_init(&gLeave, &leaveCfg);
+    }
     l3_impact_fit_reset(&gImpactFit);
     /* The ball track shares the club track's geometry; the shot machine
      * gives the ball tracker the whole post movie. */
@@ -3510,7 +3520,7 @@ static float l3_ballArmBin(uint32_t teeBin)
  * ball tracker at the destination (the band's far edge with a band) with the
  * impact time: the range-only impact's crossing when it fired, else this
  * frame's. */
-static void l3_shotObserve(uint32_t teeBin, int32_t ranged)
+static void l3_shotObserve(uint32_t teeBin, int32_t fired, uint32_t impactUs)
 {
     l3_shot_input_t in;
     uint32_t frameUs = gPreFramesCaptured * (uint32_t)gFramePeriodUs;
@@ -3520,12 +3530,8 @@ static void l3_shotObserve(uint32_t teeBin, int32_t ranged)
     in.ballPosition = gBallPosition;
     in.clubActive = gClubTrack.active;
     in.clubPoints = gClubTrack.count;
-    in.rangeFired = (uint8_t)(ranged ? 1U : 0U);
-    if (ranged && gRangeImpact.fired) {
-        in.impactTimestampUs = gRangeImpact.impactTimestampUs;
-    } else {
-        in.impactTimestampUs = frameUs;
-    }
+    in.rangeFired = (uint8_t)(fired ? 1U : 0U);
+    in.impactTimestampUs = fired ? impactUs : frameUs;
     in.delivery = &gDelivery;
     in.club = &gClubTrack;
     if (l3_shot_update(&gShot, &in, gPreFramesCaptured) == L3_SHOT_IMPACT &&
@@ -3795,7 +3801,8 @@ static uint32_t l3_preImpactClubTargets(const l3_detect_frame_t *frame, l3_trig_
                                         uint32_t regionFirstBin, uint32_t regionCount,
                                         const l3_obs_params_t *params, float floor,
                                         uint32_t frameIndex, uint32_t frameUs,
-                                        l3_target_obs_t *targets, uint32_t *windowCount)
+                                        l3_target_obs_t *targets, uint32_t *windowCount,
+                                        int32_t *left)
 {
     *windowCount = 0U;
     if (gImpactFitCfg.bandBins > 0.0F) {
@@ -3814,6 +3821,25 @@ static uint32_t l3_preImpactClubTargets(const l3_detect_frame_t *frame, l3_trig_
             return 0U;
         }
         *windowCount = count;
+        if (gBand.valid) {
+            /* The ball-leave fallback reads the same window for its own
+             * returns, into the club's target buffer before the club's
+             * extraction overwrites it: no RAM of its own. */
+            uint32_t leaving = l3_leave_targets(&gLeave.cfg, params, obs, frame->binStart, count,
+                                                frameIndex, frameUs, gBand.hiBin, targets,
+                                                L3_OBS_MAX_TARGETS);
+            l3_track_point_t newest;
+            /* The club track as it stood after the last frame, near the band. */
+            uint8_t near = (gClubTrack.count > 0U &&
+                            l3_track_point(&gClubTrack, gClubTrack.count - 1U, &newest))
+                               ? l3_leave_club_near(&gLeave.cfg, gClubTrack.active,
+                                                    gClubTrack.count, newest.rangeBin,
+                                                    gBand.loBin)
+                               : 0U;
+
+            *left = l3_leave_update(&gLeave, targets, leaving, gBand.hiBin,
+                                    0.5F * (gBand.loBin + gBand.hiBin), near);
+        }
         found = l3_obs_extract(params, frameIndex, frameUs, frame->binStart, obs, count,
                                floor, targets, L3_OBS_MAX_TARGETS);
         return l3_band_keep_short(&gBand, targets, found);
@@ -3834,6 +3860,9 @@ static void l3_considerSelfTrigger(uint32_t slot)
     uint32_t count;
     uint32_t bin;
     int32_t ranged = 0;
+    int32_t left = 0;
+    int32_t fired;
+    uint32_t impactUs;
     l3_track_point_t newest;
     uint32_t ticks;
     uintptr_t key;
@@ -3916,7 +3945,7 @@ static void l3_considerSelfTrigger(uint32_t slot)
         found = l3_preImpactClubTargets(&frame, obs, frame.binStart + first, count, &params,
                                         gTrig.floor, gPreFramesCaptured,
                                         gPreFramesCaptured * (uint32_t)gFramePeriodUs, targets,
-                                        &windowCount);
+                                        &windowCount, &left);
         l3_profileStage(L3_PROF_EXTRACT, ticks);
         gClubTrackDest = teeBin;
         ticks = Cycleprofiler_getTimeStamp();
@@ -4005,8 +4034,11 @@ static void l3_considerSelfTrigger(uint32_t slot)
     }
     gTrigBusy = 0U;
     /* The club track's range-only impact is the self-trigger. */
-    l3_shotObserve(teeBin, ranged);
-    if (!ranged) {
+    /* The club rules, else the ball leaving: each dates its own impact. */
+    fired = (ranged || left) ? 1 : 0;
+    impactUs = ranged ? gRangeImpact.impactTimestampUs : gLeave.impactTimestampUs;
+    l3_shotObserve(teeBin, fired, impactUs);
+    if (!fired) {
         l3_noteTrigger(gClubTrack.active ? 7U : 5U, gTrig.floor);
         return;
     }
@@ -4848,6 +4880,8 @@ static int32_t l3_cli_triggerLog(int32_t argc, char *argv[])
         CLI_write(" %s estimates=%u\n", line, (unsigned)gAngleEstimates);
         (void)l3_impact_format(&gRangeImpact, line, sizeof(line));
         CLI_write("range %s\n", line);
+        (void)l3_leave_format(&gLeave, line, sizeof(line));
+        CLI_write("%s\n", line);
         (void)l3_impact_fit_format(&gImpactFit, line, sizeof(line));
         CLI_write("%s\n", line);
         for (index = 0U; l3_track_point(&gClubTrack, index, &point); index++) {

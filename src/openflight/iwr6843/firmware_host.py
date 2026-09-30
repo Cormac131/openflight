@@ -40,6 +40,7 @@ HOST_SOURCES = (
     "l3_joint_search.c",
     "l3_ball_hyp.c",
     "l3_impact.c",
+    "l3_leave.c",
     "l3_shot.c",
     "l3_ball_track.c",
     "l3_result.c",
@@ -81,6 +82,8 @@ LAUNCH_NO_LATE = 0xFF
 # l3_impact.h
 IMPACT_WHY_NAMES = ("none", "nodelivery", "pending", "passed", "fired")
 IMPACT_CAUSE_NAMES = ("none", "crossing", "end")
+LEAVE_CLUB_MIN_POINTS = 2  # l3_leave.h
+LEAVE_WHY_NAMES = ("none", "noclub", "idle", "far", "stood", "started", "slow", "fired")
 
 # l3_impact_fit.h
 FIT_MAX_POINTS = 8
@@ -571,6 +574,40 @@ class ImpactCfg(ctypes.Structure):
     """``l3_impact_cfg_t``."""
 
     _fields_ = [("horizonS", ctypes.c_float), ("endM", ctypes.c_float)]
+
+
+class LeaveCfg(ctypes.Structure):
+    """``l3_leave_cfg_t``."""
+
+    _fields_ = [
+        ("startBins", ctypes.c_float),
+        ("minSpeedMps", ctypes.c_float),
+        ("maxSpeedMps", ctypes.c_float),
+        ("binWidthM", ctypes.c_float),
+        ("snr", ctypes.c_float),
+        ("clubHoldFrames", ctypes.c_uint32),
+        ("clubNearBins", ctypes.c_float),
+        ("newBins", ctypes.c_float),
+    ]
+
+
+class Leave(ctypes.Structure):
+    """``l3_leave_t``: the ball-leave fallback."""
+
+    _fields_ = [
+        ("cfg", LeaveCfg),
+        ("fired", ctypes.c_uint8),
+        ("why", ctypes.c_uint8),
+        ("started", ctypes.c_uint8),
+        ("clubHold", ctypes.c_uint32),
+        ("prevCount", ctypes.c_uint32),
+        ("prevBins", ctypes.c_float * OBS_MAX_TARGETS),
+        ("startBin", ctypes.c_float),
+        ("startUs", ctypes.c_uint32),
+        ("speedMps", ctypes.c_float),
+        ("impactTimestampUs", ctypes.c_uint32),
+        ("counters", ctypes.c_uint32 * len(LEAVE_WHY_NAMES)),
+    ]
 
 
 class ImpactClub(ctypes.Structure):
@@ -1364,6 +1401,21 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     ),
     "l3_impact_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_impact_cause_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_leave_cfg_defaults": ([_P(LeaveCfg)], None),
+    "l3_leave_init": ([_P(Leave), _P(LeaveCfg)], None),
+    "l3_leave_rearm": ([_P(Leave)], None),
+    "l3_leave_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_leave_club_near": ([_P(LeaveCfg), ctypes.c_uint8, _U32, _F32, _F32], ctypes.c_uint8),
+    "l3_leave_targets": (
+        [_P(LeaveCfg), _P(ObsParams), _P(BinObs), _U32, _U32, _U32, _U32, _F32]
+        + [_P(TargetObs), _U32],
+        _U32,
+    ),
+    "l3_leave_update": (
+        [_P(Leave), _P(TargetObs), _U32, _F32, _F32, ctypes.c_uint8],
+        ctypes.c_int32,
+    ),
+    "l3_leave_format": ([_P(Leave), *_TEXT], ctypes.c_int32),
     "l3_impact_format": ([_P(Impact), *_TEXT], ctypes.c_int32),
     # l3_impact_fit.h
     "l3_impact_fit_cfg_defaults": ([_P(ImpactFitCfg)], None),
@@ -1673,6 +1725,7 @@ __all__ = [
     "FollowCtx",
     "IMPACT_CAUSE_NAMES",
     "IMPACT_WHY_NAMES",
+    "LEAVE_WHY_NAMES",
     "MEAS_FALLBACK",
     "MEAS_IMPLAUSIBLE",
     "MEAS_MEASURED",
@@ -1702,6 +1755,8 @@ __all__ = [
     "Impact",
     "ImpactCfg",
     "ImpactClub",
+    "Leave",
+    "LeaveCfg",
     "FIT_MAX_POINTS",
     "FIT_NO_TRACK",
     "FIT_TRACK_NAMES",

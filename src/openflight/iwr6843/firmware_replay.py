@@ -588,6 +588,8 @@ class ReplayResult:
     band_noise: tuple[float, ...] = ()
     band_frozen_frame: int | None = None
     range_frame: int | None = None  # the range-only impact's fire
+    leave_frame: int | None = None  # the ball-leave fallback's fire
+    leave_status: str = ""  # l3_leave_format at the end of the replay
     impact_fit: ImpactFitSummary | None = None
     impact_fit_status: str = ""
     # The shot's impact time as IMPACT froze it, before the fit refined
@@ -906,6 +908,12 @@ def replay_dump(
     # The range-only impact: the self-trigger (l3_impact_update_range).
     impact = fw.Impact()
     lib.l3_impact_init(ctypes.byref(impact), ctypes.byref(impact_cfg))
+    # The ball-leave fallback (l3_leave_update): fires when the club rules miss.
+    leave_cfg = fw.LeaveCfg()
+    lib.l3_leave_cfg_defaults(ctypes.byref(leave_cfg))
+    leave_cfg.binWidthM = RANGE_SPAN_M / config.fft_size
+    leave = fw.Leave()
+    lib.l3_leave_init(ctypes.byref(leave), ctypes.byref(leave_cfg))
     destination = config.destination
     fit_cfg = fw.ImpactFitCfg()
     lib.l3_impact_fit_cfg_defaults(ctypes.byref(fit_cfg))
@@ -927,6 +935,7 @@ def replay_dump(
     lib.l3_impact_fit_reset(ctypes.byref(fit))
     fitted_frozen_us: int | None = None  # the frozen time the fit replaced
     range_frame: int | None = None
+    leave_frame: int | None = None
     club_reader = fw.fit_reader(lib, "l3_fit_span_point")
     delivery = fw.Delivery()
     ball_position = fw.Vec3()
@@ -1192,7 +1201,12 @@ def replay_dump(
             targets,
             trigger_region=(first_bin, obs, count.value),
             band_enabled=band_enabled,
+            leave=leave,
+            leave_track=track,
         )
+        left = bool(leave.fired) and leave_frame is None
+        if left:
+            leave_frame = frame
         appended = lib.l3_track_update(ctypes.byref(track), targets, found, frame, timestamp_us)
         if band_enabled:
             # An active club track freezes the band where it stands; an idle
@@ -1268,7 +1282,7 @@ def replay_dump(
         # l3_considerSelfTrigger: the range-only impact fires. A
         # sound-triggered recording's impact is post_from_frame, so nothing
         # before it fires.
-        fired = bool(ranged) and not early
+        fired = bool(ranged or left) and not early
         if fired and fired_frame is None:
             fired_frame = frame
         # The shot machine, as l3_shotObserve feeds it; IMPACT arms the ball tracker.
@@ -1278,8 +1292,10 @@ def replay_dump(
         shot_in.clubActive = track.active
         shot_in.clubPoints = track.count
         shot_in.rangeFired = 1 if fired else 0
-        if fired and impact.fired:
+        if fired and ranged:
             shot_in.impactTimestampUs = int(impact.impactTimestampUs)
+        elif fired:
+            shot_in.impactTimestampUs = int(leave.impactTimestampUs)
         else:
             shot_in.impactTimestampUs = timestamp_us
         shot_in.delivery = ctypes.pointer(delivery)
@@ -1355,6 +1371,8 @@ def replay_dump(
         band_noise=tuple(float(v) for v in noise.avg[: noise.count]),
         band_frozen_frame=band_frozen_frame,
         range_frame=range_frame,
+        leave_frame=leave_frame,
+        leave_status=fw.c_text(lib.l3_leave_format, ctypes.byref(leave), cap=240),
         impact_fit=_impact_fit_summary(fit) if fitted_frozen_us is not None else None,
         impact_fit_status=fw.c_text(lib.l3_impact_fit_format, ctypes.byref(fit), cap=240),
         frozen_impact_timestamp_us=frozen_impact_us,
@@ -1388,6 +1406,8 @@ def _banded_window_targets(  # pylint: disable=too-many-arguments
     floor: float | None = None,
     running_floor: ctypes.c_float | None = None,
     keep_short: bool = False,
+    leave: fw.Leave | None = None,
+    leave_track: fw.ClubTrack | None = None,
 ) -> tuple[int, int, float, ctypes.Array]:
     """The whole frame window as targets with the tee band removed:
     ``l3_obs_extract`` over local bins ``0..count`` (global first bin
@@ -1397,7 +1417,10 @@ def _banded_window_targets(  # pylint: disable=too-many-arguments
     disabled band removes nothing. The floor is either given (the trigger's,
     before impact) or a running one updated from this window first (the post
     window's own, as gBallFloor). Returns (targets kept, bins scored, floor,
-    the scored bins' observations)."""
+    the scored bins' observations). ``leave`` reads the same observations
+    for its own targets, as l3_preImpactClubTargets feeds l3_leave_update:
+    the band's far edge and its centre (the ball's rest bin), armed by
+    ``leave_track`` near the band (l3_leave_club_near); no band, no update."""
     if (floor is None) == (running_floor is None):
         raise ValueError("give exactly one of floor and running_floor")
     count = min(window_bins, fw.TRIG_MAX_BINS)
@@ -1416,9 +1439,43 @@ def _banded_window_targets(  # pylint: disable=too-many-arguments
         targets,
         fw.OBS_MAX_TARGETS,
     )
+    if leave is not None and band.valid:
+        leaving = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
+        n_leaving = lib.l3_leave_targets(
+            ctypes.byref(leave.cfg),
+            ctypes.byref(params),
+            obs,
+            window_start,
+            count,
+            frame,
+            timestamp_us,
+            band.hiBin,
+            leaving,
+            fw.OBS_MAX_TARGETS,
+        )
+        lib.l3_leave_update(
+            ctypes.byref(leave),
+            leaving,
+            n_leaving,
+            band.hiBin,
+            0.5 * (band.loBin + band.hiBin),
+            _leave_club_near(lib, leave, leave_track, band),
+        )
     keep = lib.l3_band_keep_short if keep_short else lib.l3_band_filter
     found = keep(ctypes.byref(band), targets, found)
     return found, count, float(floor), obs
+
+
+def _leave_club_near(lib, leave: fw.Leave, track: fw.ClubTrack | None, band: fw.Band) -> int:
+    """l3_leave_club_near for the club track as it stood after the last frame,
+    as l3_preImpactClubTargets asks it."""
+    if track is None or track.count == 0:
+        return 0
+    newest = fw.TrackPoint()
+    lib.l3_track_point(ctypes.byref(track), track.count - 1, ctypes.byref(newest))
+    return lib.l3_leave_club_near(
+        ctypes.byref(leave.cfg), track.active, track.count, newest.rangeBin, band.loBin
+    )
 
 
 def _pre_impact_club_targets(  # pylint: disable=too-many-arguments
@@ -1436,6 +1493,8 @@ def _pre_impact_club_targets(  # pylint: disable=too-many-arguments
     *,
     trigger_region: tuple[int, ctypes.Array, int],
     band_enabled: bool,
+    leave: fw.Leave | None = None,
+    leave_track: fw.ClubTrack | None = None,
 ) -> tuple[int, ctypes.Array | None, int]:
     """The club track's targets on a pre-impact frame: (how many, the
     whole-window observations scored, their count) -- (n, None, 0) when the
@@ -1464,6 +1523,8 @@ def _pre_impact_club_targets(  # pylint: disable=too-many-arguments
             targets,
             floor=floor,
             keep_short=True,
+            leave=leave,
+            leave_track=leave_track,
         )
         return found, window_obs, window_count
     first_bin, obs, count = trigger_region

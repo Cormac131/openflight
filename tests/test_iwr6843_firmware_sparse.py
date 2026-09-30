@@ -616,12 +616,11 @@ def test_shot_machine_sees_every_pre_frame_and_arms_the_ball_tracker_at_impact()
     consider = _function("static void l3_considerSelfTrigger(")
     observe = _function("static void l3_shotObserve(")
 
-    assert "l3_shotObserve(teeBin, ranged);" in consider
-    assert consider.index("l3_shotObserve(") < consider.index("if (!ranged) {")
+    assert "l3_shotObserve(teeBin, fired, impactUs);" in consider
+    assert consider.index("l3_shotObserve(") < consider.index("if (!fired) {")
     assert "in.ballLocked = gTrigDestBall;" in observe
     assert "in.clubActive = gClubTrack.active;" in observe
-    assert "if (ranged && gRangeImpact.fired) {" in observe
-    assert "in.impactTimestampUs = frameUs;" in observe
+    assert "in.impactTimestampUs = fired ? impactUs : frameUs;" in observe
     assert "gShot.impactFrame == gPreFramesCaptured" in observe
     assert "l3_ball_track_arm(&gBallTrack, l3_ballArmBin(teeBin), &gBallPosition," in observe
     rearm = _function("static void l3_trigRearm(")

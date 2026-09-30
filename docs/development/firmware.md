@@ -162,6 +162,23 @@ point within `endM` of the ball's range (default 0.40 m, about 8.5 bins; 0
 turns it off), dated to that last point. `triggerLog track` prints which rule
 fired (`cause=crossing` or `cause=end`) and whether the end rule is armed.
 
+When the club is not seen before launch (the early 2026-08-09 captures lose it
+3-5 frames out), neither rule fires, so the ball leaving is a fallback
+(`l3_leave.c`, tee band on only). Before impact the band hides the ball; the
+first return to stand beyond the band's far edge, starting within 4 bins of it
+and stepping outward on the next frame at 22-90 m/s, is the ball. On every
+labelled swing the ball goes first and the club follows 1-10 frames later,
+slower. It reads its own returns: the bins beyond the band against their own
+median (6x), because the trigger's floor, learned where the club swings, sits
+above the leaving ball. Three guards keep it off clutter and noise: it is armed
+only for 10 frames after the club track came within 10 bins of the band, a
+start from nothing must have had no return within a bin of it on the frame
+before (a standing ridge beyond a band set short of the ball always does), and
+the step must be a ball's speed. Impact is dated by running the two points back
+to the band's centre. It fires about two frames after launch; at the kiosk's
+settings it fires every labelled swing, none more than three frames late.
+`triggerLog track` prints a `leave` line after the `range impact` line.
+
 `triggerLog` prints the front end's frame count, floor and threshold, then its
 configuration. After a missed swing, read `triggerLog track` (the club track,
 its delivery, and the `range impact` verdict: `nodelivery`, `pending`,

@@ -114,12 +114,61 @@ def test_range_impact_runs_every_pre_impact_frame_and_feeds_the_shot():
     club_now = self_trigger.index("clubNow.ballRangeM = (float)teeBin * gClubTrack.cfg.binWidthM;")
     took = self_trigger.index("if (appended && gClubTrack.count > 0U &&", club_now)
     assert club_in < club_now < took < self_trigger.index("clubNow.appended = 1U;") < ranged
-    # The range-only impact is the self-trigger: it feeds the shot, then freezes.
-    observe_call = self_trigger.index("l3_shotObserve(teeBin, ranged);")
-    assert ranged < observe_call < self_trigger.index("if (!ranged) {")
+    # The range-only impact or the ball-leave fallback is the self-trigger:
+    # it feeds the shot, then freezes.
+    fired = self_trigger.index("fired = (ranged || left) ? 1 : 0;")
+    observe_call = self_trigger.index("l3_shotObserve(teeBin, fired, impactUs);")
+    assert ranged < fired < observe_call < self_trigger.index("if (!fired) {")
     observe = body("l3_shotObserve")
-    assert "in.rangeFired = (uint8_t)(ranged ? 1U : 0U);" in observe
-    assert "in.impactTimestampUs = gRangeImpact.impactTimestampUs;" in observe
+    assert "in.rangeFired = (uint8_t)(fired ? 1U : 0U);" in observe
+    assert "in.impactTimestampUs = fired ? impactUs : frameUs;" in observe
+
+
+def test_the_ball_leave_fallback_reads_the_window_before_the_club_targets_reuse_it():
+    """Band on, l3_leave_targets reads the whole window the club's targets come
+    from, into the same target buffer (no new RAM), before the club's own
+    extraction overwrites it. No band, no fallback."""
+    targets = body("l3_preImpactClubTargets")
+    guard = targets.index("if (gBand.valid) {")
+    read = targets.index(
+        "uint32_t leaving = l3_leave_targets(&gLeave.cfg, params, obs, frame->binStart, count,"
+    )
+    update = targets.index("*left = l3_leave_update(&gLeave, targets, leaving, gBand.hiBin,")
+    club = targets.index(
+        "found = l3_obs_extract(params, frameIndex, frameUs, frame->binStart, obs,"
+    )
+    assert guard < read < update < club
+    # Armed by the club track as it stood after the last frame, near the band,
+    # as the replay's _leave_club_near asks it.
+    near = targets.index("? l3_leave_club_near(&gLeave.cfg, gClubTrack.active,")
+    assert read < near < update
+    assert "gClubTrack.count, newest.rangeBin," in targets[near:update]
+    assert "gBand.loBin)" in targets[near:update]
+    assert "0.5F * (gBand.loBin + gBand.hiBin), near);" in targets[update:club]
+    self_trigger = body("l3_considerSelfTrigger")
+    assert "int32_t left = 0;" in self_trigger
+    assert "&windowCount, &left);" in self_trigger
+
+
+def test_the_fire_is_dated_by_the_rule_that_fired():
+    self_trigger = body("l3_considerSelfTrigger")
+    assert (
+        "impactUs = ranged ? gRangeImpact.impactTimestampUs : gLeave.impactTimestampUs;"
+        in self_trigger
+    )
+
+
+def test_the_ball_leave_fallback_is_set_up_rearmed_and_logged():
+    assert "static l3_leave_t          gLeave;" in SOURCE
+    assert "l3_leave_rearm(&gLeave);" in body("l3_trigRearm")
+    assert "l3_leave_cfg_defaults(&leaveCfg);" in SOURCE
+    assert "leaveCfg.binWidthM = cfg.binWidthM;" in SOURCE
+    assert "l3_leave_init(&gLeave, &leaveCfg);" in SOURCE
+    log = body("l3_cli_triggerLog")
+    track = log[log.index('strcmp(argv[1], "track") == 0') :]
+    assert "(void)l3_leave_format(&gLeave, line, sizeof(line));" in track
+    makefile = (FIRMWARE_DIR / "makefile").read_text(encoding="utf-8")
+    assert " l3_leave.c " in makefile
 
 
 def test_post_impact_targets_are_band_filtered():

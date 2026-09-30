@@ -10,6 +10,7 @@ baseline. To accept a deliberate change run
 
 from __future__ import annotations
 
+import functools
 from dataclasses import replace
 
 import pytest
@@ -67,11 +68,12 @@ def _kiosk_config(config: fr.ReplayConfig, ball_bin: int) -> fr.ReplayConfig:
     )
 
 
-@needs_compiler
-def test_the_kiosk_self_trigger_fires_at_the_labelled_launch():
-    """The kiosk's settings, not the manifest's: the ball's bin is its first
-    labelled point (the tape a correctly measured tee gives), the launch frame
-    that point's frame."""
+@functools.cache
+def _kiosk_fire_offsets() -> tuple[tuple[str, int | None], ...]:
+    """(dump, fired frame - labelled launch frame, None when it never fired)
+    for every labelled swing replayed at the kiosk's settings. The ball's bin
+    is its first labelled point (the tape a correctly measured tee gives), the
+    launch frame that point's frame."""
     judged = []
     for path, config, labels in _RECORDINGS:
         if not labels.ball:
@@ -82,6 +84,12 @@ def test_the_kiosk_self_trigger_fires_at_the_labelled_launch():
         )
         offset = None if result.fired_frame is None else result.fired_frame - launch.frame
         judged.append((path.name, offset))
+    return tuple(judged)
+
+
+@needs_compiler
+def test_the_kiosk_self_trigger_fires_at_the_labelled_launch():
+    judged = _kiosk_fire_offsets()
     assert len(judged) >= 30
     near = [
         name
@@ -92,4 +100,27 @@ def test_the_kiosk_self_trigger_fires_at_the_labelled_launch():
     assert len(near) >= KIOSK_TRIGGER_MIN_SHARE * len(judged), (
         f"fired from {EARLY_FRAMES} frames before to {LATE_FRAMES} after launch on "
         f"{len(near)}/{len(judged)}; missed (fire - launch frames): {missed}"
+    )
+
+
+# The ball tracker looks for the ball within 8 bins of its rest bin after the
+# fire; at the labelled launch rates (1.5-3.6 bins a frame, median 2.8) three
+# frames is as late as a fire can come and still hand it the ball.
+LATEST_FIRE_FRAMES = 3
+
+
+@needs_compiler
+def test_every_labelled_swing_fires_at_the_kiosk_settings_before_the_ball_is_lost():
+    """When the club rules miss (the club unseen before launch, as in the early
+    2026-08-09 captures), the ball leaving still fires, late but in time."""
+    judged = _kiosk_fire_offsets()
+    unfired = [name for name, offset in judged if offset is None]
+    too_late = [
+        (name, offset)
+        for name, offset in judged
+        if offset is not None and offset > LATEST_FIRE_FRAMES
+    ]
+    assert unfired == [] and too_late == [], (
+        f"never fired: {unfired}; fired more than {LATEST_FIRE_FRAMES} frames after "
+        f"launch: {too_late}"
     )

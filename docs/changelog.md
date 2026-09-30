@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **IWR6843 self-trigger: the ball leaving fires it when the club rules miss.**
+  In the early 2026-08-09 captures the club is invisible for the 3-5 frames
+  before launch, so neither club rule fired on four swings. `l3_leave.c` fires
+  on the first return beyond the tee band's far edge that steps outward at a
+  ball's speed on the next frame, read against the median of the bins beyond
+  the band (the trigger's floor sits above the leaving ball), armed only just
+  after the club reached the band, and only from a return that did not stand
+  there the frame before. Replayed at the kiosk's settings every one of the 34
+  labelled swings now fires, none more than three frames after launch (30
+  within two, from 27); the fallback decides 7, never ahead of a club rule
+  that would have fired first. `triggerLog track` gains a `leave` line. On the
+  four rescued swings the post-fire launch speed is still poor (17-19 m/s
+  against 27-30 labelled on two, none on one). Needs a firmware rebuild and
+  reflash.
+
 ### Fixed
 - **IWR6843 self-trigger still missed swings on the kiosk: it now also fires
   when the club's approach ends near the ball.** The club track's crossing of
