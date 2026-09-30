@@ -819,3 +819,43 @@ def test_noise_under_the_floor_confidence_does_not_start_a_flight(lib):
     ball.arm()
     assert not ball.update(8, [target(8, 49.5, confidence=0.02)])
     assert ball.why == "nocandidate"
+
+
+def test_a_confident_departure_displaces_an_unconfirmed_smeared_first_point(lib):
+    """20260916_184748: a stray 0.11 return at 53.8 was taken on frame 9; the
+    ball (51.6, 0.9) arrived behind it on frame 10, was never offered, and had
+    left the gate when the stray failed to confirm, so the club was taken
+    (20 m/s for a 33 m/s ball). An unconfirmed first point gives way to a
+    confident return in the origin gate."""
+    ball = Ball(lib)
+    ball.arm(origin_bin=49.0)
+    assert ball.update(9, [target(9, 53.8, confidence=0.11)])
+    assert ball.update(10, [target(10, 51.6, confidence=0.9)])
+    assert ball.why == "acquired" and ball.track.core.count == 1
+    assert ball.track.core.lastBin == pytest.approx(51.6)
+    assert ball.update(11, [target(11, 54.1, confidence=0.95)])
+    assert ball.why == "confirmed"
+
+
+def test_a_confirming_point_is_taken_before_any_displacement(lib):
+    """The smeared ball confirmed on its next frame keeps the flight, even with
+    a confident return (the club's follow-through) in the origin gate."""
+    ball = Ball(lib)
+    ball.arm(origin_bin=46.0)
+    ball.update(10, [target(10, 50.5, confidence=0.06)])
+    assert ball.update(11, [target(11, 47.6, confidence=0.92), target(11, 53.3, confidence=0.04)])
+    assert ball.why == "confirmed" and ball.track.core.lastBin == pytest.approx(53.3)
+
+
+def test_a_weak_return_does_not_displace_a_first_point(lib):
+    ball = Ball(lib)
+    ball.arm(origin_bin=49.0)
+    ball.update(9, [target(9, 53.8, confidence=0.11)])
+    ball.update(10, [target(10, 51.6, confidence=0.15)])
+    assert ball.track.core.count == 1 and ball.track.core.lastBin == pytest.approx(53.8)
+
+
+def test_the_displacing_confidence_is_the_club_trackers(lib):
+    cfg = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
+    assert cfg.displaceConfidence == pytest.approx(0.2)

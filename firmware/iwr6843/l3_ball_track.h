@@ -36,6 +36,9 @@ typedef struct {
     float    originGateBins;      /* acquire within this many bins beyond the origin */
     float    minDepartureBins;    /* ... and at least this many beyond it: the impact
                                    * echo and the resting club sit at the origin */
+    float    displaceConfidence;  /* an unconfirmed first point with no confirming
+                                   * point gives way to a departure in the origin
+                                   * gate this confident (and more than it) */
     uint32_t launchPoints;        /* earliest points fitted for the launch */
     float    snr;                 /* extraction threshold over the floor for the post
                                    * window: a departing ball is a weak return */

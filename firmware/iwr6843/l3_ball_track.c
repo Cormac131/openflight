@@ -30,6 +30,7 @@ void l3_ball_track_cfg_defaults(l3_ball_track_cfg_t *cfg)
     cfg->maxSpeedMps = 100.0F;
     cfg->originGateBins = 8.0F;       /* the first post frame is at most ~5 bins out */
     cfg->minDepartureBins = 1.0F;     /* the impact echo sits at the origin itself */
+    cfg->displaceConfidence = 0.2F;   /* a clean return, as the club tracker needs */
     cfg->launchPoints = 6U;
     cfg->snr = 1.0F;                  /* the floor itself: the ball is weak and moving */
     cfg->useHypotheses = 0U;          /* decided by the recorded captures */
@@ -141,6 +142,35 @@ int32_t l3_ball_track_seed(l3_ball_track_t *track, const l3_target_obs_t *first,
     return l3_ball_track_confirm(track);
 }
 
+/* The most confident return in the origin gate at least displaceConfidence
+ * and more confident than the unconfirmed first point, or -1: a smeared stray
+ * taken first must not keep the ball, arriving behind it, from being offered
+ * (20260916_184748). */
+static int32_t l3_ball_track_displacer(const l3_ball_track_t *track,
+                                       const l3_target_obs_t *targets, uint32_t n)
+{
+    l3_track_point_t first;
+    int32_t best = -1;
+    uint32_t i;
+
+    if (!l3_track_point(&track->core, 0U, &first)) {
+        return -1;
+    }
+    for (i = 0U; i < n; i++) {
+        float beyond = targets[i].rangeBin - track->originBin;
+
+        if (beyond < track->cfg.minDepartureBins || beyond > track->cfg.originGateBins ||
+            targets[i].confidence < track->cfg.displaceConfidence ||
+            targets[i].confidence <= first.confidence) {
+            continue;
+        }
+        if (best < 0 || targets[i].confidence > targets[best].confidence) {
+            best = (int32_t)i;
+        }
+    }
+    return best;
+}
+
 /* The core's gate around its prediction for this frame. */
 static int32_t l3_ball_track_inGate(const l3_club_track_t *core, const l3_target_obs_t *target,
                                     uint32_t frame)
@@ -214,6 +244,20 @@ static int32_t l3_ball_track_step(l3_ball_track_t *track, const l3_target_obs_t 
         return l3_ball_track_note(track, L3_BALL_TRACK_WHY_NO_CANDIDATE, 0);
     }
     appended = l3_track_update(&track->core, candidates, kept, frame, timestampUs);
+    if (!appended && !track->confirmed && track->core.count == 1U) {
+        /* Nothing confirmed the first point: a confident departure replaces it. */
+        int32_t displacer = l3_ball_track_displacer(track, targets, n);
+
+        if (displacer >= 0) {
+            l3_track_reset(&track->core);
+            appended = l3_track_update(&track->core, &targets[displacer], 1U, frame,
+                                       timestampUs);
+            if (appended) {
+                track->lastTargetIndex = (uint32_t)displacer;
+                return l3_ball_track_note(track, L3_BALL_TRACK_WHY_ACQUIRED, 1);
+            }
+        }
+    }
     if (appended && track->core.lastTargetIndex < kept) {
         track->lastTargetIndex = indices[track->core.lastTargetIndex];
     }

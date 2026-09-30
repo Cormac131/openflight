@@ -838,6 +838,7 @@ class BallTrackCfg(ctypes.Structure):
         ("maxSpeedMps", ctypes.c_float),
         ("originGateBins", ctypes.c_float),
         ("minDepartureBins", ctypes.c_float),
+        ("displaceConfidence", ctypes.c_float),
         ("launchPoints", ctypes.c_uint32),
         ("snr", ctypes.c_float),
         ("useHypotheses", ctypes.c_uint32),
