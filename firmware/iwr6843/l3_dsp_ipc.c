@@ -1,0 +1,87 @@
+/* IWR6843 MSS <-> DSS detect link. See l3_dsp_ipc.h. */
+#include "l3_dsp_ipc.h"
+
+#include <stddef.h>
+#include <string.h>
+
+#include "l3_bin_score.h"
+#include "l3_iq16_stats.h"
+
+uint32_t l3_dsp_request_size(void)
+{
+    return (uint32_t)sizeof(l3_dsp_request_t);
+}
+
+uint32_t l3_dsp_reply_size(void)
+{
+    return (uint32_t)sizeof(l3_dsp_reply_t);
+}
+
+uint32_t l3_dsp_frame_bytes(uint32_t ntx, uint32_t nrx, uint32_t binCount, uint32_t loops)
+{
+    return loops * ntx * nrx * binCount * 2U * (uint32_t)sizeof(int16_t);
+}
+
+uint32_t l3_dsp_request_check(const l3_dsp_request_t *request, uint32_t l3Bytes)
+{
+    uint32_t frameBytes;
+
+    if (request == NULL || request->magic != L3_DSP_MAGIC) {
+        return L3_DSP_ERR_MAGIC;
+    }
+    if (request->cmd == L3_DSP_CMD_PING) {
+        return L3_DSP_OK;
+    }
+    if (request->cmd != L3_DSP_CMD_PROBE) {
+        return L3_DSP_ERR_CMD;
+    }
+    if (request->ntx == 0U || request->ntx > L3_BIN_SCORE_MAX_TX || request->loops == 0U ||
+        request->loops > L3_IQ16_MAX_LOOPS || request->binCount == 0U ||
+        request->binCount > 256U || request->nBins == 0U ||
+        request->firstBin >= request->binCount ||
+        request->nBins > request->binCount - request->firstBin) {
+        return L3_DSP_ERR_GEOMETRY;
+    }
+    frameBytes = l3_dsp_frame_bytes(request->ntx, L3_DSP_N_RX, request->binCount, request->loops);
+    /* Word aligned; subtraction, not addition, so a huge offset cannot wrap. */
+    if ((request->frameOffset & 3U) != 0U || frameBytes > l3Bytes ||
+        request->frameOffset > l3Bytes - frameBytes) {
+        return L3_DSP_ERR_RANGE;
+    }
+    return L3_DSP_OK;
+}
+
+void l3_dsp_probe_run(const l3_dsp_request_t *request, const uint8_t *l3Base, uint32_t l3Bytes,
+                      l3_dsp_reply_t *reply)
+{
+    uint32_t bin;
+
+    memset(reply, 0, sizeof(*reply));
+    reply->magic = L3_DSP_MAGIC;
+    if (request == NULL) {
+        reply->status = L3_DSP_ERR_MAGIC;
+        return;
+    }
+    reply->cmd = request->cmd;
+    reply->seq = request->seq;
+    reply->status = l3_dsp_request_check(request, l3Bytes);
+    if (reply->status != L3_DSP_OK || request->cmd != L3_DSP_CMD_PROBE) {
+        return;
+    }
+    if (l3Base == NULL) {
+        reply->status = L3_DSP_ERR_RANGE;
+        return;
+    }
+    for (bin = request->firstBin; bin < request->firstBin + request->nBins; bin++) {
+        l3_bin_obs_t obs;
+        const int16_t *frame = (const int16_t *)(const void *)&l3Base[request->frameOffset];
+
+        if (l3_bin_score_iq16(frame, request->binCount, bin, request->ntx, L3_DSP_N_RX,
+                              request->loops, &obs, NULL) == 0) {
+            reply->energySum += obs.energy;
+            reply->r1ReSum += obs.r1Re;
+            reply->r1ImSum += obs.r1Im;
+            reply->nBins++;
+        }
+    }
+}

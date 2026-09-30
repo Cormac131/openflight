@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **IWR6843 detect task moving to the DSP: the link, phase 0.** The trigger
+  runs on the R4F and the DSS image has only slept since it first booted.
+  The DSS now answers the MSS over the mailbox, and the IQ16 per-bin scoring
+  is one module (`l3_bin_score.c`) both cores build. `trackCfg dsp ping` and
+  `trackCfg dsp probe [bins]` check on the board that the DSS answers and
+  scores the live ring frame exactly as the MSS does, and time both;
+  `scripts/hardware-test/iwr6843_dsp_probe.py` runs them. Nothing about the
+  trigger changes yet. Needs a firmware rebuild and reflash
+  (`releases/l3_dump_dsp_link_test.bin`).
 - **IWR6843 self-trigger: the ball leaving fires it when the club rules miss.**
   In the early 2026-08-09 captures the club is invisible for the 3-5 frames
   before launch, so neither club rule fired on four swings. `l3_leave.c` fires

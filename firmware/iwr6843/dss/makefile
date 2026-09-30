@@ -48,15 +48,16 @@ TI_ROOT ?= /opt/ti
 C674x_DSPLIB_INSTALL_PATH ?= $(TI_ROOT)/sdk/dsplib_c674x_3_4_0_0
 DSPLIB_PACKAGES = $(C674x_DSPLIB_INSTALL_PATH)/packages
 
-DSS_STD_LIBS = $(C674_COMMON_STD_LIB) -ldsplib.$(C674_LIB_EXT)
-DSS_LOC_LIBS = $(C674_COMMON_LOC_LIB) -i$(DSPLIB_PACKAGES)/ti/dsplib/lib
+# libmailbox: the MSS <-> DSS detect link (l3_dsp_ipc.h).
+DSS_STD_LIBS = $(C674_COMMON_STD_LIB) -llibmailbox_$(MMWAVE_SDK_DEVICE_TYPE).$(C674_LIB_EXT) -ldsplib.$(C674_LIB_EXT)
+DSS_LOC_LIBS = $(C674_COMMON_LOC_LIB) -i$(MMWAVE_SDK_INSTALL_PATH)/ti/drivers/mailbox/lib -i$(DSPLIB_PACKAGES)/ti/dsplib/lib
 
 CFG        = dss.cfg
 CONFIGPKG  = dss_configPkg_$(MMWAVE_SDK_DEVICE_TYPE)
 MAP        = $(APPNAME).map
 OUT        = $(APPNAME).$(C674_EXE_EXT)
 APP_CMD    = dss_linker.cmd
-SOURCES    = dss_main.c solve_fft.c solve_tracking.c solve_numpy_rng.c solve_lcmf.c track_select.c
+SOURCES    = dss_main.c l3_dsp_ipc.c l3_bin_score.c l3_iq16_stats.c solve_fft.c solve_tracking.c solve_numpy_rng.c solve_lcmf.c track_select.c
 DEPENDS    = $(addprefix $(PLATFORM_OBJDIR)/, $(SOURCES:.c=.$(C674_DEP_EXT)))
 OBJECTS    = $(addprefix $(PLATFORM_OBJDIR)/, $(SOURCES:.c=.$(C674_OBJ_EXT)))
 

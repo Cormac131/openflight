@@ -50,6 +50,8 @@ HOST_SOURCES = (
     "l3_iq8.c",
     "l3_retain.c",
     "l3_iq16_stats.c",
+    "l3_bin_score.c",
+    "l3_dsp_ipc.c",
 )
 
 # l3_observation.h
@@ -576,6 +578,45 @@ class ImpactCfg(ctypes.Structure):
     """``l3_impact_cfg_t``."""
 
     _fields_ = [("horizonS", ctypes.c_float), ("endM", ctypes.c_float)]
+
+
+# l3_dsp_ipc.h
+L3_DSP_MAGIC = 0x4C445331
+L3_DSP_CMD_PING = 1
+L3_DSP_CMD_PROBE = 2
+L3_DSP_OK = 0
+
+
+class DspRequest(ctypes.Structure):
+    """``l3_dsp_request_t``: an MSS -> DSS detect-link request."""
+
+    _fields_ = [
+        ("magic", ctypes.c_uint32),
+        ("cmd", ctypes.c_uint32),
+        ("seq", ctypes.c_uint32),
+        ("frameOffset", ctypes.c_uint32),
+        ("binCount", ctypes.c_uint32),
+        ("firstBin", ctypes.c_uint32),
+        ("nBins", ctypes.c_uint32),
+        ("ntx", ctypes.c_uint32),
+        ("loops", ctypes.c_uint32),
+    ]
+
+
+class DspReply(ctypes.Structure):
+    """``l3_dsp_reply_t``: the DSS's answer."""
+
+    _fields_ = [
+        ("magic", ctypes.c_uint32),
+        ("cmd", ctypes.c_uint32),
+        ("seq", ctypes.c_uint32),
+        ("status", ctypes.c_uint32),
+        ("nBins", ctypes.c_uint32),
+        ("cycles", ctypes.c_uint32),
+        ("energySum", ctypes.c_float),
+        ("r1ReSum", ctypes.c_float),
+        ("r1ImSum", ctypes.c_float),
+    ]
 
 
 class Span(ctypes.Structure):
@@ -1324,6 +1365,20 @@ _TEXT = (ctypes.c_char_p, _U32)
 
 # name -> (argtypes, restype); None restype is the C void.
 _SIGNATURES: dict[str, tuple[list, object]] = {
+    # l3_bin_score.h
+    "l3_bin_score_iq16": (
+        [_P(ctypes.c_int16), _U32, _U32, _U32, _U32, _U32, _P(BinObs), _P(ctypes.c_float)],
+        ctypes.c_int32,
+    ),
+    # l3_dsp_ipc.h
+    "l3_dsp_request_size": ([], _U32),
+    "l3_dsp_reply_size": ([], _U32),
+    "l3_dsp_frame_bytes": ([_U32, _U32, _U32, _U32], _U32),
+    "l3_dsp_request_check": ([_P(DspRequest), _U32], _U32),
+    "l3_dsp_probe_run": (
+        [_P(DspRequest), _P(ctypes.c_uint8), _U32, _P(DspReply)],
+        None,
+    ),
     # l3_observation.h
     "l3_obs_stat": ([_U32, _P(BinObs)], _F32),
     "l3_obs_median": ([_U32, _P(BinObs), _U32], _F32),

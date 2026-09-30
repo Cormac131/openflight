@@ -532,6 +532,32 @@ shots (at rearm, before the HWA restarts): pre starts `approachBins` short of
 the ball, impact and post `marginBins` short, late half a window further
 out. L3 is then spent on where the shot is rather than on fixed ranges.
 
+### Detect task on the DSS
+
+The self-trigger's detect task runs on the R4F (MSS) today: ~73 us a range
+bin, so the scan plan scores 27 bins before impact and 16 after to leave the
+CLI and the notices time in a 3 ms frame. It is moving to the C674x (DSS),
+with the MSS path kept behind a switch so the two can be compared on the
+board.
+
+Phase 0 proves the link before anything moves:
+
+- `l3_bin_score.c` is the IQ16 per-bin scoring, pulled out of
+  `l3_verticalResidual` so both cores build the same code
+- `l3_dsp_ipc.c` is the mailbox message (channel 0, MSS <-> DSS). A frame
+  travels as its byte offset into L3, since the MSS sees L3 at `0x51000000`
+  and the DSS at `0x20000000`, and the DSS refuses a request that would read
+  outside it. The DSS invalidates its L2 cache over the frame before reading
+  (the EDMA writes the ring behind it)
+- `trackCfg dsp ping` and `trackCfg dsp probe [bins]` are sub-modes, because
+  the CLI table is at the SDK's `CLI_MAX_CMD`. The probe scores the newest
+  pre-impact ring frame on the MSS and then the DSS, and prints both times
+  and whether every sum matched bit for bit. IQ16 rings only
+- `scripts/hardware-test/iwr6843_dsp_probe.py` runs both and summarizes
+
+Frames in the compact formats' processing scratch live in MSS DATA_RAM,
+which the DSS cannot read, so those formats stay on the MSS path.
+
 ### Hardware-gated work
 
 The code above is complete and host-tested; what needs the rig is listed

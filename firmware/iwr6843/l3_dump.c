@@ -68,6 +68,8 @@
 #include "l3_impact_fit.h"
 #include "l3_iq8.h"
 #include "l3_iq16_stats.h"
+#include "l3_bin_score.h"
+#include "l3_dsp_ipc.h"
 #include "l3_retain.h"
 #include "compact_iq16.h"
 #include "l3_profile.h"
@@ -3049,34 +3051,14 @@ static void l3_verticalResidual(const l3_detect_frame_t *source, uint32_t localB
         loopPower[loop] = 0.0F;
     }
     if (cb == 2U && loops <= L3_IQ16_MAX_LOOPS) {
-        /* IQ16: exact integer statistics (l3_iq16_stats.c), converted to
-         * float once at the end, so the IQ16 precision the scratch or ring
-         * holds is not spent in float rounding on the way to the detector. */
-        l3_iq16_bin_stats_t bin;
-        l3_iq16_channel_stats_t channelStats;
+        /* IQ16: exact integer statistics, the code the DSS runs too
+         * (l3_bin_score.c), so the two cores' answers agree bit for bit. */
+        l3_bin_obs_t scored = {0.0F, 0.0F, 0.0F, 0.0F, 0.0F};
 
-        l3_iq16_bin_stats_init(&bin, loops);
-        for (tx = 0U; tx < ntx; tx++) {
-            uint32_t rx;
-            if (ntx == 3U && tx == 1U) {
-                continue;
-            }
-            for (rx = 0U; rx < N_RX; rx++) {
-                const int16_t *words =
-                    (const int16_t *)(const void *)&frame[((tx * N_RX + rx) * binCount + localBin) * 4U];
-
-                if (l3_iq16_channel_stats(words, loops, loopStride / 2U, &channelStats) == 0) {
-                    l3_iq16_bin_stats_add(&bin, &channelStats);
-                }
-            }
-        }
-        l3_iq16_bin_stats_finish(&bin, &energy, &peak, &loopPower[0], &r1Re, &r1Im, perLoop);
+        (void)l3_bin_score_iq16((const int16_t *)(const void *)frame, binCount, localBin, ntx,
+                                N_RX, loops, &scored, perLoop);
         if (obs != NULL) {
-            obs->energy = energy;
-            obs->peak = peak;
-            obs->loop0 = loopPower[0];
-            obs->r1Re = r1Re;
-            obs->r1Im = r1Im;
+            *obs = scored;
         }
         return;
     }
@@ -4621,6 +4603,172 @@ static int32_t l3_cli_trackCfgImpact(int32_t argc, char *argv[])
     return 0;
 }
 
+/* --- the MSS <-> DSS detect link (l3_dsp_ipc.h) ------------------------------
+ * Phase 0 of moving the detect task to the DSS: dspPing, and dspProbe, which
+ * scores the newest pre-impact ring frame on both cores with the same code
+ * and compares. The DSS clocks at 600 MHz. */
+#define L3_DSP_REPLY_TIMEOUT_TICKS 100U /* ms: a DSS that never answers fails the command */
+#define L3_DSS_CLOCK_MHZ 600U
+#define L3_DSP_STALE_REPLIES 3U
+
+static Mbox_Handle gDspLink = NULL;
+static uint32_t gDspSeq = 0U;
+
+static void l3_dspLinkOpen(void)
+{
+    Mailbox_Config cfg;
+    int32_t errCode = 0;
+
+    if (Mailbox_Config_init(&cfg) < 0) {
+        return;
+    }
+    cfg.readMode = MAILBOX_MODE_BLOCKING;
+    cfg.readTimeout = L3_DSP_REPLY_TIMEOUT_TICKS;
+    cfg.writeMode = MAILBOX_MODE_BLOCKING;
+    cfg.writeTimeout = L3_DSP_REPLY_TIMEOUT_TICKS;
+    cfg.chType = MAILBOX_CHTYPE_MULTI;
+    cfg.chId = MAILBOX_CH_ID_0;
+    gDspLink = Mailbox_open(MAILBOX_TYPE_DSS, &cfg, &errCode);
+    if (errCode != 0) {
+        gDspLink = NULL;
+    }
+}
+
+/* Send request, wait for the reply with its sequence number. A reply to an
+ * earlier request that timed out may still be queued: skip up to a few.
+ * Returns 0, or -1 with no link, a failed write, or no matching reply. */
+static int32_t l3_dspExchange(l3_dsp_request_t *request, l3_dsp_reply_t *reply)
+{
+    uint32_t attempt;
+
+    if (gDspLink == NULL) {
+        return -1;
+    }
+    request->magic = L3_DSP_MAGIC;
+    request->seq = ++gDspSeq;
+    if (Mailbox_write(gDspLink, (const uint8_t *)request, sizeof(*request)) !=
+        (int32_t)sizeof(*request)) {
+        return -1;
+    }
+    for (attempt = 0U; attempt < L3_DSP_STALE_REPLIES; attempt++) {
+        int32_t got = Mailbox_read(gDspLink, (uint8_t *)reply, sizeof(*reply));
+
+        (void)Mailbox_readFlush(gDspLink);
+        if (got != (int32_t)sizeof(*reply)) {
+            return -1;
+        }
+        if (reply->magic == L3_DSP_MAGIC && reply->seq == request->seq) {
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static uint32_t l3_cyclesToUs(uint32_t cycles)
+{
+    return cycles / (gCpuClock / 1000000U);
+}
+
+/* "trackCfg dsp ping": the DSS answers over the mailbox. */
+static int32_t l3_dspPing(void)
+{
+    l3_dsp_request_t request;
+    l3_dsp_reply_t reply;
+    uint32_t ticks;
+
+    memset(&request, 0, sizeof(request));
+    request.cmd = L3_DSP_CMD_PING;
+    ticks = Cycleprofiler_getTimeStamp();
+    if (l3_dspExchange(&request, &reply) != 0) {
+        CLI_write("Error: DSP did not answer (link %s)\n", gDspLink == NULL ? "closed" : "open");
+        return -1;
+    }
+    CLI_write("dsp pong seq=%u us=%u\n", (unsigned)reply.seq,
+              (unsigned)l3_cyclesToUs(Cycleprofiler_getTimeStamp() - ticks));
+    return 0;
+}
+
+static uint32_t l3_floatBits(float value)
+{
+    uint32_t bits;
+
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+/* "trackCfg dsp probe [bins]": score the newest pre-impact ring frame (its
+ * first bins; all by default) on the MSS, then on the DSS, and compare bit
+ * for bit. The ring slot is not rewritten for preFrames frames, far longer
+ * than either core takes. IQ16 rings only: the shared scoring reads int16. */
+static int32_t l3_dspProbe(int32_t argc, char *argv[])
+{
+    l3_dsp_request_t request;
+    l3_dsp_reply_t mss;
+    l3_dsp_reply_t dss;
+    uint32_t slot;
+    uint32_t ticks;
+    uint32_t mssUs;
+    uint32_t match;
+
+    if (gPreFramesCaptured == 0U || gCapturePlan.preFrames == 0U || gCapturePlan.loops == 0U) {
+        CLI_write("Error: no frame captured yet (sensorStart first)\n");
+        return -1;
+    }
+    if (l3_ringComponentBytes() != 2U) {
+        CLI_write("Error: dspProbe needs an IQ16 ring (captureFormat iq16)\n");
+        return -1;
+    }
+    slot = (gPreFramesCaptured - 1U) % gCapturePlan.preFrames;
+    memset(&request, 0, sizeof(request));
+    request.magic = L3_DSP_MAGIC;
+    request.cmd = L3_DSP_CMD_PROBE;
+    request.frameOffset =
+        (uint32_t)(uintptr_t)&g_ring[gFrameOffset[slot]] - SOC_XWR68XX_MSS_L3RAM_BASE_ADDRESS;
+    request.binCount = gFrameBinCount[slot];
+    request.firstBin = 0U;
+    request.nBins = (argc > 3) ? (uint32_t)atoi(argv[3]) : request.binCount;
+    request.ntx = gCapturePlan.chirpsPerFrame / gCapturePlan.loops;
+    request.loops = gCapturePlan.loops;
+
+    ticks = Cycleprofiler_getTimeStamp();
+    l3_dsp_probe_run(&request, (const uint8_t *)SOC_XWR68XX_MSS_L3RAM_BASE_ADDRESS,
+                     L3_TOTAL_BYTES, &mss);
+    mssUs = l3_cyclesToUs(Cycleprofiler_getTimeStamp() - ticks);
+    if (mss.status != L3_DSP_OK) {
+        CLI_write("Error: probe refused (status %u)\n", (unsigned)mss.status);
+        return -1;
+    }
+    if (l3_dspExchange(&request, &dss) != 0) {
+        CLI_write("Error: DSP did not answer (link %s)\n", gDspLink == NULL ? "closed" : "open");
+        return -1;
+    }
+    match = (dss.status == L3_DSP_OK && dss.nBins == mss.nBins &&
+             l3_floatBits(dss.energySum) == l3_floatBits(mss.energySum) &&
+             l3_floatBits(dss.r1ReSum) == l3_floatBits(mss.r1ReSum) &&
+             l3_floatBits(dss.r1ImSum) == l3_floatBits(mss.r1ImSum)) ? 1U : 0U;
+    CLI_write("dsp probe slot=%u bins=%u mss_us=%u dss_us=%u dss_cycles=%u match=%u "
+              "status=%u mss_energy=%08x dss_energy=%08x\n",
+              (unsigned)slot, (unsigned)mss.nBins, (unsigned)mssUs,
+              (unsigned)(dss.cycles / L3_DSS_CLOCK_MHZ), (unsigned)dss.cycles,
+              (unsigned)match, (unsigned)dss.status,
+              (unsigned)l3_floatBits(mss.energySum), (unsigned)l3_floatBits(dss.energySum));
+    return match ? 0 : -1;
+}
+
+/* "trackCfg dsp ping | probe [bins]": the detect link's diagnostics. A
+ * trackCfg sub-mode: the CLI table is at the SDK's CLI_MAX_CMD. */
+static int32_t l3_cli_trackCfgDsp(int32_t argc, char *argv[])
+{
+    if (argc == 3 && strcmp(argv[2], "ping") == 0) {
+        return l3_dspPing();
+    }
+    if ((argc == 3 || argc == 4) && strcmp(argv[2], "probe") == 0) {
+        return l3_dspProbe(argc, argv);
+    }
+    CLI_write("Error: trackCfg dsp ping | probe [bins]\n");
+    return -1;
+}
+
 /* "trackCfg impactFit <bandBins>": the tee band's total width in range bins
  * (l3_band.h), placed on the noisiest idle bins near the tee; 0 for no band. A sub-mode, not a command of its own: the CLI
  * table is at the SDK's CLI_MAX_CMD. Kept across triggerCfg and sensorStart;
@@ -4681,6 +4829,9 @@ static int32_t l3_cli_trackCfg(int32_t argc, char *argv[])
     }
     if (argc >= 2 && strcmp(argv[1], "impactFit") == 0) {
         return l3_cli_trackCfgImpactFit(argc, argv);
+    }
+    if (argc >= 2 && strcmp(argv[1], "dsp") == 0) {
+        return l3_cli_trackCfgDsp(argc, argv);
     }
     if (argc >= 2 && strcmp(argv[1], "ballSnr") == 0) {
         return l3_cli_trackCfgBallSnr(argc, argv);
@@ -5875,6 +6026,9 @@ static void l3_initTask(UArg arg0, UArg arg1)
 
     /* mmWave control (FULL, ISOLATION). */
     Mailbox_init(MAILBOX_TYPE_MSS);
+    /* The DSS detect link, beside the BSS channel mmWave opens. A DSS that
+     * did not boot leaves it closed; the dsp commands then say so. */
+    l3_dspLinkOpen();
     memset((void *)&initCfg, 0, sizeof(MMWave_InitCfg));
     initCfg.domain                  = MMWave_Domain_MSS;
     initCfg.socHandle               = gSocHandle;

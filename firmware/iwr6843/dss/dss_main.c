@@ -1,19 +1,28 @@
-/* DSS (C674x) image for the on-chip solve.
+/* DSS (C674x) image: the detect link, and the on-chip solve stages.
  *
- * Milestone 1: boot, register with the mailbox, and answer a ping. The solve
- * stages land on top of this in later tasks. The DSS reads the capture arena
- * in place from L3 and caches it in L2; it owns no resident L3 buffer.
+ * The detect task is moving here from the MSS. Phase 0 answers the MSS over
+ * the mailbox (l3_dsp_ipc.h): PING, and PROBE, which scores bins of a frame
+ * in the shared L3 ring with the same code the MSS runs (l3_bin_score.c).
+ * The DSS reads the ring in place from L3 and caches it in L2; it owns no
+ * resident L3 buffer.
  */
+#include <c6x.h>
 #include <string.h>
 #include <stdint.h>
 #include <xdc/std.h>
 #include <ti/sysbios/BIOS.h>
 #include <ti/sysbios/knl/Task.h>
+#include <ti/sysbios/family/c64p/Cache.h>
+#include <ti/common/sys_common.h>
 #include <ti/drivers/soc/soc.h>
 #include <ti/drivers/esm/esm.h>
 #include <ti/drivers/mailbox/mailbox.h>
 
 #include "../solve/solve_ipc.h"
+#include "../l3_dsp_ipc.h"
+
+/* The MSS's L3 arena, as this core addresses it. */
+#define DSS_L3_BYTES (MMWAVE_L3RAM_NUM_BANK * MMWAVE_SHMEM_BANK_SIZE)
 
 /* dss_solveTask's stack. Given explicitly via taskParams.stack/stackSize
  * below (a static array here) rather than left NULL, which would make
@@ -32,14 +41,65 @@
 #pragma DATA_ALIGN(dss_solveTaskStack, 8)
 static uint8_t dss_solveTaskStack[DSS_SOLVE_TASK_STACK_SIZE];
 
+/* Answer one request from the MSS. A PROBE's frame was written by the EDMA
+ * behind this core's L2 cache, so the cache over it is invalidated before a
+ * byte is read; the scoring is timed in CPU cycles (TSCL). */
+static void dss_answer(const l3_dsp_request_t *request, l3_dsp_reply_t *reply)
+{
+    const uint8_t *l3 = (const uint8_t *)SOC_XWR68XX_DSS_L3RAM_BASE_ADDRESS;
+    uint32_t start;
+
+    if (request->cmd == L3_DSP_CMD_PROBE &&
+        l3_dsp_request_check(request, DSS_L3_BYTES) == L3_DSP_OK) {
+        Cache_inv((Ptr)&l3[request->frameOffset],
+                  l3_dsp_frame_bytes(request->ntx, L3_DSP_N_RX, request->binCount,
+                                     request->loops),
+                  Cache_Type_ALLD, TRUE);
+    }
+    start = TSCL;
+    l3_dsp_probe_run(request, l3, DSS_L3_BYTES, reply);
+    reply->cycles = TSCL - start;
+}
+
+/* The detect link: read a request, answer it, release the mailbox for the
+ * next. A message of the wrong size is answered with ERR_MAGIC so the MSS
+ * does not wait out its timeout. */
 static void dss_solveTask(UArg arg0, UArg arg1)
 {
+    Mailbox_Config cfg;
+    Mbox_Handle link;
+    int32_t errCode = 0;
+
     (void)arg0;
     (void)arg1;
+    TSCL = 0U; /* any write starts the free-running cycle counter */
+    Mailbox_init(MAILBOX_TYPE_DSS);
+    if (Mailbox_Config_init(&cfg) < 0) {
+        return;
+    }
+    cfg.readMode = MAILBOX_MODE_BLOCKING;
+    cfg.readTimeout = BIOS_WAIT_FOREVER;
+    cfg.writeMode = MAILBOX_MODE_BLOCKING;
+    cfg.writeTimeout = 100U;
+    cfg.chType = MAILBOX_CHTYPE_MULTI;
+    cfg.chId = MAILBOX_CH_ID_0;
+    link = Mailbox_open(MAILBOX_TYPE_MSS, &cfg, &errCode);
+    if (link == NULL || errCode != 0) {
+        return;
+    }
     while (1) {
-        /* Milestone 1: no work yet. Task 6 replaces this with the mailbox
-         * listener. Yield so BIOS is demonstrably scheduling us. */
-        Task_sleep(100U);
+        l3_dsp_request_t request;
+        l3_dsp_reply_t reply;
+        int32_t got;
+
+        memset(&request, 0, sizeof(request));
+        got = Mailbox_read(link, (uint8_t *)&request, sizeof(request));
+        (void)Mailbox_readFlush(link);
+        if (got != (int32_t)sizeof(request)) {
+            request.magic = 0U;
+        }
+        dss_answer(&request, &reply);
+        (void)Mailbox_write(link, (const uint8_t *)&reply, sizeof(reply));
     }
 }
 

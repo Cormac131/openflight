@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 FIRMWARE_MAKEFILE = Path(__file__).parents[1] / "firmware" / "Makefile"
@@ -10,9 +11,7 @@ FIRMWARE_DIR = Path(__file__).parents[1] / "firmware" / "iwr6843"
 
 def test_sdk_install_keeps_the_c6000_toolchain():
     text = FIRMWARE_MAKEFILE.read_text(encoding="utf-8")
-    disabled = [
-        line for line in text.splitlines() if "--disable-components" in line
-    ]
+    disabled = [line for line in text.splitlines() if "--disable-components" in line]
     assert disabled, "expected an SDK install line with --disable-components"
     for line in disabled:
         assert "TI_CGT_C6000" not in line
@@ -64,3 +63,77 @@ def test_l2_cache_reservation_is_enforced_by_the_linker_not_just_the_symbol():
     # exactly what this fix proved does NOT work -- it must not sneak back
     # in as the "real" enforcement mechanism.
     assert "MEMORY" not in cmd or "MEMORY directive cannot be edited" in cmd
+
+
+# --- the MSS <-> DSS detect link (Phase 0: ping and probe) --------------------
+#
+# The detect task is moving to the DSS. Phase 0 proves the link on the board:
+# dspPing, and dspProbe, which scores the same ring frame on both cores with
+# the same code (l3_bin_score.c) and compares. The C is unit tested on the
+# host (test_iwr6843_firmware_dsp.py); these pin the board glue around it.
+
+DSS_MAIN = FIRMWARE_DIR / "dss" / "dss_main.c"
+MSS_MAIN = FIRMWARE_DIR / "l3_dump.c"
+
+
+def _sources(makefile: Path) -> list[str]:
+    for line in makefile.read_text(encoding="utf-8").splitlines():
+        if line.startswith("SOURCES"):
+            return line.split("=", 1)[1].split()
+    raise AssertionError(f"no SOURCES in {makefile}")
+
+
+def test_both_cores_build_the_shared_scoring_and_the_link():
+    for makefile in (FIRMWARE_DIR / "makefile", FIRMWARE_DIR / "dss" / "makefile"):
+        sources = _sources(makefile)
+        for name in ("l3_bin_score.c", "l3_dsp_ipc.c", "l3_iq16_stats.c"):
+            assert name in sources, f"{name} missing from {makefile}"
+
+
+def test_the_dss_links_the_mailbox_driver():
+    makefile = (FIRMWARE_DIR / "dss" / "makefile").read_text(encoding="utf-8")
+    libs = [line for line in makefile.splitlines() if line.startswith("DSS_STD_LIBS")]
+    assert libs and "-llibmailbox_$(MMWAVE_SDK_DEVICE_TYPE)" in libs[0]
+
+
+def test_the_dss_answers_the_link_over_the_mailbox():
+    text = DSS_MAIN.read_text(encoding="utf-8")
+    assert "Mailbox_init(MAILBOX_TYPE_DSS)" in text
+    assert "Mailbox_open(MAILBOX_TYPE_MSS" in text
+    assert "l3_dsp_probe_run(" in text
+    assert "Mailbox_readFlush(" in text, "a read message must be released or the next never lands"
+    assert "SOC_XWR68XX_DSS_L3RAM_BASE_ADDRESS" in text, "the DSS reads L3 at its own address"
+
+
+def test_the_dss_invalidates_its_cache_over_the_frame_before_scoring():
+    """L2 caches L3 on the DSS and the EDMA rewrites ring slots behind it:
+    without an invalidate the DSS scores a stale copy of an old frame."""
+    text = DSS_MAIN.read_text(encoding="utf-8")
+    invalidate = text.find("Cache_inv(")
+    assert invalidate >= 0
+    assert invalidate < text.find("l3_dsp_probe_run(")
+
+
+def test_the_mss_opens_the_link_with_a_bounded_wait():
+    """A DSS that never answers must fail the command, not hang the CLI."""
+    text = MSS_MAIN.read_text(encoding="utf-8")
+    assert "Mailbox_open(MAILBOX_TYPE_DSS" in text
+    assert "L3_DSP_REPLY_TIMEOUT_TICKS" in text
+    assert "readTimeout = L3_DSP_REPLY_TIMEOUT_TICKS" in text
+
+
+def test_the_link_commands_are_a_trackcfg_sub_mode_not_new_table_entries():
+    """The CLI table is at the SDK's CLI_MAX_CMD (32) with the mmWave
+    extension's commands: a new entry would overwrite one (it did: ball)."""
+    text = MSS_MAIN.read_text(encoding="utf-8")
+    assert 'strcmp(argv[1], "dsp") == 0' in text
+    assert "return l3_cli_trackCfgDsp(argc, argv);" in text
+    assert '"dspPing"' not in text and '"dspProbe"' not in text
+    entries = [int(n) for n in re.findall(r"tableEntry\[(\d+)\]\.cmd\s*=", text)]
+    assert sorted(entries) == list(range(19)), "one table entry per command, 0..18"
+
+
+def test_the_mss_sends_frames_as_l3_offsets_and_scores_them_itself_too():
+    text = MSS_MAIN.read_text(encoding="utf-8")
+    assert "SOC_XWR68XX_MSS_L3RAM_BASE_ADDRESS" in text
+    assert "l3_dsp_probe_run(" in text, "the MSS runs the same probe to compare"

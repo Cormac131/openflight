@@ -551,6 +551,26 @@ class IWR6843Radar:
         """
         return self.cmd(f"ball scan {first_bin} {count}", 4.0)
 
+    def dsp_ping(self) -> int:
+        """``trackCfg dsp ping``: the DSS's round trip over the mailbox, in us.
+
+        Raises ``DspLinkError`` when it does not answer or the image has no link.
+        """
+        from .dsp_link import parse_dsp_pong  # pylint: disable=import-outside-toplevel
+
+        return parse_dsp_pong(self.cmd("trackCfg dsp ping", 2.0))
+
+    def dsp_probe(self, bins: int | None = None):
+        """``trackCfg dsp probe [bins]``: the newest ring frame scored on the MSS
+        and the DSS, timed and compared (``dsp_link.DspProbe``). Needs a
+        running IQ16 capture; ``bins`` scores only the first ones."""
+        from .dsp_link import parse_dsp_probe  # pylint: disable=import-outside-toplevel
+
+        if bins is not None and bins < 1:
+            raise ValueError(f"bins must be >= 1, got {bins}")
+        line = "trackCfg dsp probe" if bins is None else f"trackCfg dsp probe {bins}"
+        return parse_dsp_probe(self.cmd(line, 2.0))
+
     def ball_status(self) -> str:
         """The ball-placement detector's state line; parse with ``tee_scan.parse_ball_status``."""
         return self.cmd("ball status", 2.0)
