@@ -357,6 +357,7 @@ def test_a_clean_run_passes_every_check():
         "detect_dropped_stale",
         "keeps_up",
         "angles_not_dropped",
+        "board_never_stopped",
     }
 
 
@@ -497,3 +498,12 @@ def test_unknown_margins_and_statistics_are_marked_not_invented():
     lines = format_timing_report(timing, "mss")
     assert "margin_min=- margin_last=-" in lines[0].replace(" us", "")
     assert "  (no statistics)" in lines
+
+
+def test_a_board_that_had_to_be_restarted_fails_the_run():
+    """Frozen and not latched, the board scores nothing until restarted: the
+    acceptance run recovers it, and says so as a failure."""
+    assert verdict()["board_never_stopped"].passed
+    checks = verdict(recoveries=2)
+    assert not checks["board_never_stopped"].passed
+    assert "2" in checks["board_never_stopped"].detail

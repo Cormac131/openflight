@@ -4091,6 +4091,12 @@ static void l3_considerSelfTrigger(uint32_t slot)
     fired = (ranged || left) ? 1 : 0;
     impactUs = ranged ? gRangeImpact.impactTimestampUs : gLeave.impactTimestampUs;
     if (fired) {
+        /* A stale completion (a freeze a release never waited on) would let
+         * the release stop this capture mid-tail with the request still
+         * set, and the rearm then start a post tail at once: the lock-up of
+         * 2026-09-30. l3_freezeHwaAfterPostFrames drains the same way. */
+        while (Semaphore_pend(gHwaFreezeSemaphore, BIOS_NO_WAIT)) {
+        }
         key = Hwi_disable();
         gHwaFreezeRequested = 1U;
         gPostCaptureStarted = 0U;
@@ -4214,6 +4220,10 @@ static int32_t l3_awaitFrozenRing(void)
             CLI_write("Error: self-trigger freeze timed out\n");
             gSelfTriggerLatched = 0U;
             return -1;
+        } else if (gHwaFreezeSemaphore != NULL) {
+            /* Frozen before this release: take its completion, so none is
+             * left for the next fire's release to mistake for its own. */
+            (void)Semaphore_pend(gHwaFreezeSemaphore, BIOS_NO_WAIT);
         }
         gSelfTriggerLatched = 0U;
         return l3_finishCaptureStop();
@@ -4326,6 +4336,9 @@ static void l3_sparseWriteCell(const l3_sparse_window_t *window,
 /* Clear the capture state and restart the ring after a sparse command. */
 static int32_t l3_sparseRearm(void)
 {
+    /* A fresh pre-trigger ring: no freeze may be pending, or the first
+     * frame after the restart begins a post tail. */
+    gHwaFreezeRequested = 0U;
     gRingFrame = 0U;
     gHwaFreezeRequestFrame = 0U;
     gPreFramesCaptured = 0U;

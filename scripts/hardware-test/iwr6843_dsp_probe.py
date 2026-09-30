@@ -30,6 +30,7 @@ Exit status 0 only when every ping answered, every probe matched and (with
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 
@@ -53,18 +54,25 @@ DEFAULT_TRIGGER_BIN = 41
 DEFAULT_TRIGGER_SNR = 1.0
 
 
-def hold(radar: IWR6843Radar, seconds: float) -> int:
+def hold(radar: IWR6843Radar, seconds: float, restart) -> tuple[int, int]:
     """Let the detector run for seconds, rearming it (l3release) after each
     swing it fires on, as the kiosk does: fired, it freezes and scores
-    nothing more until released. Returns the swings it fired on."""
-    fired = 0
+    nothing more until released. A board found stopped and NOT latched
+    scores nothing and nothing rearms it (the 2026-09-30 lock-up): it is
+    restarted with restart() and counted. Returns (fired, restarts)."""
+    fired = restarts = 0
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         time.sleep(1.0)
-        if "latched=1" in radar.stats():
+        stats = radar.stats()
+        if "latched=1" in stats:
             radar.release_sparse_freeze()
             fired += 1
-    return fired
+        elif re.search(r"active=0", stats):
+            print("  board stopped and not latched: restarting it")
+            restart()
+            restarts += 1
+    return fired, restarts
 
 
 def report(radar: IWR6843Radar, label: str):
@@ -92,18 +100,33 @@ def run_acceptance(radar: IWR6843Radar, args: argparse.Namespace) -> bool:
     """Arm the self-trigger, run verify then dss while the operator swings,
     and print each check. True when every one passed."""
     trigger = SelfTriggerConfig(tee_bin=args.trigger_bin, snr=args.trigger_snr)
-    reply = radar.cmd(trigger.command, 2.0)
-    if "Error" in reply or "Done" not in reply:
-        print(f"FAIL acceptance: the self-trigger was refused: {reply.strip()}")
+
+    def arm() -> bool:
+        reply = radar.cmd(trigger.command, 2.0)
+        if "Error" in reply or "Done" not in reply:
+            print(f"FAIL acceptance: the self-trigger was refused: {reply.strip()}")
+            return False
+        return True
+
+    def restart() -> None:
+        radar.send_config(args.config)
+        arm()
+
+    if not arm():
         return False
+    restarts = 0
     print(f"acceptance: verify for {args.seconds:.0f} s: swing now")
     radar.detect_core("verify")
-    print(f"  fired on {hold(radar, args.seconds)} swings")
+    fired, stopped = hold(radar, args.seconds, restart)
+    restarts += stopped
+    print(f"  fired on {fired} swings")
     verify = radar.detect_core()
     report(radar, "verify")
     print(f"acceptance: dss for {args.seconds:.0f} s: swing again")
     radar.detect_core("dss")
-    print(f"  fired on {hold(radar, args.seconds)} swings")
+    fired, stopped = hold(radar, args.seconds, restart)
+    restarts += stopped
+    print(f"  fired on {fired} swings")
     dss = radar.detect_core()
     timing, stats = report(radar, "dss")
     checks = evaluate_acceptance(
@@ -112,6 +135,7 @@ def run_acceptance(radar: IWR6843Radar, args: argparse.Namespace) -> bool:
         timing=timing,
         stats_text=stats,
         perf_text=radar.cmd("triggerLog perf", 2.0),
+        recoveries=restarts,
     )
     for check in checks:
         print(f"  {'pass' if check.passed else 'FAIL'} {check.name}: {check.detail}")

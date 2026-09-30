@@ -526,9 +526,12 @@ def evaluate_acceptance(
     timing: DetectTiming | None,
     stats_text: str,
     perf_text: str,
+    recoveries: int = 0,
 ) -> list[AcceptanceCheck]:
     """Each acceptance check with its verdict. A line the board did not
-    report (an older image) fails its check: nothing passes unseen."""
+    report (an older image) fails its check: nothing passes unseen.
+    ``recoveries``: times the run found the board stopped and not latched
+    (it scores nothing until restarted) and restarted it."""
     health = parse_detect_health(stats_text)
     angles = parse_angle_queue(perf_text)
     service = None if timing is None else timing.stats.get("service")
@@ -572,11 +575,19 @@ def evaluate_acceptance(
             ),
         ),
         AcceptanceCheck(
+            "board_never_stopped",
+            recoveries == 0,
+            f"found stopped and restarted {recoveries} times",
+        ),
+        AcceptanceCheck(
             "angles_not_dropped",
             angles is not None and angles.dropped == 0,
             "no angles line in triggerLog perf"
             if angles is None
-            else f"queued={angles.queued} done={angles.done} dropped={angles.dropped}",
+            else (
+                f"queued={angles.queued} done={angles.done} stale={angles.stale} "
+                f"failed={angles.failed} dropped={angles.dropped} pending={angles.pending}"
+            ),
         ),
     ]
 
