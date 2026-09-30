@@ -37,6 +37,14 @@ def test_default_iwr6843_config_is_adaptive16():
     assert "captureFormat adaptive16" in text
 
 
+# A capture running and the self-trigger not latched: nothing to rearm.
+ARMED_STATS = "frames=10 wraps=0 active=1\ntrig phase=watching tee=1 latched=0 enabled=1\nDone\n"
+# Frozen on a self-trigger: the readback that should have rearmed it failed.
+FROZEN_STATS = "frames=10 wraps=0 active=0\ntrig phase=fired tee=1 latched=1 enabled=1\nDone\n"
+# Stopped and not latched: l3release refuses (l3_awaitFrozenRing), only a restart runs it.
+STOPPED_STATS = "frames=10 wraps=0 active=0\ntrig phase=fired tee=1 latched=0 enabled=1\nDone\n"
+
+
 class FakeRadar:
     """Small transport double with a complete L3 dump."""
 
@@ -50,8 +58,28 @@ class FakeRadar:
         self.read_started_at = None
         self.shutdown_events = []
         self.ball_snrs = []
+        self.stats_replies: list[str | Exception] = []
+        self.stats_reads = 0
+        self.releases = 0
+        self.release_error: Exception | None = None
+        self.config_errors: list[Exception] = []
+
+    def stats(self) -> str:
+        """Armed unless a test queued other replies (or errors) first."""
+        self.stats_reads += 1
+        reply = self.stats_replies.pop(0) if self.stats_replies else ARMED_STATS
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    def release_sparse_freeze(self) -> None:
+        if self.release_error is not None:
+            raise self.release_error
+        self.releases += 1
 
     def send_config(self, path: str, lines=None):
+        if self.config_errors:
+            raise self.config_errors.pop(0)
         self.configs.append(path)
 
     def set_tee_band(self, bins: float) -> bool:
@@ -457,7 +485,6 @@ class SelfTriggerRadar(FakeRadar):
         self.cmd_reply = cmd_reply
         self.commands: list[tuple[str, str]] = []
         self.notices: list[bytes] = []
-        self.releases = 0
         self.sparse = None
         self.sparse_error: Exception | None = None
         self.result = None
@@ -483,9 +510,6 @@ class SelfTriggerRadar(FakeRadar):
         if b"Triggered" in pending:
             return True, b""
         return False, pending
-
-    def release_sparse_freeze(self) -> None:
-        self.releases += 1
 
     def read_sparse(self, planner):
         del planner
@@ -675,7 +699,7 @@ class _FlakyReleaseRadar(SelfTriggerRadar):
         self.attempts += 1
         if self.attempts <= self.failures:
             raise RuntimeError("l3sparse release timed out")
-        super().release_sparse_freeze()
+        self.releases += 1
 
 
 def test_a_failed_release_is_retried_until_the_ring_rearms(tmp_path, monkeypatch):
@@ -1475,3 +1499,166 @@ def test_onboard_result_is_doubted_only_when_the_board_is_uncalibrated(tmp_path,
     monitor.calibration_applied = applied
     result = monitor._read_onboard_result()  # pylint: disable=protected-access
     assert result.doubted is doubted
+
+
+# --- every capture ends with the board armed ------------------------------------
+#
+# 2026-09-30 17:43: a self-trigger fired, l3dump answered 18 bytes, the capture
+# failed, and nothing released or restarted the board: it sat frozen and none
+# of the next swings fired. After every capture the worker checks the board
+# (``stats``: a capture running, the self-trigger not latched) and rearms it:
+# l3release, else the radar restarted as start() configured it, retried until
+# it runs.
+
+
+def _started(tmp_path, radar, *, self_trigger=True, **kwargs) -> IWR6843CaptureMonitor:
+    if self_trigger:
+        monitor = _self_trigger_monitor(tmp_path, radar, **kwargs)
+        monitor.start(armed=False)
+    else:
+        config = tmp_path / "radar.cfg"
+        config.write_text("sensorStart\n", encoding="utf-8")
+        monitor = IWR6843CaptureMonitor(
+            config_path=config,
+            output_dir=tmp_path / "dumps",
+            radar=radar,
+            button_factory=FakeButton,
+            **kwargs,
+        )
+        monitor.start(armed=False)
+    monitor.arm()
+    return monitor
+
+
+def _self_triggered_capture(monitor, radar):
+    radar.notices.append(b"Triggered\n")
+    return monitor.capture_for_shot(None, timeout_s=1.0)
+
+
+def test_a_failed_dump_releases_the_frozen_ring(tmp_path):
+    radar = SelfTriggerRadar(b"x" * 18)
+    radar.stats_replies = [FROZEN_STATS]
+    monitor = _started(tmp_path, radar)
+
+    capture = _self_triggered_capture(monitor, radar)
+
+    assert capture is not None and not capture.valid
+    assert "short IWR6843 dump" in capture.error
+    assert _wait_until(lambda: radar.releases == 1)
+    assert len(radar.configs) == 1, "released, not restarted"
+    monitor.stop()
+
+
+def test_a_board_that_refuses_the_release_is_restarted_as_it_was_started(tmp_path):
+    """Stopped and not latched, l3release refuses: the whole start-up runs again
+    (config, band, ball snr, calibration, triggerCfg) on the worker thread."""
+    radar = SelfTriggerRadar(b"x" * 18)
+    radar.stats_replies = [STOPPED_STATS]
+    radar.release_error = RuntimeError("IWR6843 did not release the frozen ring: Error")
+    monitor = _started(tmp_path, radar)
+
+    _self_triggered_capture(monitor, radar)
+
+    assert _wait_until(lambda: len(radar.configs) == 2)
+    assert _wait_until(
+        lambda: len([c for c, _t in radar.commands if c.startswith("triggerCfg")]) == 2
+    )
+    arms = [thread for line, thread in radar.commands if line == "triggerCfg 12 6.0 1"]
+    assert arms[1] == "iwr6843-capture", "the worker owns the port after start"
+    assert radar.ball_snrs == [0.0, 0.0]
+    monitor.stop()
+
+
+def test_restart_hooks_run_after_a_restart(tmp_path):
+    """What the server sets after start (the ball detector's ball cfg) is set again."""
+    radar = SelfTriggerRadar(b"x" * 18)
+    radar.stats_replies = [STOPPED_STATS]
+    radar.release_error = RuntimeError("refused")
+    monitor = _self_trigger_monitor(tmp_path, radar)
+    hooked = []
+    monitor.add_restart_hook(hooked.append)
+    monitor.start(armed=False)
+    monitor.arm()
+
+    _self_triggered_capture(monitor, radar)
+
+    assert _wait_until(lambda: hooked == [radar])
+    monitor.stop()
+
+
+def test_a_capture_that_left_the_board_armed_is_not_disturbed(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    monitor = _started(tmp_path, radar)
+
+    capture = _self_triggered_capture(monitor, radar)
+
+    assert capture is not None and capture.valid
+    assert _wait_until(lambda: radar.stats_reads >= 1), "checked"
+    time.sleep(0.05)
+    assert radar.releases == 0 and len(radar.configs) == 1
+    monitor.stop()
+
+
+def test_unreadable_stats_count_as_not_armed(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    radar.stats_replies = [RuntimeError("serial timeout")]
+    monitor = _started(tmp_path, radar)
+
+    _self_triggered_capture(monitor, radar)
+
+    assert _wait_until(lambda: radar.releases == 1)
+    monitor.stop()
+
+
+def test_a_failing_restart_is_retried_until_the_board_runs(tmp_path, monkeypatch):
+    monkeypatch.setattr(iwr_monitor, "_REARM_RETRY_BACKOFF_S", 0.0)
+    radar = SelfTriggerRadar(b"x" * 18)
+    radar.stats_replies = [STOPPED_STATS]
+    radar.release_error = RuntimeError("refused")
+    monitor = _started(tmp_path, radar)
+    radar.config_errors = [RuntimeError("config rejected"), RuntimeError("config rejected")]
+
+    _self_triggered_capture(monitor, radar)
+
+    assert _wait_until(lambda: len(radar.configs) == 2)
+    assert radar.config_errors == []
+    monitor.stop()
+
+
+def test_a_failed_gpio_capture_rearms_the_board_too(tmp_path):
+    """Sound-triggered, a failed l3dump can leave the capture stopped as well."""
+    radar = FakeRadar(_raw_dump(), error=RuntimeError("IWR6843 dump stalled"))
+    radar.stats_replies = [STOPPED_STATS]
+    radar.release_error = RuntimeError("refused")
+    monitor = _started(tmp_path, radar, self_trigger=False)
+    edge = time.time()
+    assert monitor.notify_trigger(edge)
+
+    capture = monitor.capture_for_shot(edge, timeout_s=1.0)
+
+    assert capture is not None and not capture.valid
+    assert _wait_until(lambda: len(radar.configs) == 2)
+    monitor.stop()
+
+
+def test_an_edge_while_the_board_is_being_rearmed_is_rejected_as_busy(tmp_path):
+    release = threading.Event()
+
+    class SlowRestart(FakeRadar):
+        def send_config(self, path: str, lines=None):
+            if self.configs:  # the restart, not the start
+                release.wait(timeout=1.0)
+            super().send_config(path, lines)
+
+    radar = SlowRestart(_raw_dump(), error=RuntimeError("stalled"))
+    radar.stats_replies = [STOPPED_STATS]
+    radar.release_error = RuntimeError("refused")
+    monitor = _started(tmp_path, radar, self_trigger=False)
+    assert monitor.notify_trigger(time.time())
+    try:
+        assert _wait_until(lambda: monitor._rearming)  # pylint: disable=protected-access
+        assert monitor.notify_trigger(time.time() + 1.0) is False
+    finally:
+        release.set()
+    assert _wait_until(lambda: len(radar.configs) == 2)
+    monitor.stop()

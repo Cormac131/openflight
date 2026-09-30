@@ -669,7 +669,9 @@ class TestIWR6843ShotIntegration:
         captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path, tilt_deg=12.0)
         board = captured["board_calibration"]
         assert board.pitch_deg == pytest.approx(12.0), "--iwr6843-tilt-deg reaches the board"
-        assert server_module.iwr6843_runtime.calibration.tilt_rad == pytest.approx(math.radians(12.0))
+        assert server_module.iwr6843_runtime.calibration.tilt_rad == pytest.approx(
+            math.radians(12.0)
+        )
         server_module.iwr6843_runtime = None
 
     def test_session_config_records_the_board_calibration(self, monkeypatch, tmp_path):
@@ -678,9 +680,10 @@ class TestIWR6843ShotIntegration:
         assert set(recorded) >= {"pitch_deg", "elem_phase_rad", "elem_gain"}
         server_module.iwr6843_runtime = None
 
-    def _init_with_ball_detector(self, monkeypatch, tmp_path, mode, emitted):
+    def _init_with_ball_detector(self, monkeypatch, tmp_path, mode, emitted, restart_hooks=None):
         submitted = []
         calibration = Calibration.identity()
+        hooks = [] if restart_hooks is None else restart_hooks
 
         class FakeCaptureMonitor:
             def __init__(self, **kwargs):
@@ -695,6 +698,9 @@ class TestIWR6843ShotIntegration:
             def submit(self, name, job):
                 submitted.append((name, job))
                 return True
+
+            def add_restart_hook(self, hook):
+                hooks.append(hook)
 
             def stop(self):
                 return None
@@ -769,6 +775,37 @@ class TestIWR6843ShotIntegration:
             assert server_module._iwr6843_setup_status() is poller.latest
         finally:
             server_module._stop_iwr6843_setup_poller()
+            server_module.iwr6843_runtime = None
+
+    def test_a_radar_restart_turns_the_ball_detector_back_on(self, monkeypatch, tmp_path):
+        """A capture that left the board stopped restarts it (sensorStart
+        drops ball cfg): the restart hook sends it again and the poll keeps
+        running."""
+        emitted = []
+        hooks = []
+        submitted = self._init_with_ball_detector(
+            monkeypatch, tmp_path, "follow", emitted, restart_hooks=hooks
+        )
+        try:
+            configured = []
+            radar = SimpleNamespace(
+                configure_ball=lambda enable, fol: configured.append((enable, fol))
+            )
+            submitted[0][1](radar)
+            assert len(hooks) == 1
+            hooks[0](radar)
+            assert configured == [(True, True), (True, True)]
+            assert server_module.iwr6843_setup_poller.running
+        finally:
+            server_module._stop_iwr6843_setup_poller()
+            server_module.iwr6843_runtime = None
+
+    def test_the_ball_detector_off_registers_no_restart_hook(self, monkeypatch, tmp_path):
+        hooks = []
+        self._init_with_ball_detector(monkeypatch, tmp_path, "off", [], restart_hooks=hooks)
+        try:
+            assert hooks == []
+        finally:
             server_module.iwr6843_runtime = None
 
     def test_init_iwr6843_ball_detector_refused_by_firmware_reports_it_off(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import queue
+import re
 import threading
 import time
 from collections import deque
@@ -36,6 +37,11 @@ _GRACEFUL_DUMP_SHUTDOWN_S = 12.0
 # Pause after a serial error in the self-trigger listener so a dead port
 # logs a warning twice a second instead of spinning.
 _LISTENER_ERROR_BACKOFF_S = 0.5
+# Between attempts to rearm the board after a capture (l3release, else a restart).
+_REARM_RETRY_BACKOFF_S = 0.5
+# The board's state in a ``stats`` reply: a capture running, the trigger latched.
+_STATS_ACTIVE = re.compile(r"\bactive=(\d+)")
+_STATS_LATCHED = re.compile(r"\blatched=(\d+)")
 # The firmware's limit for "trackCfg impactFit" (L3_IMPACT_FIT_MAX_BAND_BINS).
 TEE_BAND_MAX_BINS = 64.0
 
@@ -430,6 +436,14 @@ class IWR6843CaptureMonitor:
         self._trigger_notice = b""
         # A frozen ring nobody will read. Retried until the release succeeds.
         self._release_pending = False
+        # After every capture the board is left armed (_ensure_armed); edges
+        # while that runs are refused as busy. A restart repeats start()'s
+        # configuration (kept here) and then runs the restart hooks.
+        self._rearming = False
+        self._sensor_configured = False
+        self._config_lines: list[str] | None = None
+        self._onboard_track_config: str | None = None
+        self._restart_hooks: list[Callable[[IWR6843Radar], None]] = []
 
     def _tee_relative_config_lines(self) -> list[str] | None:
         """The cfg with its windows on the tee, or None to send the file as it is."""
@@ -484,42 +498,13 @@ class IWR6843CaptureMonitor:
                 )
         if self.save_dumps:
             self.output_dir.mkdir(parents=True, exist_ok=True)
-        configured = False
+        self._config_lines = config_lines
+        self._onboard_track_config = onboard_track_config
+        self._sensor_configured = False
         try:
-            self.radar.send_config(str(self.config_path), lines=config_lines)
-            configured = True
             # Before the worker starts: after that only the worker may talk
             # to the radar.
-            # Always sent, 0 included: the firmware keeps the band across
-            # sensorStart, so a restart without the flag must clear it.
-            if not self.radar.set_tee_band(self.tee_band_bins):
-                logger.info(
-                    "[IWR6843] Firmware has no tee band (trackCfg impactFit); "
-                    "nothing to clear with the band off"
-                )
-            # Always sent, the default (0) included, for the same reason.
-            if not self.radar.set_ball_snr(0.0 if self.ball_snr is None else self.ball_snr):
-                logger.info(
-                    "[IWR6843] Firmware has no ball snr setting (trackCfg ballSnr); "
-                    "it uses its own default"
-                )
-            # Always sent, identity included: the firmware keeps it across
-            # sensorStart. Sent before triggerCfg, which copies it into the tracks.
-            board = self.board_calibration
-            applied = self.radar.set_radar_cal(board.cal_args)
-            applied = self.radar.set_elements(board.elem_phase_rad, board.elem_gain) and applied
-            # Firmware without the sub-modes already runs the identity, so an
-            # identity refusal loses nothing.
-            self.calibration_applied = applied or board.is_identity
-            if not self.calibration_applied:
-                logger.warning(
-                    "[IWR6843] Firmware has no trackCfg cal/elem, so the calibration was not "
-                    "applied: onboard launch angles, club path and angle of attack are "
-                    "uncalibrated and will not be used this session"
-                )
-            if onboard_track_config is not None:
-                self._configure_onboard_tracking(onboard_track_config)
-            self._apply_self_trigger()
+            self._configure_radar()
 
             # The self-trigger listens for the firmware line; the pin stays
             # free so a stray sound-gate edge cannot start a second capture.
@@ -539,7 +524,7 @@ class IWR6843CaptureMonitor:
             if self._button is not None:
                 self._button.close()
                 self._button = None
-            if configured:
+            if self._sensor_configured:
                 self._stop_sensor_and_close()
             else:
                 self.radar.close()
@@ -552,6 +537,124 @@ class IWR6843CaptureMonitor:
             ", armed" if self._armed else ", waiting for OPS",
             f", self-trigger {self.self_trigger.command!r}" if self.self_trigger else "",
         )
+
+    def _configure_radar(self) -> None:
+        """The radar as start() leaves it: the cfg, the tee band, the ball snr,
+        the board calibration, the onboard tracker and the self-trigger.
+
+        Also how _ensure_armed restarts a board a failed capture left stopped,
+        so the two cannot drift apart. Raises on failure; _sensor_configured
+        says whether the cfg got as far as starting the sensor (which then
+        needs stopping).
+        """
+        self.radar.send_config(str(self.config_path), lines=self._config_lines)
+        self._sensor_configured = True
+        # Always sent, 0 included: the firmware keeps the band across
+        # sensorStart, so a restart without the flag must clear it.
+        if not self.radar.set_tee_band(self.tee_band_bins):
+            logger.info(
+                "[IWR6843] Firmware has no tee band (trackCfg impactFit); "
+                "nothing to clear with the band off"
+            )
+        # Always sent, the default (0) included, for the same reason.
+        if not self.radar.set_ball_snr(0.0 if self.ball_snr is None else self.ball_snr):
+            logger.info(
+                "[IWR6843] Firmware has no ball snr setting (trackCfg ballSnr); "
+                "it uses its own default"
+            )
+        # Always sent, identity included: the firmware keeps it across
+        # sensorStart. Sent before triggerCfg, which copies it into the tracks.
+        board = self.board_calibration
+        applied = self.radar.set_radar_cal(board.cal_args)
+        applied = self.radar.set_elements(board.elem_phase_rad, board.elem_gain) and applied
+        # Firmware without the sub-modes already runs the identity, so an
+        # identity refusal loses nothing.
+        self.calibration_applied = applied or board.is_identity
+        if not self.calibration_applied:
+            logger.warning(
+                "[IWR6843] Firmware has no trackCfg cal/elem, so the calibration was not "
+                "applied: onboard launch angles, club path and angle of attack are "
+                "uncalibrated and will not be used this session"
+            )
+        if self._onboard_track_config is not None:
+            self._configure_onboard_tracking(self._onboard_track_config)
+        self._apply_self_trigger()
+
+    def add_restart_hook(self, hook: Callable[[IWR6843Radar], None]) -> None:
+        """Run ``hook(radar)`` on the worker after a restart that rearmed the
+        board: what was set after start (the ball detector's ``ball cfg``) is
+        set again. A failing hook is logged and does not undo the rearm."""
+        self._restart_hooks.append(hook)
+
+    def _board_armed(self) -> bool:
+        """A capture running and, with the self-trigger, not latched.
+
+        Unreadable stats count as not armed. Firmware whose stats carry no
+        ``active=`` field cannot say, and is left alone.
+        """
+        try:
+            text = self.radar.stats()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("[IWR6843] Board state unreadable after the capture: %s", exc)
+            return False
+        active = _STATS_ACTIVE.search(text)
+        if active is None:
+            return True
+        latched = _STATS_LATCHED.search(text)
+        frozen = self.watch_self_trigger and latched is not None and latched.group(1) == "1"
+        return active.group(1) == "1" and not frozen
+
+    def _restart_radar(self) -> None:
+        """start()'s configuration again, then the restart hooks."""
+        self._configure_radar()
+        for hook in self._restart_hooks:
+            try:
+                hook(self.radar)
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.warning("[IWR6843] Restart hook failed", exc_info=True)
+        logger.warning("[IWR6843] Radar restarted to rearm it after a capture")
+
+    def _rearm(self) -> None:
+        """l3release (it stops at a frame boundary and rearms), else a restart.
+
+        The firmware refuses l3release with nothing frozen and nothing running
+        (l3_awaitFrozenRing), which a readback that stopped the capture and
+        then failed leaves behind; only a restart runs that board again.
+        Raises when the restart fails.
+        """
+        try:
+            self.radar.release_sparse_freeze()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("[IWR6843] l3release refused (%s): restarting the radar", exc)
+        else:
+            if self._board_armed():
+                logger.info("[IWR6843] Rearmed after the capture (l3release)")
+                return
+            logger.warning("[IWR6843] Still not armed after l3release: restarting the radar")
+        self._restart_radar()
+
+    def _ensure_armed(self) -> None:
+        """Leave the board armed after a capture, whatever its readback did.
+
+        2026-09-30: an l3dump that answered 18 bytes left the board frozen and
+        nothing rearmed it, so no later swing fired. Retried until the board
+        runs or the monitor stops; edges meanwhile are refused as busy.
+        """
+        if self._board_armed():
+            return
+        with self._condition:
+            self._rearming = True
+        try:
+            while self._running:
+                try:
+                    self._rearm()
+                    return
+                except Exception:  # pylint: disable=broad-exception-caught
+                    logger.warning("[IWR6843] Rearm failed; retrying", exc_info=True)
+                    time.sleep(_REARM_RETRY_BACKOFF_S)
+        finally:
+            with self._condition:
+                self._rearming = False
 
     def _open_button(self):
         """The trigger-pin input, from the injected factory or gpiozero."""
@@ -663,6 +766,7 @@ class IWR6843CaptureMonitor:
                 self._capture_active
                 or self._job_active
                 or self._edge_pending
+                or self._rearming
                 or edge_timestamp - self._last_edge_timestamp < 0.1
             ):
                 logger.debug("[IWR6843] Ignoring duplicate/busy trigger edge")
@@ -864,6 +968,9 @@ class IWR6843CaptureMonitor:
             f"{len(raw)} bytes" if raw is not None else error,
             capture.dump_duration_s,
         )
+        # Always, success or not: a readback that failed can leave the ring
+        # frozen or the capture stopped, and then nothing fires again.
+        self._ensure_armed()
 
     def capture_for_shot(
         self,

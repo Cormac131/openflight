@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a firmware rebuild and reflash.
 
 ### Fixed
+- **A failed IWR6843 dump left the board frozen, so no later swing fired.**
+  After an `l3dump` that answered 18 bytes nothing released or restarted the
+  board. After every capture, good or failed, the kiosk now reads `stats`
+  and, when the board is not running (or sits latched on a self-trigger),
+  sends `l3release`, else restarts the radar as start-up configured it, and
+  sends the ball detector's `ball cfg` again. It retries until the board
+  runs; edges meanwhile are refused as busy.
 - **IWR6843 board went silent the moment the self-trigger was armed.** With
   the tee band on (the default since 2026-09-29) every armed frame scored the
   trigger region and then the whole 53-bin window: at ~73 us a bin

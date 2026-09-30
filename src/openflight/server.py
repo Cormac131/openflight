@@ -1390,6 +1390,9 @@ def _start_iwr6843_ball_detector(capture_monitor, mode: str, setup_poll_s: float
 
     iwr6843_setup_poller = poller
     capture_monitor.submit("ball-cfg", enable)
+    # A restart that rearms the board (a failed capture left it stopped) runs
+    # sensorStart again, which drops ball cfg: send it again.
+    capture_monitor.add_restart_hook(enable)
 
 
 def _stop_iwr6843_setup_poller() -> None:
