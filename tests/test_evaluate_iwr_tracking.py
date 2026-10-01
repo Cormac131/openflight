@@ -103,7 +103,7 @@ def test_summarize_counts_every_category(ev):
 
 def test_compare_names_each_regression(ev):
     base = {
-        "captures": 125,
+        "captures": 93,
         "club": {"club": 55, "stuck": 32, "few": 6},
         "ball": {"ok": 15, "wrong": 70, "none": 8},
         "ball_present": 23,
