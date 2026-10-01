@@ -30,7 +30,7 @@ Binding, ports, and debug output.
 | `--host` | default `0.0.0.0` | Host to bind to (default: 0.0.0.0) |
 | `--web-port` | int; default `8080` | Web server port (default: 8080) |
 | `--startup-status-file` | path | Write structured initialization progress for the optional kiosk splash |
-| `--debug`, `-d` | flag | Enable verbose FFT/CFAR debug output |
+| `--debug`, `-d` | flag | Enable verbose FFT/CFAR debug output. With `--iwr6843`, also read the TI ring back after every shot, save it, and log the host LCMF-v1 numbers beside the firmware's. The shot always carries the firmware's numbers. |
 | `--radar-log` | flag | Log raw radar data to console (Python logging) |
 | `--show-raw` | flag | Show raw radar readings in console (signed values) |
 
@@ -64,14 +64,13 @@ The supported angle radar.
 | `--iwr6843-config` | default `config/iwr6843_l3dump_wide_24f2ms_53bin_iq16_window_hann.cfg` | TI RF config matching the flashed L3 firmware |
 | `--iwr6843-cal` | default `config/iwr6843_calibration_reference.json` | TI complex array/range calibration JSON |
 | `--iwr6843-trigger-pin` | int; default `17` | BCM GPIO receiving the shared sound-trigger edge (default: 17) |
-| `--iwr6843-tee-m` | float; default `1.575` | Distance in metres from the enclosure front to the centre of the ball, not the golfer's feet (horizontal is fine: the ball's height barely changes it). The array sits 30 mm behind the front and that is added internally (default: 1.575) |
+| `--iwr6843-tee-m` | float; default `1.575` | Distance in metres from the enclosure front to the centre of the ball, not the golfer's feet (horizontal is fine: the ball's height barely changes it). The array sits 30 mm behind the front and that is added internally (default: 1.575, minimum: 1.4) |
 | `--iwr6843-net-m` | float; default `4.6` | Distance in metres from the enclosure front to the net or screen; the array's 30 mm depth is added internally. Only used with `--iwr6843-flight net`: ball tracks are kept 0.25 m short of it (default: 4.6) |
 | `--iwr6843-tee-band-bins` | float; default `6` (`0` = off) | **Experimental.** Width, in range bins, of the tee band the IWR6843 club and ball trackers ignore; the firmware places it on the noisiest bins within 10 bins of the tee (learned from idle frames, frozen while the club swings) and impact is then fitted from the tracks either side (`trackCfg impactFit`). Before 2026-09-29 the value was a half width. 0 = off (default). The value is sent at every start, 0 included, so a restart clears a band a previous run set. A 13-bin band (the old ±6 half width) failed acceptance on the recorded sessions (club tracking collapsed); leave it off unless you are testing a cluttered setup |
 | `--iwr6843-flight` | choices: `net`, `range`, `course`; default `net` | net clamps tracks at the net. range or course keeps returns past it and measures the late-window descent after the shot is published |
 | `--iwr6843-self-trigger` | flag | Freeze the IWR ring when the firmware club track is predicted to cross the tee's range and send S! to the OPS, instead of the sound-gate edge. Disconnect the SEN-14262 GATE from HOST_INT. Requires --iwr6843 and --trigger sound |
-| `--iwr6843-full-capture` | flag | Transfer all samples and TX channels instead of selected cells; about 7 seconds for the default profile. Use with `--debug` to save full diagnostic dumps. |
+| `--iwr6843-full-capture` | flag | Transfer all samples and TX channels instead of selected cells; about 7 seconds for the default profile. Requires `--debug`, which turns it on by itself. The firmware tracker stays configured, so the onboard result is unchanged. |
 | `--no-iwr6843-onboard-track` | flag | Select cells on the Pi instead of onboard; still transfers selected samples unless `--iwr6843-full-capture` is set. |
-| `--iwr6843-onboard-metrics` | flag | Prefer the firmware's usable club path and attack angle over the host pipeline's; launch angles always come from the host. The onboard result rides on every shot as `iwr6843_onboard` either way; OPS ball speed is never replaced. |
 | `--iwr6843-ball-detector` | choices: `off`, `on`, `follow`; default `off` | Firmware ball-placement detector: `on` locks the ball for the onboard shot machine and drives the kiosk setup banner; `follow` also aims the self-trigger at the locked ball; `off` keeps the configured tee bin |
 | `--iwr6843-setup-poll-s` | float; default `1.0` | Seconds between `ball status` polls for the setup banner |
 | `--iwr6843-self-trigger-bin` | int | Global range-FFT bin the trigger watches, inside the cfg's first capture window (default: two bins short of the ball, from `--iwr6843-tee-m`, moved by `--iwr6843-self-trigger-offset-m`: bin 36 for the default 1.575 m, 1.605 m from the array). Requires --iwr6843-self-trigger |

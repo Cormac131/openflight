@@ -375,6 +375,9 @@ class IWR6843Capture:
     # The board's result showed no ball flight, so the readback was skipped
     # (IWR6843CaptureMonitor.veto_no_ball).
     vetoed: bool = False
+    # The monitor runs without readback (IWR6843CaptureMonitor.readback):
+    # onboard_result is all this capture has, by design rather than failure.
+    onboard_only: bool = False
 
     @property
     def valid(self) -> bool:
@@ -415,7 +418,21 @@ class IWR6843CaptureMonitor:
         ball_snr: float | None = None,
         board_calibration: BoardCalibration | None = None,
         veto_no_ball: bool = False,
+        readback: bool = True,
+        full_capture: bool = False,
     ):
+        if save_dumps and not readback:
+            raise ValueError("save_dumps needs the readback: without it there is no dump to save")
+        if full_capture and not readback:
+            raise ValueError("full_capture needs the readback: without it nothing is read")
+        # Read the whole ring (l3dump) even when the firmware tracker or the
+        # host planner could pick cells: the --debug diagnostic dump. The
+        # tracker stays configured, since its limits feed the onboard result.
+        self.full_capture = full_capture
+        # Read the frozen ring back for the host pipeline. Off, the board's
+        # own result is the shot's only IWR data and the ring is just
+        # released: no l3track/l3sparse/l3dump traffic.
+        self.readback = readback
         if veto_no_ball and self_trigger is None:
             raise ValueError(
                 "veto_no_ball needs the self-trigger: only it reads the board's result"
@@ -911,8 +928,11 @@ class IWR6843CaptureMonitor:
 
         Firmware-tracked cells (``l3track``), then host-planned cells
         (``l3sparse``), then the full ring (``l3dump``). Each step falls back
-        only when the firmware refused before streaming.
+        only when the firmware refused before streaming. A full capture goes
+        straight to the full ring.
         """
+        if self.full_capture:
+            return self.radar.read_dump(), None, None
         if self.onboard_tracking:
             try:
                 tracked = self.radar.read_tracked()
@@ -982,12 +1002,15 @@ class IWR6843CaptureMonitor:
         metadata = None
         noise_power = None
         onboard_track = None
-        onboard_result = self._read_onboard_result() if self.watch_self_trigger else None
+        # Every edge, self-trigger or sound: the result carries the shot's angles.
+        onboard_result = self._read_onboard_result()
         # No result (not ready, unreadable) never vetoes: the capture is kept.
         vetoed = self.veto_no_ball and onboard_result is not None and not onboard_result.ball_flight
         if vetoed:
             error = "vetoed: no ball flight"
             logger.info("[IWR6843] Trigger #%d: no ball flight, readback skipped", sequence)
+        elif not self.readback:
+            logger.info("[IWR6843] Trigger #%d: onboard result only, no readback", sequence)
         else:
             try:
                 logger.info("[IWR6843] Trigger #%d: reading track samples", sequence)
@@ -1016,6 +1039,7 @@ class IWR6843CaptureMonitor:
             onboard_track=onboard_track,
             onboard_result=onboard_result,
             vetoed=vetoed,
+            onboard_only=not self.readback,
         )
         with self._condition:
             self._capture_active = False
@@ -1024,7 +1048,7 @@ class IWR6843CaptureMonitor:
         logger.info(
             "[IWR6843] Capture #%d complete: %s in %.2fs",
             sequence,
-            f"{len(raw)} bytes" if raw is not None else error,
+            f"{len(raw)} bytes" if raw is not None else (error or "onboard result only"),
             capture.dump_duration_s,
         )
         # Always, success or not: a readback that failed can leave the ring

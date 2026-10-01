@@ -607,24 +607,113 @@ def test_unreadable_firmware_result_never_costs_the_capture(tmp_path, caplog):
     monitor.stop()
 
 
-def test_gpio_captures_do_not_ask_for_a_firmware_result(tmp_path):
-    config = tmp_path / "radar.cfg"
-    config.write_text("sensorStart\n", encoding="utf-8")
-    radar = FakeRadar(_raw_dump())
-    monitor = IWR6843CaptureMonitor(
-        config_path=config,
-        output_dir=tmp_path / "dumps",
-        radar=radar,
-        button_factory=FakeButton,
-    )
-    monitor.start()
+def test_sound_triggered_captures_carry_the_firmware_result(tmp_path):
+    """The onboard result is the shot's angle source, so a GPIO edge reads it too."""
+    radar = SelfTriggerRadar(_raw_dump())
+    radar.result = SimpleNamespace(shot_id=3, verdict="valid", club_points=4, ball_points=9)
+    monitor = _started(tmp_path, radar, self_trigger=False)
     edge = time.time()
     assert monitor.notify_trigger(edge)
     capture = monitor.capture_for_shot(edge, timeout_s=1.0)
     monitor.stop()
 
     assert capture is not None and capture.valid
+    assert capture.onboard_result is radar.result
+    assert radar.result_reads == 1
+
+
+@pytest.mark.parametrize("self_trigger", [True, False])
+def test_without_readback_the_result_is_the_whole_capture(tmp_path, self_trigger):
+    """Not --debug: no l3track/l3sparse/l3dump traffic; the frozen ring is released."""
+    radar = SelfTriggerRadar(_raw_dump())
+    radar.result = SimpleNamespace(shot_id=3, verdict="valid", club_points=4, ball_points=9)
+    radar.stats_replies = [FROZEN_STATS]
+    monitor = _started(tmp_path, radar, self_trigger=self_trigger, readback=False)
+
+    if self_trigger:
+        capture = _self_triggered_capture(monitor, radar)
+    else:
+        edge = time.time()
+        assert monitor.notify_trigger(edge)
+        capture = monitor.capture_for_shot(edge, timeout_s=1.0)
+
+    assert capture is not None
+    assert capture.onboard_only
+    assert capture.raw is None and capture.path is None and capture.error is None
+    assert not capture.valid, "valid still means a complete dump"
+    assert capture.onboard_result is radar.result
+    assert radar.read_started_at is None, "no readback"
+    assert _wait_until(lambda: radar.releases == 1)
+    assert not list((tmp_path / "dumps").glob("*.l3dump"))
+    monitor.stop()
+
+
+def test_without_readback_and_without_a_result_the_capture_is_still_onboard_only(tmp_path):
+    """No RESULT this shot (ready=0): nothing to read back either, so the shot has no angles."""
+    radar = SelfTriggerRadar(_raw_dump())
+    monitor = _started(tmp_path, radar, readback=False)
+
+    capture = _self_triggered_capture(monitor, radar)
+
+    assert capture is not None and capture.onboard_only
     assert capture.onboard_result is None
+    assert radar.read_started_at is None
+    monitor.stop()
+
+
+def test_readback_is_on_by_default_and_marks_nothing_onboard_only(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    monitor = _started(tmp_path, radar)
+
+    capture = _self_triggered_capture(monitor, radar)
+
+    assert capture is not None and capture.valid and not capture.onboard_only
+    assert radar.read_started_at is not None
+    monitor.stop()
+
+
+def test_full_capture_reads_the_whole_ring_even_with_the_firmware_tracker(tmp_path):
+    """--debug: every sample, though trackCfg stays on for the onboard result."""
+    radar = SelfTriggerRadar(_raw_dump())
+    radar.read_tracked = lambda: pytest.fail("full capture must not read tracked cells")
+    radar.read_sparse = lambda planner: pytest.fail("full capture must not read sparse cells")
+    monitor = _started(tmp_path, radar, full_capture=True)
+    monitor.onboard_tracking = True
+    monitor.slice_planner = object()
+
+    capture = _self_triggered_capture(monitor, radar)
+
+    assert capture is not None and capture.valid
+    assert radar.read_started_at is not None
+    monitor.stop()
+
+
+def test_full_capture_needs_the_readback(tmp_path):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="full_capture needs the readback"):
+        IWR6843CaptureMonitor(
+            config_path=config,
+            output_dir=tmp_path / "dumps",
+            radar=FakeRadar(_raw_dump()),
+            button_factory=FakeButton,
+            full_capture=True,
+            readback=False,
+        )
+
+
+def test_saving_dumps_needs_the_readback(tmp_path):
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="save_dumps needs the readback"):
+        IWR6843CaptureMonitor(
+            config_path=config,
+            output_dir=tmp_path / "dumps",
+            radar=FakeRadar(_raw_dump()),
+            button_factory=FakeButton,
+            save_dumps=True,
+            readback=False,
+        )
 
 
 def test_self_trigger_config_is_sent_before_the_worker_owns_the_port(tmp_path):

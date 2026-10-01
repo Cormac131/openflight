@@ -341,14 +341,26 @@ packets from older firmware, but older Pi code refuses version 2, so
 **update the Pi before flashing this firmware.** An `inconsistent` impact fit
 sets the `impact_uncertain` quality bit.
 
-The host reads that packet on every self-triggered capture, before the
-readback (`l3track`/`l3sparse` rearm the ring, which resets the result). It
-rides on the capture as `onboard_result`, on the shot as `iwr6843_onboard`
-(the session JSONL keeps it), and the kiosk shows it under the Live tiles
-with each metric's provenance and confidence. By default the host pipeline
-still owns the published numbers; `--iwr6843-onboard-metrics` copies the
-firmware's usable launch angles, club path and attack angle onto the shot
-(sources `radar_onboard` / `onboard`). OPS ball speed is never replaced.
+The host reads that packet on every capture, self-triggered or sound-triggered,
+before any readback (`l3track`/`l3sparse` rearm the ring, which resets the
+result). It rides on the capture as `onboard_result`, on the shot as
+`iwr6843_onboard` (the session JSONL keeps it), and the kiosk shows it under
+the Live tiles with each metric's provenance and confidence. The packet is
+the shot's only IWR source:
+
+- **Launch angles.** Its vertical and horizontal launch go on the shot with
+  source `radar`, unless the metric is missing, implausible or a tee fallback.
+- **Club delivery.** Its usable club path and attack angle go on the shot
+  with status `onboard`.
+- **Host corrections.** The host adds `--iwr6843-azimuth-offset-deg` to
+  horizontal launch and club path, because the board runs with azimuth
+  offset 0. It adds the inclinometer's effective-minus-configured tilt to
+  vertical launch and attack angle.
+
+Without `--debug` the ring is never read back; the frozen ring is released
+straight away. With `--debug` it is read back, saved, and run through the
+host LCMF-v1 and club-path pipeline. Those results are logged beside the
+board's but never published. OPS ball speed is never replaced.
 
 The detect path reads IQ8 rings as well as IQ16: every ring reader takes
 the component width from the capture format and multiplies int8 samples by
