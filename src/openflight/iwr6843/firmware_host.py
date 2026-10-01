@@ -40,6 +40,7 @@ HOST_SOURCES = (
     "l3_ball_anchor.c",
     "l3_launch.c",
     "l3_ball_hyp.c",
+    "l3_ball_recover.c",
     "l3_impact.c",
     "l3_leave.c",
     "l3_scan.c",
@@ -254,6 +255,10 @@ TRACK_WHY_NAMES = ("none", "acquired", "associated", "coasted", "dropped", "idle
 BALL_HYP_MAX = 4
 BALL_HYP_POINTS = 8
 BALL_HYP_NONE = 0xFFFFFFFF
+
+# l3_ball_recover.h
+BALL_HISTORY_FRAMES = 24
+BALL_HISTORY_TARGETS = 6
 
 
 class BinObs(ctypes.Structure):
@@ -1150,6 +1155,64 @@ class BallHyp(ctypes.Structure):
     ]
 
 
+class BallHistoryTarget(ctypes.Structure):
+    """``l3_ball_history_target_t``."""
+
+    _fields_ = [
+        ("rangeBin", ctypes.c_float),
+        ("dopplerAliasMps", ctypes.c_float),
+        ("stat", ctypes.c_float),
+        ("coherence", ctypes.c_float),
+    ]
+
+
+class BallHistoryFrame(ctypes.Structure):
+    """``l3_ball_history_frame_t``."""
+
+    _fields_ = [
+        ("frame", ctypes.c_uint32),
+        ("timestampUs", ctypes.c_uint32),
+        ("count", ctypes.c_uint8),
+        ("clubMask", ctypes.c_uint8),
+        ("targets", BallHistoryTarget * BALL_HISTORY_TARGETS),
+    ]
+
+
+class BallHistory(ctypes.Structure):
+    """``l3_ball_history_t``: the post-impact target ring."""
+
+    _fields_ = [
+        ("next", ctypes.c_uint32),
+        ("count", ctypes.c_uint32),
+        ("frames", BallHistoryFrame * BALL_HISTORY_FRAMES),
+    ]
+
+
+class BallRecoverCfg(ctypes.Structure):
+    """``l3_ball_recover_cfg_t``."""
+
+    _fields_ = [
+        ("binWidthM", ctypes.c_float),
+        ("velocitySpanMps", ctypes.c_float),
+        ("gateM", ctypes.c_float),
+        ("tieBins", ctypes.c_float),
+        ("maxResidualBins", ctypes.c_float),
+        ("dopplerToleranceMps", ctypes.c_float),
+    ]
+
+
+class BallRecoverResult(ctypes.Structure):
+    """``l3_ball_recover_result_t``."""
+
+    _fields_ = [
+        ("count", ctypes.c_uint32),
+        ("recovered", ctypes.c_uint32),
+        ("firstFrame", ctypes.c_uint32),
+        ("mask", ctypes.c_uint32),
+        ("residualBins", ctypes.c_float),
+    ]
+
+
 class BallHypsCfg(ctypes.Structure):
     """``l3_ball_hyps_cfg_t``."""
 
@@ -1865,6 +1928,24 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     ),
     "l3_ball_hyps_struct_bytes": ([], _U32),
     "l3_ball_hyps_classify": ([_P(BallHyps), _P(BallHypVerdict)], None),
+    # l3_ball_recover.h
+    "l3_ball_recover_cfg_defaults": ([_P(BallRecoverCfg)], None),
+    "l3_ball_history_reset": ([_P(BallHistory)], None),
+    "l3_ball_history_push": ([_P(BallHistory), _P(TargetObs), _U32, _U32, _U32, _U32], None),
+    "l3_ball_history_at": ([_P(BallHistory), _U32], _P(BallHistoryFrame)),
+    "l3_ball_recover": (
+        [
+            _P(BallRecoverCfg),
+            _P(BallHistory),
+            _P(BallHyp),
+            ctypes.c_float,
+            _P(BallHypPoint),
+            _U32,
+            _P(BallRecoverResult),
+        ],
+        _U32,
+    ),
+    "l3_ball_history_struct_bytes": ([], _U32),
     # l3_ball_fit.h
     "l3_ball_fit_cfg_defaults": ([_P(BallFitCfg)], None),
     "l3_ball_fit_max_evaluations": ([_P(BallFitCfg)], _U32),
@@ -2097,12 +2178,19 @@ __all__ = [
     "TRACK_WHY_NAMES",
     "BALL_HYP_MAX",
     "BALL_HYP_NONE",
+    "BALL_HISTORY_FRAMES",
+    "BALL_HISTORY_TARGETS",
     "BALL_HYP_POINTS",
+    "BallHistory",
+    "BallHistoryFrame",
+    "BallHistoryTarget",
     "BallHyp",
     "BallHypPoint",
     "BallHypVerdict",
     "BallHyps",
     "BallHypsCfg",
+    "BallRecoverCfg",
+    "BallRecoverResult",
     "TRIG_MAX_BINS",
     "TRIG_TRACE_DEPTH",
     "ANGLE_GRID_STEPS",

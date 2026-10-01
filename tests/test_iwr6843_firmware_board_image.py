@@ -58,6 +58,7 @@ def board(tmp_path_factory):
 def test_the_board_image_leaves_out_the_search_and_most_of_the_trace():
     assert dict(define.split("=", 1) for define in board_defines()) == {
         "L3_BALL_HYPOTHESES": "0",
+        "L3_BALL_RECOVER": "0",
         "L3_TRIG_TRACE_DEPTH": f"{BOARD_TRACE_DEPTH}U",
     }
 
