@@ -143,7 +143,7 @@ def test_adaptive_format_names_every_window(lib):
 
 
 def test_reconstruct_is_a_stage_but_not_a_per_frame_cost(lib):
-    """It runs once per shot (the fire, RESULT): its mean would inflate the
+    """It runs once per shot (the ball fit at RESULT): its mean would inflate the
     per-frame budget the MSS reports."""
     assert fw.PROFILE_STAGE_NAMES.index("reconstruct") == 8
     assert fw.PROFILE_STAGE_NAMES[-1] == "dspwait"

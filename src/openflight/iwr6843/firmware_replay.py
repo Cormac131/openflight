@@ -956,7 +956,8 @@ def replay_dump(
     # The club's pending angles (l3_angle_queue.h), as the board queues them.
     angle_queue = fw.AngleQueue()
     lib.l3_angle_queue_init(ctypes.byref(angle_queue))
-    # The club reconstruction's work area (l3_track_kf.h), as the board's gClubKfWork.
+    # The club reconstruction's work area (l3_track_kf.h): the replay and viewer run the
+    # club filter; the board does not.
     kf_work = ctypes.create_string_buffer(lib.l3_track_kf_work_bytes())
     kf_result = fw.TrackKfResult()
 
@@ -1933,7 +1934,8 @@ def _follow_club(  # pylint: disable=too-many-arguments
 
 def _reconstructed(lib, core, summaries: list[PointSummary]) -> list[PointSummary]:
     """The summaries with every still-held point re-read after reconstruction;
-    a point rolled off the ring (or withdrawn) keeps what it was logged with."""
+    a point rolled off the ring (or withdrawn) keeps what it was logged with.
+    Held points are found by timestamp, so this assumes timestamps are unique."""
     index = ctypes.c_uint32()
     point = fw.TrackPoint()
     out = []
@@ -2447,7 +2449,8 @@ def _launch_line(result: ReplayResult) -> str:
     return (
         f"launch: {launch.points} points, ball speed {launch.speed_mps:.1f} m/s "
         f"(radial {launch.radial_speed_mps:.1f}), hla {hla}, vla {vla}, "
-        f"residual {1000 * launch.residual_m:.1f} mm, confidence {launch.confidence:.2f}"
+        f"residual {1000 * launch.residual_m:.1f} mm, confidence {launch.confidence:.2f}, "
+        f"why={launch.angle_why} angles={launch.angles_accepted}"
     )
 
 

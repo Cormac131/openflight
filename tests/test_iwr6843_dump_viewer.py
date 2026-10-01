@@ -964,3 +964,15 @@ def test_the_hover_only_reports_a_fit_for_reconstructed_points():
     body = html[html.index("function renderTraj(") : html.index("// ---------- annotate")]
     assert "p.filter_accepted === false" in body
     assert 'p.filter_hypothesis ?? "unfiltered"' not in body
+
+
+def test_a_track_without_a_reconstruction_is_still_drawn_raw():
+    page = _page()
+    assert 'const alone = trajShow === "raw" || !list.some((p) => p.filtered_position);' in page
+    assert 'if (trajShow !== "fitted" || !(list || []).some((p) => p.filtered_position)) raw(' in page
+
+
+def test_the_launch_chip_says_why_the_angles_are_missing():
+    page = _page()
+    assert "F.launch.angle_why" in page and "F.launch.angles_accepted" in page
+    assert "angles: " in page

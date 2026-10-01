@@ -446,7 +446,11 @@ function renderChips() {
     out.push(chip(C.club, "club pts", `${F.points.length} · run ${F.longest_run} · ${fmt(F.speed_mps)} m/s`));
     if (F.delivery) out.push(chip(C.club, "delivery", `${fmt(F.delivery.speed_mps)} m/s path ${fmt(F.delivery.path_deg)}° aoa ${fmt(F.delivery.attack_deg)}°`));
     out.push(chip(C.ball, "ball pts", F.ball_points.length));
-    if (F.launch) out.push(chip(C.ball, "launch", `${fmt(F.launch.speed_mps)} m/s vla ${fmt(F.launch.vla_deg)}° hla ${fmt(F.launch.hla_deg)}°`));
+    if (F.launch) {
+      const missing = F.launch.hla_deg == null || F.launch.vla_deg == null;
+      const why = missing ? ` · angles: ${F.launch.angle_why} (n=${F.launch.angles_accepted})` : "";
+      out.push(chip(C.ball, "launch", `${fmt(F.launch.speed_mps)} m/s vla ${fmt(F.launch.vla_deg)}° hla ${fmt(F.launch.hla_deg)}°${why}`));
+    }
     if (F.joint_ball_points && F.joint_ball_points.length) {
       const confirmed = F.joint_confirmed ? " ✓" : "";
       out.push(chip(C.jball, "joint ball" + confirmed, F.joint_ball_points.length));
@@ -524,7 +528,7 @@ function renderTraj(el) {
   // Raw: each point's own angles. A rejected angle is hollow, a floor reflection a diamond.
   const raw = (list, name, color) => {
     if (!list || !list.length) return;
-    const alone = trajShow === "raw";
+    const alone = trajShow === "raw" || !list.some((p) => p.filtered_position);
     traces.push({
       type: "scatter3d", mode: alone ? "lines+markers" : "markers", name: alone ? name : `${name} (raw)`,
       opacity: alone ? 1 : 0.45,
@@ -550,7 +554,7 @@ function renderTraj(el) {
     });
   };
   const add = (list, name, color) => {
-    if (trajShow !== "fitted") raw(list, name, color);
+    if (trajShow !== "fitted" || !(list || []).some((p) => p.filtered_position)) raw(list, name, color);
     if (trajShow !== "raw") fitted(list, name, color);
   };
   if (F) {

@@ -859,3 +859,15 @@ def test_an_adopted_hypothesis_keeps_its_points_angle_confidence(lib):
     lib.l3_track_point(ctypes.byref(ball.track.core), 0, ctypes.byref(point))
     assert point.anglesValid == both
     assert point.angleConfidence == pytest.approx(0.61)
+
+
+def test_a_launch_call_after_reconstruct_resets_the_angles(lib):
+    """The contract the board relies on: l3_ball_track_launch rebuilds the whole
+    l3_launch_t, so callers must not call it again once reconstruct has run
+    (l3_dump.c guards the per-frame call with gShotResultReady)."""
+    ball, _ = fly(lib, speed=60.0, hla_deg=3.0, vla_deg=12.0, frames=8)
+    _, launch = ball.launch()
+    assert launch.hlaValid and launch.vlaValid
+    lib.l3_ball_track_launch(ctypes.byref(ball.track), ctypes.byref(launch))
+    assert not launch.hlaValid and not launch.vlaValid
+    assert launch.angleWhy == 0 and launch.anglesAccepted == 0

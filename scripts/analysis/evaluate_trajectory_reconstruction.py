@@ -37,6 +37,9 @@ def scatter_about_line(points) -> float | None:
 
 
 def _track_scatter(points) -> tuple[float | None, float | None]:
+    """Scatter about a line of the raw and the reconstructed positions, over only the
+    points that have a reconstruction (hence "ball compared" is small: the ball fit
+    is invalid on most real shots)."""
     raw = [p.position for p in points if p.position is not None and p.filtered_position is not None]
     fitted = [p.filtered_position for p in points if p.filtered_position is not None]
     return scatter_about_line(raw), scatter_about_line(fitted)

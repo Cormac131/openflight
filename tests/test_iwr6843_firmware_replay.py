@@ -1401,3 +1401,22 @@ def test_synthetic_shot_vla_is_read_back_by_the_direction_fit(lib):
     assert result.launch is not None and result.launch.vla_deg is not None
     assert result.launch.vla_deg == pytest.approx(12.0, abs=2.0)
     assert result.launch.angle_why == "ok"
+
+
+def test_the_launch_line_says_why_the_angles_are_missing():
+    from types import SimpleNamespace
+
+    launch = fr.LaunchSummary(
+        points=6,
+        speed_mps=60.0,
+        radial_speed_mps=59.0,
+        hla_deg=None,
+        vla_deg=None,
+        residual_m=0.001,
+        confidence=0.9,
+        velocity=(0.0, 0.0, 0.0),
+        angles_accepted=5,
+        angle_why="uncertain",
+    )
+    line = fr._launch_line(SimpleNamespace(launch=launch))
+    assert "why=uncertain angles=5" in line

@@ -3744,7 +3744,11 @@ static void l3_considerBallTrack(uint32_t slot)
         }
     }
 #endif /* L3_BALL_HYPOTHESES */
-    (void)l3_ball_track_launch(&gBallTrack, &gLaunch);
+    /* Not once the result is built: launch rebuilds gLaunch, wiping the angles
+     * RESULT reconstructed. */
+    if (!gShotResultReady) {
+        (void)l3_ball_track_launch(&gBallTrack, &gLaunch);
+    }
     l3_profileStage(L3_PROF_BALL_TRACK, ticks);
     gTrigBusy = 0U;
     /* IMPACT -> BALL_TRACK -> SOLVE on the frames; SOLVE -> RESULT at once,

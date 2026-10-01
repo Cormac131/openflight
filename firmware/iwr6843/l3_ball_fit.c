@@ -241,7 +241,8 @@ static uint32_t l3_ball_fit_search(const l3_ball_fit_cfg_t *cfg, const l3_vec3_t
  * positive definite. */
 static uint32_t l3_ball_fit_sigmas(const l3_ball_fit_cfg_t *cfg, const l3_vec3_t *tee,
                                    const l3_ball_fit_obs_t *obs, uint32_t n, float rmsRad,
-                                   float hla, float vla, float *hlaSigma, float *vlaSigma)
+                                   uint32_t accepted, float hla, float vla, float *hlaSigma,
+                                   float *vlaSigma)
 {
     float d = L3_BALL_FIT_CURV_STEP;
     float f[3][3];
@@ -270,7 +271,10 @@ static uint32_t l3_ball_fit_sigmas(const l3_ball_fit_cfg_t *cfg, const l3_vec3_t
     if (!(hhh > 0.0F) || !(hvv > 0.0F) || !(det > 0.0F)) {
         return 0U;
     }
-    scale = rmsRad * rmsRad / (cfg->angleSigmaRad * cfg->angleSigmaRad);
+    /* Two fitted parameters (hla, vla): the residual variance is rms^2 * a / (a - 2),
+     * a the accepted angles (a >= 3, the minAccepted clamp). */
+    scale = rmsRad * rmsRad * (float)accepted / ((float)accepted - 2.0F) /
+            (cfg->angleSigmaRad * cfg->angleSigmaRad);
     *hlaSigma = sqrtf(scale * hvv / det);
     *vlaSigma = sqrtf(scale * hhh / det);
     return 1U;
@@ -389,7 +393,7 @@ uint32_t l3_ball_fit_run(const l3_ball_fit_cfg_t *cfg, const l3_vec3_t *origin,
         }
     }
     out->rmsRad = sqrtf(sumWSq / sumW);
-    curved = l3_ball_fit_sigmas(cfg, &out->tee, obs, n, out->rmsRad, out->hlaRad, out->vlaRad,
+    curved = l3_ball_fit_sigmas(cfg, &out->tee, obs, n, out->rmsRad, out->accepted, out->hlaRad, out->vlaRad,
                                 &out->hlaSigmaRad, &out->vlaSigmaRad);
     out->evaluations += L3_BALL_FIT_CURV_EVALS;
     if (out->hlaRad <= cfg->hlaMinRad + L3_BALL_FIT_EDGE_RAD ||

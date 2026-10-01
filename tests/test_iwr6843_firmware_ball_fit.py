@@ -337,7 +337,6 @@ def test_realistic_angle_scatter_never_reports_a_confident_wrong_direction(lib):
             valid += 1
             assert fit.hlaSigmaRad <= 3.0 * DEG + 1e-6 and fit.vlaSigmaRad <= 3.0 * DEG + 1e-6
             wrong += err > 9.0
-    print("12deg valid", valid, "wrong", wrong)
     assert wrong <= 10
 
 

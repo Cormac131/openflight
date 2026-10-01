@@ -468,3 +468,15 @@ def test_the_per_frame_paths_do_not_reconstruct():
     assert SOURCE.count("l3_ball_track_reconstruct(") == 1
     assert "l3_track_kf_run(" not in SOURCE
     assert "l3_track_delivery_filtered(" not in SOURCE
+
+
+def test_per_frame_launch_stops_once_the_result_is_ready():
+    # l3_ball_track_launch resets gLaunch, wiping the angles RESULT reconstructed.
+    ball_track = body("l3_considerBallTrack")
+    assert re.search(
+        r"if \(!gShotResultReady\) \{\s*\(void\)l3_ball_track_launch\(&gBallTrack, &gLaunch\);\s*\}",
+        ball_track,
+    )
+    assert ball_track.index("l3_ball_track_launch(") < ball_track.index(
+        "l3_ball_track_reconstruct("
+    )

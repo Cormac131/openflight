@@ -8,7 +8,7 @@
  * chi-square gate (chi2Gate). A point failing it still updates on its range,
  * so the range track is never lost. The prediction uses each point's own time
  * step, so frames the track coasted through are handled. The whole track is
- * available when this runs (at the fire, once), so the RTS smoother runs
+ * available when this runs (the replay and viewer run it once, after the shot; the board does not), so the RTS smoother runs
  * over it and each point's filteredPosition is the smoothed one.
  *
  * Range rate is not a measurement: radialVelocityMps is derived from the same
