@@ -23,6 +23,8 @@ void l3_ball_hyps_cfg_defaults(l3_ball_hyps_cfg_t *cfg)
     cfg->fastBallMps = 0.0F;          /* off until the recorded captures say otherwise */
     cfg->fastSupportFraction = 0.55F; /* the Pi detector's FAST_SUPPORT_FRAC */
     cfg->farWindowM = 0.0F;           /* off until the recorded captures say otherwise */
+    cfg->corridorGate = 1U;
+    cfg->anchorRangeTolM = 0.1F;
 }
 
 static void l3_ball_hyps_clear(l3_ball_hyps_t *hyps)
@@ -113,6 +115,36 @@ int32_t l3_ball_hyp_fit(const l3_ball_hyp_t *hyp, uint32_t referenceUs, float *r
 {
     return l3_ball_points_fit(hyp->points, hyp->count, referenceUs, rateBinsPerS, binAtReference,
                               residualBins);
+}
+
+/* G1: some impact within the anchor's tolerance and some speed in
+ * [minDepartureMps, maxSpeedMps] put a ball at rangeBin at timestampUs. */
+static int32_t l3_ball_hyps_inCorridor(const l3_ball_hyps_t *hyps, float rangeBin,
+                                       uint32_t timestampUs)
+{
+    const l3_ball_hyps_cfg_t *cfg = &hyps->cfg;
+    float dtS = l3_ball_hyps_seconds(timestampUs, hyps->anchor.anchorUs);
+    float tolS = (float)hyps->anchor.anchorTolUs * 1.0e-6F;
+    float travelledM = (rangeBin - hyps->anchor.anchorBin) * cfg->binWidthM;
+    float loM = cfg->minDepartureMps * (dtS - tolS) - cfg->anchorRangeTolM;
+    float hiM = cfg->maxSpeedMps * (dtS + tolS) + cfg->anchorRangeTolM;
+
+    return (travelledM >= loM && travelledM <= hiM) ? 1 : 0;
+}
+
+/* G2: a hypothesis whose fitted rate after three points is under the slowest
+ * ball's is a still return, not a departure. */
+static int32_t l3_ball_hyps_stalled(const l3_ball_hyps_cfg_t *cfg, const l3_ball_hyp_t *hyp)
+{
+    float rate;
+    float at;
+    float residual;
+
+    if (hyp->count < 3U ||
+        !l3_ball_hyp_fit(hyp, hyp->points[hyp->count - 1U].timestampUs, &rate, &at, &residual)) {
+        return 0;
+    }
+    return (rate * cfg->binWidthM < cfg->minDepartureMps) ? 1 : 0;
 }
 
 /* Where a hypothesis can be at timestampUs: [lo, hi] around a centre. One
@@ -236,6 +268,13 @@ uint32_t l3_ball_hyps_update(l3_ball_hyps_t *hyps, const l3_target_obs_t *target
             }
         }
     }
+    if (cfg->corridorGate) {
+        for (j = 0U; j < n; j++) {
+            if (!taken[j] && !l3_ball_hyps_inCorridor(hyps, targets[j].rangeBin, timestampUs)) {
+                taken[j] = 1U;  /* no impact and speed explain it: never a ball point */
+            }
+        }
+    }
     for (i = 0U; i < L3_BALL_HYP_MAX; i++) {
         if (hyps->hyp[i].active) {
             l3_ball_hyps_window(hyps, &hyps->hyp[i], timestampUs, &lo[i], &hi[i], &centre[i]);
@@ -290,6 +329,14 @@ uint32_t l3_ball_hyps_update(l3_ball_hyps_t *hyps, const l3_target_obs_t *target
             hyps->dropped++;
         }
     }
+    for (i = 0U; i < L3_BALL_HYP_MAX; i++) {
+        l3_ball_hyp_t *hyp = &hyps->hyp[i];
+
+        if (hyp->active && l3_ball_hyps_stalled(cfg, hyp)) {
+            hyp->active = 0U;
+            hyps->dropped++;
+        }
+    }
     /* Start hypotheses from what is left in the start band. Its far edge
      * moves out with the time since the gate at the fastest ball's speed: a
      * gate that fired late finds the ball already out, and it must still be
@@ -304,7 +351,8 @@ uint32_t l3_ball_hyps_update(l3_ball_hyps_t *hyps, const l3_target_obs_t *target
         l3_ball_hyp_t *hyp;
         int32_t slot;
 
-        if (taken[j] || range < hyps->anchor.acceptFromBin - hyps->spawnBehindBins || range > spawnHi) {
+        if (taken[j] || range < hyps->anchor.acceptFromBin - hyps->spawnBehindBins ||
+            (!cfg->corridorGate && range > spawnHi)) {
             continue;
         }
         slot = l3_ball_hyps_slot(hyps);

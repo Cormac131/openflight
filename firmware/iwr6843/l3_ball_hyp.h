@@ -84,6 +84,12 @@ typedef struct {
      * impact echo's or the golfer's and never become hypothesis points, so the
      * ball is taken only once it is clear of the merged bins. 0 turns it off. */
     float    farWindowM;
+    /* G1: a target must be explainable by an impact within the anchor's
+     * tolerance and a speed in [minDepartureMps, maxSpeedMps], within
+     * anchorRangeTolM. 0: the start band [accept - spawnBehind, accept +
+     * spawnBeyond + maxSpeedMps x elapsed] as before. */
+    uint32_t corridorGate;
+    float    anchorRangeTolM;
 } l3_ball_hyps_cfg_t;
 
 typedef struct {

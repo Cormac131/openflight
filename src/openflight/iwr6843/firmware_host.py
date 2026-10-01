@@ -1169,6 +1169,8 @@ class BallHypsCfg(ctypes.Structure):
         ("fastBallMps", ctypes.c_float),
         ("fastSupportFraction", ctypes.c_float),
         ("farWindowM", ctypes.c_float),
+        ("corridorGate", ctypes.c_uint32),
+        ("anchorRangeTolM", ctypes.c_float),
     ]
 
 

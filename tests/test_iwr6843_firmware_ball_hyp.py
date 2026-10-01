@@ -103,7 +103,7 @@ def test_the_ball_is_one_hypothesis_and_the_club_claim_none(lib):
 
 
 def test_only_targets_near_the_origin_start_a_hypothesis(lib):
-    hyps = make_hyps(lib)
+    hyps = make_hyps(lib, corridorGate=0)
     arm(lib, hyps)
     targets = [obs(1, 0, b, 900.0, 5.0) for b in (44.5, 45.2, 55.8, 56.4)]
     feed(lib, hyps, 1, 0, targets)  # at the gate time: origin - 1 .. origin + 10
@@ -112,7 +112,7 @@ def test_only_targets_near_the_origin_start_a_hypothesis(lib):
 
 def test_the_start_band_moves_out_with_the_time_since_the_gate(lib):
     """2 ms after the gate a 100 m/s ball can be 4.27 bins further out."""
-    hyps = make_hyps(lib)
+    hyps = make_hyps(lib, corridorGate=0)
     arm(lib, hyps)
     targets = [obs(1, 2000, b, 900.0, 5.0) for b in (56.4, 60.1, 60.5)]
     feed(lib, hyps, 1, 2000, targets)
@@ -261,8 +261,55 @@ def test_a_stationary_return_near_the_origin_is_never_the_ball(lib):
     """The strong stall beside the ball (2026-08-24: bins 38.2-38.4, SNR up to 970)."""
     scene = TwoTracks(missing_ball=tuple(range(1, 9)), extras=[(48.0, 20000.0, 0.8)])
     hyps, _ = run(lib, scene)
-    assert active(hyps)  # it is followed as a hypothesis ...
-    assert verdict(lib, hyps).index == -1  # ... but it never leaves: not the ball
+    assert verdict(lib, hyps).index == -1  # the stall is dropped, not followed: not the ball
+
+
+def test_a_stationary_pair_cannot_start_once_the_corridor_has_moved_on(lib):
+    """20260927_144220: two near-stationary returns held two of four slots."""
+    hyps = make_hyps(lib)
+    arm(lib, hyps, tol_us=2000)
+    for k in range(1, 4):  # 33-39 ms after the anchor: lower edge >= 0.21 m (4.5 bins)
+        ts = 30_000 + 3000 * k
+        feed(lib, hyps, k, ts, [obs(k, ts, 46.2, 2000.0, 0.0), obs(k, ts, 48.0, 2000.0, 0.0)])
+    assert not active(hyps)
+
+
+def test_the_same_pair_starts_hypotheses_with_the_corridor_off(lib):
+    hyps = make_hyps(lib, corridorGate=0)
+    arm(lib, hyps, tol_us=2000)
+    feed(lib, hyps, 1, 33_000, [obs(1, 33_000, 46.2, 2000.0, 0.0), obs(1, 33_000, 48.0, 2000.0, 0.0)])
+    assert len(active(hyps)) == 2
+
+
+@pytest.mark.parametrize(
+    "metres, inside",
+    [(10.0 * 0.010 - 0.1 + 0.002, True), (10.0 * 0.010 - 0.1 - 0.002, False),
+     (100.0 * 0.014 + 0.1 - 0.002, True), (100.0 * 0.014 + 0.1 + 0.002, False)],
+)
+def test_the_corridor_edges(lib, metres, inside):
+    """dt = 12 ms, tol = 2 ms: [10 x 10 ms - 0.1, 100 x 14 ms + 0.1] metres from the tee."""
+    hyps = make_hyps(lib, spawnBeyondM=10.0)  # the off-mode band must not be what refuses
+    arm(lib, hyps, tol_us=2000)
+    feed(lib, hyps, 1, 12_000, [obs(1, 12_000, 46.0 + metres / BIN_M, 900.0, 40.0)])
+    assert bool(active(hyps)) is inside
+
+
+def test_the_corridor_holds_across_the_clock_wrap(lib):
+    start = 2**32 - 4000
+    hyps = make_hyps(lib)
+    arm(lib, hyps, gate_us=start, tol_us=2000)
+    ts = (start + 12_000) % 2**32
+    feed(lib, hyps, 1, ts, [obs(1, ts, 46.0 + 0.4 / BIN_M, 900.0, 40.0)])
+    assert len(active(hyps)) == 1
+
+
+def test_a_hypothesis_that_stops_moving_is_dropped_at_three_points(lib):
+    hyps = make_hyps(lib, corridorGate=0)
+    arm(lib, hyps)
+    for k, b in enumerate((47.0, 47.1, 47.15), start=1):
+        feed(lib, hyps, k, 2000 * k, [obs(k, 2000 * k, b, 900.0, 0.0)])
+    assert not active(hyps)
+    assert hyps.dropped == 1
 
 
 @pytest.mark.parametrize("offset_us", [-6000, 6000])
