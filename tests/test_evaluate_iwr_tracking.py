@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -495,22 +495,176 @@ def test_summarize_splits_the_ball_verdicts_by_presence(ev):
     assert s["ball_present"] == 2 and s["ball_present_strict"] == 2
 
 
-def split(present_ok, absent_none, absent_wrong, club=72):
-    return {
-        "captures": 125,
-        "club": {"club": club, "stuck": 0, "few": 0},
-        "ball_by_presence": {
-            "present": {"ok": present_ok, "wrong": 0, "none": 0},
-            "absent": {"ok": 0, "wrong": absent_wrong, "none": absent_none},
-        },
-    }
+def named(ev, name, ball, present, club="club"):
+    return ev.Outcome(
+        name=name,
+        club=club,
+        ball=ball,
+        ball_present=present,
+        ball_present_strict=present,
+        launch_mps=None,
+        ops_mps=40.0,
+    )
 
 
-def test_accept_split_passes_only_a_strict_improvement(ev):
-    base = split(present_ok=10, absent_none=5, absent_wrong=60, club=60)
-    assert ev.accept_split(split(11, 6, 59, club=60), base) == []
-    problems = ev.accept_split(split(10, 5, 60, club=59), base)
-    assert len(problems) == 4  # ok not higher, none not higher, wrong not lower, club below base
+def baseline_of(ev, outcomes) -> dict:
+    """A baseline JSON as --json writes it: the summary and every outcome."""
+    return {"summary": ev.summarize(outcomes), "outcomes": [asdict(o) for o in outcomes]}
+
+
+# The legacy baseline: a, b present; c, d absent.
+BASE_ROWS = [("a", "wrong", True), ("b", "none", True), ("c", "wrong", False), ("d", "ok", False)]
+
+
+def base_json(ev, club="club"):
+    return baseline_of(ev, [named(ev, n, b, p, club=club) for n, b, p in BASE_ROWS])
+
+
+def failures(ev, lines):
+    return [line for line in lines if not ev.is_informational(line)]
+
+
+def test_accept_split_passes_a_strict_improvement_under_the_same_labels(ev):
+    run = [
+        named(ev, "a", "ok", True),
+        named(ev, "b", "none", True),
+        named(ev, "c", "none", False),
+        named(ev, "d", "none", False),
+    ]
+    assert ev.accept_split(run, base_json(ev)) == []
+
+
+def test_accept_split_names_each_failure_under_the_same_labels(ev):
+    run = [
+        named(ev, "a", "wrong", True, club="stuck"),
+        named(ev, "b", "none", True),
+        named(ev, "c", "wrong", False),
+        named(ev, "d", "ok", False),
+    ]
+    problems = ev.accept_split(run, base_json(ev))
+    assert problems == [
+        "ball-present ok 0 not above 0",
+        "ball-absent none 0 not above 0",
+        "ball-absent wrong 1 not below 1",
+        "club at impact 3 < baseline 4",
+    ]
+    assert failures(ev, problems) == problems
+
+
+def test_accept_split_judges_the_run_by_the_baselines_labels(ev):
+    """The run's own label differs on c (its replay saw a ball there): c is
+    still judged as absent, so its 'none' counts; the difference is reported
+    as information, not as a failure."""
+    run = [
+        named(ev, "a", "ok", True),
+        named(ev, "b", "none", True),
+        named(ev, "c", "none", True),  # run says present, baseline absent
+        named(ev, "d", "none", False),
+    ]
+    lines = ev.accept_split(run, base_json(ev))
+    assert lines == ["label differs: c baseline=absent run=present"]
+    assert failures(ev, lines) == []
+
+
+def test_a_label_flip_cannot_buy_acceptance(ev):
+    """Under the run's own labels c ('wrong', now present) would leave the
+    absent side with no wrong; under the baseline's it is still absent wrong."""
+    run = [
+        named(ev, "a", "ok", True),
+        named(ev, "b", "none", True),
+        named(ev, "c", "wrong", True),
+        named(ev, "d", "none", False),
+    ]
+    lines = ev.accept_split(run, base_json(ev))
+    assert failures(ev, lines) == ["ball-absent wrong 1 not below 1"]
+    assert "label differs: c baseline=absent run=present" in lines
+
+
+def test_accept_split_refuses_different_capture_sets(ev):
+    run = [
+        named(ev, "a", "ok", True),
+        named(ev, "b", "none", True),
+        named(ev, "c", "none", False),
+        named(ev, "e", "none", False),
+    ]
+    problems = ev.accept_split(run, base_json(ev))
+    assert len(problems) == 1 and not ev.is_informational(problems[0])
+    assert "captures differ" in problems[0]
+    assert "only in the run: e" in problems[0] and "only in the baseline: d" in problems[0]
+
+
+def test_accept_split_refuses_duplicate_capture_names(ev):
+    run = [named(ev, n, b, p) for n, b, p in BASE_ROWS] + [named(ev, "a", "ok", True)]
+    problems = ev.accept_split(run, base_json(ev))
+    assert problems == ["duplicate capture names in the run: a"]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "needle"),
+    [
+        (lambda b: b.pop("outcomes"), "no per-capture outcomes"),
+        (lambda b: b["summary"].pop("ball_by_presence"), "no ball_by_presence"),
+        (lambda b: b.pop("summary"), "no summary"),
+        (lambda b: b["outcomes"][0].pop("ball_present"), "no ball_present"),
+    ],
+)
+def test_an_old_baseline_is_a_readable_problem_not_a_key_error(ev, mutate, needle):
+    base = base_json(ev)
+    mutate(base)
+    run = [named(ev, n, b, p) for n, b, p in BASE_ROWS]
+    problems = ev.accept_split(run, base)
+    assert len(problems) == 1 and needle in problems[0]
+    assert not ev.is_informational(problems[0])
+
+
+def _run_main(ev, monkeypatch, tmp_path, run, *flags):
+    monkeypatch.setattr(ev, "iter_cases", lambda roots: iter(run))
+    monkeypatch.setattr(ev, "evaluate", lambda case, **_kw: case)
+    return ev.main([str(tmp_path), *flags])
+
+
+def test_the_cli_runs_accept_and_compare_both_and_fails_on_either(
+    ev, monkeypatch, tmp_path, capsys
+):
+    base = tmp_path / "base.json"
+    base.write_text(json.dumps(base_json(ev)), encoding="utf-8")
+    same = [named(ev, n, b, p) for n, b, p in BASE_ROWS]
+    code = _run_main(ev, monkeypatch, tmp_path, same, "--accept", str(base), "--compare", str(base))
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "NOT ACCEPTED: ball-present ok 0 not above 0" in out
+    assert "REGRESSION" not in out  # the compare ran too and found nothing
+
+    worse = [named(ev, n, "none", p, club="stuck") for n, _b, p in BASE_ROWS]
+    code = _run_main(ev, monkeypatch, tmp_path, worse, "--accept", str(base), "--compare", str(base))
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "NOT ACCEPTED" in out and "REGRESSION club at impact" in out
+
+
+def test_the_cli_prints_label_differences_without_failing(ev, monkeypatch, tmp_path, capsys):
+    base = tmp_path / "base.json"
+    base.write_text(json.dumps(base_json(ev)), encoding="utf-8")
+    run = [
+        named(ev, "a", "ok", True),
+        named(ev, "b", "none", True),
+        named(ev, "c", "none", True),
+        named(ev, "d", "none", False),
+    ]
+    assert _run_main(ev, monkeypatch, tmp_path, run, "--accept", str(base)) == 0
+    out = capsys.readouterr().out
+    assert "NOTE: label differs: c baseline=absent run=present" in out
+    assert "NOT ACCEPTED" not in out
+
+
+def test_the_cli_reports_an_old_baseline_and_fails(ev, monkeypatch, tmp_path, capsys):
+    base = tmp_path / "old.json"
+    old = base_json(ev)
+    del old["outcomes"]
+    base.write_text(json.dumps(old), encoding="utf-8")
+    run = [named(ev, n, b, p) for n, b, p in BASE_ROWS]
+    assert _run_main(ev, monkeypatch, tmp_path, run, "--accept", str(base)) == 1
+    assert "NOT ACCEPTED: " in capsys.readouterr().out
 
 
 def test_a_reviewed_label_overrides_the_heuristic(ev, tmp_path, monkeypatch):

@@ -358,10 +358,72 @@ def compare(summary: dict, baseline: dict, *, allow_more_none: int = 0) -> list[
     return problems
 
 
-def accept_split(summary: dict, baseline: dict) -> list[str]:
-    """Spec E2, against legacy re-run under the same label: what keeps the
-    hypotheses from becoming the default, one line each (empty: accepted)."""
-    now, base = summary["ball_by_presence"], baseline["ball_by_presence"]
+LABEL_DIFFERS = "label differs: "
+
+
+def is_informational(line: str) -> bool:
+    """Whether an accept_split line is information (a capture whose run label
+    differs from the baseline's) rather than a reason not to accept."""
+    return line.startswith(LABEL_DIFFERS)
+
+
+def _baseline_problem(baseline: dict) -> str | None:
+    """Why a baseline JSON cannot be judged against, None when it can."""
+    if "summary" not in baseline:
+        return "baseline has no summary: write it with --json"
+    if "ball_by_presence" not in baseline["summary"] or "club" not in baseline["summary"]:
+        return "baseline summary has no ball_by_presence: re-run it under the gap-tolerant label"
+    if "outcomes" not in baseline:
+        return "baseline has no per-capture outcomes: re-run it with --json"
+    for row in baseline["outcomes"]:
+        missing = [key for key in ("name", "ball", "ball_present") if key not in row]
+        if missing:
+            return f"baseline outcome has no {', '.join(missing)}: re-run it with --json"
+    return None
+
+
+def _split_counts(rows: Iterable[tuple[str, bool]]) -> dict[str, dict[str, int]]:
+    """(verdict, present) pairs counted per presence and verdict."""
+    counts = {side: {v: 0 for v in ("ok", "wrong", "none")} for side in ("present", "absent")}
+    for verdict, present in rows:
+        counts["present" if present else "absent"][verdict] += 1
+    return counts
+
+
+def _duplicates(names: Sequence[str]) -> list[str]:
+    return sorted({n for n in names if names.count(n) > 1})
+
+
+def accept_split(outcomes: Iterable[Outcome], baseline: dict) -> list[str]:
+    """Spec E2 against legacy: the run's verdicts and the baseline's, both split
+    by the BASELINE's per-capture ball_present, so a label the run's replay
+    moved cannot move a capture between the populations being judged.
+
+    Returns one line per reason not to accept, then one informational line per
+    capture whose run label differs from the baseline's (``is_informational``;
+    never a failure). Empty: accepted. The capture sets must match."""
+    outcomes = list(outcomes)
+    problem = _baseline_problem(baseline)
+    if problem is not None:
+        return [problem]
+    rows = baseline["outcomes"]
+    run_names = [o.name for o in outcomes]
+    base_names = [row["name"] for row in rows]
+    for who, names in (("run", run_names), ("baseline", base_names)):
+        duplicated = _duplicates(names)
+        if duplicated:
+            return [f"duplicate capture names in the {who}: {', '.join(duplicated)}"]
+    if set(run_names) != set(base_names):
+        only_run = sorted(set(run_names) - set(base_names))
+        only_base = sorted(set(base_names) - set(run_names))
+        return [
+            f"captures differ: {len(run_names)} in the run, {len(base_names)} in the baseline;"
+            f" only in the run: {', '.join(only_run) or '-'};"
+            f" only in the baseline: {', '.join(only_base) or '-'}"
+        ]
+    label = {row["name"]: bool(row["ball_present"]) for row in rows}
+    now = _split_counts((o.ball, label[o.name]) for o in outcomes)
+    base = _split_counts((row["ball"], label[row["name"]]) for row in rows)
     problems = []
     if now["present"]["ok"] <= base["present"]["ok"]:
         problems.append(f"ball-present ok {now['present']['ok']} not above {base['present']['ok']}")
@@ -373,10 +435,17 @@ def accept_split(summary: dict, baseline: dict) -> list[str]:
         problems.append(
             f"ball-absent wrong {now['absent']['wrong']} not below {base['absent']['wrong']}"
         )
-    if summary["club"]["club"] < baseline["club"]["club"]:
-        problems.append(
-            f"club at impact {summary['club']['club']} < baseline {baseline['club']['club']}"
-        )
+    run_club = sum(1 for o in outcomes if o.club == "club")
+    base_club = baseline["summary"]["club"]["club"]
+    if run_club < base_club:
+        problems.append(f"club at impact {run_club} < baseline {base_club}")
+    side = {True: "present", False: "absent"}
+    for o in sorted(outcomes, key=lambda o: o.name):
+        if bool(o.ball_present) != label[o.name]:
+            problems.append(
+                f"{LABEL_DIFFERS}{o.name} baseline={side[label[o.name]]}"
+                f" run={side[bool(o.ball_present)]}"
+            )
     return problems
 
 
@@ -498,20 +567,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         written["impact"] = impact
     if args.json is not None:
         args.json.write_text(json.dumps(written, indent=2) + "\n", encoding="utf-8")
+    failed = False
     if args.accept is not None:
-        baseline = json.loads(args.accept.read_text(encoding="utf-8"))["summary"]
-        problems = accept_split(summary, baseline)
-        for line in problems:
-            print(f"NOT ACCEPTED: {line}")
-        if problems:
-            return 1
+        baseline = json.loads(args.accept.read_text(encoding="utf-8"))
+        for line in accept_split(outcomes, baseline):
+            if is_informational(line):
+                print(f"NOTE: {line}")
+            else:
+                print(f"NOT ACCEPTED: {line}")
+                failed = True
     if args.compare is not None:
         baseline = json.loads(args.compare.read_text(encoding="utf-8"))["summary"]
         problems = compare(summary, baseline, allow_more_none=args.allow_more_none)
         for problem in problems:
             print(f"REGRESSION {problem}")
-        return 1 if problems else 0
-    return 0
+        failed = failed or bool(problems)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
