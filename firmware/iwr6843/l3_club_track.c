@@ -5,22 +5,11 @@
 
 #include "l3_club_track.h"
 #include "l3_text.h"
+#include "l3_track_kf.h"
 
 static const char *const kWhyNames[L3_TRACK_WHY_COUNT] = {
     "none", "acquired", "associated", "coasted", "dropped", "idle", "released"
 };
-
-/* The reconstruction's defaults; Task 5 moves them to l3_track_kf_cfg_defaults. */
-static void l3_track_kf_defaults_inline(l3_track_kf_cfg_t *kf)
-{
-    kf->accelSigmaMps2 = 1500.0F;    /* a clubhead on its arc: ~40 m/s at ~1.1 m radius */
-    kf->rangeSigmaM = 0.03F;
-    kf->angleSigmaRad = 15.0F * (3.14159265F / 180.0F);
-    kf->minAngleConfidence = 0.05F;
-    kf->chi2Gate = 9.21F;            /* 99 % for 2 degrees of freedom */
-    kf->initPositionSigmaM = 0.5F;
-    kf->initVelocitySigmaMps = 50.0F;
-}
 
 void l3_track_cfg_defaults(l3_track_cfg_t *cfg)
 {
@@ -43,7 +32,7 @@ void l3_track_cfg_defaults(l3_track_cfg_t *cfg)
     cfg->followDopplerRiseMps = 1.5F;
     cfg->approachMaxSameBinPoints = 1U;
     cfg->standingFrames = 2U;
-    l3_track_kf_defaults_inline(&cfg->kf);
+    l3_track_kf_cfg_defaults(&cfg->kf);
 }
 
 static float l3_track_absf(float value)

@@ -35,6 +35,7 @@ HOST_SOURCES = (
     "l3_band.c",
     "l3_trigger.c",
     "l3_club_track.c",
+    "l3_track_kf.c",
     "l3_impact_fit.c",
     "l3_launch.c",
     "l3_joint_search.c",
@@ -490,6 +491,20 @@ class Trig(ctypes.Structure):
 # l3_club_track.h L3_FILTER_HYP_*
 FILTER_HYP_NAMES = ("none", "direct", "image", "ambiguous", "unfiltered")
 FILTER_HYP_UNFILTERED = FILTER_HYP_NAMES.index("unfiltered")
+
+
+# l3_track_kf.h
+TRACK_KF_WHY_NAMES = ("none", "ok", "few_points", "diverged")
+
+
+class TrackKfResult(ctypes.Structure):
+    """``l3_track_kf_result_t``."""
+
+    _fields_ = [
+        ("points", ctypes.c_uint32),
+        ("accepted", ctypes.c_uint32),
+        ("why", ctypes.c_uint8),
+    ]
 
 
 class TrackKfCfg(ctypes.Structure):
@@ -1959,6 +1974,12 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     # l3_launch.h
     "l3_launch_from_delivery": ([_P(Delivery), _U32, _P(Launch)], None),
     "l3_track_append_point": ([_P(ClubTrack), _P(TrackPoint)], None),
+    # l3_track_kf.h
+    "l3_track_kf_cfg_defaults": ([_P(TrackKfCfg)], None),
+    "l3_track_kf_work_bytes": ([], _U32),
+    "l3_track_kf_run": ([_P(TrackKfCfg), _P(ClubTrack), ctypes.c_void_p, _P(TrackKfResult)], _U32),
+    "l3_track_delivery_filtered": ([_P(ClubTrack), _U32, _P(Delivery)], _U32),
+    "l3_track_kf_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     # l3_joint_search.h
     "l3_joint_cfg_defaults": ([_P(JointCfg)], None),
     "l3_joint_init": ([_P(Joint), _P(JointCfg)], None),
