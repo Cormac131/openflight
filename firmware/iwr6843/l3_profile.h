@@ -25,7 +25,7 @@ enum {
     L3_PROF_IMPACT,
     L3_PROF_BALL_DETECT,
     L3_PROF_BALL_TRACK,
-    L3_PROF_RECONSTRUCT,  /* once per shot: the club EKF at the fire, the ball fit at RESULT */
+    L3_PROF_RECONSTRUCT,  /* once per shot: the ball's direction fit at RESULT */
     L3_PROF_DSP_WAIT,     /* the MSS blocked on the DSS's answer (l3_detect_core.h) */
     L3_PROF_STAGE_COUNT
 };

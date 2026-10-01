@@ -60,7 +60,6 @@
 #include "l3_angle.h"
 #include "l3_ball_track.h"
 #include "l3_club_track.h"
-#include "l3_track_kf.h"
 #include "l3_adaptive.h"
 #include "l3_band.h"
 #include "l3_impact.h"
@@ -505,11 +504,6 @@ static uint32_t            gShotId;
 /* MSS-only diagnostics live in HS-RAM (mss_linker.cmd .hsramMss): DATA_RAM
  * is full. Not zeroed at load like .bss, so l3_initTask clears them. */
 #define L3_HSRAM_DIAG __attribute__((section(".hsramMss")))
-
-/* The club reconstruction's scratch (l3_track_kf.h), ~11 KB, MSS-only, used
- * once per shot at the fire; HS-RAM like the other MSS-only buffers (DATA_RAM
- * is full). Not zeroed at load: l3_track_kf_run writes every slot it reads. */
-static l3_track_kf_work_t gClubKfWork L3_HSRAM_DIAG;
 
 static l3_profile_t        gProfile L3_HSRAM_DIAG;
 /* The club's pending angles and the angle task's stack, in HS-RAM too:
@@ -4119,17 +4113,9 @@ static void l3_considerSelfTrigger(uint32_t slot)
         /* The notice first: the host's S! waits on it, the debug line does not. */
         l3_queueNotice("Triggered\n");
         /* Then every pending club angle, so the shot freezes them with the
-         * trajectory; the club reconstructed from them once (l3_track_kf.h),
-         * and the delivery again from that. */
+         * trajectory, and the delivery again from them. */
         l3_angleQueueDrain();
-        {
-            uint32_t reconstructTicks = Cycleprofiler_getTimeStamp();
-            l3_track_kf_result_t kfResult;
-
-            (void)l3_track_kf_run(&gClubTrack.cfg.kf, &gClubTrack, &gClubKfWork, &kfResult);
-            (void)l3_track_delivery_filtered(&gClubTrack, 8U, &gDelivery);
-            l3_profileStage(L3_PROF_RECONSTRUCT, reconstructTicks);
-        }
+        (void)l3_track_delivery(&gClubTrack, 8U, &gDelivery);
     }
     l3_shotObserve(teeBin, fired, impactUs);
     if (left && gBallTrack.armed) {

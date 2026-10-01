@@ -450,17 +450,6 @@ def test_after_impact_the_ball_tracker_scores_the_post_spans_against_the_frozen_
     assert "gClubTrack.active && gClubTrack.count > 0U" in ball_track[band:post]
 
 
-def test_the_fire_reconstructs_the_club_before_its_frozen_delivery():
-    """After the angle drain the club is reconstructed once and the delivery
-    the shot machine freezes is the filtered one."""
-    flat = " ".join(SOURCE.split())
-    drain = flat.index("l3_angleQueueDrain();")
-    run = flat.index("l3_track_kf_run(&gClubTrack.cfg.kf, &gClubTrack, &gClubKfWork,", drain)
-    filtered = flat.index("l3_track_delivery_filtered(&gClubTrack, 8U, &gDelivery);", run)
-    observe = flat.index("l3_shotObserve(teeBin, fired, impactUs);", filtered)
-    assert drain < run < filtered < observe
-
-
 def test_result_reconstructs_the_ball_once_before_building_the_result():
     flat = " ".join(SOURCE.split())
     gate = flat.index("if (gShot.state == L3_SHOT_RESULT && !gShotResultReady) {")
@@ -469,16 +458,13 @@ def test_result_reconstructs_the_ball_once_before_building_the_result():
     assert gate < fit < build
 
 
-def test_both_reconstructions_are_profiled():
-    assert SOURCE.count("l3_profileStage(L3_PROF_RECONSTRUCT,") == 2
+def test_the_ball_reconstruction_is_profiled():
+    assert SOURCE.count("l3_profileStage(L3_PROF_RECONSTRUCT,") == 1
 
 
 def test_the_per_frame_paths_do_not_reconstruct():
-    """Each reconstruction has exactly one call site, the two once-per-shot ones above."""
+    """The ball's reconstruction has one call site (RESULT); the board never
+    reconstructs the club and its frozen delivery is the unfiltered one."""
     assert SOURCE.count("l3_ball_track_reconstruct(") == 1
-    assert SOURCE.count("l3_track_kf_run(") == 1
-
-
-def test_the_club_reconstruction_scratch_lives_in_hsram():
-    assert "static l3_track_kf_work_t gClubKfWork L3_HSRAM_DIAG;" in SOURCE
-    assert SOURCE.index("#define L3_HSRAM_DIAG") < SOURCE.index("gClubKfWork L3_HSRAM_DIAG")
+    assert "l3_track_kf_run(" not in SOURCE
+    assert "l3_track_delivery_filtered(" not in SOURCE

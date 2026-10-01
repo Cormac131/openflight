@@ -1386,14 +1386,6 @@ def replay_dump(
         fired = bool(ranged or left) and not early
         if fired and fired_frame is None:
             fired_frame = frame
-        if fired and fired_frame == frame:
-            # l3_considerSelfTrigger: the fire drains the club's angles (the
-            # replay drained each frame already), reconstructs the club once
-            # and freezes the filtered delivery.
-            lib.l3_track_kf_run(
-                ctypes.byref(track.cfg.kf), ctypes.byref(track), kf_work, ctypes.byref(kf_result)
-            )
-            lib.l3_track_delivery_filtered(ctypes.byref(track), 8, ctypes.byref(delivery))
         # The shot machine, as l3_shotObserve feeds it; IMPACT arms the ball tracker.
         shot_in = fw.ShotInput()
         shot_in.ballLocked = 1 if config.dest_bin is not None else 0
@@ -1467,8 +1459,9 @@ def replay_dump(
         frozen_impact_us = fitted_frozen_us
     else:
         frozen_impact_us = int(shot.impactTimestampUs)
-    # The viewer's trajectories. The board reconstructs the club only at the
-    # fire (for its delivery) and the ball at RESULT; the replay does both over
+    # The viewer's trajectories. The board does not reconstruct the club (its
+    # frozen delivery is the unfiltered one); the replay does, for the viewer
+    # only. The ball is reconstructed once, as the board does at RESULT, over
     # every held point at the end, so the page shows the whole track even when
     # the capture ended before RESULT.
     lib.l3_track_kf_run(

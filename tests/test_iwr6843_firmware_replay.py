@@ -1344,22 +1344,26 @@ def test_a_replayed_shot_carries_both_reconstructions(lib):
     assert any(p.angle_confidence > 0.0 for p in result.points)
 
 
-def test_the_fire_frame_reports_the_filtered_delivery(lib, swing, monkeypatch):
-    """At the fire the board drains the angles, reconstructs the club once and
-    freezes the filtered delivery; the replay does the same on the fired frame."""
+def test_the_club_is_reconstructed_once_for_the_viewer_only(lib, swing, monkeypatch):
+    """The board never reconstructs the club and its frozen delivery is the
+    unfiltered one; the replay reconstructs once at the end, for the viewer."""
     calls = []
     original_run = lib.l3_track_kf_run
+    original_filtered = lib.l3_track_delivery_filtered
 
-    def spy(*args):
+    def spy_run(*args):
         calls.append("kf")
         return original_run(*args)
 
-    monkeypatch.setattr(lib, "l3_track_kf_run", spy)
+    def spy_filtered(*args):
+        calls.append("filtered")
+        return original_filtered(*args)
+
+    monkeypatch.setattr(lib, "l3_track_kf_run", spy_run)
+    monkeypatch.setattr(lib, "l3_track_delivery_filtered", spy_filtered)
     result = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
     assert result.fired_frame is not None
-    fired = result.frames[result.fired_frame]
-    assert fired.delivery is not None and fired.delivery.points > 0
-    assert calls.count("kf") == 2, "once at the fire, once at the end for the viewer"
+    assert calls == ["kf"]
 
 
 def test_a_point_summary_of_an_unfiltered_point_has_no_filtered_position():

@@ -525,8 +525,8 @@ format miss the club.
 
 `triggerLog perf` prints per-stage counts, last, mean and maximum in
 microseconds (residual, trigger, extraction, club track, angle, impact, ball
-detector, ball tracker, `reconstruct`, the club filter at the fire plus the
-ball fit at RESULT, once per shot, and `dspwait`, the part of the residual the
+detector, ball tracker, `reconstruct`, the ball's direction fit at RESULT,
+once per shot, and `dspwait`, the part of the residual the
 MSS spent blocked on the DSS; the frame total excludes both `dspwait` and
 `reconstruct`) from
 `l3_profile.c` and the R4F cycle counter. That
