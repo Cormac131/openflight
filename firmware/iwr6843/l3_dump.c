@@ -3525,6 +3525,7 @@ static float l3_ballArmBin(uint32_t teeBin)
 static void l3_shotObserve(uint32_t teeBin, int32_t fired, uint32_t impactUs)
 {
     l3_shot_input_t in;
+    l3_ball_anchor_t anchor;
     uint32_t frameUs = gPreFramesCaptured * (uint32_t)gFramePeriodUs;
 
     memset(&in, 0, sizeof(in));
@@ -3538,8 +3539,9 @@ static void l3_shotObserve(uint32_t teeBin, int32_t fired, uint32_t impactUs)
     in.club = &gClubTrack;
     if (l3_shot_update(&gShot, &in, gPreFramesCaptured) == L3_SHOT_IMPACT &&
         gShot.impactFrame == gPreFramesCaptured) {
-        l3_ball_track_arm(&gBallTrack, l3_ballArmBin(teeBin), &gBallPosition,
-                          in.impactTimestampUs);
+        l3_ball_track_anchor(&gBallTrack, (float)teeBin, l3_ballArmBin(teeBin),
+                             in.impactTimestampUs, &gImpactFitCfg, &gClubTrack, &anchor);
+        l3_ball_track_arm(&gBallTrack, &anchor, &gBallPosition);
         if (gBand.valid) {
             /* The post window's floor, frozen (l3_scan.h): the fallback's
              * median beyond the band, else the trigger's own floor. */

@@ -18,7 +18,6 @@ void l3_ball_hyps_cfg_defaults(l3_ball_hyps_cfg_t *cfg)
     cfg->classifyPoints = 4U;
     cfg->minDepartureMps = 10.0F;     /* the slowest chip leaves faster than this */
     cfg->maxSpeedMps = 100.0F;
-    cfg->impactToleranceUs = 15000U;  /* the gate is not the exact impact */
     cfg->maxResidualBins = 1.0F;
     cfg->dopplerToleranceMps = 2.5F;
     cfg->fastBallMps = 0.0F;          /* off until the recorded captures say otherwise */
@@ -46,12 +45,11 @@ void l3_ball_hyps_init(l3_ball_hyps_t *hyps, const l3_ball_hyps_cfg_t *cfg)
     l3_ball_hyps_clear(hyps);
 }
 
-void l3_ball_hyps_arm(l3_ball_hyps_t *hyps, float originBin, uint32_t impactTimestampUs)
+void l3_ball_hyps_arm(l3_ball_hyps_t *hyps, const l3_ball_anchor_t *anchor)
 {
     l3_ball_hyps_clear(hyps);
     hyps->armed = 1U;
-    hyps->originBin = originBin;
-    hyps->impactTimestampUs = impactTimestampUs;
+    hyps->anchor = *anchor;
 }
 
 /* Signed seconds from earlier to later on the wrapping microsecond clock. */
@@ -218,7 +216,7 @@ uint32_t l3_ball_hyps_update(l3_ball_hyps_t *hyps, const l3_target_obs_t *target
     }
     if (cfg->farWindowBins > 0.0F) {
         for (j = 0U; j < n; j++) {
-            if (targets[j].rangeBin < hyps->originBin + cfg->farWindowBins) {
+            if (targets[j].rangeBin < hyps->anchor.acceptFromBin + cfg->farWindowBins) {
                 taken[j] = 1U;  /* short of the far window: never a ball point */
             }
         }
@@ -281,8 +279,8 @@ uint32_t l3_ball_hyps_update(l3_ball_hyps_t *hyps, const l3_target_obs_t *target
      * moves out with the time since the gate at the fastest ball's speed: a
      * gate that fired late finds the ball already out, and it must still be
      * able to start. */
-    sinceGateS = l3_ball_hyps_seconds(timestampUs, hyps->impactTimestampUs);
-    spawnHi = hyps->originBin + cfg->spawnBeyondBins +
+    sinceGateS = l3_ball_hyps_seconds(timestampUs, hyps->anchor.anchorUs);
+    spawnHi = hyps->anchor.acceptFromBin + cfg->spawnBeyondBins +
               ((sinceGateS > 0.0F && cfg->binWidthM > 0.0F)
                    ? cfg->maxSpeedMps / cfg->binWidthM * sinceGateS
                    : 0.0F);
@@ -291,7 +289,7 @@ uint32_t l3_ball_hyps_update(l3_ball_hyps_t *hyps, const l3_target_obs_t *target
         l3_ball_hyp_t *hyp;
         int32_t slot;
 
-        if (taken[j] || range < hyps->originBin - cfg->spawnBehindBins || range > spawnHi) {
+        if (taken[j] || range < hyps->anchor.acceptFromBin - cfg->spawnBehindBins || range > spawnHi) {
             continue;
         }
         slot = l3_ball_hyps_slot(hyps);
@@ -345,7 +343,7 @@ static int32_t l3_ball_hyps_judge(const l3_ball_hyps_t *hyps, uint32_t i,
     const l3_ball_hyps_cfg_t *cfg = &hyps->cfg;
     const l3_ball_hyp_t *hyp = &hyps->hyp[i];
     float rate;
-    float atGate;
+    float atAnchor;
     float residual;
     float rateMps;
     float originOffsetS;
@@ -358,7 +356,7 @@ static int32_t l3_ball_hyps_judge(const l3_ball_hyps_t *hyps, uint32_t i,
     if (!hyp->active || hyp->count < cfg->classifyPoints) {
         return 0;
     }
-    if (!l3_ball_hyp_fit(hyp, hyps->impactTimestampUs, &rate, &atGate, &residual) ||
+    if (!l3_ball_hyp_fit(hyp, hyps->anchor.anchorUs, &rate, &atAnchor, &residual) ||
         !(rate > 0.0F)) {
         return 0;
     }
@@ -366,8 +364,8 @@ static int32_t l3_ball_hyps_judge(const l3_ball_hyps_t *hyps, uint32_t i,
     if (rateMps < cfg->minDepartureMps || rateMps > cfg->maxSpeedMps) {
         return 0;
     }
-    originOffsetS = (hyps->originBin - atGate) / rate;
-    if (fabsf(originOffsetS) * 1.0e6F > (float)cfg->impactToleranceUs) {
+    originOffsetS = (hyps->anchor.anchorBin - atAnchor) / rate;
+    if (fabsf(originOffsetS) * 1.0e6F > (float)hyps->anchor.anchorTolUs) {
         return 0;
     }
     if (residual > cfg->maxResidualBins) {

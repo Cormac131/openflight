@@ -203,7 +203,9 @@ def test_post_impact_targets_are_band_filtered():
 
 def test_ball_tracker_is_armed_at_the_band_edge():
     assert "return gBand.valid ? gBand.hiBin : (float)teeBin;" in body("l3_ballArmBin")
-    assert "l3_ball_track_arm(&gBallTrack, l3_ballArmBin(teeBin)," in body("l3_shotObserve")
+    assert "l3_ball_track_anchor(&gBallTrack, (float)teeBin, l3_ballArmBin(teeBin)," in body(
+        "l3_shotObserve"
+    )
 
 
 def test_impact_fit_runs_before_the_result_is_built():
@@ -446,7 +448,7 @@ def test_behind_the_detect_task_sheds_the_ball_detector_and_the_map_chunk():
 
 def test_impact_freezes_the_post_floor_from_the_fallbacks_median():
     observe = body("l3_shotObserve")
-    arm = observe.index("l3_ball_track_arm(&gBallTrack,")
+    arm = observe.index("l3_ball_track_arm(&gBallTrack, &anchor,")
     freeze = observe.index("gBallFloor = (gLeaveFloor > 0.0F) ? gLeaveFloor : gTrig.floor;", arm)
     assert "if (gBand.valid) {" in observe[arm:freeze]
 

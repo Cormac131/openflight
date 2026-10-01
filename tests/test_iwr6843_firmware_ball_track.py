@@ -34,6 +34,18 @@ def lib(tmp_path_factory):
     return fw.build_firmware_library(tmp_path_factory.mktemp("l3_host"))
 
 
+def arm_track(lib, track, origin_bin, origin, impact_us):
+    """Arm with the gate as the anchor: the legacy origin and impact time."""
+    anchor = fw.BallAnchor(
+        anchorBin=origin_bin,
+        acceptFromBin=origin_bin,
+        gateUs=impact_us,
+        anchorUs=impact_us,
+        anchorTolUs=track.cfg.gateTolUs,
+    )
+    lib.l3_ball_track_arm(ctypes.byref(track), ctypes.byref(anchor), ctypes.byref(fw.Vec3(*origin)))
+
+
 class Ball:
     def __init__(self, lib, **overrides):
         self.lib = lib
@@ -47,9 +59,7 @@ class Ball:
         lib.l3_ball_track_init(ctypes.byref(self.track), ctypes.byref(cfg))
 
     def arm(self, origin_bin=ORIGIN_BIN, origin=ORIGIN, impact_us=IMPACT_US):
-        self.lib.l3_ball_track_arm(
-            ctypes.byref(self.track), origin_bin, ctypes.byref(fw.Vec3(*origin)), impact_us
-        )
+        arm_track(self.lib, self.track, origin_bin, origin, impact_us)
 
     def update(self, frame, targets, timestamp_us=None) -> bool:
         arr = (fw.TargetObs * max(1, len(targets)))(*targets)
@@ -272,6 +282,40 @@ def test_the_strongest_return_does_not_steal_a_confirmed_flight(lib):
     assert ball.track.core.lastBin == pytest.approx(last + step)
 
 
+def test_the_legacy_search_keeps_the_accept_bin_and_gate_time(lib):
+    ball = Ball(lib)
+    anchor = fw.BallAnchor(
+        anchorBin=46.0,
+        acceptFromBin=50.0,
+        gateUs=99,
+        anchorUs=77,
+        anchorTolUs=2000,
+        anchorSigmaUs=100.0,
+        source=1,
+    )
+    lib.l3_ball_track_arm(
+        ctypes.byref(ball.track), ctypes.byref(anchor), ctypes.byref(fw.Vec3(*ORIGIN))
+    )
+    assert ball.track.originBin == 50.0 and ball.track.impactTimestampUs == 99
+    assert ball.track.anchor.anchorUs == 77
+    assert ball.track.hyps.anchor.anchorBin == 46.0
+
+
+def test_the_track_builds_its_anchor_from_its_own_cfg(lib):
+    ball = Ball(lib)
+    out = fw.BallAnchor()
+    fit = fw.ImpactFitCfg()
+    lib.l3_impact_fit_cfg_defaults(ctypes.byref(fit))
+    lib.l3_ball_track_anchor(
+        ctypes.byref(ball.track), 46.0, 50.0, 1234, ctypes.byref(fit), None, ctypes.byref(out)
+    )
+    assert (out.anchorUs, out.anchorTolUs, out.acceptFromBin) == (
+        1234,
+        ball.track.cfg.gateTolUs,
+        50.0,
+    )
+
+
 def test_reset_and_rearm_forget_the_flight_but_keep_the_counters(lib):
     ball, _ = fly(lib, frames=4)
     lib.l3_ball_track_reset(ctypes.byref(ball.track))
@@ -416,10 +460,7 @@ def hyp_track(lib, **overrides):
 
 
 def run_joint(lib, track, scene, on_frame=None):
-    origin = fw.Vec3(scene.origin_bin * BIN_M, 0.0, 0.0)
-    lib.l3_ball_track_arm(
-        ctypes.byref(track), scene.origin_bin, ctypes.byref(origin), scene.gate_us
-    )
+    arm_track(lib, track, scene.origin_bin, (scene.origin_bin * BIN_M, 0.0, 0.0), scene.gate_us)
     whys = []
     for f in scene.build():
         arr = (fw.TargetObs * max(1, len(f.targets)))(*f.targets)
@@ -476,8 +517,7 @@ def test_with_the_search_off_the_joint_update_is_todays_update(lib):
     cfg = fw.BallTrackCfg()
     lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
     lib.l3_ball_track_init(ctypes.byref(b), ctypes.byref(cfg))
-    origin = fw.Vec3(scene.origin_bin * BIN_M, 0.0, 0.0)
-    lib.l3_ball_track_arm(ctypes.byref(b), scene.origin_bin, ctypes.byref(origin), scene.gate_us)
+    arm_track(lib, b, scene.origin_bin, (scene.origin_bin * BIN_M, 0.0, 0.0), scene.gate_us)
     for f in scene.build():
         arr = (fw.TargetObs * max(1, len(f.targets)))(*f.targets)
         lib.l3_ball_track_update(ctypes.byref(b), arr, len(f.targets), f.frame, f.timestamp_us)
@@ -603,9 +643,8 @@ def test_fastest_credible_keeps_an_unclaimed_follow_through_off_the_ball(lib, de
         for name, value in hyps.items():
             setattr(track.cfg.hyps, name, value)
             setattr(track.hyps.cfg, name, value)
-        origin = fw.Vec3(scene.origin_bin * BIN_M, 0.0, 0.0)
-        lib.l3_ball_track_arm(
-            ctypes.byref(track), scene.origin_bin, ctypes.byref(origin), scene.gate_us
+        arm_track(
+            lib, track, scene.origin_bin, (scene.origin_bin * BIN_M, 0.0, 0.0), scene.gate_us
         )
         for f in unclaimed(scene):
             arr = (fw.TargetObs * max(1, len(f.targets)))(*f.targets)

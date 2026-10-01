@@ -39,6 +39,8 @@ void l3_ball_track_cfg_defaults(l3_ball_track_cfg_t *cfg)
     cfg->snr = 1.0F;                  /* the floor itself: the ball is weak and moving */
     cfg->useHypotheses = 0U;          /* decided by the recorded captures */
     cfg->skipClubClaim = 1U;
+    cfg->gateTolUs = 15000U;          /* the gate is not the exact impact */
+    cfg->anchorMaxSigmaUs = 3000.0F;
     l3_ball_fit_cfg_defaults(&cfg->fit);
 #if L3_BALL_HYPOTHESES
     l3_ball_hyps_cfg_defaults(&cfg->hyps);
@@ -71,6 +73,7 @@ void l3_ball_track_reset(l3_ball_track_t *track)
     track->originBin = 0.0F;
     track->lastTargetIndex = L3_TRACK_NO_TARGET;
     memset(&track->origin, 0, sizeof(track->origin));
+    memset(&track->anchor, 0, sizeof(track->anchor));
 #if L3_BALL_HYPOTHESES
     l3_ball_hyps_init(&track->hyps, &track->cfg.hyps);
     memset(&track->verdict, 0, sizeof(track->verdict));
@@ -78,17 +81,26 @@ void l3_ball_track_reset(l3_ball_track_t *track)
 #endif
 }
 
-void l3_ball_track_arm(l3_ball_track_t *track, float originBin, const l3_vec3_t *origin,
-                       uint32_t impactTimestampUs)
+void l3_ball_track_arm(l3_ball_track_t *track, const l3_ball_anchor_t *anchor,
+                       const l3_vec3_t *origin)
 {
     l3_ball_track_reset(track);
     track->armed = 1U;
-    track->originBin = originBin;
+    track->originBin = anchor->acceptFromBin;
     track->origin = *origin;
-    track->impactTimestampUs = impactTimestampUs;
+    track->impactTimestampUs = anchor->gateUs;
+    track->anchor = *anchor;
 #if L3_BALL_HYPOTHESES
-    l3_ball_hyps_arm(&track->hyps, originBin, impactTimestampUs);
+    l3_ball_hyps_arm(&track->hyps, anchor);
 #endif
+}
+
+void l3_ball_track_anchor(const l3_ball_track_t *track, float teeBin, float acceptFromBin,
+                          uint32_t gateUs, const l3_impact_fit_cfg_t *fitCfg,
+                          const l3_club_track_t *club, l3_ball_anchor_t *out)
+{
+    l3_ball_anchor_make(teeBin, acceptFromBin, gateUs, track->cfg.gateTolUs, fitCfg, club,
+                        track->cfg.anchorMaxSigmaUs, out);
 }
 
 static int32_t l3_ball_track_note(l3_ball_track_t *track, uint8_t why, int32_t appended)

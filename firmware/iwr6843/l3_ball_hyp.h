@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 
+#include "l3_ball_anchor.h"
 #include "l3_observation.h"
 
 /* Build switch. The search is off at run time (l3_ball_track_cfg_defaults)
@@ -66,7 +67,6 @@ typedef struct {
     uint32_t classifyPoints;      /* points before a hypothesis may be the ball */
     float    minDepartureMps;
     float    maxSpeedMps;
-    uint32_t impactToleranceUs;   /* the fit must reach the origin this close to the gate time */
     float    maxResidualBins;     /* RMS about the fitted line */
     float    dopplerToleranceMps; /* a point agrees when its Doppler is this close to the rate */
     /* Fastest credible, the Pi detector's rule (tracking.find_ball_from_power):
@@ -100,8 +100,7 @@ typedef struct {
 typedef struct {
     l3_ball_hyps_cfg_t cfg;
     uint8_t  armed;
-    float    originBin;
-    uint32_t impactTimestampUs;   /* the gate time the tracker was armed at */
+    l3_ball_anchor_t anchor;      /* where and when the ball was struck; acceptFromBin is the old origin */
     uint32_t nextId;
     uint32_t spawned;
     uint32_t dropped;             /* coasted out or evicted */
@@ -110,8 +109,8 @@ typedef struct {
 
 void l3_ball_hyps_cfg_defaults(l3_ball_hyps_cfg_t *cfg);
 void l3_ball_hyps_init(l3_ball_hyps_t *hyps, const l3_ball_hyps_cfg_t *cfg);
-/* Forget every hypothesis and start looking from originBin at the gate time. */
-void l3_ball_hyps_arm(l3_ball_hyps_t *hyps, float originBin, uint32_t impactTimestampUs);
+/* Forget every hypothesis and start looking from anchor->acceptFromBin, back-projecting to the anchor. */
+void l3_ball_hyps_arm(l3_ball_hyps_t *hyps, const l3_ball_anchor_t *anchor);
 /* One post-impact frame's targets (strongest first) and the index of the one
  * the club track claimed (L3_TRACK_NO_TARGET, or anything >= n, for none).
  * Returns the hypotheses active afterwards. */
@@ -130,7 +129,7 @@ int32_t l3_ball_hyps_set_angles(l3_ball_hyps_t *hyps, uint32_t index, float azim
                                 float angleConfidence);
 /* The ball among the hypotheses holding at least classifyPoints points:
  * fitted over them from the gate time, it must move outward at
- * minDepartureMps..maxSpeedMps, cross the origin within impactToleranceUs of
+ * minDepartureMps..maxSpeedMps, cross the origin within the anchor tolerance of
  * the gate time and fit within maxResidualBins. The best score wins:
  * (1 - residual / maxResidualBins) + the fraction of points whose Doppler
  * agrees with the rate + half the fraction of club frames where it was the

@@ -27,6 +27,7 @@
 #include "l3_club_track.h"
 #include "l3_ball_hyp.h"
 #include "l3_frames.h"
+#include "l3_ball_anchor.h"
 #include "l3_ball_fit.h"
 #include "l3_launch.h"
 
@@ -50,6 +51,10 @@ typedef struct {
     /* Once confirmed, skip the club's claimed target while another candidate
      * is in the gate. */
     uint32_t skipClubClaim;
+    /* The gate anchor's tolerance, and the club fit's sigma under which its
+     * impact time anchors the search instead (0: never). */
+    uint32_t gateTolUs;
+    float    anchorMaxSigmaUs;
     /* The ball's direction: the tee-anchored fit over every held point
      * (l3_ball_fit.h), once per shot by l3_ball_track_reconstruct. */
     l3_ball_fit_cfg_t fit;
@@ -83,6 +88,7 @@ typedef struct {
     uint32_t  impactTimestampUs;
     float     originBin;          /* global bin of the ball at impact */
     l3_vec3_t origin;             /* golf frame */
+    l3_ball_anchor_t anchor;      /* the search's; originBin and impactTimestampUs stay the legacy ones */
     uint32_t  lastTargetIndex;    /* index into the last update's targets that was
                                    * appended, L3_TRACK_NO_TARGET when none */
     uint32_t  counters[L3_BALL_TRACK_WHY_COUNT];
@@ -96,9 +102,15 @@ void l3_ball_track_cfg_defaults(l3_ball_track_cfg_t *cfg);
 void l3_ball_track_init(l3_ball_track_t *track, const l3_ball_track_cfg_t *cfg);
 /* Forget the flight and the arming; configuration and counters survive. */
 void l3_ball_track_reset(l3_ball_track_t *track);
-/* IMPACT: start looking for a ball leaving originBin (global) at origin. */
-void l3_ball_track_arm(l3_ball_track_t *track, float originBin, const l3_vec3_t *origin,
-                       uint32_t impactTimestampUs);
+/* IMPACT: start looking for a ball. The legacy acquisition starts from
+ * anchor->acceptFromBin at anchor->gateUs; the hypotheses back-project to the
+ * anchor. origin is the tee in the golf frame. */
+void l3_ball_track_arm(l3_ball_track_t *track, const l3_ball_anchor_t *anchor,
+                       const l3_vec3_t *origin);
+/* The anchor for arming, from this track's gateTolUs and anchorMaxSigmaUs. */
+void l3_ball_track_anchor(const l3_ball_track_t *track, float teeBin, float acceptFromBin,
+                          uint32_t gateUs, const l3_impact_fit_cfg_t *fitCfg,
+                          const l3_club_track_t *club, l3_ball_anchor_t *out);
 /* Start the flight from two points already known to be the ball (the
  * ball-leave fallback's, l3_leave.h): after its late fire the departing ball
  * is too smeared for the tracker to acquire, but once a flight exists it is

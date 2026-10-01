@@ -1114,11 +1114,8 @@ def replay_dump(
                 ball_elevation,
                 ctypes.byref(ball_position),
             )
-            lib.l3_ball_track_arm(
-                ctypes.byref(ball_track),
-                _ball_arm_bin(band, destination),
-                ctypes.byref(ball_position),
-                timestamp_us,
+            _arm_ball(
+                lib, ball_track, fit_cfg, track, band, destination, ball_position, timestamp_us
             )
             forced_in = fw.ShotInput()
             forced_in.ballLocked = 1 if config.dest_bin is not None else 0
@@ -1374,10 +1371,14 @@ def replay_dump(
             == fw.SHOT_STATE_NAMES.index("impact")
             and shot.impactFrame == frame
         ):
-            lib.l3_ball_track_arm(
-                ctypes.byref(ball_track),
-                _ball_arm_bin(band, destination),
-                ctypes.byref(ball_position),
+            _arm_ball(
+                lib,
+                ball_track,
+                fit_cfg,
+                track,
+                band,
+                destination,
+                ball_position,
                 shot_in.impactTimestampUs,
             )
         if fired and left and ball_track.armed:
@@ -1753,6 +1754,25 @@ def _ball_arm_bin(band: fw.Band, destination: int) -> float:
     """Where the ball tracker is armed (as l3_ballArmBin): the band's far edge
     as it stands, else the destination."""
     return float(band.hiBin) if band.valid else float(destination)
+
+
+def _arm_ball(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    lib, ball_track, fit_cfg, track, band, destination, ball_position, gate_us
+) -> None:
+    """l3_shotObserve's arm: the anchor from the tee and the club, then the track."""
+    anchor = fw.BallAnchor()
+    lib.l3_ball_track_anchor(
+        ctypes.byref(ball_track),
+        float(destination),
+        _ball_arm_bin(band, destination),
+        int(gate_us),
+        ctypes.byref(fit_cfg),
+        ctypes.byref(track),
+        ctypes.byref(anchor),
+    )
+    lib.l3_ball_track_arm(
+        ctypes.byref(ball_track), ctypes.byref(anchor), ctypes.byref(ball_position)
+    )
 
 
 def _club_fit(lib, track: fw.ClubTrack) -> tuple[float, float, float]:

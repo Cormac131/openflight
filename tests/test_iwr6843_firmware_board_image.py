@@ -121,7 +121,14 @@ class OpaqueBallTrack:
 
     def run(self, scene: TwoTracks) -> list[tuple[int, str]]:
         origin = fw.Vec3(scene.origin_bin * BIN_M, 0.0, 0.0)
-        self.lib.l3_ball_track_arm(self.ptr, scene.origin_bin, ctypes.byref(origin), scene.gate_us)
+        anchor = fw.BallAnchor(
+            anchorBin=scene.origin_bin,
+            acceptFromBin=scene.origin_bin,
+            gateUs=scene.gate_us,
+            anchorUs=scene.gate_us,
+            anchorTolUs=15_000,
+        )
+        self.lib.l3_ball_track_arm(self.ptr, ctypes.byref(anchor), ctypes.byref(origin))
         seen = []
         for f in scene.build():
             arr = (fw.TargetObs * max(1, len(f.targets)))(*f.targets)

@@ -1163,7 +1163,6 @@ class BallHypsCfg(ctypes.Structure):
         ("classifyPoints", ctypes.c_uint32),
         ("minDepartureMps", ctypes.c_float),
         ("maxSpeedMps", ctypes.c_float),
-        ("impactToleranceUs", ctypes.c_uint32),
         ("maxResidualBins", ctypes.c_float),
         ("dopplerToleranceMps", ctypes.c_float),
         ("fastBallMps", ctypes.c_float),
@@ -1194,8 +1193,7 @@ class BallHyps(ctypes.Structure):
     _fields_ = [
         ("cfg", BallHypsCfg),
         ("armed", ctypes.c_uint8),
-        ("originBin", ctypes.c_float),
-        ("impactTimestampUs", ctypes.c_uint32),
+        ("anchor", BallAnchor),
         ("nextId", ctypes.c_uint32),
         ("spawned", ctypes.c_uint32),
         ("dropped", ctypes.c_uint32),
@@ -1239,6 +1237,8 @@ class BallTrackCfg(ctypes.Structure):
         ("snr", ctypes.c_float),
         ("useHypotheses", ctypes.c_uint32),
         ("skipClubClaim", ctypes.c_uint32),
+        ("gateTolUs", ctypes.c_uint32),
+        ("anchorMaxSigmaUs", ctypes.c_float),
         ("fit", BallFitCfg),
         ("hyps", BallHypsCfg),
     ]
@@ -1257,6 +1257,7 @@ class BallTrack(ctypes.Structure):
         ("impactTimestampUs", ctypes.c_uint32),
         ("originBin", ctypes.c_float),
         ("origin", Vec3),
+        ("anchor", BallAnchor),
         ("lastTargetIndex", ctypes.c_uint32),
         ("counters", ctypes.c_uint32 * len(BALL_TRACK_WHY_NAMES)),
         ("hyps", BallHyps),
@@ -1817,7 +1818,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     # l3_ball_track.h
     "l3_ball_hyps_cfg_defaults": ([_P(BallHypsCfg)], None),
     "l3_ball_hyps_init": ([_P(BallHyps), _P(BallHypsCfg)], None),
-    "l3_ball_hyps_arm": ([_P(BallHyps), ctypes.c_float, _U32], None),
+    "l3_ball_hyps_arm": ([_P(BallHyps), _P(BallAnchor)], None),
     "l3_ball_hyps_update": ([_P(BallHyps), _P(TargetObs), _U32, _U32, _U32, _U32], _U32),
     "l3_ball_hyp_fit": (
         [_P(BallHyp), _U32, _P(ctypes.c_float), _P(ctypes.c_float), _P(ctypes.c_float)],
@@ -1838,7 +1839,19 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_ball_track_cfg_defaults": ([_P(BallTrackCfg)], None),
     "l3_ball_track_init": ([_P(BallTrack), _P(BallTrackCfg)], None),
     "l3_ball_track_reset": ([_P(BallTrack)], None),
-    "l3_ball_track_arm": ([_P(BallTrack), _F32, _P(Vec3), _U32], None),
+    "l3_ball_track_arm": ([_P(BallTrack), _P(BallAnchor), _P(Vec3)], None),
+    "l3_ball_track_anchor": (
+        [
+            _P(BallTrack),
+            _F32,
+            _F32,
+            _U32,
+            _P(ImpactFitCfg),
+            _P(ClubTrack),
+            _P(BallAnchor),
+        ],
+        None,
+    ),
     "l3_ball_track_seed": ([_P(BallTrack), _P(TargetObs), _P(TargetObs)], ctypes.c_int32),
     "l3_ball_track_update": ([_P(BallTrack), _P(TargetObs), _U32, _U32, _U32], ctypes.c_int32),
     "l3_ball_track_update_joint": (

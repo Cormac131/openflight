@@ -33,8 +33,15 @@ def make_hyps(lib, **overrides):
     return hyps
 
 
-def arm(lib, hyps, origin_bin=46.0, gate_us=0):
-    lib.l3_ball_hyps_arm(ctypes.byref(hyps), origin_bin, gate_us)
+def arm(lib, hyps, origin_bin=46.0, gate_us=0, tol_us=15_000, accept_bin=None):
+    anchor = fw.BallAnchor(
+        anchorBin=origin_bin,
+        acceptFromBin=origin_bin if accept_bin is None else accept_bin,
+        gateUs=gate_us,
+        anchorUs=gate_us,
+        anchorTolUs=tol_us,
+    )
+    lib.l3_ball_hyps_arm(ctypes.byref(hyps), ctypes.byref(anchor))
 
 
 def feed(lib, hyps, frame, timestamp_us, targets, club_index=NO_CLAIM):
@@ -74,7 +81,7 @@ def test_defaults(lib):
         1.5,
         8.0,
     )
-    assert (cfg.maxMisses, cfg.classifyPoints, cfg.impactToleranceUs) == (2, 4, 15000)
+    assert (cfg.maxMisses, cfg.classifyPoints) == (2, 4)
     assert (cfg.minDepartureMps, cfg.maxSpeedMps) == (10.0, 100.0)
     assert (cfg.maxResidualBins, cfg.dopplerToleranceMps) == (1.0, 2.5)
     assert cfg.binWidthM == pytest.approx(BIN_M)
@@ -367,3 +374,23 @@ def test_the_far_window_keeps_near_returns_out_of_the_search(lib):
     v = verdict(lib, hyps)
     assert v.index >= 0 and v.rateMps == pytest.approx(42.0, rel=0.03)
     assert bins(hyps.hyp[v.index]) == [b for b in truth(frames) if b >= 49.0][-8:]
+
+
+def test_the_search_back_projects_to_the_tee_not_the_accept_bin(lib):
+    """With a band the ball is accepted from the band's far edge, but it left the tee."""
+    scene = TwoTracks(frames=8)
+    hyps = make_hyps(lib)
+    arm(
+        lib,
+        hyps,
+        origin_bin=scene.origin_bin,
+        gate_us=scene.gate_us,
+        accept_bin=scene.origin_bin + 3.0,
+    )
+    for f in scene.build():
+        feed(lib, hyps, f.frame, f.timestamp_us, f.targets, f.club_index)
+    v = verdict(lib, hyps)
+    assert v.index >= 0
+    assert abs(v.originOffsetUs) < 300.0
+    assert min(bins(hyps.hyp[v.index])) >= scene.origin_bin + 3.0 - 1.0  # spawnBehind
+
