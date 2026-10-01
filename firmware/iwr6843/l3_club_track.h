@@ -336,13 +336,13 @@ uint32_t l3_track_delivery_range(const l3_club_track_t *track, uint32_t first, u
 /* "delivery points=8 az=8 el=8 speed=22.40 radial=22.00 path=2.10 attack=-3.40
  *  residual=0.012 conf=0.81 valid=spa" */
 /* The 3D fit of points [first, last) read through pointAt: what
- * l3_track_delivery_range does for a track, for any point list (the joint
- * search's ball path). Returns the points used, 0 below three. */
+ * l3_track_delivery_range does for a track, for any point list. Returns the
+ * points used, 0 below three. */
 uint32_t l3_delivery_fit(l3_point_at_fn pointAt, const void *ctx, uint32_t first, uint32_t last,
                          uint32_t fullPoints, float binWidthM, float maxAngleResidualM,
                          l3_delivery_t *out);
-/* Append a point made elsewhere (the joint search's written-out club point):
- * located with this track's calibration, lastBin and lastFrame updated. */
+/* Append a point made elsewhere: located with this track's calibration,
+ * lastBin and lastFrame updated. */
 void l3_track_append_point(l3_club_track_t *track, const l3_track_point_t *point);
 int32_t l3_track_format_delivery(const l3_delivery_t *delivery, char *out, uint32_t cap);
 /* Least-squares fit of rangeBin against time over the newest maxPoints
