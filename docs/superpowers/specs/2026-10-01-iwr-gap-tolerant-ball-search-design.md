@@ -190,4 +190,30 @@ fitting the board's DATA_RAM; angles for recovered points; any club-tracker chan
 
 ## Results
 
-To be filled in by the evaluation, capture by capture, as in the 2026-09-28 spec.
+### Legacy baseline under the gap-tolerant label (2026-10-01)
+
+Corpus: `OF Sessions` (125 captures). The 2026-09-28 93-capture set was unavailable, so the
+numbers are not comparable with that baseline, and the E2 club gate is relative to legacy on this
+corpus. Run: `--ball-hypotheses off`; JSON in `2026-10-01-ball-search-baseline-legacy.json`.
+
+| | Legacy |
+|---|---|
+| captures | 125 |
+| club at impact / stuck / few | 72 / 12 / 41 |
+| ball ok / wrong / none | 16 / 60 / 49 |
+| `ball_present` strict | 76 |
+| `ball_present` gap-tolerant | 85 |
+| ball present: ok / wrong / none | 16 / 59 / 10 |
+| ball absent: ok / wrong / none | 0 / 1 / 39 |
+
+Nine captures change from absent (strict) to present (gap-tolerant); verdicts are unchanged:
+
+- `iwr6843_20260919_190247_674_019` (none)
+- `iwr6843_20260919_190419_290_021` (none)
+- `iwr6843_20260919_190523_340_023` (none)
+- `iwr6843_20260919_190702_657_027` (none)
+- `iwr6843_20260919_190834_768_029` (none)
+- `iwr6843_20260919_191005_759_032` (none)
+- `iwr6843_20260919_191119_600_034` (none)
+- `iwr6843_20260923_183847_564_010` (none)
+- `iwr6843_20260923_184805_180_019` (wrong)
