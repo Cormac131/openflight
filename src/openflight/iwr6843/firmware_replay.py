@@ -342,8 +342,6 @@ class ReplayConfig:
     # as the recordings were made. board_calibration.replay_overrides fills it.
     elem_phase_rad: tuple[float, ...] | None = None
     elem_gain: tuple[float, ...] | None = None
-    # The ball tracker's late window for launch angles (lateRangeM); None: firmware default.
-    late_range_m: float | None = None
     # Firmware config constants (tunables.py) set over the defaults; applied last, so they win.
     overrides: Mapping[str, float] = field(default_factory=dict)
 
@@ -993,8 +991,6 @@ def replay_dump(
         config.ball_tuning.apply(ball_cfg)
     # The board overrides only the extraction snr (gBallSnr); so does this.
     ball_cfg.snr = DEFAULT_BALL_SNR if config.ball_snr is None else config.ball_snr
-    if config.late_range_m is not None:
-        ball_cfg.lateRangeM = config.late_range_m
     tunables.apply_overrides(config.overrides, "ball", ball_cfg)
     ball_track = fw.BallTrack()
     lib.l3_ball_track_init(ctypes.byref(ball_track), ctypes.byref(ball_cfg))
@@ -2019,6 +2015,8 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
         lib, cal, cube, frame, window_start, n_tx, targets, found, ball_track, chirp_period_s
     )
     lib.l3_ball_track_launch(ctypes.byref(ball_track), ctypes.byref(launch))
+    # Interim: the board runs this once per shot; the replay does so from Task 7.
+    lib.l3_ball_track_reconstruct(ctypes.byref(ball_track), ctypes.byref(launch))
     shot_in = fw.ShotInput()
     shot_in.ballPosition = ball_position
     shot_in.postFrame = 1

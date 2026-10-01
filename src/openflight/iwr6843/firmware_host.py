@@ -84,9 +84,6 @@ ANGLE_GRID_STEPS = 161
 # l3_observation.h anglesValid bits
 ANGLE_AZIMUTH, ANGLE_ELEVATION = 1, 2
 
-# l3_launch.h: lateFrom when no late fit gave angles
-LAUNCH_NO_LATE = 0xFF
-
 # l3_impact.h
 IMPACT_WHY_NAMES = ("none", "nodelivery", "pending", "passed", "fired")
 IMPACT_CAUSE_NAMES = ("none", "crossing", "end")
@@ -1171,6 +1168,28 @@ class BallHyps(ctypes.Structure):
     ]
 
 
+class BallFitCfg(ctypes.Structure):
+    """``l3_ball_fit_cfg_t``."""
+
+    _fields_ = [
+        ("angleSigmaRad", ctypes.c_float),
+        ("gateK", ctypes.c_float),
+        ("huberK", ctypes.c_float),
+        ("minAccepted", ctypes.c_uint32),
+        ("maxRmsRad", ctypes.c_float),
+        ("imageSepMinRad", ctypes.c_float),
+        ("radarHeightM", ctypes.c_float),
+        ("teeBallHeightM", ctypes.c_float),
+        ("hlaMinRad", ctypes.c_float),
+        ("hlaMaxRad", ctypes.c_float),
+        ("vlaMinRad", ctypes.c_float),
+        ("vlaMaxRad", ctypes.c_float),
+        ("gridSteps", ctypes.c_uint32),
+        ("gridLevels", ctypes.c_uint32),
+        ("maxAngleSigmaRad", ctypes.c_float),
+    ]
+
+
 class BallTrackCfg(ctypes.Structure):
     """``l3_ball_track_cfg_t``."""
 
@@ -1185,7 +1204,7 @@ class BallTrackCfg(ctypes.Structure):
         ("snr", ctypes.c_float),
         ("useHypotheses", ctypes.c_uint32),
         ("skipClubClaim", ctypes.c_uint32),
-        ("lateRangeM", ctypes.c_float),
+        ("fit", BallFitCfg),
         ("hyps", BallHypsCfg),
     ]
 
@@ -1223,10 +1242,12 @@ class Launch(ctypes.Structure):
         ("vlaRad", ctypes.c_float),
         ("residualM", ctypes.c_float),
         ("confidence", ctypes.c_float),
+        ("angleRmsRad", ctypes.c_float),
         ("speedValid", ctypes.c_uint8),
         ("hlaValid", ctypes.c_uint8),
         ("vlaValid", ctypes.c_uint8),
-        ("lateFrom", ctypes.c_uint8),
+        ("anglesAccepted", ctypes.c_uint8),
+        ("angleWhy", ctypes.c_uint8),
     ]
 
 
@@ -1642,28 +1663,6 @@ class AdaptiveWindows(ctypes.Structure):
 BALL_FIT_WHY_NAMES = ("none", "ok", "few_angles", "scatter", "grid_edge", "no_tee", "uncertain")
 
 
-class BallFitCfg(ctypes.Structure):
-    """``l3_ball_fit_cfg_t``."""
-
-    _fields_ = [
-        ("angleSigmaRad", ctypes.c_float),
-        ("gateK", ctypes.c_float),
-        ("huberK", ctypes.c_float),
-        ("minAccepted", ctypes.c_uint32),
-        ("maxRmsRad", ctypes.c_float),
-        ("imageSepMinRad", ctypes.c_float),
-        ("radarHeightM", ctypes.c_float),
-        ("teeBallHeightM", ctypes.c_float),
-        ("hlaMinRad", ctypes.c_float),
-        ("hlaMaxRad", ctypes.c_float),
-        ("vlaMinRad", ctypes.c_float),
-        ("vlaMaxRad", ctypes.c_float),
-        ("gridSteps", ctypes.c_uint32),
-        ("gridLevels", ctypes.c_uint32),
-        ("maxAngleSigmaRad", ctypes.c_float),
-    ]
-
-
 class BallFit(ctypes.Structure):
     """``l3_ball_fit_t``."""
 
@@ -2012,6 +2011,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
         ctypes.c_int32,
     ),
     "l3_ball_track_launch": ([_P(BallTrack), _P(Launch)], _U32),
+    "l3_ball_track_reconstruct": ([_P(BallTrack), _P(Launch)], _U32),
     "l3_ball_track_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_ball_track_format_status": ([_P(BallTrack), *_TEXT], ctypes.c_int32),
     "l3_launch_format": ([_P(Launch), *_TEXT], ctypes.c_int32),

@@ -351,8 +351,7 @@ def test_a_departing_ball_is_confirmed_with_resolved_speed(lib):
 
 
 def test_joint_launch_reports_no_late_fit(lib):
-    """The joint search has no late window, so its launch carries the sentinel
-    (a zeroed lateFrom would read as "the late fit from track point 0")."""
+    """The joint launch carries no direction fit (angleWhy none)."""
     tt = TwoTracks(
         origin_bin=46.0,
         gate_us=0,
@@ -368,7 +367,7 @@ def test_joint_launch_reports_no_late_fit(lib):
     run(lib, js, _scene_frames(tt, lib))
     launch = fw.Launch()
     assert lib.l3_joint_launch(ctypes.byref(js), None, 0, ctypes.byref(launch)) == 1
-    assert launch.lateFrom == fw.LAUNCH_NO_LATE
+    assert launch.angleWhy == 0
 
 
 def test_confirmation_exempts_the_from_rest_first_point(lib):

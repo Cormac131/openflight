@@ -439,7 +439,13 @@ def whole_shot() -> bytes:
 def test_post_impact_frames_go_to_the_ball_tracker_and_the_launch_is_recovered(lib, whole_shot):
     """The acceptance for items 11-15: from the frames after the trigger the
     replay finds the departing ball and reads its speed, HLA and VLA back."""
-    result = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    # The synthetic scene has no floor and its tee is at antenna height, so the
+    # direction fit's tee anchor is put there too.
+    config = ReplayConfig(
+        tee_bin=TEE_BIN,
+        overrides={"ball.fit.teeBallHeightM": 0.152, "ball.fit.radarHeightM": 0.152},
+    )
+    result = replay_dump(whole_shot, config, lib=lib)
     assert result.fired_frame is not None
     assert result.launch is not None
     # The synth's one-spike-per-loop ball hops bins within a burst, which
@@ -1198,22 +1204,6 @@ def test_replay_ball_angles_use_the_track_rate(lib, monkeypatch):
     raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
     replay_dump(raw, ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN), lib=lib)
     assert any(rate is not None and rate > 0.0 for rate in seen)
-
-
-def test_synthetic_shot_late_flight_vla_matches_its_launch(lib):
-    """End to end: the synthesized 12 deg launch is read back from the late
-    points. The synthetic scene has no floor, so this pins the chain (ball points
-    carry valid angles, the late window reads them), not the multipath fix."""
-    raw = synth_shot_dump(ball_speed_ms=60.0, vla_deg=12.0, hla_deg=0.0, tee_range_m=TEE_RANGE_M, n_frames=24)
-    result = replay_dump(raw, ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN, late_range_m=0.3), lib=lib)
-    assert result.launch is not None and result.launch.vla_deg is not None
-    assert result.launch.vla_deg == pytest.approx(12.0, abs=2.0)
-
-
-def test_replay_late_range_reaches_the_ball_track(lib):
-    raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
-    result = replay_dump(raw, ReplayConfig(tee_bin=TEE_BIN, dest_bin=TEE_BIN, late_range_m=0.9), lib=lib)
-    assert result.ball_track.cfg.lateRangeM == pytest.approx(0.9)
 
 
 def test_replay_track_rate_picks_the_branch_and_the_measured_phase_stays_the_rotor(lib):

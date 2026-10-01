@@ -308,13 +308,8 @@ def test_hypothesis_angles_take_their_fitted_rate_for_the_tdm_branch():
     assert "hit->dopplerPhaseRad, radial, &snapshot);" in hyps
 
 
-def test_every_launch_reset_carries_the_no_late_sentinel():
-    """A zeroed lateFrom reads as the late fit from track point 0, so each
-    memset of gLaunch is followed by the sentinel."""
-    resets = [m.end() for m in re.finditer(r"memset\(&gLaunch, 0, sizeof\(gLaunch\)\);", SOURCE)]
-    assert len(resets) >= 2
-    for end in resets:
-        assert SOURCE[end:].lstrip().startswith("gLaunch.lateFrom = L3_LAUNCH_NO_LATE;")
+def test_no_launch_reset_names_the_removed_late_window():
+    assert "lateFrom" not in SOURCE and "L3_LAUNCH_NO_LATE" not in SOURCE
 
 
 def test_track_cfg_cal_and_elem_survive_trigger_cfg_and_sensor_start():
