@@ -39,6 +39,10 @@ void l3_ball_recover_cfg_defaults(l3_ball_recover_cfg_t *cfg);
 void l3_ball_history_reset(l3_ball_history_t *h);
 void l3_ball_history_push(l3_ball_history_t *h, const l3_target_obs_t *targets, uint32_t n,
                           uint32_t frame, uint32_t timestampUs, uint32_t clubIndex);
+/* Flag index (into the targets as pushed) as the club's on the newest frame,
+ * when that frame is frame and index is within its count; otherwise nothing.
+ * The club is followed after the ball's update, so its claim arrives here. */
+void l3_ball_history_mark_club(l3_ball_history_t *h, uint32_t frame, uint32_t index);
 const l3_ball_history_frame_t *l3_ball_history_at(const l3_ball_history_t *h, uint32_t index); /* 0 oldest; NULL past count */
 uint32_t l3_ball_recover(const l3_ball_recover_cfg_t *cfg, const l3_ball_history_t *h,
                          const l3_ball_hyp_t *hyp, float acceptFromBin,

@@ -548,3 +548,18 @@ def test_the_dump_says_which_window_it_was_recorded_with():
     assert dump.index("clutter.rangeWindow = gRangeWindow;") < dump.index(
         "UART_writePolling(gDataUart, (uint8_t *)&clutter, sizeof(clutter));"
     )
+
+
+def test_the_clubs_claim_reaches_the_ball_history_after_the_club_follow():
+    """The ball is updated before the club is followed, so its own call can
+    only pass L3_TRACK_NO_TARGET: the club's claimed target is noted on the
+    ball's history right after the follow (l3_ball_track_note_club), with the
+    same frame number and the club's lastTargetIndex, as the replay does."""
+    ball_track = body("l3_considerBallTrack")
+    ball = ball_track.index("l3_ball_track_update_joint(&gBallTrack")
+    club = ball_track.index("l3_track_follow(&gClubTrack")
+    note = ball_track.index("l3_ball_track_note_club(&gBallTrack, frameIndex,")
+    assert ball < club < note
+    assert "gClubTrack.lastTargetIndex" in ball_track[note : note + 120]
+    between = ball_track[club:note]
+    assert "l3_ball_track_update_joint" not in between and between.count(";") == 1

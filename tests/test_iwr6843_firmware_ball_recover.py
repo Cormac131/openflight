@@ -169,3 +169,44 @@ def test_without_a_fit_the_hypothesis_points_pass_through(lib):
     h = history(lib, {1: [ball_bin(1)]})
     got, res = recover(lib, h, hyp_of([(1, ball_bin(1))]))
     assert got == [(1, round(ball_bin(1), 3))] and res.recovered == 0
+
+
+def test_marking_the_club_flags_its_index_on_the_newest_frame(lib):
+    """The club is followed after the ball's update, so its claim reaches the
+    history afterwards: l3_ball_history_mark_club flags it on the frame just pushed."""
+    h = history(lib, {1: [50.0, 51.0, 52.0], 2: [53.0, 54.0, 55.0]})
+    lib.l3_ball_history_mark_club(ctypes.byref(h), 2, 1)
+    newest = lib.l3_ball_history_at(ctypes.byref(h), 1).contents
+    older = lib.l3_ball_history_at(ctypes.byref(h), 0).contents
+    assert newest.clubMask == 0b10
+    assert older.clubMask == 0
+
+
+def test_marking_a_stale_frame_or_an_absent_index_does_nothing(lib):
+    h = history(lib, {1: [50.0, 51.0], 2: [53.0, 54.0]})
+    lib.l3_ball_history_mark_club(ctypes.byref(h), 1, 0)  # not the newest frame
+    lib.l3_ball_history_mark_club(ctypes.byref(h), 3, 0)  # not pushed yet
+    lib.l3_ball_history_mark_club(ctypes.byref(h), 2, 2)  # past the frame's count
+    lib.l3_ball_history_mark_club(ctypes.byref(h), 2, NO_CLAIM)
+    assert [lib.l3_ball_history_at(ctypes.byref(h), i).contents.clubMask for i in (0, 1)] == [0, 0]
+
+
+def test_marking_an_empty_history_does_nothing(lib):
+    h = fw.BallHistory()
+    lib.l3_ball_history_reset(ctypes.byref(h))
+    lib.l3_ball_history_mark_club(ctypes.byref(h), 0, 0)
+    assert bytes(h) == bytes(fw.BallHistory())
+
+
+def test_a_marked_club_return_is_not_recovered(lib):
+    frames = {k: [ball_bin(k)] for k in range(1, 7)}
+    h = fw.BallHistory()
+    lib.l3_ball_history_reset(ctypes.byref(h))
+    for k in range(1, 7):
+        ts = k * FRAME_US
+        arr = (fw.TargetObs * 1)(obs(k, ts, frames[k][0], 1000.0, SPEED))
+        lib.l3_ball_history_push(ctypes.byref(h), arr, 1, k, ts, NO_CLAIM)
+        if k == 3:
+            lib.l3_ball_history_mark_club(ctypes.byref(h), 3, 0)
+    got, res = recover(lib, h, hyp_of([(k, ball_bin(k)) for k in (1, 2, 4, 5, 6)]))
+    assert 3 not in [f for f, _ in got] and res.recovered == 0

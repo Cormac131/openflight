@@ -3743,6 +3743,8 @@ static void l3_considerBallTrack(uint32_t slot)
         follow.ballClaimIndex = ballAppended ? gBallTrack.lastTargetIndex : L3_TRACK_NO_TARGET;
         follow.frameUs = gFramePeriodUs;
         (void)l3_track_follow(&gClubTrack, targets, found, frameIndex, gPostTimestampUs, &follow);
+        /* The club's claim reaches the ball's history now: never recovered. */
+        l3_ball_track_note_club(&gBallTrack, frameIndex, gClubTrack.lastTargetIndex);
     }
     if (ballAppended && gBallTrack.lastTargetIndex < found && gBallTrack.core.count > 1U &&
         l3_track_point(&gBallTrack.core, gBallTrack.core.count - 1U, &newest)) {

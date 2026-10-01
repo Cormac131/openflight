@@ -452,9 +452,10 @@ int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t
     if (!(track->cfg.historySnr > 0.0F && track->cfg.historySnr < track->cfg.snr)) {
         return l3_ball_track_joint(track, targets, n, frame, timestampUs, clubIndex);
     }
-    /* Only the history holds the returns under snr: every branch (legacy,
-     * search, confirmed) sees the caller's targets at snr, and every index it
-     * reports is mapped back into the caller's list. */
+    /* Of this track, only the history holds the returns under snr: every
+     * branch (legacy, search, confirmed) sees the caller's targets at snr, and
+     * every index it reports is mapped back into the caller's list. (The
+     * caller's club follow sees the lowered list: l3_ball_track_extract_snr.) */
     for (i = 0U; i < n && i < L3_OBS_MAX_TARGETS; i++) {
         if (targets[i].snr >= track->cfg.snr) {
             if (i == clubIndex) {
@@ -480,6 +481,17 @@ int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targ
                              uint32_t frame, uint32_t timestampUs)
 {
     return l3_ball_track_update_joint(track, targets, n, frame, timestampUs, L3_TRACK_NO_TARGET);
+}
+
+void l3_ball_track_note_club(l3_ball_track_t *track, uint32_t frame, uint32_t clubIndex)
+{
+#if L3_BALL_RECOVER
+    l3_ball_history_mark_club(&track->history, frame, clubIndex);
+#else
+    (void)track;
+    (void)frame;
+    (void)clubIndex;
+#endif
 }
 
 float l3_ball_track_extract_snr(const l3_ball_track_cfg_t *cfg, float searchSnr)

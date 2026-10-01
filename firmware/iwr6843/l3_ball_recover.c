@@ -46,6 +46,20 @@ void l3_ball_history_push(l3_ball_history_t *h, const l3_target_obs_t *targets, 
     }
 }
 
+void l3_ball_history_mark_club(l3_ball_history_t *h, uint32_t frame, uint32_t index)
+{
+    l3_ball_history_frame_t *f;
+
+    if (h->count == 0U) {
+        return;
+    }
+    f = &h->frames[(h->next + L3_BALL_HISTORY_FRAMES - 1U) % L3_BALL_HISTORY_FRAMES];
+    if (f->frame != frame || index >= f->count) {
+        return;
+    }
+    f->clubMask |= (uint8_t)(1U << index);
+}
+
 const l3_ball_history_frame_t *l3_ball_history_at(const l3_ball_history_t *h, uint32_t index)
 {
     if (index >= h->count) {

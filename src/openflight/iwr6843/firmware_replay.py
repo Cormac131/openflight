@@ -1970,6 +1970,8 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
         lib, shot, ball_track, band, destination, bin_width_m, frame_us, ball_claim
     )
     track_bin = _follow_club(lib, track, targets, found, frame, timestamp_us, follow, points)
+    # The club's claim reaches the ball's history now (l3_considerBallTrack).
+    lib.l3_ball_track_note_club(ctypes.byref(ball_track), frame, track.lastTargetIndex)
     ball_bin = None
     angle = None
     if appended:

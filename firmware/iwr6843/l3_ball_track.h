@@ -64,8 +64,10 @@ typedef struct {
 #endif
 #if L3_BALL_RECOVER
     /* Recover the frames the adopted hypothesis missed from the post-impact
-     * history (l3_ball_recover.h). historySnr under snr (0: the same) lets the
-     * history hold weaker returns than the searches see. */
+     * history (l3_ball_recover.h). historySnr under snr (0: the same) lowers
+     * the post-window extraction (l3_ball_track_extract_snr): the history
+     * holds the weaker returns, the ball's searches still see only snr, but
+     * the club follow and the recorded targets see the lowered list too. */
     uint32_t recover;
     float    historySnr;
     l3_ball_recover_cfg_t rec;    /* binWidthM and velocitySpanMps come from core;
@@ -149,11 +151,21 @@ int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targ
 int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t *targets,
                                    uint32_t n, uint32_t frame, uint32_t timestampUs,
                                    uint32_t clubIndex);
+/* After the club follow, the target it claimed this frame (clubIndex, an
+ * index into the caller's list as passed to l3_ball_track_update_joint;
+ * L3_TRACK_NO_TARGET for none): the ball is updated before the club is
+ * followed, so its own call cannot know the claim. With L3_BALL_RECOVER it is
+ * flagged on the history's newest frame when that frame is frame, and is then
+ * never recovered; otherwise nothing. */
+void l3_ball_track_note_club(l3_ball_track_t *track, uint32_t frame, uint32_t clubIndex);
 /* The extraction threshold for the post window: searchSnr, or the history's
- * lower historySnr with recovery and the hypothesis search on. Whatever is
- * extracted, the track itself (legacy, search and confirmed) only uses
- * targets at snr or above; the weaker ones reach only the history, and the
- * indices the track reports stay indices into the caller's list. */
+ * lower historySnr with recovery and the hypothesis search on. The ball
+ * track itself (legacy, search and confirmed) only uses targets at snr or
+ * above, and the indices it reports stay indices into the caller's list. The
+ * caller's lowered list is not the ball track's alone, though: on the board
+ * and in the replay it also reaches the club follow and the replay's recorded
+ * frame targets (and so the evaluator's ball_present label). A historySnr
+ * under snr is therefore a diagnostic setting, not a history-only one. */
 float l3_ball_track_extract_snr(const l3_ball_track_cfg_t *cfg, float searchSnr);
 /* sizeof(l3_ball_track_t), for the ctypes mirror's layout check. */
 uint32_t l3_ball_track_struct_bytes(void);

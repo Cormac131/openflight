@@ -127,7 +127,10 @@ New in this spec:
   `l3_ball_track_update_joint` itself, so the board and the replay call nothing new (R7 holds by
   construction). With `historySnr < snr` the caller extracts at the lower threshold
   (`l3_ball_track_extract_snr`) and the track passes only targets with `snr >= snr` to the
-  searches.
+  searches. With recovery and the hypotheses on and `historySnr < snr`, the lowered extraction
+  list is not the history's alone: it also reaches the club follow and the replay's recorded
+  frame targets (and so the evaluator's `ball_present` label); only the ball track itself
+  filters to `snr`. `--history-snr` runs are diagnostic only and are not judged by E2.
 
 ### Evaluation (`scripts/analysis/evaluate_iwr_tracking.py`)
 

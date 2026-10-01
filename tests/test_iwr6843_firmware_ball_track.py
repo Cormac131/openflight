@@ -1179,3 +1179,74 @@ def test_the_history_is_not_fed_once_the_ball_is_confirmed(lib):
     held = ball.track.history.count
     joint_frame(ball, 9, [ball_obs(9)])
     assert ball.track.history.count == held
+
+
+# --- the club's claim reaches the history after the club follow -----------------
+
+
+def stills_then_ball_with_club(ball, club_frame=None):
+    """stills_then_ball, with the club claiming the ball's return (index 4) in
+    club_frame after the ball's update, as the board and the replay do: the
+    ball is updated first (no claim), then the club is followed, then
+    l3_ball_track_note_club passes the club's claimed index."""
+    lib = ball.lib
+    step = BALL_STEP_BINS
+    for k in range(1, 7):
+        ts = IMPACT_US + k * FRAME_US
+        targets = (
+            [obs(k, ts, ORIGIN_BIN + d, 9000.0, 0.0) for d in (12.0, 21.0, 30.0, 39.0)]
+            if k <= 3
+            else []
+        )
+        targets.append(obs(k, ts, ORIGIN_BIN + step * k, 1500.0, 42.0))
+        arr = (fw.TargetObs * len(targets))(*targets)
+        lib.l3_ball_track_update_joint(
+            ctypes.byref(ball.track), arr, len(targets), k, ts, fw.TRACK_NO_TARGET
+        )
+        if k == club_frame:
+            lib.l3_ball_track_note_club(ctypes.byref(ball.track), k, len(targets) - 1)
+
+
+def test_a_return_the_club_claimed_after_the_ball_update_is_not_recovered(lib):
+    """Frame 2's ball return sits on the adopted line, but the club claimed it
+    that frame: it is not recovered (only frame 1 is)."""
+    ball = Ball(lib, useHypotheses=1)
+    ball.arm()
+    stills_then_ball_with_club(ball, club_frame=2)
+    v = ball.track.verdict
+    assert ball.track.confirmed
+    assert (v.recovered, v.recoveredFirstFrame, v.recoveredMask) == (1, 1, 0b1)
+
+
+def test_without_the_club_note_the_same_return_is_recovered(lib):
+    ball = Ball(lib, useHypotheses=1)
+    ball.arm()
+    stills_then_ball_with_club(ball, club_frame=None)
+    v = ball.track.verdict
+    assert (v.recovered, v.recoveredFirstFrame, v.recoveredMask) == (2, 1, 0b11)
+
+
+def test_noting_the_club_for_another_frame_does_nothing(lib):
+    ball = Ball(lib, useHypotheses=1)
+    ball.arm()
+    lib.l3_ball_track_update_joint(
+        ctypes.byref(ball.track),
+        (fw.TargetObs * 2)(target(1, ORIGIN_BIN + 2.0), target(1, ORIGIN_BIN + 3.0)),
+        2,
+        1,
+        IMPACT_US + FRAME_US,
+        fw.TRACK_NO_TARGET,
+    )
+    lib.l3_ball_track_note_club(ctypes.byref(ball.track), 2, 1)  # frame 2 was never pushed
+    lib.l3_ball_track_note_club(ctypes.byref(ball.track), 1, fw.TRACK_NO_TARGET)
+    assert lib.l3_ball_history_at(ctypes.byref(ball.track.history), 0).contents.clubMask == 0
+    lib.l3_ball_track_note_club(ctypes.byref(ball.track), 1, 1)
+    assert lib.l3_ball_history_at(ctypes.byref(ball.track.history), 0).contents.clubMask == 0b10
+
+
+def test_noting_the_club_with_recovery_off_does_nothing(lib):
+    ball = Ball(lib, useHypotheses=1, recover=0)
+    ball.arm()
+    before = bytes(ball.track)
+    lib.l3_ball_track_note_club(ctypes.byref(ball.track), 1, 0)
+    assert bytes(ball.track) == before

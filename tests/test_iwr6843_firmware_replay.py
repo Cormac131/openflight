@@ -1461,3 +1461,59 @@ def test_the_hypothesis_replay_reports_its_recovery(lib, whole_shot):
     assert result.ball_track.confirmed and verdict.index >= 0
     assert result.recovered_frames == fr.recovered_frames(verdict) == ()
     assert result.ball_status.endswith(f" rec={verdict.recovered}")
+
+
+class _CallLog:
+    """The firmware library with a log of the post-impact ball and club calls."""
+
+    LOGGED = ("l3_ball_track_update_joint", "l3_track_follow", "l3_ball_track_note_club")
+
+    def __init__(self, lib):
+        self._lib = lib
+        self.calls: list[tuple] = []
+
+    def __getattr__(self, name):
+        func = getattr(self._lib, name)
+        if name not in self.LOGGED:
+            return func
+
+        def logged(*args):
+            result = func(*args)
+            if name == "l3_track_follow":
+                club = args[0]._obj  # pylint: disable=protected-access
+                self.calls.append((name, int(args[3]), int(club.lastTargetIndex)))
+            elif name == "l3_ball_track_note_club":
+                ball = args[0]._obj  # pylint: disable=protected-access
+                history = ball.history
+                newest = (
+                    self._lib.l3_ball_history_at(ctypes.byref(history), history.count - 1)
+                    if history.count
+                    else None
+                )
+                mask = newest.contents.clubMask if newest else 0
+                self.calls.append((name, int(args[1]), int(args[2]), mask))
+            else:
+                self.calls.append((name, int(args[3])))
+            return result
+
+        return logged
+
+
+def test_the_replay_notes_the_clubs_claim_right_after_the_club_follow(lib, whole_shot):
+    """R7: as l3_considerBallTrack, every post-impact frame updates the ball,
+    follows the club, then notes the club's claimed target (its lastTargetIndex)
+    on the ball's history for that frame."""
+    log = _CallLog(lib)
+    replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN, ball_hypotheses=True), lib=log)
+    calls = log.calls
+    follows = [i for i, c in enumerate(calls) if c[0] == "l3_track_follow"]
+    assert follows, "no post-impact frame was replayed"
+    for i in follows:
+        assert calls[i - 1][0] == "l3_ball_track_update_joint"
+        assert i + 1 < len(calls) and calls[i + 1][0] == "l3_ball_track_note_club", calls[i:]
+        _, frame, claimed = calls[i]
+        _, note_frame, note_index, _mask = calls[i + 1]
+        assert (note_frame, note_index) == (frame, claimed)
+    marked = [c for c in calls if c[0] == "l3_ball_track_note_club" and c[2] != fw.TRACK_NO_TARGET]
+    assert marked, "the synthetic club is never claimed after impact"
+    assert any(c[3] & (1 << c[2]) for c in marked if c[2] < 8), "no claim reached the history"

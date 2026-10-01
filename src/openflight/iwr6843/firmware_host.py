@@ -1936,6 +1936,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_ball_recover_cfg_defaults": ([_P(BallRecoverCfg)], None),
     "l3_ball_history_reset": ([_P(BallHistory)], None),
     "l3_ball_history_push": ([_P(BallHistory), _P(TargetObs), _U32, _U32, _U32, _U32], None),
+    "l3_ball_history_mark_club": ([_P(BallHistory), _U32, _U32], None),
     "l3_ball_history_at": ([_P(BallHistory), _U32], _P(BallHistoryFrame)),
     "l3_ball_recover": (
         [
@@ -1978,6 +1979,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
         [_P(BallTrack), _P(TargetObs), _U32, _U32, _U32, _U32],
         ctypes.c_int32,
     ),
+    "l3_ball_track_note_club": ([_P(BallTrack), _U32, _U32], None),
     "l3_ball_track_extract_snr": ([_P(BallTrackCfg), _F32], _F32),
     "l3_ball_track_struct_bytes": ([], _U32),
     "l3_ball_track_set_angles": (
