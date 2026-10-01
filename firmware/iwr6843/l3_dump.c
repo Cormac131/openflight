@@ -79,6 +79,7 @@
 #include "l3_profile.h"
 #include "l3_result.h"
 #include "l3_shot.h"
+#include "fw_version.h"
 
 #if defined(L3_DUMP_IQ8) || defined(L3_RING_IQ8)
 #define L3_ANY_IQ8 1
@@ -5688,10 +5689,28 @@ static int32_t l3_cli_ball(int32_t argc, char *argv[])
     return -1;
 }
 
-/* CLI "stats": report capture counters (diagnostic). */
+/* "stats version": identify the flashed image. One line of space-separated
+ * key=value pairs; the host parses it, so keep keys stable. A sub-mode of
+ * "stats" because the CLI table is at the SDK's CLI_MAX_CMD. Images that
+ * predate it ignore the argument and print the counters instead. */
+static int32_t l3_statsVersion(void)
+{
+    CLI_write("version=%s git=%s variant=%s built=%s\n",
+              L3_FW_VERSION, L3_FW_GIT, L3_FW_VARIANT, L3_FW_BUILT);
+    return 0;
+}
+
+/* CLI "stats [version]": report capture counters (diagnostic), or with
+ * "version" the image identity. */
 static int32_t l3_cli_stats(int32_t argc, char *argv[])
 {
-    (void)argc; (void)argv;
+    if (argc == 2 && strcmp(argv[1], "version") == 0) {
+        return l3_statsVersion();
+    }
+    if (argc != 1) {
+        CLI_write("Error: stats [version]\n");
+        return -1;
+    }
 #ifdef HWA_CHAINED_SNAPSHOT_RING
 #ifdef L3_RING_IQ8
     CLI_write("frames=%u wraps=%u active=%d calib=0x%x rf_faults=%u "
@@ -6468,9 +6487,11 @@ static void l3_initTask(UArg arg0, UArg arg1)
     /* CLI with the mmWave extension. */
     cliCfg.cliPrompt             = "l3dump:/>";
 #ifdef HYBRID_CADENCE_CAPTURE
-    cliCfg.cliBanner             = "OpenFlight hybrid-cadence L3 firmware (v6)\n";
+    cliCfg.cliBanner             = "OpenFlight hybrid-cadence L3 firmware (v6) "
+                                   L3_FW_VERSION " " L3_FW_GIT "\n";
 #else
-    cliCfg.cliBanner             = "OpenFlight configurable L3 snapshot firmware (v5)\n";
+    cliCfg.cliBanner             = "OpenFlight configurable L3 snapshot firmware (v5) "
+                                   L3_FW_VERSION " " L3_FW_GIT "\n";
 #endif
     cliCfg.cliUartHandle         = gCliUart;
     cliCfg.socHandle             = gSocHandle;
@@ -6488,7 +6509,7 @@ static void l3_initTask(UArg arg0, UArg arg1)
     cliCfg.tableEntry[2].helpString    = "Freeze and stream one L3 snapshot dump";
     cliCfg.tableEntry[2].cmdHandlerFxn = l3_cli_dump;
     cliCfg.tableEntry[3].cmd           = "stats";
-    cliCfg.tableEntry[3].helpString    = "Report capture counters";
+    cliCfg.tableEntry[3].helpString    = "stats [version]: capture counters, or firmware version";
     cliCfg.tableEntry[3].cmdHandlerFxn = l3_cli_stats;
 #ifdef ENABLE_HWA_SMOKE
     cliCfg.tableEntry[4].cmd           = "hwastats";

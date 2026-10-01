@@ -38,6 +38,15 @@ R4F_CFLAGS += $(L3_VARIANT_DEFS)
 L3_FEATURE_DEFS ?= --define=L3_BALL_HYPOTHESES=0 --define=L3_TRIG_TRACE_DEPTH=24U
 R4F_CFLAGS += $(L3_FEATURE_DEFS)
 
+# Image identity for the CLI "stats version" sub-mode (see fw_version.h). The
+# top-level firmware/Makefile stamps all three from firmware/VERSION, git and
+# the clock; values must not contain spaces.
+L3_FW_VERSION ?= 0.0.0-dev
+L3_FW_GIT ?= unknown
+L3_FW_BUILT ?= unknown
+R4F_CFLAGS += --define=L3_FW_VERSION='"$(L3_FW_VERSION)"'
+R4F_CFLAGS += --define=L3_FW_GIT='"$(L3_FW_GIT)"' --define=L3_FW_BUILT='"$(L3_FW_BUILT)"'
+
 APPNAME = l3_dump
 
 # Sources live alongside this makefile.

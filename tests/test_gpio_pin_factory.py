@@ -136,6 +136,9 @@ class TestMonitorInstallsFactory:
         class FakeRadar:
             port = "/dev/fake"
 
+            def firmware_version(self):
+                return None
+
             def send_config(self, path, lines=None):
                 pass
 
