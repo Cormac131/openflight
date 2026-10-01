@@ -218,3 +218,98 @@ Nine captures change from absent (strict) to present (gap-tolerant); verdicts ar
 - `iwr6843_20260919_191119_600_034` (none)
 - `iwr6843_20260923_183847_564_010` (none)
 - `iwr6843_20260923_184805_180_019` (wrong)
+
+### Hypothesis search and ablation (2026-10-01)
+
+Corpus: `OF Sessions` (125 captures), as for the legacy baseline. Legacy re-run on this branch's
+HEAD (`--ball-hypotheses off`) reproduces the committed baseline capture for capture (club, ball
+verdict and launch speed), so it is the comparison as committed. Every hypothesis run is
+`--ball-hypotheses on --accept 2026-10-01-ball-search-baseline-legacy.json`; JSON in
+`2026-10-01-ball-search-hypotheses-<variant>.json`. The radar-to-net distance is unknown, so no
+run uses `--net-range-m` and E3 has no column. The repo recordings' manifest check was not run
+because E2 failed on the corpus.
+
+| Run | present ok / wrong / none | absent ok / wrong / none | club | `--accept` |
+|---|---|---|---|---|
+| legacy | 16 / 59 / 10 | 0 / 1 / 39 | 72 | — |
+| all-on (defaults) | 32 / 29 / 24 | 0 / 1 / 39 | 72 | absent none 39 not above 39; absent wrong 1 not below 1 |
+| `--corridor-gate off` | 31 / 30 / 24 | 0 / 1 / 39 | 72 | same two |
+| `--impact-coast-ms 6` | 32 / 28 / 25 | 0 / 1 / 39 | 72 | same two |
+| `--max-decel 0` | 29 / 35 / 21 | 0 / 1 / 39 | 72 | same two |
+| `--recover off` | 33 / 28 / 24 | 0 / 1 / 39 | 72 | same two |
+| `--classify-points 6` | 37 / 11 / 37 | 0 / 1 / 39 | 72 | same two |
+| `--history-snr 0.7` | 32 / 30 / 24 | 0 / 0 / 39 | 72 | absent none 39 not above 39 |
+
+Club at impact is 72 in every run, with no capture's club verdict changed.
+
+`20260927_144220_262_005` and `20260927_183542_142_009` are not in this corpus, so they have no
+capture-by-capture entry. Instead, every capture whose ball verdict changed between legacy and
+all-on (39; all are `ball_present` under both runs):
+
+| Capture (`iwr6843_` omitted) | OPS m/s | legacy launch | all-on launch | verdict |
+|---|---|---|---|---|
+| 20260916_184748_410_001 | 35.9 | 52.2 | 36.5 | wrong → ok |
+| 20260916_184825_011_002 | 40.0 | – | 41.6 | none → ok |
+| 20260916_184937_318_004 | 38.7 | 9.2 | 38.7 | wrong → ok |
+| 20260916_185013_572_005 | 39.7 | 8.6 | 41.5 | wrong → ok |
+| 20260916_190937_131_002 | 32.7 | 46.2 | – | wrong → none |
+| 20260919_185429_574_003 | 25.3 | 14.9 | – | wrong → none |
+| 20260919_185657_244_008 | 28.7 | 20.0 | 31.5 | wrong → ok |
+| 20260919_190333_892_020 | 48.3 | 1.9 | – | wrong → none |
+| 20260919_190633_265_026 | 42.6 | 23.5 | 41.8 | wrong → ok |
+| 20260919_190749_481_028 | 49.8 | 21.3 | 47.0 | wrong → ok |
+| 20260919_190902_385_030 | 45.5 | 55.3 | 43.9 | wrong → ok |
+| 20260919_191037_862_033 | 48.3 | 28.9 | 48.4 | wrong → ok |
+| 20260919_191229_528_036 | 34.3 | 16.3 | – | wrong → none |
+| 20260923_130505_440_008 | 31.5 | 40.0 | 27.6 | wrong → ok |
+| 20260923_130517_126_009 | 41.2 | 48.6 | – | wrong → none |
+| 20260923_130532_189_010 | 43.3 | 2.7 | 44.2 | wrong → ok |
+| 20260923_130603_754_011 | 40.0 | 16.7 | – | wrong → none |
+| 20260923_130725_534_013 | 29.9 | 8.4 | 25.6 | wrong → ok |
+| 20260923_130736_303_014 | 33.5 | 63.1 | 33.0 | wrong → ok |
+| 20260923_130804_075_015 | 37.4 | 50.5 | 33.2 | wrong → ok |
+| 20260923_130813_241_016 | 36.4 | 35.0 | 18.4 | ok → wrong |
+| 20260923_130832_920_017 | 35.6 | 14.8 | 34.7 | wrong → ok |
+| 20260923_130936_910_020 | 36.1 | 47.6 | 36.3 | wrong → ok |
+| 20260923_131012_999_022 | 48.1 | 17.9 | 52.4 | wrong → ok |
+| 20260923_131031_161_023 | 39.7 | 16.8 | 41.1 | wrong → ok |
+| 20260923_131232_075_029 | 40.2 | 15.1 | – | wrong → none |
+| 20260923_131458_319_037 | 50.6 | 20.7 | 46.2 | wrong → ok |
+| 20260923_183514_618_004 | 46.6 | 40.3 | 65.0 | ok → wrong |
+| 20260923_184026_592_001 | 70.4 | 60.2 | – | ok → none |
+| 20260923_184122_450_003 | 70.4 | 63.1 | 46.3 | ok → wrong |
+| 20260923_184155_650_004 | 70.0 | 46.0 | – | wrong → none |
+| 20260923_184223_357_005 | 65.5 | 15.7 | – | wrong → none |
+| 20260923_184247_221_006 | 70.5 | 54.6 | – | wrong → none |
+| 20260923_184351_044_009 | 64.0 | 52.5 | – | wrong → none |
+| 20260923_184447_518_011 | 68.6 | 69.2 | – | ok → none |
+| 20260923_184523_117_013 | 66.0 | 6.8 | – | wrong → none |
+| 20260923_184547_322_014 | 68.0 | 14.4 | 64.0 | wrong → ok |
+| 20260923_184734_911_017 | 69.8 | 19.4 | – | wrong → none |
+| 20260923_184831_766_021 | 63.1 | 4.9 | 63.7 | wrong → ok |
+
+Totals: 21 wrong → ok, 1 none → ok, 13 wrong → none, 3 ok → wrong, 2 ok → none.
+
+**Board bytes** (host `ctypes` sizes, the arithmetic of
+`tests/test_iwr6843_firmware_board_image.py`; not a TI link map — a board build with both switches
+on was not run): `L3_BALL_HYPOTHESES` adds 1796 B (`BallHyps` 1628 + `BallHypVerdict` 60 +
+`BallHypsCfg` 108); `L3_BALL_RECOVER` adds 2632 B (`BallHistory` 2600 + `BallRecoverCfg` 24 + 8);
+4428 B together.
+
+**What moved what.** The search doubles ball-present `ok` (16 → 32) and halves `wrong` (59 → 29),
+at the cost of more `none` (10 → 24); club is untouched. E2 fails on the absent side only, and the
+absent side is one capture: `20260923_184647_713_016` (OPS 69.6 m/s, no ball chain) is `wrong` under
+legacy (17.2 m/s) and under every hypothesis run (23.7 m/s), and with 40 absent captures `none`
+can only rise above 39 if that capture goes to `none`. Per switch against all-on (net counts;
+the number of captures whose verdict changes is in brackets): the corridor gate is worth 1 `ok` (off: 31 / 30 / 24 [5]); a 6 ms impact coast turns
+1 `wrong` into `none` net (32 / 28 / 25 [5]); the deceleration ceiling is worth 3 `ok` and 6
+`wrong` (off: 29 / 35 / 21 [7]); recovery costs 1 `ok` and gains nothing here (off: 33 / 28 / 24
+[1] — on `20260919_185532_646_005` recovery moves the launch from 33.4 to 38.4 m/s against OPS
+30.5); 6 classify points is the largest lever (37 / 11 / 37 [25]: +5 `ok`, −18 `wrong`, +13 `none`);
+`--history-snr 0.7` leaves every tracker verdict as all-on [0] but flips `20260923_184647_713_016`'s
+label from absent to present, because the label is computed from the replay's frame targets,
+which `historySnr` changes — its absent `wrong` 0 is a label artifact, not a tracker gain, and the
+label should be made independent of the history SNR before it is used to judge that switch.
+
+**Decision.** `--accept` printed problems for the all-defaults run, so `useHypotheses` stays 0 and
+the board keeps both switches off.
