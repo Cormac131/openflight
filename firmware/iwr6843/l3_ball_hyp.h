@@ -65,7 +65,9 @@ typedef struct {
                                    * used only with corridorGate off */
     float    gateM;               /* association half-width at zero elapsed time ... */
     float    gateMps;             /* ... growing by this speed uncertainty over the gap */
-    uint32_t maxMisses;           /* coasted frames before a hypothesis is dropped */
+    uint32_t coastUs;             /* longest a hypothesis goes without a point ... */
+    uint32_t impactCoastUs;       /* ... unless its newest point is short of the tee + */
+    float    impactRegionM;       /* this: the ball is hidden near impact for longer */
     uint32_t classifyPoints;      /* points before a hypothesis may be the ball */
     float    minDepartureMps;
     float    maxSpeedMps;
@@ -114,6 +116,7 @@ typedef struct {
     float    spawnBeyondBins;
     float    gateBins;
     float    farWindowBins;
+    float    impactRegionBins;
     uint32_t nextId;
     uint32_t spawned;
     uint32_t dropped;             /* coasted out or evicted */

@@ -78,7 +78,8 @@ def test_defaults(lib):
     assert (cfg.spawnBehindM, cfg.spawnBeyondM, cfg.gateM, cfg.gateMps) == pytest.approx(
         (0.046875, 0.46875, 0.0703125, 8.0)
     )
-    assert (cfg.maxMisses, cfg.classifyPoints) == (2, 4)
+    assert (cfg.coastUs, cfg.impactCoastUs, cfg.classifyPoints) == (6000, 18000, 4)
+    assert cfg.impactRegionM == pytest.approx(0.5)
     assert (cfg.minDepartureMps, cfg.maxSpeedMps) == (10.0, 100.0)
     assert (cfg.maxResidualBins, cfg.dopplerToleranceMps) == (1.0, 2.5)
     assert cfg.binWidthM == pytest.approx(BIN_M)
@@ -127,18 +128,47 @@ def test_a_merged_first_return_is_a_missed_frame_not_a_point(lib):
 
 
 def test_the_ball_coasts_over_two_missing_frames_and_is_picked_up(lib):
-    hyps, frames = run(lib, TwoTracks(missing_ball=(3, 4)))
+    scene = TwoTracks(missing_ball=(3, 4))
+    hyps, frames = run(lib, scene, impactRegionM=0.0, coastUs=2 * scene.frame_us)
     (hyp,) = active(hyps)
     assert [hyp.points[i].frame for i in range(hyp.count)] == [1, 2, 5, 6, 7, 8]
     assert bins(hyp) == truth(frames)
 
 
 def test_three_missing_frames_drop_it_and_the_ball_starts_again(lib):
-    hyps, frames = run(lib, TwoTracks(missing_ball=(3, 4, 5)))
+    scene = TwoTracks(missing_ball=(3, 4, 5))
+    hyps, frames = run(lib, scene, impactRegionM=0.0, coastUs=2 * scene.frame_us)
     assert hyps.dropped == 1
     (hyp,) = active(hyps)  # a new hypothesis from frame 6, inside the widened band
     assert hyp.points[0].frame == 6
     assert bins(hyp) == truth([f for f in frames if f.frame >= 6])
+
+
+@pytest.mark.parametrize("frame_us", [2000, 3000])
+def test_a_ball_missing_near_impact_survives_a_long_gap(lib, frame_us):
+    """Five frames without the ball inside the impact region, at either profile."""
+    scene = TwoTracks(frames=10, frame_us=frame_us, missing_ball=(3, 4, 5, 6, 7),
+                      club_visible=False)
+    hyps, frames = run(lib, scene)
+    assert len(active(hyps)) == 1
+    assert bins(active(hyps)[0]) == truth(frames)
+
+
+def test_the_same_gap_beyond_the_impact_region_drops_it(lib):
+    scene = TwoTracks(frames=10, frame_us=3000, missing_ball=(5, 6, 7, 8), club_visible=False)
+    hyps, _ = run(lib, scene, impactRegionM=0.05)
+    assert hyps.dropped >= 1
+
+
+def test_coasting_is_by_time_not_frames(lib):
+    """6 ms coast: three missing 2 ms frames (6 ms) keep it; three missing 3 ms
+    frames (9 ms) drop it. A frame count would treat them the same."""
+    kept = TwoTracks(frames=7, frame_us=2000, missing_ball=(3, 4, 5), club_visible=False)
+    hyps, _ = run(lib, kept, impactRegionM=0.0)
+    assert len(active(hyps)) == 1 and hyps.dropped == 0
+    lost = TwoTracks(frames=7, frame_us=3000, missing_ball=(3, 4, 5), club_visible=False)
+    hyps, _ = run(lib, lost, impactRegionM=0.0)
+    assert hyps.dropped >= 1
 
 
 def test_a_ball_return_the_club_claims_is_never_a_ball_point(lib):

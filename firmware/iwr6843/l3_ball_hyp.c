@@ -14,7 +14,9 @@ void l3_ball_hyps_cfg_defaults(l3_ball_hyps_cfg_t *cfg)
     cfg->spawnBeyondM = 10.0F * cfg->binWidthM;  /* ... and is first seen within ~3 frames of it */
     cfg->gateM = 1.5F * cfg->binWidthM;
     cfg->gateMps = 8.0F;              /* drag and fit error, per second of prediction */
-    cfg->maxMisses = 2U;
+    cfg->coastUs = 6000U;
+    cfg->impactCoastUs = 18000U;
+    cfg->impactRegionM = 0.5F;
     cfg->classifyPoints = 4U;
     cfg->minDepartureMps = 10.0F;     /* the slowest chip leaves faster than this */
     cfg->maxSpeedMps = 100.0F;
@@ -50,6 +52,7 @@ void l3_ball_hyps_init(l3_ball_hyps_t *hyps, const l3_ball_hyps_cfg_t *cfg)
     hyps->spawnBeyondBins = cfg->spawnBeyondM * binsPerM;
     hyps->gateBins = cfg->gateM * binsPerM;
     hyps->farWindowBins = cfg->farWindowM * binsPerM;
+    hyps->impactRegionBins = cfg->impactRegionM * binsPerM;
     l3_ball_hyps_clear(hyps);
 }
 
@@ -316,15 +319,22 @@ uint32_t l3_ball_hyps_update(l3_ball_hyps_t *hyps, const l3_target_obs_t *target
         fed[bestHyp] = 1U;
         taken[bestTarget] = 1U;
     }
-    /* Coast the hypotheses that found nothing; drop them after maxMisses. */
+    /* Coast the hypotheses that found nothing; drop one whose newest point is
+     * older than its coast: impactCoastUs inside the impact region, else coastUs. */
     for (i = 0U; i < L3_BALL_HYP_MAX; i++) {
         l3_ball_hyp_t *hyp = &hyps->hyp[i];
+        const l3_ball_hyp_point_t *last;
+        uint32_t limitUs;
 
         if (!hyp->active || fed[i]) {
             continue;
         }
         hyp->misses++;
-        if (hyp->misses > cfg->maxMisses) {
+        last = &hyp->points[hyp->count - 1U];
+        limitUs = (last->rangeBin < hyps->anchor.anchorBin + hyps->impactRegionBins)
+                      ? cfg->impactCoastUs
+                      : cfg->coastUs;
+        if ((int32_t)(timestampUs - last->timestampUs) > (int32_t)limitUs) {
             hyp->active = 0U;
             hyps->dropped++;
         }
@@ -535,7 +545,7 @@ void l3_ball_hyps_classify(const l3_ball_hyps_t *hyps, l3_ball_hyp_verdict_t *ou
         }
         /* The slow winner is likely the club or the tee while a fast one is
          * still gathering points: wait for it. It classifies or coasts out
-         * within classifyPoints + maxMisses frames, so this is bounded. */
+         * within classifyPoints points or its coast, so this is bounded. */
         if (best.index >= 0 && l3_ball_hyps_fastPending(hyps)) {
             out->waitingForFast = 1U;
             return;
