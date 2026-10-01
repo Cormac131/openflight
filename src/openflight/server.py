@@ -2712,26 +2712,125 @@ def _apply_late_window_result(shot: Shot, measured: dict | None) -> None:
 
 MPS_TO_MPH = 2.23694
 
+# (metric, row label, onboard->display scale, unit, decimals). Speeds are m/s
+# on the wire; angles are already degrees; spin_rate is shown as the firmware
+# sends it (no unit is defined for it yet).
+_ONBOARD_ROWS = (
+    ("ball_speed", "ball speed", MPS_TO_MPH, " mph", 1),
+    ("club_speed", "club speed", MPS_TO_MPH, " mph", 1),
+    ("vertical_launch", "launch V", 1.0, "°", 1),
+    ("horizontal_launch", "launch H", 1.0, "°", 1),
+    ("club_path", "club path", 1.0, "°", 1),
+    ("angle_of_attack", "attack", 1.0, "°", 1),
+    ("spin_rate", "spin rate", 1.0, "", 0),
+    ("spin_axis", "spin axis", 1.0, "°", 1),
+    ("impact_range", "impact range", 1.0, " m", 2),
+)
+
+
+def _fmt(value: float | None, unit: str, decimals: int) -> str:
+    return "-" if value is None else f"{value:.{decimals}f}{unit}"
+
+
+def _onboard_comparators(shot: Shot, measurement, club_path) -> dict[str, tuple[str, float | None]]:
+    """The OPS or host value each onboard metric is judged against, by metric name."""
+    host_path = getattr(club_path, "path_deg", None) if club_path is not None else None
+    path_source = "host"
+    if host_path is None and club_path is not None:
+        host_path = getattr(club_path, "candidate_path_deg", None)
+        path_source = "host cand"
+    return {
+        "ball_speed": ("OPS", shot.ball_speed_mph),
+        "club_speed": ("OPS", shot.club_speed_mph),
+        "vertical_launch": (
+            "host",
+            getattr(measurement, "angle_deg", None) if measurement is not None else None,
+        ),
+        "horizontal_launch": (
+            "host",
+            getattr(measurement, "horizontal_deg", None) if measurement is not None else None,
+        ),
+        "club_path": (path_source, host_path),
+        "angle_of_attack": (
+            "host cand",
+            getattr(club_path, "candidate_attack_angle_deg", None)
+            if club_path is not None
+            else None,
+        ),
+        "spin_rate": ("OPS", shot.spin_rpm),
+        "spin_axis": ("host", shot.spin_axis_deg),
+    }
+
+
+def _onboard_flags(metric) -> str:
+    flags = [
+        name
+        for name, on in (
+            ("IMPLAUSIBLE", metric.implausible),
+            ("fallback", metric.fallback),
+            ("radial", metric.radial_only),
+        )
+        if on
+    ]
+    return f" [{','.join(flags)}]" if flags else ""
+
+
+def format_onboard_comparison(shot: Shot, onboard, measurement, club_path) -> str:
+    """Every firmware metric beside the OPS or host value it is compared with.
+
+    One row per metric: the onboard value with its confidence, MEASURED /
+    ESTIMATED label and any doubt flags, then the comparator and the
+    onboard-minus-comparator delta. Unusable onboard values print with their
+    flags but no delta, so an implausible number is never read as agreement.
+    """
+    comparators = _onboard_comparators(shot, measurement, club_path)
+    lines = [
+        f"[SERVER] IWR6843 onboard shot {onboard.shot_id} v{onboard.version}: {onboard.verdict}, "
+        f"impact {onboard.impact_source}, club {onboard.club_points} pts / "
+        f"ball {onboard.ball_points} pts"
+        + (f", quality {','.join(sorted(onboard.quality))}" if onboard.quality else "")
+    ]
+    for name, label, scale, unit, decimals in _ONBOARD_ROWS:
+        metric = onboard.metrics.get(name)
+        if metric is None:
+            continue
+        value = metric.value * scale if metric.value is not None else None
+        row = f"  {label:<13}{_fmt(value, unit, decimals):>10}"
+        if value is not None:
+            row += f"  conf {metric.confidence:.2f} {metric.label}{_onboard_flags(metric)}"
+        if name in comparators:
+            source, other = comparators[name]
+            row = f"{row:<52}| {source} {_fmt(other, unit, decimals)}"
+            if metric.usable and other is not None:
+                row += f"  Δ {value - other:+.{decimals}f}"
+        lines.append(row)
+    ops_smash = shot.smash_factor
+    smash_row = f"  {'smash':<13}{_fmt(onboard.smash, '', 2):>10}"
+    smash_row = f"{smash_row:<52}| OPS {_fmt(ops_smash, '', 2)}"
+    if onboard.smash is not None and ops_smash is not None:
+        smash_row += f"  Δ {onboard.smash - ops_smash:+.2f}"
+    lines.append(smash_row)
+    fit = onboard.impact_fit
+    if fit:
+        tracks = ", ".join(
+            f"{track} {info['why']}"
+            + (f" {info['speed_mps'] * MPS_TO_MPH:.1f} mph" if info.get("speed_mps") else "")
+            for track, info in fit.get("tracks", {}).items()
+        )
+        lines.append(
+            f"  {'impact fit':<13}{fit.get('verdict')}"
+            f", refined-trigger {_fmt(fit.get('refined_minus_trigger_us'), ' us', 0)}"
+            f", spread {_fmt(fit.get('spread_us'), ' us', 0)}"
+            + (f", dropped {fit['dropped']}" if fit.get("dropped") else "")
+            + (", no lock" if fit.get("no_lock") else "")
+            + (f"; {tracks}" if tracks else "")
+        )
+    return "\n".join(lines)
+
 
 def _log_onboard_comparison(shot: Shot, onboard, measurement, club_path) -> None:
-    """One line putting the firmware's numbers beside the host pipeline's."""
-    host_vertical = getattr(measurement, "angle_deg", None) if measurement is not None else None
-    host_path = getattr(club_path, "path_deg", None) if club_path is not None else None
-    onboard_speed = onboard["ball_speed"]
-    logger.info(
-        "[SERVER] IWR6843 onboard %s: ball %s vs OPS %.1f mph; launch %s vs host %s; "
-        "path %s vs host %s; club %s",
-        onboard.verdict,
-        f"{onboard_speed.value * MPS_TO_MPH:.1f} mph" if onboard_speed.usable else "-",
-        shot.ball_speed_mph,
-        f"{onboard['vertical_launch'].value:.1f}" if onboard["vertical_launch"].usable else "-",
-        f"{host_vertical:.1f}" if host_vertical is not None else "-",
-        f"{onboard['club_path'].value:.1f}" if onboard["club_path"].usable else "-",
-        f"{host_path:.1f}" if host_path is not None else "-",
-        f"{onboard['club_speed'].value * MPS_TO_MPH:.1f} mph"
-        if onboard["club_speed"].usable
-        else "-",
-    )
+    """Print the firmware's numbers beside the OPS and host pipeline's, one block per shot."""
+    logger.info("%s", format_onboard_comparison(shot, onboard, measurement, club_path))
 
 
 def _apply_onboard_metrics(shot: Shot, onboard) -> None:
