@@ -325,9 +325,6 @@ def compare(summary: dict, baseline: dict, *, allow_more_none: int = 0) -> list[
     return problems
 
 
-CLUB_AT_IMPACT_FLOOR = 55
-
-
 def accept_split(summary: dict, baseline: dict) -> list[str]:
     """Spec E2, against legacy re-run under the same label: what keeps the
     hypotheses from becoming the default, one line each (empty: accepted)."""
@@ -343,8 +340,10 @@ def accept_split(summary: dict, baseline: dict) -> list[str]:
         problems.append(
             f"ball-absent wrong {now['absent']['wrong']} not below {base['absent']['wrong']}"
         )
-    if summary["club"]["club"] < CLUB_AT_IMPACT_FLOOR:
-        problems.append(f"club at impact {summary['club']['club']} < {CLUB_AT_IMPACT_FLOOR}")
+    if summary["club"]["club"] < baseline["club"]["club"]:
+        problems.append(
+            f"club at impact {summary['club']['club']} < baseline {baseline['club']['club']}"
+        )
     return problems
 
 

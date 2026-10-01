@@ -458,10 +458,10 @@ def split(present_ok, absent_none, absent_wrong, club=55):
 
 
 def test_accept_split_passes_only_a_strict_improvement(ev):
-    base = split(present_ok=10, absent_none=5, absent_wrong=60)
-    assert ev.accept_split(split(11, 6, 59), base) == []
-    problems = ev.accept_split(split(10, 5, 60, club=54), base)
-    assert len(problems) == 4  # ok not higher, none not higher, wrong not lower, club below 55
+    base = split(present_ok=10, absent_none=5, absent_wrong=60, club=60)
+    assert ev.accept_split(split(11, 6, 59, club=60), base) == []
+    problems = ev.accept_split(split(10, 5, 60, club=59), base)
+    assert len(problems) == 4  # ok not higher, none not higher, wrong not lower, club below base
 
 
 def test_a_reviewed_label_overrides_the_heuristic(ev, tmp_path, monkeypatch):
