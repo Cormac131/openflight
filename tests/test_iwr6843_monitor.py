@@ -1671,3 +1671,101 @@ def test_an_edge_while_the_board_is_being_rearmed_is_rejected_as_busy(tmp_path):
         release.set()
     assert _wait_until(lambda: len(radar.configs) == 2)
     monitor.stop()
+
+
+# --- the no-ball veto (2026-10-01) ------------------------------------------------
+#
+# Raking a ball onto the tee or a waggle fired the self-trigger 8 times in 10 on
+# 2026-10-01; each cost a ~7 s readback with no ball in it. With veto_no_ball the
+# board's own result decides: no ball flight, no readback, the ring is released.
+# It is off by default until the ball search finds the ball reliably (it missed
+# 26 of 39 labelled shots in replay that day).
+
+
+class _ResultPacket:
+    """Stands in for a ShotResultPacket with or without a ball flight."""
+
+    shot_id = 4
+    verdict = "partial"
+    club_points = 6
+
+    def __init__(self, ball_flight: bool):
+        self.ball_flight = ball_flight
+        self.ball_points = 6 if ball_flight else 0
+
+    def with_onboard_angles_doubted(self):
+        return self
+
+
+def _vetoing(tmp_path, radar, **kwargs) -> IWR6843CaptureMonitor:
+    radar.stats_replies = [FROZEN_STATS]
+    return _started(tmp_path, radar, veto_no_ball=True, **kwargs)
+
+
+def test_veto_no_ball_is_off_by_default(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    radar.result = _ResultPacket(ball_flight=False)
+    monitor = _started(tmp_path, radar)
+
+    capture = _self_triggered_capture(monitor, radar)
+
+    assert capture is not None and capture.valid and not capture.vetoed
+    assert radar.read_started_at is not None
+    monitor.stop()
+
+
+def test_a_result_without_a_ball_flight_skips_the_readback_and_releases(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    radar.result = _ResultPacket(ball_flight=False)
+    monitor = _vetoing(tmp_path, radar, save_dumps=True)
+
+    capture = _self_triggered_capture(monitor, radar)
+
+    assert capture is not None and capture.vetoed
+    assert not capture.valid and capture.raw is None and capture.path is None
+    assert capture.error == "vetoed: no ball flight"
+    assert capture.onboard_result is radar.result
+    assert radar.read_started_at is None, "no readback"
+    assert _wait_until(lambda: radar.releases == 1)
+    assert not list((tmp_path / "dumps").glob("*.l3dump")), "nothing saved"
+    monitor.stop()
+
+
+def test_a_result_with_a_ball_flight_is_read_back(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    radar.result = _ResultPacket(ball_flight=True)
+    monitor = _vetoing(tmp_path, radar)
+
+    capture = _self_triggered_capture(monitor, radar)
+
+    assert capture is not None and capture.valid and not capture.vetoed
+    assert radar.read_started_at is not None
+    monitor.stop()
+
+
+@pytest.mark.parametrize("why", ["not_ready", "unreadable"])
+def test_without_a_result_the_veto_keeps_the_capture(tmp_path, why):
+    """No RESULT yet, or a packet the host cannot read: fail safe, read it back."""
+    radar = SelfTriggerRadar(_raw_dump())
+    if why == "unreadable":
+        radar.result_error = RuntimeError("triggerLog result timed out")
+    monitor = _vetoing(tmp_path, radar)
+
+    capture = _self_triggered_capture(monitor, radar)
+
+    assert capture is not None and capture.valid and not capture.vetoed
+    monitor.stop()
+
+
+def test_the_veto_needs_the_self_trigger(tmp_path):
+    """Sound-triggered captures read no onboard result, so nothing could veto them."""
+    config = tmp_path / "radar.cfg"
+    config.write_text("sensorStart\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="veto_no_ball needs the self-trigger"):
+        IWR6843CaptureMonitor(
+            config_path=config,
+            output_dir=tmp_path / "dumps",
+            radar=FakeRadar(_raw_dump()),
+            button_factory=FakeButton,
+            veto_no_ball=True,
+        )

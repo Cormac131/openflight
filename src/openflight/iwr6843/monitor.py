@@ -351,6 +351,9 @@ class IWR6843Capture:
     # the readback rearms the ring; None on firmware without it or without a
     # RESULT this shot.
     onboard_result: object | None = None
+    # The board's result showed no ball flight, so the readback was skipped
+    # (IWR6843CaptureMonitor.veto_no_ball).
+    vetoed: bool = False
 
     @property
     def valid(self) -> bool:
@@ -390,7 +393,16 @@ class IWR6843CaptureMonitor:
         tee_band_bins: float = TEE_BAND_DEFAULT_BINS,
         ball_snr: float | None = None,
         board_calibration: BoardCalibration | None = None,
+        veto_no_ball: bool = False,
     ):
+        if veto_no_ball and self_trigger is None:
+            raise ValueError(
+                "veto_no_ball needs the self-trigger: only it reads the board's result"
+            )
+        # Skip the readback when the board's result shows no ball flight
+        # (raking a ball over, a waggle). Off by default: the board's ball
+        # tracker still misses real balls.
+        self.veto_no_ball = veto_no_ball
         # "not <=" also refuses NaN.
         if not 0.0 <= tee_band_bins <= TEE_BAND_MAX_BINS:
             raise ValueError(
@@ -950,17 +962,23 @@ class IWR6843CaptureMonitor:
         noise_power = None
         onboard_track = None
         onboard_result = self._read_onboard_result() if self.watch_self_trigger else None
-        try:
-            logger.info("[IWR6843] Trigger #%d: reading track samples", sequence)
-            raw, noise_power, onboard_track = self._read_capture()
-            metadata = self._validate_dump(raw)
-            if self.save_dumps:
-                path = self._capture_path(sequence, edge_timestamp)
-                path.write_bytes(raw)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            error = str(exc)
-            raw = None
-            logger.warning("[IWR6843] Capture #%d failed: %s", sequence, exc, exc_info=True)
+        # No result (not ready, unreadable) never vetoes: the capture is kept.
+        vetoed = self.veto_no_ball and onboard_result is not None and not onboard_result.ball_flight
+        if vetoed:
+            error = "vetoed: no ball flight"
+            logger.info("[IWR6843] Trigger #%d: no ball flight, readback skipped", sequence)
+        else:
+            try:
+                logger.info("[IWR6843] Trigger #%d: reading track samples", sequence)
+                raw, noise_power, onboard_track = self._read_capture()
+                metadata = self._validate_dump(raw)
+                if self.save_dumps:
+                    path = self._capture_path(sequence, edge_timestamp)
+                    path.write_bytes(raw)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                error = str(exc)
+                raw = None
+                logger.warning("[IWR6843] Capture #%d failed: %s", sequence, exc, exc_info=True)
         completed = time.time()
         capture = IWR6843Capture(
             sequence=sequence,
@@ -976,6 +994,7 @@ class IWR6843CaptureMonitor:
             noise_power=noise_power,
             onboard_track=onboard_track,
             onboard_result=onboard_result,
+            vetoed=vetoed,
         )
         with self._condition:
             self._capture_active = False

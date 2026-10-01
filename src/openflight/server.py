@@ -1192,6 +1192,7 @@ def init_iwr6843(
     setup_poll_s: float = 1.0,
     tee_band_bins: float | None = None,
     ball_snr: float | None = None,
+    veto_no_ball: bool = False,
 ) -> bool:
     """Initialize GPIO-triggered TI capture and the frozen LCMF-v1 estimator.
 
@@ -1276,6 +1277,7 @@ def init_iwr6843(
             tee_band_bins=tee_band_bins,
             ball_snr=ball_snr,
             board_calibration=board_calibration,
+            veto_no_ball=veto_no_ball,
         )
         if self_trigger is not None:
             logger.warning(
@@ -1323,6 +1325,7 @@ def init_iwr6843(
             "array_depth_m": ARRAY_DEPTH_M,
             "tee_band_bins": tee_band_bins,
             "ball_snr": ball_snr,
+            "veto_no_ball": veto_no_ball,
             "board_calibration": board_calibration.to_dict(),
             "net_range_m": net_from_front_m,
             "flight": flight,
@@ -5094,6 +5097,13 @@ def main():
         "noise floor, at least 1 (default: 1). Requires --iwr6843-self-trigger",
     )
     parser.add_argument(
+        "--iwr6843-veto-no-ball",
+        action="store_true",
+        help="Skip the IWR readback when the firmware's shot result shows no ball flight "
+        "(raking a ball over, a waggle), and rearm at once. Off by default: the firmware's "
+        "ball tracker still misses real balls. Requires --iwr6843-self-trigger",
+    )
+    parser.add_argument(
         "--iwr6843-onboard-metrics",
         action="store_true",
         help="Prefer the IWR6843 firmware's usable club delivery (path, attack) over the host "
@@ -5361,6 +5371,8 @@ def main():
         parser.error(str(error))
     if args.iwr6843_self_trigger and not args.iwr6843:
         parser.error("--iwr6843-self-trigger requires --iwr6843")
+    if args.iwr6843_veto_no_ball and not args.iwr6843_self_trigger:
+        parser.error("--iwr6843-veto-no-ball requires --iwr6843-self-trigger")
     if self_trigger_config is not None and args.trigger != "sound":
         parser.error("--iwr6843-self-trigger drives the OPS with S!; use --trigger sound")
     if args.camera_capture and (
@@ -5554,6 +5566,7 @@ def main():
             setup_poll_s=args.iwr6843_setup_poll_s,
             tee_band_bins=args.iwr6843_tee_band_bins,
             ball_snr=args.iwr6843_ball_snr,
+            veto_no_ball=args.iwr6843_veto_no_ball,
         ):
             calibration = iwr6843_runtime.calibration
             ball_speed_correction_distance_ft = _iwr6843_tee_range_m(args) * 3.28084

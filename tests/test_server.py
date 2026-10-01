@@ -658,6 +658,20 @@ class TestIWR6843ShotIntegration:
         assert server_module.iwr6843_runtime_config["ball_snr"] == 4.5
         server_module.iwr6843_runtime = None
 
+    def test_init_iwr6843_leaves_the_no_ball_veto_off_by_default(self, monkeypatch, tmp_path):
+        captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path)
+
+        assert captured["veto_no_ball"] is False
+        assert server_module.iwr6843_runtime_config["veto_no_ball"] is False
+        server_module.iwr6843_runtime = None
+
+    def test_init_iwr6843_passes_the_no_ball_veto_to_the_monitor(self, monkeypatch, tmp_path):
+        captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path, veto_no_ball=True)
+
+        assert captured["veto_no_ball"] is True
+        assert server_module.iwr6843_runtime_config["veto_no_ball"] is True
+        server_module.iwr6843_runtime = None
+
     def test_init_iwr6843_passes_the_tee_band_to_the_monitor(self, monkeypatch, tmp_path):
         captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path, tee_band_bins=6.0)
 
@@ -5572,6 +5586,7 @@ class TestSelfTriggerCli:
         [
             (["--iwr6843", "--iwr6843-self-trigger-bin", "3"], "requires --iwr6843-self-trigger"),
             (["--iwr6843-self-trigger"], "requires --iwr6843"),
+            (["--iwr6843", "--iwr6843-veto-no-ball"], "requires --iwr6843-self-trigger"),
             (
                 ["--iwr6843", "--iwr6843-self-trigger", "--trigger", "speed"],
                 "use --trigger sound",
