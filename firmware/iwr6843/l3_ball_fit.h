@@ -12,7 +12,12 @@
  * cap. A point further than gateK sigma from that fit is rejected and the
  * fit is redone without it. Too few kept points, too large a residual or a
  * best direction on the search limit gives no angles rather than a confident
- * wrong one.
+ * wrong one. So does a direction the geometry cannot pin: the radar looks
+ * nearly down the flight line, so an angle error shows at the antenna at a
+ * fraction of its size and the residual stays at noise level. The cost's
+ * curvature at the optimum (finite differences, 0.5 deg) gives the direction's
+ * covariance, scaled by the observed scatter relative to angleSigmaRad; a sigma over
+ * maxAngleSigmaRad is uncertain. Checked after the grid-edge and scatter checks.
  *
  * The tee: the ball track's origin gives the tee's slant range and bearing;
  * its height is teeBallHeightM above the floor, the antenna radarHeightM.
@@ -43,7 +48,8 @@ typedef struct {
     float    vlaMinRad;
     float    vlaMaxRad;
     uint32_t gridSteps;       /* intervals per axis per level (at most 16) */
-    uint32_t gridLevels;      /* each level spans one step either side of the last best */
+    uint32_t gridLevels;      /* each level spans one step either side of the last best (1 to 4) */
+    float    maxAngleSigmaRad; /* either launch angle's 1-sigma beyond this: uncertain, no direction */
 } l3_ball_fit_cfg_t;
 
 enum {
@@ -53,6 +59,7 @@ enum {
     L3_BALL_FIT_WHY_SCATTER,      /* the kept angles' RMS exceeds maxRmsRad */
     L3_BALL_FIT_WHY_GRID_EDGE,    /* the best direction is on a search limit */
     L3_BALL_FIT_WHY_NO_TEE,       /* the origin gives no tee (range under the tee height) */
+    L3_BALL_FIT_WHY_UNCERTAIN,    /* the geometry cannot pin the direction: a sigma exceeds maxAngleSigmaRad */
     L3_BALL_FIT_WHY_COUNT
 };
 
@@ -60,6 +67,8 @@ typedef struct {
     float     hlaRad;         /* horizontal launch, positive right */
     float     vlaRad;         /* vertical launch, positive up */
     float     rmsRad;         /* kept points' weighted RMS angle residual */
+    float     hlaSigmaRad;    /* 1-sigma of hlaRad from the cost's curvature */
+    float     vlaSigmaRad;    /* 1-sigma of vlaRad */
     l3_vec3_t tee;            /* the anchor, golf frame */
     uint32_t  used;           /* points whose angles were weighed */
     uint32_t  accepted;       /* of those, kept by the gate */
@@ -69,7 +78,8 @@ typedef struct {
 } l3_ball_fit_t;
 
 void l3_ball_fit_cfg_defaults(l3_ball_fit_cfg_t *cfg);
-/* The most candidate directions one run can score: two passes of every level. */
+/* The most candidate directions one run can score: two passes of every level,
+ * plus the nine of the curvature estimate. */
 uint32_t l3_ball_fit_max_evaluations(const l3_ball_fit_cfg_t *cfg);
 /* Unit vector for (HLA, VLA) in the golf frame. */
 void l3_ball_fit_direction(float hlaRad, float vlaRad, l3_vec3_t *u);

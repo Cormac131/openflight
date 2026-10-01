@@ -138,6 +138,7 @@ def test_defaults_are_the_measured_scatter_and_a_three_level_grid(lib):
     assert (cfg.hlaMinRad, cfg.hlaMaxRad) == pytest.approx((-45.0 * DEG, 45.0 * DEG))
     assert (cfg.vlaMinRad, cfg.vlaMaxRad) == pytest.approx((-10.0 * DEG, 60.0 * DEG))
     assert cfg.gridSteps == 10 and cfg.gridLevels == 3
+    assert cfg.maxAngleSigmaRad == pytest.approx(3.0 * DEG)
 
 
 def test_why_names_match_the_firmware(lib):
@@ -155,6 +156,8 @@ def test_noise_free_points_give_back_the_direction_and_the_line(lib, hla_deg, vl
     assert fit.hlaRad / DEG == pytest.approx(hla_deg, abs=0.3)
     assert fit.vlaRad / DEG == pytest.approx(vla_deg, abs=0.3)
     assert (fit.tee.x, fit.tee.y, fit.tee.z) == pytest.approx(shot.tee, abs=1e-4)
+    for sigma in (fit.hlaSigmaRad, fit.vlaSigmaRad):
+        assert math.isfinite(sigma) and 0.0 < sigma < 1.0 * DEG
     for index, truth in enumerate(shot.truth):
         point = shot.point(index)
         assert point.filterAccepted == 1 and point.filterHypothesis == HYP["direct"]
@@ -303,11 +306,52 @@ def test_a_zero_origin_has_no_tee(lib):
 
 def test_the_search_stays_inside_its_evaluation_budget(lib):
     cfg = defaults(lib)
-    assert lib.l3_ball_fit_max_evaluations(ctypes.byref(cfg)) == 2 * 3 * 11 * 11
+    assert lib.l3_ball_fit_max_evaluations(ctypes.byref(cfg)) == 2 * 3 * 11 * 11 + 9
     clean = Shot(lib, hla_deg=2.0, vla_deg=14.0)
     _, fit = clean.run()
-    assert fit.evaluations == 3 * 11 * 11, "nothing gated: the refit is skipped"
+    assert fit.evaluations == 3 * 11 * 11 + 9, "nothing gated: the refit is skipped"
     wild = Shot(lib, hla_deg=2.0, vla_deg=14.0)
     wild.measure(2, wild.truth[2], az_err=40.0 * DEG, el_err=40.0 * DEG)
     _, fit = wild.run()
-    assert fit.evaluations == 2 * 3 * 11 * 11
+    assert fit.evaluations == 2 * 3 * 11 * 11 + 9
+
+
+def noisy_shots(lib, noise_deg, count, seed, **cfg):
+    rng = random.Random(seed)
+    for _ in range(count):
+        shot = Shot(lib, hla_deg=2.0, vla_deg=14.0, cfg=defaults(lib, **cfg))
+        for index, truth in enumerate(shot.truth):
+            shot.measure(
+                index, truth, az_err=rng.gauss(0, noise_deg) * DEG, el_err=rng.gauss(0, noise_deg) * DEG
+            )
+        _, fit = shot.run()
+        yield fit, math.hypot(fit.hlaRad / DEG - 2.0, fit.vlaRad / DEG - 14.0)
+
+
+def test_realistic_angle_scatter_never_reports_a_confident_wrong_direction(lib):
+    """At the measured 12 deg scatter the geometry (the radar looks down the
+    flight line) cannot support a direction: the fit must say so, not guess."""
+    wrong = valid = 0
+    for fit, err in noisy_shots(lib, 12.0, 200, 20261002):
+        if fit.valid:
+            valid += 1
+            assert fit.hlaSigmaRad <= 3.0 * DEG + 1e-6 and fit.vlaSigmaRad <= 3.0 * DEG + 1e-6
+            wrong += err > 9.0
+    print("12deg valid", valid, "wrong", wrong)
+    assert wrong <= 10
+
+
+def test_small_angle_noise_still_reports_a_direction(lib):
+    results = list(noisy_shots(lib, 1.0, 100, 20261003))
+    valid = [(f, e) for f, e in results if f.valid]
+    assert len(valid) >= 95
+    for fit, err in valid:
+        assert err <= 3.0 * max(fit.hlaSigmaRad, fit.vlaSigmaRad) / DEG + 0.5
+
+
+def test_too_few_minaccepted_is_clamped(lib):
+    shot = Shot(lib, hla_deg=0.0, vla_deg=12.0, cfg=defaults(lib, minAccepted=0))
+    for index in range(2, 8):
+        shot.measure(index, shot.truth[index], flags=0, confidence=0.0)
+    accepted, fit = shot.run()
+    assert accepted == 0 and why(fit) == "few_angles"

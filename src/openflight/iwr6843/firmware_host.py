@@ -1639,7 +1639,7 @@ class AdaptiveWindows(ctypes.Structure):
 
 
 # l3_ball_fit.h
-BALL_FIT_WHY_NAMES = ("none", "ok", "few_angles", "scatter", "grid_edge", "no_tee")
+BALL_FIT_WHY_NAMES = ("none", "ok", "few_angles", "scatter", "grid_edge", "no_tee", "uncertain")
 
 
 class BallFitCfg(ctypes.Structure):
@@ -1660,6 +1660,7 @@ class BallFitCfg(ctypes.Structure):
         ("vlaMaxRad", ctypes.c_float),
         ("gridSteps", ctypes.c_uint32),
         ("gridLevels", ctypes.c_uint32),
+        ("maxAngleSigmaRad", ctypes.c_float),
     ]
 
 
@@ -1670,6 +1671,8 @@ class BallFit(ctypes.Structure):
         ("hlaRad", ctypes.c_float),
         ("vlaRad", ctypes.c_float),
         ("rmsRad", ctypes.c_float),
+        ("hlaSigmaRad", ctypes.c_float),
+        ("vlaSigmaRad", ctypes.c_float),
         ("tee", Vec3),
         ("used", ctypes.c_uint32),
         ("accepted", ctypes.c_uint32),

@@ -6,11 +6,15 @@
 
 #define L3_BALL_FIT_DEG (3.14159265F / 180.0F)
 #define L3_BALL_FIT_MAX_STEPS 16U
+#define L3_BALL_FIT_MAX_LEVELS 4U
+#define L3_BALL_FIT_MIN_ANGLES 3U
+#define L3_BALL_FIT_CURV_STEP (0.5F * L3_BALL_FIT_DEG)
+#define L3_BALL_FIT_CURV_EVALS 9U
 #define L3_BALL_FIT_EDGE_RAD 1.0e-4F
 #define L3_BALL_FIT_ANGLES (L3_OBS_ANGLE_AZIMUTH | L3_OBS_ANGLE_ELEVATION)
 
 static const char *const kWhyNames[L3_BALL_FIT_WHY_COUNT] = {
-    "none", "ok", "few_angles", "scatter", "grid_edge", "no_tee"
+    "none", "ok", "few_angles", "scatter", "grid_edge", "no_tee", "uncertain"
 };
 
 /* One held point, as the fit reads it. */
@@ -45,6 +49,14 @@ static uint32_t l3_ball_fit_steps(const l3_ball_fit_cfg_t *cfg)
     return (cfg->gridSteps > L3_BALL_FIT_MAX_STEPS) ? L3_BALL_FIT_MAX_STEPS : cfg->gridSteps;
 }
 
+static uint32_t l3_ball_fit_levels(const l3_ball_fit_cfg_t *cfg)
+{
+    if (cfg->gridLevels < 1U) {
+        return 1U;
+    }
+    return (cfg->gridLevels > L3_BALL_FIT_MAX_LEVELS) ? L3_BALL_FIT_MAX_LEVELS : cfg->gridLevels;
+}
+
 void l3_ball_fit_cfg_defaults(l3_ball_fit_cfg_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
@@ -62,13 +74,14 @@ void l3_ball_fit_cfg_defaults(l3_ball_fit_cfg_t *cfg)
     cfg->vlaMaxRad = 60.0F * L3_BALL_FIT_DEG;
     cfg->gridSteps = 10U;
     cfg->gridLevels = 3U;
+    cfg->maxAngleSigmaRad = 3.0F * L3_BALL_FIT_DEG;
 }
 
 uint32_t l3_ball_fit_max_evaluations(const l3_ball_fit_cfg_t *cfg)
 {
     uint32_t side = l3_ball_fit_steps(cfg) + 1U;
 
-    return 2U * cfg->gridLevels * side * side;
+    return 2U * l3_ball_fit_levels(cfg) * side * side + L3_BALL_FIT_CURV_EVALS;
 }
 
 void l3_ball_fit_direction(float hlaRad, float vlaRad, l3_vec3_t *u)
@@ -111,7 +124,8 @@ static void l3_ball_fit_predict(float mirrorZ, const l3_vec3_t *tee, const l3_ve
 {
     /* Forward root of s^2 + 2 s (tee.u) + |tee|^2 - r^2 = 0; o->r > |tee|
      * (ahead), so the root is real and non-negative. */
-    float s = -teeU + sqrtf(teeU * teeU + o->r * o->r - teeSq);
+    float disc = teeU * teeU + o->r * o->r - teeSq;
+    float s = -teeU + sqrtf((disc > 0.0F) ? disc : 0.0F);
     float qSq;
 
     out->p.x = tee->x + s * u->x;
@@ -178,7 +192,7 @@ static uint32_t l3_ball_fit_search(const l3_ball_fit_cfg_t *cfg, const l3_vec3_t
     uint32_t evaluations = 0U;
     uint32_t level;
 
-    for (level = 0U; level < cfg->gridLevels; level++) {
+    for (level = 0U; level < l3_ball_fit_levels(cfg); level++) {
         float hStep = (hHi - hLo) / (float)steps;
         float vStep = (vHi - vLo) / (float)steps;
         float cosH[L3_BALL_FIT_MAX_STEPS + 1U];
@@ -221,6 +235,47 @@ static uint32_t l3_ball_fit_search(const l3_ball_fit_cfg_t *cfg, const l3_vec3_t
     return evaluations;
 }
 
+/* The direction's 1-sigma from the cost's curvature: a central-difference
+ * Hessian in (HLA, VLA), inverted, scaled by the observed scatter's variance
+ * relative to the assumed sigma. Returns 0 (and infinite sigmas) when the curvature is not
+ * positive definite. */
+static uint32_t l3_ball_fit_sigmas(const l3_ball_fit_cfg_t *cfg, const l3_vec3_t *tee,
+                                   const l3_ball_fit_obs_t *obs, uint32_t n, float rmsRad,
+                                   float hla, float vla, float *hlaSigma, float *vlaSigma)
+{
+    float d = L3_BALL_FIT_CURV_STEP;
+    float f[3][3];
+    float hhh;
+    float hvv;
+    float hhv;
+    float det;
+    float scale;
+    int32_t i;
+    int32_t j;
+
+    *hlaSigma = 1.0e30F;
+    *vlaSigma = 1.0e30F;
+    for (i = -1; i <= 1; i++) {
+        for (j = -1; j <= 1; j++) {
+            l3_vec3_t u;
+
+            l3_ball_fit_direction(hla + (float)i * d, vla + (float)j * d, &u);
+            f[i + 1][j + 1] = l3_ball_fit_cost(cfg, tee, &u, obs, n);
+        }
+    }
+    hhh = (f[2][1] - 2.0F * f[1][1] + f[0][1]) / (d * d);
+    hvv = (f[1][2] - 2.0F * f[1][1] + f[1][0]) / (d * d);
+    hhv = (f[2][2] - f[2][0] - f[0][2] + f[0][0]) / (4.0F * d * d);
+    det = hhh * hvv - hhv * hhv;
+    if (!(hhh > 0.0F) || !(hvv > 0.0F) || !(det > 0.0F)) {
+        return 0U;
+    }
+    scale = rmsRad * rmsRad / (cfg->angleSigmaRad * cfg->angleSigmaRad);
+    *hlaSigma = sqrtf(scale * hvv / det);
+    *vlaSigma = sqrtf(scale * hhh / det);
+    return 1U;
+}
+
 static uint32_t l3_ball_fit_fail(l3_club_track_t *core, l3_ball_fit_t *out, uint8_t why)
 {
     l3_track_unfilter_all(core);
@@ -244,7 +299,10 @@ uint32_t l3_ball_fit_run(const l3_ball_fit_cfg_t *cfg, const l3_vec3_t *origin,
     float sumW = 0.0F;
     float sumWSq = 0.0F;
     l3_vec3_t u;
+    uint32_t minAccepted = (cfg->minAccepted < L3_BALL_FIT_MIN_ANGLES) ? L3_BALL_FIT_MIN_ANGLES
+                                                                       : cfg->minAccepted;
     uint32_t i;
+    uint32_t curved;
 
     memset(out, 0, sizeof(*out));
     memset(obs, 0, sizeof(obs));
@@ -270,7 +328,7 @@ uint32_t l3_ball_fit_run(const l3_ball_fit_cfg_t *cfg, const l3_vec3_t *origin,
         obs[i].use = (uint8_t)(obs[i].w > 0.0F);
         out->used += obs[i].use;
     }
-    if (out->used < cfg->minAccepted) {
+    if (out->used < minAccepted) {
         return l3_ball_fit_fail(core, out, L3_BALL_FIT_WHY_FEW_ANGLES);
     }
     out->evaluations = l3_ball_fit_search(cfg, &out->tee, obs, n, &out->hlaRad, &out->vlaRad);
@@ -290,7 +348,7 @@ uint32_t l3_ball_fit_run(const l3_ball_fit_cfg_t *cfg, const l3_vec3_t *origin,
             out->accepted++;
         }
     }
-    if (out->accepted < cfg->minAccepted) {
+    if (out->accepted < minAccepted) {
         return l3_ball_fit_fail(core, out, L3_BALL_FIT_WHY_FEW_ANGLES);
     }
     if (out->accepted < out->used) {
@@ -331,6 +389,9 @@ uint32_t l3_ball_fit_run(const l3_ball_fit_cfg_t *cfg, const l3_vec3_t *origin,
         }
     }
     out->rmsRad = sqrtf(sumWSq / sumW);
+    curved = l3_ball_fit_sigmas(cfg, &out->tee, obs, n, out->rmsRad, out->hlaRad, out->vlaRad,
+                                &out->hlaSigmaRad, &out->vlaSigmaRad);
+    out->evaluations += L3_BALL_FIT_CURV_EVALS;
     if (out->hlaRad <= cfg->hlaMinRad + L3_BALL_FIT_EDGE_RAD ||
         out->hlaRad >= cfg->hlaMaxRad - L3_BALL_FIT_EDGE_RAD ||
         out->vlaRad <= cfg->vlaMinRad + L3_BALL_FIT_EDGE_RAD ||
@@ -339,6 +400,10 @@ uint32_t l3_ball_fit_run(const l3_ball_fit_cfg_t *cfg, const l3_vec3_t *origin,
     }
     if (out->rmsRad > cfg->maxRmsRad) {
         return l3_ball_fit_fail(core, out, L3_BALL_FIT_WHY_SCATTER);
+    }
+    if (!curved || out->hlaSigmaRad > cfg->maxAngleSigmaRad ||
+        out->vlaSigmaRad > cfg->maxAngleSigmaRad) {
+        return l3_ball_fit_fail(core, out, L3_BALL_FIT_WHY_UNCERTAIN);
     }
     out->valid = 1U;
     out->why = L3_BALL_FIT_WHY_OK;
