@@ -398,6 +398,9 @@ class LaunchSummary:
     residual_m: float
     confidence: float
     velocity: tuple[float, float, float]
+    angles_accepted: int = 0
+    angle_rms_deg: float | None = None  # None when the direction fit kept no angles
+    angle_why: str = "none"  # l3_ball_fit_why_name: why the angles are (not) valid
 
 
 @dataclass(frozen=True)
@@ -550,6 +553,11 @@ class PointSummary:
     # l3_track_point_t.position: the point in the calibrated radar frame, metres.
     position: tuple[float, float, float] | None = None
     angles_valid: bool = False
+    angle_confidence: float = 0.0
+    # l3_track_point_t.filteredPosition; None when the point was not reconstructed.
+    filtered_position: tuple[float, float, float] | None = None
+    filter_accepted: bool = False
+    filter_hypothesis: str = "unfiltered"
 
 
 @dataclass
@@ -698,6 +706,9 @@ def _launch_summary(launch: fw.Launch) -> LaunchSummary | None:
         residual_m=float(launch.residualM),
         confidence=float(launch.confidence),
         velocity=(float(launch.velocity.x), float(launch.velocity.y), float(launch.velocity.z)),
+        angles_accepted=int(launch.anglesAccepted),
+        angle_rms_deg=math.degrees(launch.angleRmsRad) if launch.anglesAccepted else None,
+        angle_why=fw.BALL_FIT_WHY_NAMES[launch.angleWhy],
     )
 
 
@@ -779,6 +790,7 @@ def _radar_cal(lib: ctypes.CDLL, config: ReplayConfig) -> fw.RadarCal:
 
 
 def _point_summary(point: fw.TrackPoint) -> PointSummary:
+    reconstructed = point.filterHypothesis != fw.FILTER_HYP_UNFILTERED
     return PointSummary(
         frame=int(point.frame),
         timestamp_us=int(point.timestampUs),
@@ -788,6 +800,18 @@ def _point_summary(point: fw.TrackPoint) -> PointSummary:
         confidence=float(point.confidence),
         position=(float(point.position.x), float(point.position.y), float(point.position.z)),
         angles_valid=bool(point.anglesValid),
+        angle_confidence=float(point.angleConfidence),
+        filtered_position=(
+            (
+                float(point.filteredPosition.x),
+                float(point.filteredPosition.y),
+                float(point.filteredPosition.z),
+            )
+            if reconstructed
+            else None
+        ),
+        filter_accepted=bool(point.filterAccepted),
+        filter_hypothesis=fw.FILTER_HYP_NAMES[point.filterHypothesis],
     )
 
 
@@ -932,6 +956,9 @@ def replay_dump(
     # The club's pending angles (l3_angle_queue.h), as the board queues them.
     angle_queue = fw.AngleQueue()
     lib.l3_angle_queue_init(ctypes.byref(angle_queue))
+    # The club reconstruction's work area (l3_track_kf.h), as the board's gClubKfWork.
+    kf_work = ctypes.create_string_buffer(lib.l3_track_kf_work_bytes())
+    kf_result = fw.TrackKfResult()
 
     impact_cfg = fw.ImpactCfg()
     lib.l3_impact_cfg_defaults(ctypes.byref(impact_cfg))
@@ -1359,6 +1386,14 @@ def replay_dump(
         fired = bool(ranged or left) and not early
         if fired and fired_frame is None:
             fired_frame = frame
+        if fired and fired_frame == frame:
+            # l3_considerSelfTrigger: the fire drains the club's angles (the
+            # replay drained each frame already), reconstructs the club once
+            # and freezes the filtered delivery.
+            lib.l3_track_kf_run(
+                ctypes.byref(track.cfg.kf), ctypes.byref(track), kf_work, ctypes.byref(kf_result)
+            )
+            lib.l3_track_delivery_filtered(ctypes.byref(track), 8, ctypes.byref(delivery))
         # The shot machine, as l3_shotObserve feeds it; IMPACT arms the ball tracker.
         shot_in = fw.ShotInput()
         shot_in.ballLocked = 1 if config.dest_bin is not None else 0
@@ -1432,6 +1467,16 @@ def replay_dump(
         frozen_impact_us = fitted_frozen_us
     else:
         frozen_impact_us = int(shot.impactTimestampUs)
+    # The viewer's trajectories. The board reconstructs the club only at the
+    # fire (for its delivery) and the ball at RESULT; the replay does both over
+    # every held point at the end, so the page shows the whole track even when
+    # the capture ended before RESULT.
+    lib.l3_track_kf_run(
+        ctypes.byref(track.cfg.kf), ctypes.byref(track), kf_work, ctypes.byref(kf_result)
+    )
+    lib.l3_ball_track_reconstruct(ctypes.byref(ball_track), ctypes.byref(launch))
+    points = _reconstructed(lib, track, points)
+    ball_points = _reconstructed(lib, ball_track.core, ball_points)
     points = _confirmed_points(points, track)
     return ReplayResult(
         config=config,
@@ -1893,6 +1938,20 @@ def _follow_club(  # pylint: disable=too-many-arguments
     return float(newest.rangeBin)
 
 
+def _reconstructed(lib, core, summaries: list[PointSummary]) -> list[PointSummary]:
+    """The summaries with every still-held point re-read after reconstruction;
+    a point rolled off the ring (or withdrawn) keeps what it was logged with."""
+    index = ctypes.c_uint32()
+    point = fw.TrackPoint()
+    out = []
+    for summary in summaries:
+        held = lib.l3_track_find_point(
+            ctypes.byref(core), summary.timestamp_us, ctypes.byref(index)
+        ) and lib.l3_track_point(ctypes.byref(core), index.value, ctypes.byref(point))
+        out.append(_point_summary(point) if held else summary)
+    return out
+
+
 def _confirmed_points(points: list[PointSummary], track) -> list[PointSummary]:
     """The logged points less a newest point still tentative when the capture
     ends: nothing confirmed it, so it is not a club point
@@ -2015,8 +2074,6 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
         lib, cal, cube, frame, window_start, n_tx, targets, found, ball_track, chirp_period_s
     )
     lib.l3_ball_track_launch(ctypes.byref(ball_track), ctypes.byref(launch))
-    # Interim: the board runs this once per shot; the replay does so from Task 7.
-    lib.l3_ball_track_reconstruct(ctypes.byref(ball_track), ctypes.byref(launch))
     shot_in = fw.ShotInput()
     shot_in.ballPosition = ball_position
     shot_in.postFrame = 1

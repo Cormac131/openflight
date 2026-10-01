@@ -1318,3 +1318,82 @@ def test_the_replay_only_sets_fields_the_shot_input_has():
     assigned = set(re.findall(r"\b(?:shot_in|forced_in)\.(\w+) =", source))
     assert assigned, "the replay feeds the shot machine"
     assert assigned <= fields, sorted(assigned - fields)
+
+
+def _synthetic_shot_config() -> ReplayConfig:
+    return ReplayConfig(
+        tee_bin=TEE_BIN,
+        dest_bin=TEE_BIN,
+        overrides={"ball.fit.teeBallHeightM": 0.152, "ball.fit.radarHeightM": 0.152},
+    )
+
+
+def test_a_replayed_shot_carries_both_reconstructions(lib):
+    raw = synth_shot_dump(
+        ball_speed_ms=60.0, vla_deg=12.0, hla_deg=2.0, tee_range_m=TEE_RANGE_M, n_frames=24
+    )
+    result = replay_dump(raw, _synthetic_shot_config(), lib=lib)
+    assert result.launch is not None
+    assert result.launch.angle_why == "ok" and result.launch.angles_accepted >= 4
+    assert result.launch.angle_rms_deg is not None
+    fitted_ball = [p for p in result.ball_points if p.filtered_position is not None]
+    assert len(fitted_ball) >= 4
+    assert all(p.filter_hypothesis in fw.FILTER_HYP_NAMES for p in result.ball_points)
+    fitted_club = [p for p in result.points if p.filtered_position is not None]
+    assert len(fitted_club) >= 3, "the club is reconstructed over its held points"
+    assert any(p.angle_confidence > 0.0 for p in result.points)
+
+
+def test_the_fire_frame_reports_the_filtered_delivery(lib, swing, monkeypatch):
+    """At the fire the board drains the angles, reconstructs the club once and
+    freezes the filtered delivery; the replay does the same on the fired frame."""
+    calls = []
+    original_run = lib.l3_track_kf_run
+
+    def spy(*args):
+        calls.append("kf")
+        return original_run(*args)
+
+    monkeypatch.setattr(lib, "l3_track_kf_run", spy)
+    result = replay_dump(swing, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
+    assert result.fired_frame is not None
+    fired = result.frames[result.fired_frame]
+    assert fired.delivery is not None and fired.delivery.points > 0
+    assert calls.count("kf") == 2, "once at the fire, once at the end for the viewer"
+
+
+def test_a_point_summary_of_an_unfiltered_point_has_no_filtered_position():
+    point = fw.TrackPoint()
+    point.filterHypothesis = fw.FILTER_HYP_UNFILTERED
+    summary = fr._point_summary(point)  # pylint: disable=protected-access
+    assert summary.filtered_position is None and summary.filter_hypothesis == "unfiltered"
+
+
+def test_the_ball_is_reconstructed_once_per_replay(lib, monkeypatch):
+    """The board reconstructs the ball once, at RESULT; the replay once, at the end."""
+    calls = []
+    original = lib.l3_ball_track_reconstruct
+
+    def spy(*args):
+        calls.append("ball")
+        return original(*args)
+
+    monkeypatch.setattr(lib, "l3_ball_track_reconstruct", spy)
+    raw = synth_shot_dump(
+        ball_speed_ms=60.0, vla_deg=12.0, hla_deg=0.0, tee_range_m=TEE_RANGE_M, n_frames=24
+    )
+    replay_dump(raw, _synthetic_shot_config(), lib=lib)
+    assert calls == ["ball"]
+
+
+def test_synthetic_shot_vla_is_read_back_by_the_direction_fit(lib):
+    """End to end: the synthesized 12 deg launch is read back by the tee-anchored
+    fit. The synthetic scene has no floor and its tee is at antenna height, so
+    the anchor is put there too."""
+    raw = synth_shot_dump(
+        ball_speed_ms=60.0, vla_deg=12.0, hla_deg=0.0, tee_range_m=TEE_RANGE_M, n_frames=24
+    )
+    result = replay_dump(raw, _synthetic_shot_config(), lib=lib)
+    assert result.launch is not None and result.launch.vla_deg is not None
+    assert result.launch.vla_deg == pytest.approx(12.0, abs=2.0)
+    assert result.launch.angle_why == "ok"
