@@ -54,6 +54,10 @@
  * a track the band hid) is tentative: the next associated point must lie at
  * least this far downrange of it, or the point is withdrawn. */
 #define L3_TRACK_TENTATIVE_ADVANCE_BINS 1.0F
+/* Candidate approaches (acquireMaxStepBins > 0): how many are held, and the
+ * most frames between a candidate and the point that confirms it. */
+#define L3_TRACK_CANDIDATES 4U
+#define L3_TRACK_CANDIDATE_MAX_GAP_FRAMES 2U
 
 typedef struct {
     uint32_t frame;
@@ -123,6 +127,24 @@ typedef struct {
      * following skip it (association keeps the track's own bin, which the
      * same-bin rules handle); 0 disables. */
     uint32_t standingFrames;
+    /* Acquisition by candidate approach. The golfer's body, in the bins short
+     * of the ball, returns far stronger than the club and reads as a slow
+     * mover, so the most confident target of one frame is often the body. A
+     * target at least acquireMinConfidence becomes a candidate; a track starts
+     * only when a later target (within L3_TRACK_CANDIDATE_MAX_GAP_FRAMES)
+     * steps on from it by acquireMinStepBins..acquireMaxStepBins a frame with
+     * an aliased Doppler within acquireDopplerTolMps of it. The body never
+     * steps. acquireMaxStepBins 0 (the default) acquires the best target of
+     * one frame, as before; 4.5 is a 70 m/s club's step. Off because on the
+     * labelled swings it also confirmed hops between still returns. As
+     * before (minConfidence, the mover preference). */
+    float    acquireMinStepBins;
+    float    acquireMaxStepBins;
+    float    acquireDopplerTolMps;
+    float    acquireMinConfidence;
+    /* Of several confirming pairs, the one whose step per frame is nearest this
+     * (with association's Doppler, quality and strength terms). */
+    float    acquireExpectedStepBins;
 } l3_track_cfg_t;
 
 /* Club delivery from a regression of position against time over the newest
@@ -208,6 +230,14 @@ typedef struct {
     /* Per global bin: consecutive frames a target has stood within one bin of
      * it (see standingFrames). Kept across releases and resets. */
     uint8_t  standHold[L3_TRACK_GLOBAL_BINS];
+    /* Candidate approaches awaiting a confirming step (acquireMaxStepBins). */
+    uint32_t candidateCount;
+    l3_target_obs_t candidates[L3_TRACK_CANDIDATES];
+    /* The last update's targets' bins and frame: a confirming step must land
+     * where no other return stood the frame before. */
+    uint32_t prevFrame;
+    uint32_t prevCount;
+    float    prevBins[L3_OBS_MAX_TARGETS];
 } l3_club_track_t;
 
 void l3_track_cfg_defaults(l3_track_cfg_t *cfg);

@@ -20,6 +20,10 @@ void l3_ball_track_cfg_defaults(l3_ball_track_cfg_t *cfg)
      * taken instead. The second point's range rate refuses slow returns. */
     cfg->core.minConfidence = 0.05F;
     cfg->core.maxMisses = 1U;
+    /* The core is seeded one point at a time (a confirmed hypothesis, the
+     * leave fallback's points) and must start on it: the ball's candidates
+     * are its hypotheses (l3_ball_hyp), not the club's approach steps. */
+    cfg->core.acquireMaxStepBins = 0.0F;
     /* The club rules (ascending bins, at most two per bin) describe the
      * approach; the ball tracker has its own departure tests. */
     cfg->core.ascendingOnly = 0U;

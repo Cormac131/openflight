@@ -385,3 +385,85 @@ def test_placement_needs_history_on_every_bin_it_might_cover(lib):
     """One chunk (global 48..51) a round short: the band stays centred."""
     band = place(lib, span_map(lib, peaked(), skip=48), centre=47.0, width=5.0)
     assert (band.loBin, band.hiBin) == (45.0, 49.0)
+
+
+# --- the clutter map: expected return and spread per bin -----------------------
+#
+# The map is fed only on frames with no club track, so it learns the scene at
+# address: the golfer's body in the bins short of the ball, still scatterers.
+# A pre-impact target that does not beat its bin's expected return by
+# `sigmas` spreads is that clutter, not the club (2026-10-01: the body out-
+# returned the club by 10-30 dB and took its track).
+
+
+def clutter_target(peak_bin: int, stat: float):
+    t = fw.TargetObs()
+    t.peakBin = peak_bin
+    t.rangeBin = float(peak_bin)
+    t.stat = stat
+    t.snr = stat
+    return t
+
+
+def clutter_filter(lib, noise, sigmas, *items):
+    arr = (fw.TargetObs * max(1, len(items)))(*items)
+    kept = lib.l3_band_clutter_filter(ctypes.byref(noise), sigmas, arr, len(items))
+    return [arr[i].peakBin for i in range(kept)]
+
+
+def alternating_map(lib, first_bin=40, size=11, low=90.0, high=110.0, updates=64):
+    """Every bin swings between low and high: mean 100, spread ~10."""
+    noise = fw.BandNoise()
+    lib.l3_band_noise_reset(ctypes.byref(noise))
+    for k in range(updates):
+        value = low if k % 2 == 0 else high
+        lib.l3_band_noise_update(
+            ctypes.byref(noise), STAT, first_bin, obs_row([value] * size), size
+        )
+    return noise
+
+
+def test_noise_map_keeps_a_spread_the_ema_of_the_deviation(lib):
+    noise = fw.BandNoise()
+    lib.l3_band_noise_reset(ctypes.byref(noise))
+    lib.l3_band_noise_update(ctypes.byref(noise), STAT, 20, obs_row([16.0]), 1)
+    assert noise.dev[0] == pytest.approx(0.0)  # a seed has no spread yet
+    lib.l3_band_noise_update(ctypes.byref(noise), STAT, 20, obs_row([0.0]), 1)
+    # |0 - 16| against the mean before this update, at the map's 1/16
+    assert noise.dev[0] == pytest.approx(1.0)
+
+
+def test_the_spread_settles_on_the_scenes_swing(lib):
+    noise = alternating_map(lib)
+    assert noise.avg[5] == pytest.approx(100.0, abs=1.5)
+    assert noise.dev[5] == pytest.approx(10.0, rel=0.15)
+
+
+def test_clutter_filter_drops_what_the_bin_usually_returns_and_keeps_order(lib):
+    noise = alternating_map(lib)
+    kept = clutter_filter(
+        lib,
+        noise,
+        3.0,
+        clutter_target(45, 125.0),  # within 3 spreads of 100: the scene
+        clutter_target(46, 150.0),  # well over: something new
+        clutter_target(44, 60.0),
+        clutter_target(47, 140.0),
+    )
+    assert kept == [46, 47]
+
+
+def test_clutter_filter_keeps_bins_the_map_has_not_learned(lib):
+    noise = alternating_map(lib, first_bin=40, size=11)
+    kept = clutter_filter(lib, noise, 3.0, clutter_target(30, 50.0), clutter_target(60, 50.0))
+    assert kept == [30, 60]
+
+
+def test_clutter_filter_needs_the_bins_history(lib):
+    noise = alternating_map(lib, updates=4)
+    assert clutter_filter(lib, noise, 3.0, clutter_target(45, 101.0)) == [45]
+
+
+def test_clutter_filter_with_no_sigmas_keeps_everything(lib):
+    noise = alternating_map(lib)
+    assert clutter_filter(lib, noise, 0.0, clutter_target(45, 101.0)) == [45]

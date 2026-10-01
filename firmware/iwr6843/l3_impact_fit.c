@@ -22,6 +22,7 @@ void l3_impact_fit_cfg_defaults(l3_impact_fit_cfg_t *cfg)
     cfg->minSigmaUs = 500.0F;
     cfg->maxSigmaUs = 3000.0F;    /* one 3 ms frame */
     cfg->bandSearchBins = 10.0F;
+    cfg->clutterSigmas = 0.0F;    /* off until the labelled replays settle it */
 }
 
 void l3_impact_fit_reset(l3_impact_fit_t *fit)

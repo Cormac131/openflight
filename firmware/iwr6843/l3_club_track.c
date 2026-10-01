@@ -31,6 +31,18 @@ void l3_track_cfg_defaults(l3_track_cfg_t *cfg)
     cfg->followDopplerRiseMps = 1.5F;
     cfg->approachMaxSameBinPoints = 1U;
     cfg->standingFrames = 2U;
+    cfg->acquireMinStepBins = 0.75F;   /* 5th percentile of the labelled club steps */
+    /* Off: on the labelled swings (2026-10-01) candidates rescued swings past
+     * the golfer but confirmed steps between still returns and the hands, so
+     * captures with no swing fired. 4.5 (a 70 m/s club's step) turns it on;
+     * revisit once the clutter model damps the still returns. */
+    cfg->acquireMaxStepBins = 0.0F;
+    cfg->acquireExpectedStepBins = 2.0F; /* the labelled approaches' median, 2.0-2.1 */
+    /* Off (half the alias span): frame to frame the club's aliased Doppler
+     * moves by a median 2.3 m/s and a tenth of steps by 7-8 (labelled swings,
+     * 2026-10-01), so it only ranks pairs (l3_track_misfit). */
+    cfg->acquireDopplerTolMps = 9.0F;
+    cfg->acquireMinConfidence = 0.0F;  /* the club past the golfer reads 0.0-0.2 */
 }
 
 static float l3_track_absf(float value)
@@ -74,6 +86,7 @@ void l3_track_reset(l3_club_track_t *track)
     track->releasedValid = 0U;
     track->releasedBin = 0.0F;
     track->releasedDopplerMps = 0.0F;
+    track->candidateCount = 0U;
 }
 
 static void l3_track_note(l3_club_track_t *track, uint8_t why)
@@ -154,6 +167,43 @@ static uint8_t l3_track_standing(const l3_club_track_t *track, float rangeBin)
 
     return (track->cfg.standingFrames > 0U && bin >= 0 && bin < (int32_t)L3_TRACK_GLOBAL_BINS &&
             track->standHold[bin] >= track->cfg.standingFrames) ? 1U : 0U;
+}
+
+/* True when, on the frame before `frame`, a return other than one at
+ * `ownBin` stood within a bin of rangeBin. A club stepping on finds its new
+ * bin empty (bar its own last return, when it steps under a bin and a half);
+ * a hop between two still returns does not. */
+static uint8_t l3_track_heldLastFrame(const l3_club_track_t *track, uint32_t frame,
+                                      float rangeBin, float ownBin)
+{
+    uint32_t i;
+
+    if (track->prevFrame + 1U != frame) {
+        return 0U;
+    }
+    for (i = 0U; i < track->prevCount; i++) {
+        if (l3_track_absf(track->prevBins[i] - ownBin) > 1.0e-3F &&
+            l3_track_absf(track->prevBins[i] - rangeBin) <= 1.0F) {
+            return 1U;
+        }
+    }
+    return 0U;
+}
+
+/* Remember this update's target bins for the next frame's confirmation. */
+static void l3_track_notePrev(l3_club_track_t *track, const l3_target_obs_t *targets, uint32_t n,
+                              uint32_t frame)
+{
+    uint32_t i;
+
+    if (n > L3_OBS_MAX_TARGETS) {
+        n = L3_OBS_MAX_TARGETS;
+    }
+    for (i = 0U; i < n; i++) {
+        track->prevBins[i] = targets[i].rangeBin;
+    }
+    track->prevCount = n;
+    track->prevFrame = frame;
 }
 
 /* After a frame's decision: extend or break each bin's run of frames with a
@@ -271,53 +321,216 @@ static const l3_track_point_t *l3_track_newest(const l3_club_track_t *track)
     return &track->points[(track->next + L3_TRACK_POINTS - 1U) % L3_TRACK_POINTS];
 }
 
-/* Acquire the most confident target that clears the bar, preferring one that
- * reads as moving (a stationary body in the lane is often the strongest
- * return) and skipping one that looks like the last released return. With
- * quietWhenIdle, finding nothing leaves the last "why" (a release) standing. */
-static int32_t l3_track_acquire(l3_club_track_t *track, const l3_target_obs_t *targets,
-                                uint32_t n, uint32_t frame, int32_t quietWhenIdle)
+/* How badly a target fits a track (lower is better): rangeErr bins off
+ * where it should be, its aliased Doppler this far (wrapped) from
+ * dopplerMps, its confidence and its strength (1/snr is 0 for a very strong
+ * mover and 1 just above the floor: prefer the stronger MTI residual). */
+static float l3_track_misfit(const l3_track_cfg_t *cfg, const l3_target_obs_t *target,
+                             float rangeErr, float dopplerMps)
+{
+    float span = (cfg->velocitySpanMps > 0.0F) ? cfg->velocitySpanMps : 1.0F;
+    float velocityErr = l3_track_wrapped_diff(target->dopplerAliasMps, dopplerMps,
+                                              cfg->velocitySpanMps) / span;
+    float strengthMisfit = (target->snr > 0.0F) ? (1.0F / target->snr) : 1.0F;
+
+    return cfg->weightRange * rangeErr + cfg->weightVelocity * velocityErr +
+           cfg->weightQuality * (1.0F - target->confidence) + cfg->weightStrength * strengthMisfit;
+}
+
+static uint8_t l3_track_moves(const l3_track_cfg_t *cfg, const l3_target_obs_t *target)
+{
+    return (uint8_t)(cfg->minAcquireDopplerMps <= 0.0F ||
+                     l3_track_absf(target->dopplerAliasMps) >= cfg->minAcquireDopplerMps);
+}
+
+/* A target acquisition may start from: at least minConfidence, not standing
+ * in its bin, and not the return the last released track ended on. */
+static uint8_t l3_track_acquirable(const l3_club_track_t *track, const l3_target_obs_t *target,
+                                   float minConfidence)
 {
     const l3_track_cfg_t *cfg = &track->cfg;
-    const l3_target_obs_t *best = NULL;
+
+    if (target->confidence < minConfidence || l3_track_standing(track, target->rangeBin)) {
+        return 0U;
+    }
+    return (uint8_t)!(track->releasedValid &&
+                      l3_track_absf(target->rangeBin - track->releasedBin) <= cfg->gateBins &&
+                      l3_track_wrapped_diff(target->dopplerAliasMps, track->releasedDopplerMps,
+                                            cfg->velocitySpanMps) <=
+                          L3_TRACK_RELEASE_DOPPLER_TOL_MPS);
+}
+
+/* The acquirable target a single frame prefers: one that reads as moving (a
+ * stationary body in the lane is often the strongest return), then the most
+ * confident. `taken` (may be NULL) marks targets already chosen. Returns its
+ * index, L3_TRACK_NO_TARGET for none. */
+static uint32_t l3_track_pickBest(const l3_club_track_t *track, const l3_target_obs_t *targets,
+                                  uint32_t n, float minConfidence, const uint8_t *taken)
+{
+    uint32_t best = L3_TRACK_NO_TARGET;
     uint8_t bestMoves = 0U;
     uint32_t i;
 
     for (i = 0U; i < n; i++) {
-        uint8_t moves = (uint8_t)(cfg->minAcquireDopplerMps <= 0.0F ||
-                                  l3_track_absf(targets[i].dopplerAliasMps) >=
-                                      cfg->minAcquireDopplerMps);
-        if (targets[i].confidence < cfg->minConfidence || l3_track_standing(track, targets[i].rangeBin)) {
+        uint8_t moves = l3_track_moves(&track->cfg, &targets[i]);
+
+        if ((taken != NULL && taken[i]) || !l3_track_acquirable(track, &targets[i], minConfidence)) {
             continue;
         }
-        if (track->releasedValid &&
-            l3_track_absf(targets[i].rangeBin - track->releasedBin) <= cfg->gateBins &&
-            l3_track_wrapped_diff(targets[i].dopplerAliasMps, track->releasedDopplerMps,
-                                 cfg->velocitySpanMps) <= L3_TRACK_RELEASE_DOPPLER_TOL_MPS) {
-            continue;
-        }
-        if (best == NULL || (moves && !bestMoves) ||
-            (moves == bestMoves && targets[i].confidence > best->confidence)) {
-            best = &targets[i];
+        if (best == L3_TRACK_NO_TARGET || (moves && !bestMoves) ||
+            (moves == bestMoves && targets[i].confidence > targets[best].confidence)) {
+            best = i;
             bestMoves = moves;
-            track->lastTargetIndex = i;
         }
     }
-    if (best == NULL) {
+    return best;
+}
+
+/* Start a track on `first`, observed at `frame`. */
+static void l3_track_start(l3_club_track_t *track, const l3_target_obs_t *first, uint32_t frame)
+{
+    track->active = 1U;
+    track->misses = 0U;
+    track->lastFrame = frame;
+    track->lastBin = first->rangeBin;
+    track->velocityBinsPerFrame = 0.0F;
+    track->predictedBin = first->rangeBin;
+    track->releasedValid = 0U;
+    track->candidateCount = 0U;
+    l3_track_append(track, first, 0.0F, 0.0F);
+    l3_track_countBin(track, first->rangeBin, 1);
+}
+
+/* The held candidate this frame's targets confirm: a target stepping on from
+ * it by acquireMinStepBins..acquireMaxStepBins a frame (ascending: the club
+ * closes on the ball) with its aliased Doppler within acquireDopplerTolMps.
+ * Of several, the pair that fits best as association would judge it
+ * (l3_track_misfit): the step's distance from acquireExpectedStepBins, the
+ * Doppler agreement, and both points' confidence and strength. Returns 1
+ * with *candidate and *index. */
+static int32_t l3_track_confirm(const l3_club_track_t *track, const l3_target_obs_t *targets,
+                                uint32_t n, uint32_t frame, uint32_t *candidate,
+                                uint32_t *index)
+{
+    const l3_track_cfg_t *cfg = &track->cfg;
+    float bestScore = 0.0F;
+    int32_t found = 0;
+    uint32_t c;
+    uint32_t i;
+
+    for (c = 0U; c < track->candidateCount; c++) {
+        const l3_target_obs_t *held = &track->candidates[c];
+        uint32_t gap = frame - held->frame;
+
+        if (gap == 0U || gap > L3_TRACK_CANDIDATE_MAX_GAP_FRAMES) {
+            continue;
+        }
+        for (i = 0U; i < n; i++) {
+            float step = (targets[i].rangeBin - held->rangeBin) / (float)gap;
+            float score;
+
+            if (step < cfg->acquireMinStepBins || step > cfg->acquireMaxStepBins ||
+                !l3_track_acquirable(track, &targets[i], cfg->acquireMinConfidence) ||
+                l3_track_heldLastFrame(track, frame, targets[i].rangeBin, held->rangeBin) ||
+                l3_track_wrapped_diff(targets[i].dopplerAliasMps, held->dopplerAliasMps,
+                                      cfg->velocitySpanMps) > cfg->acquireDopplerTolMps) {
+                continue;
+            }
+            /* The step's misfit is the second point's; the first point's
+             * quality and strength count as well. */
+            score = l3_track_misfit(cfg, &targets[i],
+                                    l3_track_absf(step - cfg->acquireExpectedStepBins),
+                                    held->dopplerAliasMps) +
+                    cfg->weightQuality * (1.0F - held->confidence) +
+                    cfg->weightStrength * ((held->snr > 0.0F) ? (1.0F / held->snr) : 1.0F);
+            if (!found || score < bestScore) {
+                found = 1;
+                bestScore = score;
+                *candidate = c;
+                *index = i;
+            }
+        }
+    }
+    return found;
+}
+
+/* Hold this frame's acquirable targets as candidates, preferred first (as a
+ * single frame would pick); held ones still young enough to be confirmed fill
+ * what is left, newest first. */
+static void l3_track_hold_candidates(l3_club_track_t *track, const l3_target_obs_t *targets,
+                                     uint32_t n, uint32_t frame)
+{
+    l3_target_obs_t kept[L3_TRACK_CANDIDATES];
+    uint8_t taken[L3_OBS_MAX_TARGETS];
+    uint32_t count = 0U;
+    uint32_t age;
+    uint32_t c;
+
+    memset(taken, 0, sizeof(taken));
+    if (n > L3_OBS_MAX_TARGETS) {
+        n = L3_OBS_MAX_TARGETS;
+    }
+    while (count < L3_TRACK_CANDIDATES) {
+        uint32_t best = l3_track_pickBest(track, targets, n, track->cfg.acquireMinConfidence, taken);
+
+        if (best == L3_TRACK_NO_TARGET) {
+            break;
+        }
+        taken[best] = 1U;
+        kept[count++] = targets[best];
+    }
+    /* A candidate from `age` frames ago can still be confirmed next frame
+     * while age + 1 is within the gap. */
+    for (age = 1U; age < L3_TRACK_CANDIDATE_MAX_GAP_FRAMES; age++) {
+        for (c = 0U; c < track->candidateCount && count < L3_TRACK_CANDIDATES; c++) {
+            if (frame - track->candidates[c].frame == age) {
+                kept[count++] = track->candidates[c];
+            }
+        }
+    }
+    memcpy(track->candidates, kept, count * sizeof(kept[0]));
+    track->candidateCount = count;
+}
+
+/* Start a track, or note idle unless quietWhenIdle (which leaves the last
+ * "why", a release, standing). With acquireMaxStepBins > 0 a track starts on
+ * a confirmed candidate approach, its two points at once; otherwise on the
+ * best target of this frame (l3_track_pickBest at minConfidence). */
+static int32_t l3_track_acquire(l3_club_track_t *track, const l3_target_obs_t *targets,
+                                uint32_t n, uint32_t frame, int32_t quietWhenIdle)
+{
+    const l3_track_cfg_t *cfg = &track->cfg;
+    uint32_t index = L3_TRACK_NO_TARGET;
+    uint32_t candidate = 0U;
+
+    if (cfg->acquireMaxStepBins <= 0.0F) {
+        index = l3_track_pickBest(track, targets, n, cfg->minConfidence, NULL);
+        if (index != L3_TRACK_NO_TARGET) {
+            l3_track_start(track, &targets[index], frame);
+        }
+    } else if (l3_track_confirm(track, targets, n, frame, &candidate, &index)) {
+        const l3_target_obs_t first = track->candidates[candidate];
+        uint32_t gap = frame - first.frame;
+        float step = (targets[index].rangeBin - first.rangeBin) / (float)gap;
+        float dtS = (float)(targets[index].timestampUs - first.timestampUs) * 1.0e-6F;
+
+        l3_track_start(track, &first, first.frame);
+        track->velocityBinsPerFrame = step;
+        l3_track_append(track, &targets[index], step, dtS / (float)gap);
+        track->lastFrame = frame;
+        track->lastBin = targets[index].rangeBin;
+        track->predictedBin = targets[index].rangeBin;
+        l3_track_countBin(track, targets[index].rangeBin, 0);
+    } else {
+        l3_track_hold_candidates(track, targets, n, frame);
+    }
+    if (index == L3_TRACK_NO_TARGET) {
         if (!quietWhenIdle) {
             l3_track_note(track, L3_TRACK_WHY_IDLE);
         }
         return 0;
     }
-    track->active = 1U;
-    track->misses = 0U;
-    track->lastFrame = frame;
-    track->lastBin = best->rangeBin;
-    track->velocityBinsPerFrame = 0.0F;
-    track->predictedBin = best->rangeBin;
-    track->releasedValid = 0U;
-    l3_track_append(track, best, 0.0F, 0.0F);
-    l3_track_countBin(track, best->rangeBin, 1);
+    track->lastTargetIndex = index;
     l3_track_note(track, L3_TRACK_WHY_ACQUIRED);
     return 1;
 }
@@ -420,7 +633,6 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
     track->predictedBin = predicted;
     for (i = 0U; i < n; i++) {
         float rangeErr = l3_track_absf(targets[i].rangeBin - predicted);
-        float velocityErr;
         float score;
 
         if (following) {
@@ -488,18 +700,7 @@ static int32_t l3_track_associate(l3_club_track_t *track, const l3_target_obs_t 
         if (cfg->ascendingOnly && l3_track_roundBin(targets[i].rangeBin) < floorBin) {
             continue;
         }
-        velocityErr = l3_track_wrapped_diff(targets[i].dopplerAliasMps, last->dopplerAliasMps,
-                                           cfg->velocitySpanMps) /
-                      ((cfg->velocitySpanMps > 0.0F) ? cfg->velocitySpanMps : 1.0F);
-        {
-            /* Prefer targets with stronger MTI residual (higher SNR = more motion).
-             * 1/snr is 0 for a very strong mover and 1 at snr=1 (just above floor). */
-            float strengthMisfit = (targets[i].snr > 0.0F) ? (1.0F / targets[i].snr) : 1.0F;
-
-            score = cfg->weightRange * rangeErr + cfg->weightVelocity * velocityErr +
-                    cfg->weightQuality * (1.0F - targets[i].confidence) +
-                    cfg->weightStrength * strengthMisfit;
-        }
+        score = l3_track_misfit(cfg, &targets[i], rangeErr, last->dopplerAliasMps);
         if (best == NULL || score < bestScore) {
             best = &targets[i];
             bestScore = score;
@@ -680,6 +881,7 @@ int32_t l3_track_update(l3_club_track_t *track, const l3_target_obs_t *targets, 
     int32_t appended = l3_track_updateFrame(track, targets, n, frame, timestampUs);
 
     l3_track_holdFrame(track, targets, n);
+    l3_track_notePrev(track, targets, n, frame);
     return appended;
 }
 

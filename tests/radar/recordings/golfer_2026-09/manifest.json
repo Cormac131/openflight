@@ -1,0 +1,6 @@
+{
+  "default": {
+    "tee_bin": 34,
+    "notes": "2026-09-16/19/23 home sessions, wide 24f3ms 53-bin IQ16 profile, sound-triggered, tee slant range 1.575 m, tilt 10 deg. The ball sat at bins 51-58 and the golfer's body fills the bins just short of it (about 42-52, 80-93 dB against 65 dB of air), where the club's approach passes. The tests replay these at the kiosk's settings, the ball bin taken from each dump's first labelled ball point, so tee_bin here only makes the folder loadable. Five dumps are labelled empty (no swing): nothing may be tracked on them."
+  }
+}

@@ -618,6 +618,9 @@ def test_capture_cfg_cases_cover_the_spec_table():
     assert lines["captureCfg 20 0 32 53 47 8"] is False  # zero pre bins
     assert lines["captureCfg 100 53 32 53 47 8"] is False  # window past 128
     assert lines["captureCfg 20 53 32 53 47 64"] is False  # post frames at the cap
+    assert lines["captureCfg window hann"] is True
+    assert lines["captureCfg window blackman"] is False
+    assert fc.CAPTURE_CFG_CASES[-1] == ("captureCfg window none", True), "leave it rectangular"
 
 
 def test_capture_cfg_validation_passes_and_fails_by_table():

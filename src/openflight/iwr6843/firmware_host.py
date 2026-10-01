@@ -56,6 +56,7 @@ HOST_SOURCES = (
     "l3_dsp_ipc.c",
     "l3_detect_core.c",
     "l3_timing.c",
+    "l3_window.c",
 )
 
 # l3_observation.h
@@ -232,9 +233,17 @@ PROFILE_STAGE_NAMES = (
     "dspwait",
 )
 
+# l3_window.h
+WINDOW_MAX_SAMPLES = 256
+RANGE_WINDOW_NONE = 0
+RANGE_WINDOW_HANN = 1
+RANGE_WINDOW_NAMES = ("none", "hann")
+
 # l3_club_track.h
 TRACK_POINTS = 32
 TRACK_NO_TARGET = 0xFFFFFFFF
+TRACK_CANDIDATES = 4
+TRACK_CANDIDATE_MAX_GAP_FRAMES = 2
 # No approach measured at impact: the fastest club (l3_impact_fit clubMaxMps).
 TRACK_FOLLOW_UNKNOWN_APPROACH_MPS = 70.0
 # A tentative point is confirmed by the next point this far downrange of it.
@@ -333,6 +342,7 @@ class BandNoise(ctypes.Structure):
         ("updates", ctypes.c_uint32),
         ("avg", ctypes.c_float * BAND_NOISE_BINS),
         ("seen", ctypes.c_uint8 * BAND_NOISE_BINS),
+        ("dev", ctypes.c_float * BAND_NOISE_BINS),
     ]
 
 
@@ -511,6 +521,11 @@ class TrackCfg(ctypes.Structure):
         ("followDopplerRiseMps", ctypes.c_float),
         ("approachMaxSameBinPoints", ctypes.c_uint32),
         ("standingFrames", ctypes.c_uint32),
+        ("acquireMinStepBins", ctypes.c_float),
+        ("acquireMaxStepBins", ctypes.c_float),
+        ("acquireDopplerTolMps", ctypes.c_float),
+        ("acquireMinConfidence", ctypes.c_float),
+        ("acquireExpectedStepBins", ctypes.c_float),
     ]
 
 
@@ -600,6 +615,11 @@ class ClubTrack(ctypes.Structure):
         ("releasedDopplerMps", ctypes.c_float),
         ("held", TrackHeld),
         ("standHold", ctypes.c_uint8 * 128),
+        ("candidateCount", ctypes.c_uint32),
+        ("candidates", TargetObs * TRACK_CANDIDATES),
+        ("prevFrame", ctypes.c_uint32),
+        ("prevCount", ctypes.c_uint32),
+        ("prevBins", ctypes.c_float * OBS_MAX_TARGETS),
     ]
 
 
@@ -972,6 +992,7 @@ class ImpactFitCfg(ctypes.Structure):
         ("minSigmaUs", ctypes.c_float),
         ("maxSigmaUs", ctypes.c_float),
         ("bandSearchBins", ctypes.c_float),
+        ("clutterSigmas", ctypes.c_float),
     ]
 
 
@@ -1700,6 +1721,11 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_band_contains": ([_P(Band), _F32], ctypes.c_int32),
     "l3_band_filter": ([_P(Band), _P(TargetObs), _U32], _U32),
     "l3_band_keep_short": ([_P(Band), _P(TargetObs), _U32], _U32),
+    "l3_band_clutter_filter": ([_P(BandNoise), _F32, _P(TargetObs), _U32], _U32),
+    # l3_window.h
+    "l3_window_hann_q17": ([_P(ctypes.c_int32), _U32], _U32),
+    "l3_window_parse": ([ctypes.c_char_p, _P(ctypes.c_uint8)], ctypes.c_int32),
+    "l3_window_name": ([ctypes.c_uint8], ctypes.c_char_p),
     # l3_iq16_stats.h
     "l3_iq16_channel_stats": (
         [_P(ctypes.c_int16), _U32, _U32, _P(Iq16ChannelStats)],

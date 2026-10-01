@@ -27,6 +27,12 @@
  *   temperature extension (version 5 for fixed-width formats, version 7 for
  *     variable-width formats):
  *     a 24-byte temperature report immediately follows the fixed header.
+ *   clutter extension (version 10: version 7 plus this): after the
+ *     temperature report, l3_clutter_report_t, then count float32 means,
+ *     count float32 spreads and count uint8 update counts -- the tee band's
+ *     noise map (l3_band_noise_t) as it stood at the dump. A capture has too
+ *     few idle frames for a replay to learn it (2026-10-01). The report also
+ *     names the range window the HWA applied (l3_window.h).
  * Chirp order is TDM-interleaved: chirp c -> tx = c % n_tx, loop = c / n_tx.
  */
 #ifndef L3_DUMP_FORMAT_H
@@ -42,6 +48,7 @@
 #define L3_DUMP_VERSION_TIMED    6
 #define L3_DUMP_VERSION_TEMPERATURE 5
 #define L3_DUMP_VERSION_CAPTURE_TEMPERATURE 7
+#define L3_DUMP_VERSION_CLUTTER 10
 #define L3_SAMPLE_INT16_IQ  0
 #define L3_SAMPLE_RANGE_FFT_IQ16 1
 #define L3_SAMPLE_RANGE_FFT_IQ16_WINDOWED 2
@@ -88,5 +95,13 @@ typedef struct __attribute__((packed)) {
     int16_t  tmpDig0Sens;       /* Digital temperature sensor reading */
     int16_t  tmpDig1Sens;       /* Second digital temperature sensor reading */
 } l3_temperature_report_t;      /* sizeof == 24 */
+
+typedef struct __attribute__((packed)) {
+    uint16_t firstBin;          /* global bin of the map's first entry */
+    uint16_t count;             /* entries that follow, at most L3_BAND_NOISE_BINS */
+    uint32_t updates;           /* idle frames the map has been fed */
+    uint8_t  rangeWindow;       /* L3_RANGE_WINDOW_* the range FFT used */
+    uint8_t  _reserved[3];      /* 0 */
+} l3_clutter_report_t;          /* sizeof == 12 */
 
 #endif /* L3_DUMP_FORMAT_H */

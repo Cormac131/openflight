@@ -79,6 +79,7 @@
 #include "l3_profile.h"
 #include "l3_result.h"
 #include "l3_shot.h"
+#include "l3_window.h"
 
 #if defined(L3_DUMP_IQ8) || defined(L3_RING_IQ8)
 #define L3_ANY_IQ8 1
@@ -464,6 +465,10 @@ static l3_vec3_t         gBallPosition;    /* destination in the golf frame */
 static l3_impact_fit_cfg_t gImpactFitCfg;
 static l3_band_t           gBand;
 static l3_band_noise_t     gBandNoise;
+/* The range FFT's window ("captureCfg window"), loaded into the HWA's window
+ * RAM on each arm (l3_window.h); rectangular until a session asks. */
+static uint8_t             gRangeWindow = L3_RANGE_WINDOW_NONE;
+static int32_t             gRangeWindowCoeffs[N_SAMPLES / 2U];
 static uint8_t             gBandFrozen;
 static l3_impact_t         gRangeImpact;   /* range-only fire (l3_impact_update_range) */
 static l3_leave_t          gLeave;         /* ball-leave fallback (l3_leave_update) */
@@ -997,10 +1002,32 @@ static int32_t l3_cli_captureCfgRetain(int32_t argc, char *argv[])
 #endif
 }
 
+/* "captureCfg window <none|hann>": the range FFT's window from the next arm
+ * (l3_window.h). */
+static int32_t l3_cli_captureCfgWindow(int32_t argc, char *argv[])
+{
+    uint8_t window;
+
+    if (gCaptureActive) {
+        CLI_write("Error: stop the sensor before captureCfg window\n");
+        return -1;
+    }
+    if (argc != 3 || l3_window_parse(argv[2], &window) != 0) {
+        CLI_write("Error: captureCfg window <none|hann>\n");
+        return -1;
+    }
+    gRangeWindow = window;
+    CLI_write("Done\n");
+    return 0;
+}
+
 static int32_t l3_cli_captureCfg(int32_t argc, char *argv[])
 {
     if (argc >= 2 && strcmp(argv[1], "adaptive") == 0) {
         return l3_cli_captureCfgAdaptive(argc, argv);
+    }
+    if (argc >= 2 && strcmp(argv[1], "window") == 0) {
+        return l3_cli_captureCfgWindow(argc, argv);
     }
     if (argc >= 2 && (strcmp(argv[1], "retain") == 0 || strcmp(argv[1], "retainPolicy") == 0)) {
         return l3_cli_captureCfgRetain(argc, argv);
@@ -1598,9 +1625,14 @@ static int32_t l3_configHwaProcessParam(uint8_t paramIdx, uint8_t outChannel,
     paramCfg.accelModeArgs.fftMode.fftSize = (uint8_t)l3_log2_u32(N_SAMPLES);
     paramCfg.accelModeArgs.fftMode.butterflyScaling = 0x7FU;
     paramCfg.accelModeArgs.fftMode.interfZeroOutEn = HWA_FEATURE_BIT_DISABLE;
-    paramCfg.accelModeArgs.fftMode.windowEn = HWA_FEATURE_BIT_DISABLE;
+    /* The window RAM holds the first half (loaded after HWA_reset). */
+    paramCfg.accelModeArgs.fftMode.windowEn = (gRangeWindow != L3_RANGE_WINDOW_NONE)
+                                                  ? HWA_FEATURE_BIT_ENABLE
+                                                  : HWA_FEATURE_BIT_DISABLE;
     paramCfg.accelModeArgs.fftMode.windowStart = 0U;
-    paramCfg.accelModeArgs.fftMode.winSymm = HWA_FFT_WINDOW_NONSYMMETRIC;
+    paramCfg.accelModeArgs.fftMode.winSymm = (gRangeWindow != L3_RANGE_WINDOW_NONE)
+                                                 ? HWA_FFT_WINDOW_SYMMETRIC
+                                                 : HWA_FFT_WINDOW_NONSYMMETRIC;
     paramCfg.accelModeArgs.fftMode.winInterpolateMode = HWA_FFT_WINDOW_INTERPOLATE_MODE_NONE;
     paramCfg.accelModeArgs.fftMode.magLogEn = HWA_FFT_MODE_MAGNITUDE_LOG2_DISABLED;
     paramCfg.accelModeArgs.fftMode.fftOutMode = HWA_FFT_MODE_OUTPUT_DEFAULT;
@@ -2272,6 +2304,21 @@ static int32_t l3_armHwaChain(void)
     if (errCode != 0) {
         return errCode;
     }
+    if (gRangeWindow == L3_RANGE_WINDOW_HANN) {
+        /* The first half, mirrored by HWA_FFT_WINDOW_SYMMETRIC; offset and
+         * size in bytes, as TI's range processing loads it. */
+        uint32_t coeffs = l3_window_hann_q17(gRangeWindowCoeffs, N_SAMPLES);
+
+        if (coeffs == 0U) {
+            return -1;
+        }
+        errCode = HWA_configRam(gHwaHandle, HWA_RAM_TYPE_WINDOW_RAM,
+                                (uint8_t *)gRangeWindowCoeffs,
+                                coeffs * (uint32_t)sizeof(int32_t), 0U);
+        if (errCode != 0) {
+            return errCode;
+        }
+    }
 
     memset((void *)&dummyCfg, 0, sizeof(dummyCfg));
     dummyCfg.triggerMode = HWA_TRIG_MODE_DMA;
@@ -2715,11 +2762,28 @@ int32_t l3_cli_dump(int32_t argc, char *argv[])
         memset((void *)&tempReport, 0, sizeof(tempReport));
         tempStatus = l3_readTemperatureReport(&tempReport);
         if (tempStatus == 0) {
-            h.version = L3_DUMP_VERSION_CAPTURE_TEMPERATURE;
+            /* v10: v7 plus the clutter map, so a replay starts from what the
+             * board had learned at address (dump_format.h). */
+            h.version = L3_DUMP_VERSION_CLUTTER;
         }
         UART_writePolling(gDataUart, (uint8_t *)&h, sizeof(h));
         if (tempStatus == 0) {
+            l3_clutter_report_t clutter;
+            uint32_t mapBins = (gBandNoise.count <= L3_BAND_NOISE_BINS) ? gBandNoise.count
+                                                                         : L3_BAND_NOISE_BINS;
+
             UART_writePolling(gDataUart, (uint8_t *)&tempReport, sizeof(tempReport));
+            clutter.firstBin = (uint16_t)gBandNoise.firstBin;
+            clutter.count = (uint16_t)mapBins;
+            clutter.updates = gBandNoise.updates;
+            clutter.rangeWindow = gRangeWindow;
+            memset((void *)clutter._reserved, 0, sizeof(clutter._reserved));
+            UART_writePolling(gDataUart, (uint8_t *)&clutter, sizeof(clutter));
+            if (mapBins > 0U) {
+                UART_writePolling(gDataUart, (uint8_t *)gBandNoise.avg, mapBins * sizeof(float));
+                UART_writePolling(gDataUart, (uint8_t *)gBandNoise.dev, mapBins * sizeof(float));
+                UART_writePolling(gDataUart, (uint8_t *)gBandNoise.seen, mapBins);
+            }
         }
     }
     for (i = 0U; i < actualPre; i++) {
@@ -3810,7 +3874,12 @@ static uint32_t l3_preImpactClubTargets(const l3_trig_obs_t *obs, uint32_t windo
     found = l3_obs_extract(params, frameIndex, frameUs, club->first,
                            &obs[club->first - windowFirst], club->count, floor, targets,
                            L3_OBS_MAX_TARGETS);
-    return gBand.valid ? l3_band_keep_short(&gBand, targets, found) : found;
+    if (gBand.valid) {
+        found = l3_band_keep_short(&gBand, targets, found);
+    }
+    /* The scene at address (the golfer's body, still scatterers) is not the
+     * club: the band's noise map learned it on frames with no club track. */
+    return l3_band_clutter_filter(&gBandNoise, gImpactFitCfg.clutterSigmas, targets, found);
 }
 
 /* Per completed pre-trigger slot: reduce the watch region to one observation

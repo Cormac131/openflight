@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 
 from openflight.iwr6843 import firmware_host as fw, tunables
-from openflight.iwr6843.dump import is_range_snapshot, parse_dump
+from openflight.iwr6843.dump import clutter_map_struct, is_range_snapshot, parse_dump
 from openflight.iwr6843.self_trigger import BALL_SNR_MAX, check_ball_snr
 from openflight.iwr6843.tracking import RANGE_SPAN_M, same_tx_loop_period_s
 
@@ -959,6 +959,11 @@ def replay_dump(
     band = fw.Band()
     noise = fw.BandNoise()
     lib.l3_band_noise_reset(ctypes.byref(noise))
+    if "clutter_map" in meta:
+        # The board's map as it stood at the dump (version 10): the capture
+        # alone has too few idle frames to learn it. The replay feeds it on as
+        # the board did, so the ring's idle frames count twice (at 1/16).
+        noise = clutter_map_struct(meta["clutter_map"])
     band_frozen = False
     band_frozen_frame: int | None = None
     # The impact fit, run once when the shot first reaches RESULT (as the
@@ -1248,6 +1253,8 @@ def replay_dump(
                 leave=leave,
                 leave_track=track,
                 leave_floor=leave_floor,
+                clutter=noise,
+                clutter_sigmas=fit_cfg.clutterSigmas,
             )
             found = scan.found
             first_bin, scored_region = scan.region.first, scan.region.count
@@ -1609,6 +1616,8 @@ def _scan_pre_impact(  # pylint: disable=too-many-arguments,too-many-locals
     leave: fw.Leave,
     leave_track: fw.ClubTrack,
     leave_floor: ctypes.c_float,
+    clutter: fw.BandNoise,
+    clutter_sigmas: float,
 ) -> _PreScan:
     """l3_preImpactClubTargets with the band on: the scan plan (l3_scan_pre)
     scores the trigger region clipped to short of the band, the club's
@@ -1688,6 +1697,8 @@ def _scan_pre_impact(  # pylint: disable=too-many-arguments,too-many-locals
             fw.OBS_MAX_TARGETS,
         )
         found = lib.l3_band_keep_short(ctypes.byref(band), targets, found)
+        # The scene at address is not the club (l3_band_clutter_filter).
+        found = lib.l3_band_clutter_filter(ctypes.byref(clutter), clutter_sigmas, targets, found)
     map_spans = tuple(span for span in (club, leave_span, chunk) if span.count > 0)
     return _PreScan(found, region_span, map_spans, window_obs, window_count, scored)
 
