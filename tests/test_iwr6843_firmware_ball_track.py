@@ -56,8 +56,8 @@ class Ball:
             self.lib.l3_ball_track_update(ctypes.byref(self.track), arr, len(targets), frame, stamp)
         )
 
-    def set_angles(self, az, el, flags=fw.ANGLE_AZIMUTH | fw.ANGLE_ELEVATION) -> int:
-        return self.lib.l3_ball_track_set_angles(ctypes.byref(self.track), az, el, flags)
+    def set_angles(self, az, el, flags=fw.ANGLE_AZIMUTH | fw.ANGLE_ELEVATION, confidence=1.0) -> int:
+        return self.lib.l3_ball_track_set_angles(ctypes.byref(self.track), az, el, flags, confidence)
 
     def launch(self):
         out = fw.Launch()
@@ -533,7 +533,7 @@ def test_angles_on_hypothesis_points_survive_adoption(lib):
     def angle_every_new_point(track, _frame):
         for i in range(fw.BALL_HYP_MAX):
             if track.hyps.hyp[i].lastTargetIndex != fw.BALL_HYP_NONE:
-                lib.l3_ball_hyps_set_angles(ctypes.byref(track.hyps), i, 0.02, 0.2, both)
+                lib.l3_ball_hyps_set_angles(ctypes.byref(track.hyps), i, 0.02, 0.2, both, 1.0)
 
     track = hyp_track(lib)
     run_joint(lib, track, TwoTracks(frames=4), on_frame=angle_every_new_point)
@@ -641,7 +641,7 @@ def _set_point_angles(lib, ball, *, vla_deg, hla_deg, speed, flip_first):
         az, el = sph.azimuthRad, sph.elevationRad
         if index < flip_first:
             az, el = az + 40.0 * DEG, -el
-        assert lib.l3_track_set_point_angles(ctypes.byref(core), index, az, el, BOTH) == 1
+        assert lib.l3_track_set_point_angles(ctypes.byref(core), index, az, el, BOTH, 1.0) == 1
 
 
 def test_defaults_put_the_late_window_0p6_m_past_the_ball(lib):
@@ -704,7 +704,7 @@ def test_scattered_late_angles_are_still_rejected(lib):
     core = ball.track.core
     for index in range(core.count):
         jitter = 25.0 * DEG if index % 2 else -25.0 * DEG
-        lib.l3_track_set_point_angles(ctypes.byref(core), index, jitter, jitter, BOTH)
+        lib.l3_track_set_point_angles(ctypes.byref(core), index, jitter, jitter, BOTH, 1.0)
     _, launch = ball.launch()
     assert launch.speedValid and not launch.vlaValid
 
@@ -859,3 +859,25 @@ def test_the_displacing_confidence_is_the_club_trackers(lib):
     cfg = fw.BallTrackCfg()
     lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
     assert cfg.displaceConfidence == pytest.approx(0.2)
+
+
+def test_an_adopted_hypothesis_keeps_its_points_angle_confidence(lib):
+    """Adoption re-seeds the core from the hypothesis's points; each keeps the
+    confidence its angles were measured with, or the direction fit would drop them."""
+    ball = Ball(lib, useHypotheses=1)
+    ball.arm()
+    both = fw.ANGLE_AZIMUTH | fw.ANGLE_ELEVATION
+    rng = ORIGIN_BIN + 2.0
+    for frame in range(8, 16):
+        rng += 3.0
+        arr = (fw.TargetObs * 1)(target(frame, rng, doppler=12.0))
+        lib.l3_ball_track_update_joint(ctypes.byref(ball.track), arr, 1, frame, frame * FRAME_US, 0xFFFFFFFF)
+        for i in range(fw.BALL_HYP_MAX):
+            lib.l3_ball_hyps_set_angles(ctypes.byref(ball.track.hyps), i, 0.02, 0.2, both, 0.61)
+        if ball.track.confirmed:
+            break
+    assert ball.track.confirmed, "the hypothesis search never adopted the ball"
+    point = fw.TrackPoint()
+    lib.l3_track_point(ctypes.byref(ball.track.core), 0, ctypes.byref(point))
+    assert point.anglesValid == both
+    assert point.angleConfidence == pytest.approx(0.61)

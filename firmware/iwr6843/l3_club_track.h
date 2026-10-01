@@ -55,6 +55,28 @@
  * least this far downrange of it, or the point is withdrawn. */
 #define L3_TRACK_TENTATIVE_ADVANCE_BINS 1.0F
 
+/* What reconstruction (l3_ball_fit.h, l3_track_kf.h) made of a point. */
+enum {
+    L3_FILTER_HYP_NONE = 0,      /* reconstructed, but its angles were not used
+                                  * (none measured, no weight, or gated out) */
+    L3_FILTER_HYP_DIRECT,        /* its angles were used as the direct return */
+    L3_FILTER_HYP_IMAGE,         /* ... as the floor reflection */
+    L3_FILTER_HYP_AMBIGUOUS,     /* ... direct and reflection too close to tell */
+    L3_FILTER_HYP_UNFILTERED,    /* not reconstructed: filteredPosition is position */
+    L3_FILTER_HYP_COUNT
+};
+
+/* The club reconstruction's constants (l3_track_kf.h). */
+typedef struct {
+    float accelSigmaMps2;        /* white-acceleration process noise */
+    float rangeSigmaM;           /* one range measurement */
+    float angleSigmaRad;         /* one angle at full angle confidence */
+    float minAngleConfidence;    /* floor on the confidence dividing angleSigmaRad */
+    float chi2Gate;              /* 2-dof gate on the angle pair's innovation */
+    float initPositionSigmaM;    /* first point's position uncertainty */
+    float initVelocitySigmaMps;  /* first point's velocity uncertainty (starts at 0) */
+} l3_track_kf_cfg_t;
+
 typedef struct {
     uint32_t frame;
     uint32_t timestampUs;
@@ -70,6 +92,11 @@ typedef struct {
     float    confidence;
     l3_vec3_t position;           /* GOLF frame metres from the antenna; an angle
                                    * not measured is taken as boresight */
+    float     angleConfidence;    /* l3_angle_estimate's confidence for these angles, 0 none */
+    l3_vec3_t filteredPosition;   /* reconstructed GOLF-frame position; position when
+                                   * filterHypothesis is L3_FILTER_HYP_UNFILTERED */
+    uint8_t   filterAccepted;     /* 1 when the reconstruction used this point's angles */
+    uint8_t   filterHypothesis;   /* L3_FILTER_HYP_* */
 } l3_track_point_t;
 
 typedef struct {
@@ -123,6 +150,9 @@ typedef struct {
      * following skip it (association keeps the track's own bin, which the
      * same-bin rules handle); 0 disables. */
     uint32_t standingFrames;
+    /* The club reconstruction (l3_track_kf.h). The ball's core carries it too,
+     * unused: the ball has its own fit (l3_ball_fit.h). */
+    l3_track_kf_cfg_t kf;
 } l3_track_cfg_t;
 
 /* Club delivery from a regression of position against time over the newest
@@ -283,11 +313,21 @@ float l3_track_recent_rate(const l3_club_track_t *track);
  * needs an angle estimate. Recomputes that point's golf-frame position.
  * Returns 0 when the last update appended nothing. */
 int32_t l3_track_set_angles(l3_club_track_t *track, float azimuthRad, float elevationRad,
-                            uint8_t anglesValid);
+                            uint8_t anglesValid, float angleConfidence);
 /* The same for any stored point (index 0 is the oldest held): sets its angles
- * and recomputes its golf-frame position. Returns 0 when index is not stored. */
+ * and their confidence, recomputes its golf-frame position and marks it
+ * unfiltered (a new angle voids an earlier reconstruction). Returns 0 when
+ * index is not stored. */
 int32_t l3_track_set_point_angles(l3_club_track_t *track, uint32_t index, float azimuthRad,
-                                  float elevationRad, uint8_t anglesValid);
+                                  float elevationRad, uint8_t anglesValid, float angleConfidence);
+/* A stored point for reconstruction to write into (index 0 oldest); NULL when
+ * not stored. */
+l3_track_point_t *l3_track_point_mut(l3_club_track_t *track, uint32_t index);
+/* Mark one point, or every held point, not reconstructed. */
+void l3_track_point_unfilter(l3_track_point_t *point);
+void l3_track_unfilter_all(l3_club_track_t *track);
+/* The index of the first of the newest maxPoints held points. */
+uint32_t l3_track_newest_first(const l3_club_track_t *track, uint32_t maxPoints);
 /* Point index 0 is the oldest held. Returns 0 when out of range. */
 int32_t l3_track_point(const l3_club_track_t *track, uint32_t index, l3_track_point_t *out);
 /* The index (0 oldest) of the point with timestampUs: 1, or 0 when no held

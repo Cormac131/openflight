@@ -3700,7 +3700,7 @@ static void l3_considerBallTrack(uint32_t slot)
                     flags |= L3_OBS_ANGLE_ELEVATION;
                 }
                 (void)l3_ball_track_set_angles(&gBallTrack, angle.azimuthRad,
-                                               angle.elevationRad, flags);
+                                               angle.elevationRad, flags, angle.confidence);
                 gAngleEstimates++;
             }
         }
@@ -3740,7 +3740,7 @@ static void l3_considerBallTrack(uint32_t slot)
                     flags |= L3_OBS_ANGLE_ELEVATION;
                 }
                 (void)l3_ball_hyps_set_angles(&gBallTrack.hyps, index, angle.azimuthRad,
-                                              angle.elevationRad, flags);
+                                              angle.elevationRad, flags, angle.confidence);
                 gAngleEstimates++;
             }
         }

@@ -123,7 +123,7 @@ int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t
 uint32_t l3_ball_track_struct_bytes(void);
 /* Angles for the point the last update appended; see l3_track_set_angles. */
 int32_t l3_ball_track_set_angles(l3_ball_track_t *track, float azimuthRad, float elevationRad,
-                                 uint8_t anglesValid);
+                                 uint8_t anglesValid, float angleConfidence);
 /* The launch from the earliest cfg.launchPoints confirmed points (at least
  * 3). Returns the points used, 0 when too few. */
 uint32_t l3_ball_track_launch(const l3_ball_track_t *track, l3_launch_t *out);

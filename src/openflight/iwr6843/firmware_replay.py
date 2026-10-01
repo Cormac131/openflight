@@ -2009,6 +2009,7 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
                         obs_angle.azimuthRad,
                         obs_angle.elevationRad,
                         flags,
+                        float(obs_angle.confidence),
                     )
                     angle = _angle_summary(obs_angle)
         lib.l3_track_point(ctypes.byref(core), core.count - 1, ctypes.byref(newest))
@@ -2166,7 +2167,12 @@ def _hypothesis_angles(  # pylint: disable=too-many-arguments
         )
         if obs_angle is not None:
             lib.l3_ball_hyps_set_angles(
-                ctypes.byref(hyps), index, obs_angle.azimuthRad, obs_angle.elevationRad, flags
+                ctypes.byref(hyps),
+                index,
+                obs_angle.azimuthRad,
+                obs_angle.elevationRad,
+                flags,
+                float(obs_angle.confidence),
             )
 
 

@@ -489,6 +489,25 @@ class Trig(ctypes.Structure):
     ]
 
 
+# l3_club_track.h L3_FILTER_HYP_*
+FILTER_HYP_NAMES = ("none", "direct", "image", "ambiguous", "unfiltered")
+FILTER_HYP_UNFILTERED = FILTER_HYP_NAMES.index("unfiltered")
+
+
+class TrackKfCfg(ctypes.Structure):
+    """``l3_track_kf_cfg_t``."""
+
+    _fields_ = [
+        ("accelSigmaMps2", ctypes.c_float),
+        ("rangeSigmaM", ctypes.c_float),
+        ("angleSigmaRad", ctypes.c_float),
+        ("minAngleConfidence", ctypes.c_float),
+        ("chi2Gate", ctypes.c_float),
+        ("initPositionSigmaM", ctypes.c_float),
+        ("initVelocitySigmaMps", ctypes.c_float),
+    ]
+
+
 class TrackCfg(ctypes.Structure):
     """``l3_track_cfg_t``."""
 
@@ -511,6 +530,7 @@ class TrackCfg(ctypes.Structure):
         ("followDopplerRiseMps", ctypes.c_float),
         ("approachMaxSameBinPoints", ctypes.c_uint32),
         ("standingFrames", ctypes.c_uint32),
+        ("kf", TrackKfCfg),
     ]
 
 
@@ -531,6 +551,10 @@ class TrackPoint(ctypes.Structure):
         ("coherence", ctypes.c_float),
         ("confidence", ctypes.c_float),
         ("position", Vec3),
+        ("angleConfidence", ctypes.c_float),
+        ("filteredPosition", Vec3),
+        ("filterAccepted", ctypes.c_uint8),
+        ("filterHypothesis", ctypes.c_uint8),
     ]
 
 
@@ -1075,6 +1099,7 @@ class BallHypPoint(ctypes.Structure):
         ("azimuthRad", ctypes.c_float),
         ("elevationRad", ctypes.c_float),
         ("anglesValid", ctypes.c_uint8),
+        ("angleConfidence", ctypes.c_float),
     ]
 
 
@@ -1794,9 +1819,10 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
         ctypes.c_int32,
     ),
     "l3_track_recent_rate": ([_P(ClubTrack)], _F32),
-    "l3_track_set_angles": ([_P(ClubTrack), _F32, _F32, ctypes.c_uint8], ctypes.c_int32),
+    "l3_track_set_angles": ([_P(ClubTrack), _F32, _F32, ctypes.c_uint8, _F32], ctypes.c_int32),
+    "l3_track_unfilter_all": ([_P(ClubTrack)], None),
     "l3_track_set_point_angles": (
-        [_P(ClubTrack), _U32, _F32, _F32, ctypes.c_uint8],
+        [_P(ClubTrack), _U32, _F32, _F32, ctypes.c_uint8, _F32],
         ctypes.c_int32,
     ),
     "l3_track_point": ([_P(ClubTrack), _U32, _P(TrackPoint)], ctypes.c_int32),
@@ -1914,7 +1940,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
         ctypes.c_int32,
     ),
     "l3_ball_hyps_set_angles": (
-        [_P(BallHyps), _U32, ctypes.c_float, ctypes.c_float, ctypes.c_uint8],
+        [_P(BallHyps), _U32, ctypes.c_float, ctypes.c_float, ctypes.c_uint8, ctypes.c_float],
         ctypes.c_int32,
     ),
     "l3_ball_hyps_struct_bytes": ([], _U32),
@@ -1930,7 +1956,10 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
         ctypes.c_int32,
     ),
     "l3_ball_track_struct_bytes": ([], _U32),
-    "l3_ball_track_set_angles": ([_P(BallTrack), _F32, _F32, ctypes.c_uint8], ctypes.c_int32),
+    "l3_ball_track_set_angles": (
+        [_P(BallTrack), _F32, _F32, ctypes.c_uint8, _F32],
+        ctypes.c_int32,
+    ),
     "l3_ball_track_launch": ([_P(BallTrack), _P(Launch)], _U32),
     "l3_ball_track_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_ball_track_format_status": ([_P(BallTrack), *_TEXT], ctypes.c_int32),
@@ -2188,6 +2217,8 @@ __all__ = [
     "MEAS_MEASURED",
     "MEAS_RADIAL_ONLY",
     "MEAS_VALID",
+    "FILTER_HYP_NAMES",
+    "FILTER_HYP_UNFILTERED",
     "PROFILE_STAGE_NAMES",
     "QUALITY_FLAGS",
     "AdaptiveCfg",
@@ -2239,6 +2270,7 @@ __all__ = [
     "ObsParams",
     "TargetObs",
     "TrackCfg",
+    "TrackKfCfg",
     "TrackPoint",
     "Trig",
     "TrigCfg",

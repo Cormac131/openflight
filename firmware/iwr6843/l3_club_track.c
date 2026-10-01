@@ -10,6 +10,18 @@ static const char *const kWhyNames[L3_TRACK_WHY_COUNT] = {
     "none", "acquired", "associated", "coasted", "dropped", "idle", "released"
 };
 
+/* The reconstruction's defaults; Task 5 moves them to l3_track_kf_cfg_defaults. */
+static void l3_track_kf_defaults_inline(l3_track_kf_cfg_t *kf)
+{
+    kf->accelSigmaMps2 = 1500.0F;    /* a clubhead on its arc: ~40 m/s at ~1.1 m radius */
+    kf->rangeSigmaM = 0.03F;
+    kf->angleSigmaRad = 15.0F * (3.14159265F / 180.0F);
+    kf->minAngleConfidence = 0.05F;
+    kf->chi2Gate = 9.21F;            /* 99 % for 2 degrees of freedom */
+    kf->initPositionSigmaM = 0.5F;
+    kf->initVelocitySigmaMps = 50.0F;
+}
+
 void l3_track_cfg_defaults(l3_track_cfg_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
@@ -31,6 +43,7 @@ void l3_track_cfg_defaults(l3_track_cfg_t *cfg)
     cfg->followDopplerRiseMps = 1.5F;
     cfg->approachMaxSameBinPoints = 1U;
     cfg->standingFrames = 2U;
+    l3_track_kf_defaults_inline(&cfg->kf);
 }
 
 static float l3_track_absf(float value)
@@ -111,6 +124,10 @@ static void l3_track_append(l3_club_track_t *track, const l3_target_obs_t *targe
     point->coherence = target->coherence;
     point->confidence = target->confidence;
     l3_track_locate(track, point);
+    /* A target's own angles (a seeded or synthetic point) carry no estimate
+     * of their quality: full weight when present, none when absent. */
+    point->angleConfidence = target->anglesValid ? 1.0F : 0.0F;
+    l3_track_point_unfilter(point);
     l3_track_push(track);
 }
 
@@ -120,6 +137,7 @@ void l3_track_append_point(l3_club_track_t *track, const l3_track_point_t *point
 
     *slot = *point;
     l3_track_locate(track, slot);
+    l3_track_point_unfilter(slot);
     track->lastBin = point->rangeBin;
     track->lastFrame = point->frame;
     l3_track_push(track);
@@ -738,32 +756,69 @@ int32_t l3_track_find_point(const l3_club_track_t *track, uint32_t timestampUs,
     return 0;
 }
 
-int32_t l3_track_set_point_angles(l3_club_track_t *track, uint32_t index, float azimuthRad,
-                                  float elevationRad, uint8_t anglesValid)
+void l3_track_point_unfilter(l3_track_point_t *point)
 {
-    l3_track_point_t *point;
+    point->filteredPosition = point->position;
+    point->filterAccepted = 0U;
+    point->filterHypothesis = L3_FILTER_HYP_UNFILTERED;
+}
+
+l3_track_point_t *l3_track_point_mut(l3_club_track_t *track, uint32_t index)
+{
     uint32_t oldest;
 
     if (index >= track->count) {
-        return 0;
+        return NULL;
     }
     oldest = (track->next + L3_TRACK_POINTS - track->count) % L3_TRACK_POINTS;
-    point = &track->points[(oldest + index) % L3_TRACK_POINTS];
+    return &track->points[(oldest + index) % L3_TRACK_POINTS];
+}
+
+void l3_track_unfilter_all(l3_club_track_t *track)
+{
+    uint32_t i;
+
+    for (i = 0U; i < track->count; i++) {
+        l3_track_point_unfilter(l3_track_point_mut(track, i));
+    }
+}
+
+uint32_t l3_track_newest_first(const l3_club_track_t *track, uint32_t maxPoints)
+{
+    uint32_t used;
+
+    if (maxPoints > L3_TRACK_POINTS) {
+        maxPoints = L3_TRACK_POINTS;
+    }
+    used = (track->count < maxPoints) ? track->count : maxPoints;
+    return track->count - used;
+}
+
+int32_t l3_track_set_point_angles(l3_club_track_t *track, uint32_t index, float azimuthRad,
+                                  float elevationRad, uint8_t anglesValid, float angleConfidence)
+{
+    l3_track_point_t *point = l3_track_point_mut(track, index);
+
+    if (point == NULL) {
+        return 0;
+    }
     point->azimuthRad = azimuthRad;
     point->elevationRad = elevationRad;
     point->anglesValid = anglesValid;
+    point->angleConfidence = angleConfidence;
     l3_track_locate(track, point);
+    l3_track_point_unfilter(point);
     return 1;
 }
 
 int32_t l3_track_set_angles(l3_club_track_t *track, float azimuthRad, float elevationRad,
-                            uint8_t anglesValid)
+                            uint8_t anglesValid, float angleConfidence)
 {
     if (track->lastTargetIndex == L3_TRACK_NO_TARGET || track->count == 0U) {
         return 0;
     }
     return l3_track_set_point_angles(track, track->count - 1U, azimuthRad, elevationRad,
-                                     anglesValid);
+                                     anglesValid, angleConfidence);
 }
 
 /* Least squares of one coordinate against time over the selected points:
@@ -803,13 +858,9 @@ static int32_t l3_track_fitAxis(const float *t, const float *value, uint32_t n, 
 
 uint32_t l3_track_delivery(const l3_club_track_t *track, uint32_t maxPoints, l3_delivery_t *out)
 {
-    uint32_t used;
+    uint32_t first = l3_track_newest_first(track, maxPoints);
 
-    if (maxPoints > L3_TRACK_POINTS) {
-        maxPoints = L3_TRACK_POINTS;
-    }
-    used = (track->count < maxPoints) ? track->count : maxPoints;
-    return l3_track_delivery_range(track, track->count - used, used, L3_TRACK_FULL_POINTS, out);
+    return l3_track_delivery_range(track, first, track->count - first, L3_TRACK_FULL_POINTS, out);
 }
 
 uint32_t l3_delivery_fit(l3_point_at_fn pointAt, const void *ctx, uint32_t first, uint32_t last,

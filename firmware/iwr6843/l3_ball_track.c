@@ -325,7 +325,7 @@ static int32_t l3_ball_track_adopt(l3_ball_track_t *track, uint32_t index)
         }
         if (p->anglesValid) {
             (void)l3_track_set_angles(&track->core, p->azimuthRad, p->elevationRad,
-                                      p->anglesValid);
+                                      p->anglesValid, p->angleConfidence);
         }
     }
     track->core.cfg.gateBins = gateBins;
@@ -384,9 +384,10 @@ uint32_t l3_ball_track_struct_bytes(void)
 }
 
 int32_t l3_ball_track_set_angles(l3_ball_track_t *track, float azimuthRad, float elevationRad,
-                                 uint8_t anglesValid)
+                                 uint8_t anglesValid, float angleConfidence)
 {
-    return l3_track_set_angles(&track->core, azimuthRad, elevationRad, anglesValid);
+    return l3_track_set_angles(&track->core, azimuthRad, elevationRad, anglesValid,
+                               angleConfidence);
 }
 
 /* The first point at least lateRangeM beyond the origin; count when none. */
