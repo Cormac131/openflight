@@ -318,16 +318,18 @@ SCORE's `dss_inv_us`).
 
 ### 9.4 Which core scores (`l3_detect_core.c`)
 
-`trackCfg detectCore mss|dss|verify`:
+`trackCfg detectCore dss|verify`:
 
-- `mss` (default): the MSS scores.
-- `dss`: the detect task sends SCORE and blocks on the reply (the CLI and
-  notices run meanwhile). A failed frame falls back to the MSS; three in a
-  row latch the MSS and queue `dsp detect latched to mss`.
+- `dss` (default): the detect task sends SCORE and blocks on the reply (the
+  CLI and notices run meanwhile). A failed frame falls back to the MSS;
+  three in a row latch the MSS and queue `dsp detect latched to mss`, until
+  `dss` or `verify` is chosen again.
 - `verify`: both cores score the same bins at once and are compared bit for
-  bit (`l3_dsp_result_compare`); the MSS's are used; never latches.
-- Frames that are not IQ16 ring frames in L3, or that find the link held by
-  a CLI `dsp` command, go to the MSS as `ineligible`.
+  bit (`l3_dsp_result_compare`); the MSS's are used; never latches. Needs an
+  IQ16 ring and the DSS link.
+- `mss` is not a choice. Frames that are not IQ16 ring frames in L3 (IQ8,
+  `compact16`, `adaptive16`), or that find the link held by a CLI `dsp`
+  command or down, go to the MSS as `ineligible`, so the MSS scorer stays.
 
 ## 10. The club's angles off the decision path
 

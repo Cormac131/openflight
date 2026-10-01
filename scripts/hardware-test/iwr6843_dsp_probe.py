@@ -139,7 +139,7 @@ def run_acceptance(radar: IWR6843Radar, args: argparse.Namespace) -> bool:
     )
     for check in checks:
         print(f"  {'pass' if check.passed else 'FAIL'} {check.name}: {check.detail}")
-    radar.detect_core("mss")
+    radar.detect_core("dss")  # the default: clears a latch from the run
     return all(check.passed for check in checks)
 
 

@@ -5107,11 +5107,12 @@ static void l3_timingRestart(void)
     gDetectStaleAfterRead = 0U;
 }
 
-/* "trackCfg detectCore [mss|dss|verify]": which core scores the detector's
- * bins (l3_detect_core.h). Bare, or after a change, the detect line. dss and
- * verify need an IQ16 ring and the DSS link. Choosing a core clears a latch
- * and starts the counts and the timing over. A trackCfg sub-mode: the CLI
- * table is at the SDK's CLI_MAX_CMD. */
+/* "trackCfg detectCore [dss|verify]": how the detector's bins are scored
+ * (l3_detect_core.h). Bare, or after a change, the detect line. verify needs
+ * an IQ16 ring and the DSS link; dss takes any capture, the frames the DSS
+ * cannot take scored on the MSS. Choosing a core clears a latch and starts
+ * the counts and the timing over. A trackCfg sub-mode: the CLI table is at
+ * the SDK's CLI_MAX_CMD. */
 static int32_t l3_cli_trackCfgDetectCore(int32_t argc, char *argv[])
 {
     static char line[L3_DETECT_LINE_BYTES] L3_HSRAM_DIAG;
@@ -5123,7 +5124,7 @@ static int32_t l3_cli_trackCfgDetectCore(int32_t argc, char *argv[])
                                      gDspLink != NULL);
 
         if (l3_detect_core_parse(argv[2], &which) != 0) {
-            CLI_write("Error: trackCfg detectCore mss|dss|verify\n");
+            CLI_write("Error: trackCfg detectCore dss|verify\n");
             return -1;
         }
         if (l3_detect_core_set(&gDetectCore, which, eligible) != 0) {
@@ -5135,7 +5136,7 @@ static int32_t l3_cli_trackCfgDetectCore(int32_t argc, char *argv[])
         l3_detect_core_reset_counts(&gDetectCore);
         l3_timingRestart();
     } else if (argc != 2) {
-        CLI_write("Error: trackCfg detectCore [mss|dss|verify]\n");
+        CLI_write("Error: trackCfg detectCore [dss|verify]\n");
         return -1;
     }
     (void)l3_detect_core_format(&gDetectCore, L3_DSS_CLOCK_MHZ, line, sizeof(line));

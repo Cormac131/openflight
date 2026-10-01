@@ -100,6 +100,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a firmware rebuild and reflash.
 
 ### Changed
+- **IWR6843 detector bins are scored on the DSS by default; `mss` is no
+  longer a `detectCore` choice.** `trackCfg detectCore` now takes `dss`
+  (the boot default) or `verify`. The MSS still scores the frames the DSS
+  cannot take (IQ8, `compact16` and `adaptive16` captures, or the link busy
+  or down, counted as `ineligible`), a frame the DSS fails (a `fallback`),
+  and every frame once three failures in a row latch it; choosing `dss`
+  again clears the latch. `dss` is accepted on any capture; `verify` still
+  needs an IQ16 ring and the link. Needs a firmware rebuild and reflash,
+  and the board acceptance (`iwr6843_dsp_probe.py --acceptance`) before it
+  is relied on.
 - **The IWR6843 DSS boots: it keeps the platform's caches.** The DSS image
   had never run: it died in its BIOS module startups, where the Cache
   module applied this image's 32 KB L2 cache override (TI's mmw demo keeps
