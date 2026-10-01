@@ -477,3 +477,8 @@ def test_the_per_frame_paths_do_not_reconstruct():
     """Each reconstruction has exactly one call site, the two once-per-shot ones above."""
     assert SOURCE.count("l3_ball_track_reconstruct(") == 1
     assert SOURCE.count("l3_track_kf_run(") == 1
+
+
+def test_the_club_reconstruction_scratch_lives_in_hsram():
+    assert "static l3_track_kf_work_t gClubKfWork L3_HSRAM_DIAG;" in SOURCE
+    assert SOURCE.index("#define L3_HSRAM_DIAG") < SOURCE.index("gClubKfWork L3_HSRAM_DIAG")

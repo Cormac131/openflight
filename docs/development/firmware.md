@@ -525,8 +525,10 @@ format miss the club.
 
 `triggerLog perf` prints per-stage counts, last, mean and maximum in
 microseconds (residual, trigger, extraction, club track, angle, impact, ball
-detector, ball tracker, and `dspwait`, the part of the residual the MSS
-spent blocked on the DSS, which the frame total does not count twice) from
+detector, ball tracker, `reconstruct`, the club filter at the fire plus the
+ball fit at RESULT, once per shot, and `dspwait`, the part of the residual the
+MSS spent blocked on the DSS; the frame total excludes both `dspwait` and
+`reconstruct`) from
 `l3_profile.c` and the R4F cycle counter. That
 is the evidence for moving a stage to the HWA or DSP; nothing is moved until
 the numbers say which. `captureCfg adaptive 1 <approachBins> <marginBins>`

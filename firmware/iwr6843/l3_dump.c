@@ -449,9 +449,6 @@ static l3_ball_angle_clock_t gBallAngleClock;
 static l3_impact_cfg_t   gImpactCfg;
 static uint8_t           gImpactCfgSet;
 static l3_delivery_t     gDelivery;        /* the newest frame's delivery fit */
-/* The club reconstruction's scratch (l3_track_kf.h), ~11 KB: static, used
- * once per shot at the fire. */
-static l3_track_kf_work_t gClubKfWork;
 static l3_vec3_t         gBallPosition;    /* destination in the golf frame */
 /* The tee band (l3_band.h) and the impact from the tracks either side of it
  * (l3_impact_fit.h), as firmware_replay runs them. bandBins 0 (the default)
@@ -508,6 +505,11 @@ static uint32_t            gShotId;
 /* MSS-only diagnostics live in HS-RAM (mss_linker.cmd .hsramMss): DATA_RAM
  * is full. Not zeroed at load like .bss, so l3_initTask clears them. */
 #define L3_HSRAM_DIAG __attribute__((section(".hsramMss")))
+
+/* The club reconstruction's scratch (l3_track_kf.h), ~11 KB, MSS-only, used
+ * once per shot at the fire; HS-RAM like the other MSS-only buffers (DATA_RAM
+ * is full). Not zeroed at load: l3_track_kf_run writes every slot it reads. */
+static l3_track_kf_work_t gClubKfWork L3_HSRAM_DIAG;
 
 static l3_profile_t        gProfile L3_HSRAM_DIAG;
 /* The club's pending angles and the angle task's stack, in HS-RAM too:
