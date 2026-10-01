@@ -232,31 +232,42 @@ verdict and launch speed), so it is the comparison as committed. Every hypothesi
 run uses `--net-range-m` and E3 has no column. The repo recordings' manifest check was not run
 because E2 failed on the corpus.
 
+`--accept` splits the run's verdicts by the **legacy baseline's** per-capture `ball_present`, so
+both sides are judged on the same populations; a capture whose run label differs is printed as a
+`NOTE` and is not a failure (no all-on or recover-off capture's label differs).
+
+The all-on and `--recover off` rows were re-run after recovery's club exclusion was wired (the
+club follow's claimed target now reaches the history, `l3_ball_track_note_club`); before it, the
+history's club flags were always clear. The other ablation rows predate that fix and are compared
+with the pre-fix all-on (32 / 29 / 24); with recovery on in each of them, their numbers may move
+when re-run.
+
 | Run | present ok / wrong / none | absent ok / wrong / none | club | `--accept` |
 |---|---|---|---|---|
 | legacy | 16 / 59 / 10 | 0 / 1 / 39 | 72 | — |
-| all-on (defaults) | 32 / 29 / 24 | 0 / 1 / 39 | 72 | absent none 39 not above 39; absent wrong 1 not below 1 |
+| all-on (defaults) | 33 / 28 / 24 | 0 / 1 / 39 | 72 | absent none 39 not above 39; absent wrong 1 not below 1 |
 | `--corridor-gate off` | 31 / 30 / 24 | 0 / 1 / 39 | 72 | same two |
 | `--impact-coast-ms 6` | 32 / 28 / 25 | 0 / 1 / 39 | 72 | same two |
 | `--max-decel 0` | 29 / 35 / 21 | 0 / 1 / 39 | 72 | same two |
 | `--recover off` | 33 / 28 / 24 | 0 / 1 / 39 | 72 | same two |
 | `--classify-points 6` | 37 / 11 / 37 | 0 / 1 / 39 | 72 | same two |
-| `--history-snr 0.7` | 32 / 30 / 24 | 0 / 0 / 39 | 72 | absent none 39 not above 39 |
+| `--history-snr 0.7` | 32 / 30 / 24 | 0 / 0 / 39 | 72 | diagnostic only (B4); not judged by E2 |
 
 Club at impact is 72 in every run, with no capture's club verdict changed.
 
 `20260927_144220_262_005` and `20260927_183542_142_009` are not in this corpus, so they have no
 capture-by-capture entry. Instead, every capture whose ball verdict changed between legacy and
-all-on (39; all are `ball_present` under both runs):
+all-on (40; all are `ball_present` under both runs):
 
 | Capture (`iwr6843_` omitted) | OPS m/s | legacy launch | all-on launch | verdict |
 |---|---|---|---|---|
-| 20260916_184748_410_001 | 35.9 | 52.2 | 36.5 | wrong → ok |
+| 20260916_184748_410_001 | 35.9 | 52.2 | 35.2 | wrong → ok |
 | 20260916_184825_011_002 | 40.0 | – | 41.6 | none → ok |
 | 20260916_184937_318_004 | 38.7 | 9.2 | 38.7 | wrong → ok |
 | 20260916_185013_572_005 | 39.7 | 8.6 | 41.5 | wrong → ok |
 | 20260916_190937_131_002 | 32.7 | 46.2 | – | wrong → none |
 | 20260919_185429_574_003 | 25.3 | 14.9 | – | wrong → none |
+| 20260919_185532_646_005 | 30.5 | 10.6 | 34.3 | wrong → ok |
 | 20260919_185657_244_008 | 28.7 | 20.0 | 31.5 | wrong → ok |
 | 20260919_190333_892_020 | 48.3 | 1.9 | – | wrong → none |
 | 20260919_190633_265_026 | 42.6 | 23.5 | 41.8 | wrong → ok |
@@ -273,7 +284,7 @@ all-on (39; all are `ball_present` under both runs):
 | 20260923_130804_075_015 | 37.4 | 50.5 | 33.2 | wrong → ok |
 | 20260923_130813_241_016 | 36.4 | 35.0 | 18.4 | ok → wrong |
 | 20260923_130832_920_017 | 35.6 | 14.8 | 34.7 | wrong → ok |
-| 20260923_130936_910_020 | 36.1 | 47.6 | 36.3 | wrong → ok |
+| 20260923_130936_910_020 | 36.1 | 47.6 | 35.8 | wrong → ok |
 | 20260923_131012_999_022 | 48.1 | 17.9 | 52.4 | wrong → ok |
 | 20260923_131031_161_023 | 39.7 | 16.8 | 41.1 | wrong → ok |
 | 20260923_131232_075_029 | 40.2 | 15.1 | – | wrong → none |
@@ -296,23 +307,37 @@ Totals: 21 wrong → ok, 1 none → ok, 13 wrong → none, 3 ok → wrong, 2 ok 
 **Board bytes** (host `ctypes` sizes, the arithmetic of
 `tests/test_iwr6843_firmware_board_image.py`; not a TI link map — a board build with both switches
 on was not run): `L3_BALL_HYPOTHESES` adds 1796 B (`BallHyps` 1628 + `BallHypVerdict` 60 +
-`BallHypsCfg` 108); `L3_BALL_RECOVER` adds 2632 B (`BallHistory` 2600 + `BallRecoverCfg` 24 + 8);
-4428 B together.
+`BallHypsCfg` 108); `L3_BALL_RECOVER` adds 2632 B in the track (`BallHistory` 2600 + `BallRecoverCfg` 24 + 8)
+and 2016 B of function-static `.bss`: `l3_ball_track_update_joint`'s `usable[L3_OBS_MAX_TARGETS]`
+(8 × `sizeof(l3_target_obs_t)` 72 = 576 B) and `original[L3_OBS_MAX_TARGETS]` (8 × 4 = 32 B), and
+`l3_ball_track_adopt`'s `merged[L3_TRACK_POINTS]` (32 × `sizeof(l3_ball_hyp_point_t)` 44 =
+1408 B); 4648 B static. `l3_ball_recover` also puts `found[L3_BALL_HISTORY_FRAMES]` on the stack
+(24 × 44 = 1056 B), which the detect task's stack must hold. Together: 6444 B static plus 1056 B of
+stack. (`sizeof` from `fw.TargetObs` and `fw.BallHypPoint`; the board's layout of these
+all-4-byte-field structs is expected to match, but a TI link map is still needed for the board
+figure.)
 
-**What moved what.** The search doubles ball-present `ok` (16 → 32) and halves `wrong` (59 → 29),
+**What moved what.** The search doubles ball-present `ok` (16 → 33) and halves `wrong` (59 → 28),
 at the cost of more `none` (10 → 24); club is untouched. E2 fails on the absent side only, and the
 absent side is one capture: `20260923_184647_713_016` (OPS 69.6 m/s, no ball chain) is `wrong` under
 legacy (17.2 m/s) and under every hypothesis run (23.7 m/s), and with 40 absent captures `none`
-can only rise above 39 if that capture goes to `none`. Per switch against all-on (net counts;
-the number of captures whose verdict changes is in brackets): the corridor gate is worth 1 `ok` (off: 31 / 30 / 24 [5]); a 6 ms impact coast turns
-1 `wrong` into `none` net (32 / 28 / 25 [5]); the deceleration ceiling is worth 3 `ok` and 6
-`wrong` (off: 29 / 35 / 21 [7]); recovery costs 1 `ok` and gains nothing here (off: 33 / 28 / 24
-[1] — on `20260919_185532_646_005` recovery moves the launch from 33.4 to 38.4 m/s against OPS
-30.5); 6 classify points is the largest lever (37 / 11 / 37 [25]: +5 `ok`, −18 `wrong`, +13 `none`);
-`--history-snr 0.7` leaves every tracker verdict as all-on [0] but flips `20260923_184647_713_016`'s
-label from absent to present, because the label is computed from the replay's frame targets,
-which `historySnr` changes — its absent `wrong` 0 is a label artifact, not a tracker gain, and the
-label should be made independent of the history SNR before it is used to judge that switch.
+can only rise above 39 if that capture goes to `none`. Recovery, with the club's claim now
+excluded, changes no verdict: on and off give 33 / 28 / 24 capture for capture, and recovery moves
+13 captures' launch speeds (by 0.1 to 5.3 m/s), none across the 15 % line (before the club
+exclusion was wired, recovery cost 1 `ok`: on `20260919_185532_646_005` it moved the launch from
+33.4 to 38.4 m/s against OPS 30.5; it now gives 34.3). Per switch against the pre-fix all-on
+(32 / 29 / 24; net counts, the number of captures whose verdict changes in brackets; these runs
+were not repeated after the fix): the corridor gate is worth 1 `ok` (off: 31 / 30 / 24 [5]); a 6 ms
+impact coast turns 1 `wrong` into `none` net (32 / 28 / 25 [5]); the deceleration ceiling is worth
+3 `ok` and 6 `wrong` (off: 29 / 35 / 21 [7]); 6 classify points is the largest lever
+(37 / 11 / 37 [25]: +5 `ok`, −18 `wrong`, +13 `none`). `--history-snr 0.7` is diagnostic only
+(B4) and not judged by E2: it leaves every tracker verdict as the pre-fix all-on [0] but flips
+`20260923_184647_713_016`'s label from absent to present, because the lowered extraction list also
+reaches the replay's frame targets the label is computed from — its absent `wrong` 0 is a label
+artifact, not a tracker gain. Under the new `--accept` that capture would be judged by the
+baseline's label (absent) and its label change reported as a `NOTE`.
 
-**Decision.** `--accept` printed problems for the all-defaults run, so `useHypotheses` stays 0 and
+**Decision.** `--accept` (baseline-labelled split) printed two problems for the all-defaults run
+after the club-exclusion fix (`ball-absent none 39 not above 39`; `ball-absent wrong 1 not below
+1`), so `useHypotheses` stays 0 and
 the board keeps both switches off.

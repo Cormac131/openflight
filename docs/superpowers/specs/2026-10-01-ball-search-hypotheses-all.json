@@ -7,16 +7,16 @@
       "few": 41
     },
     "ball": {
-      "ok": 32,
-      "wrong": 30,
+      "ok": 33,
+      "wrong": 29,
       "none": 63
     },
     "ball_present": 85,
     "ball_present_strict": 76,
     "ball_by_presence": {
       "present": {
-        "ok": 32,
-        "wrong": 29,
+        "ok": 33,
+        "wrong": 28,
         "none": 24
       },
       "absent": {
@@ -33,7 +33,7 @@
       "ball": "ok",
       "ball_present": true,
       "ball_present_strict": true,
-      "launch_mps": 36.52964782714844,
+      "launch_mps": 35.201717376708984,
       "ops_mps": 35.8698348483647,
       "launch_hla_deg": null,
       "impact": null,
@@ -150,10 +150,10 @@
     {
       "name": "iwr6843_20260919_185532_646_005.l3dump",
       "club": "club",
-      "ball": "wrong",
+      "ball": "ok",
       "ball_present": true,
       "ball_present_strict": true,
-      "launch_mps": 38.404335021972656,
+      "launch_mps": 34.290836334228516,
       "ops_mps": 30.452943545121798,
       "launch_hla_deg": null,
       "impact": null,
@@ -465,7 +465,7 @@
       "ball": "ok",
       "ball_present": true,
       "ball_present_strict": true,
-      "launch_mps": 28.724117279052734,
+      "launch_mps": 28.30950927734375,
       "ops_mps": 28.859740220638596,
       "launch_hla_deg": 11.160000617913806,
       "impact": null,
@@ -741,7 +741,7 @@
       "ball": "ok",
       "ball_present": true,
       "ball_present_strict": true,
-      "launch_mps": 36.25497055053711,
+      "launch_mps": 35.849979400634766,
       "ops_mps": 36.05191522830563,
       "launch_hla_deg": 17.279999524633325,
       "impact": null,
