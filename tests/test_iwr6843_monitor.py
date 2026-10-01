@@ -15,6 +15,7 @@ import pytest
 import openflight.iwr6843.monitor as iwr_monitor
 from openflight.iwr6843.board_calibration import BoardCalibration
 from openflight.iwr6843.dump import pack_dump
+from openflight.iwr6843.firmware_version import FirmwareVersion
 from openflight.iwr6843.monitor import (
     DEFAULT_IWR6843_CONFIG,
     SELF_TRIGGER_DEFAULT_SNR,
@@ -63,6 +64,9 @@ class FakeRadar:
         self.releases = 0
         self.release_error: Exception | None = None
         self.config_errors: list[Exception] = []
+        self.version_reply: FirmwareVersion | None | Exception = FirmwareVersion(
+            version="1.2.3", git="abc123", variant="hybrid-cadence", built="2026-09-30T00:00:00Z"
+        )
 
     def stats(self) -> str:
         """Armed unless a test queued other replies (or errors) first."""
@@ -76,6 +80,11 @@ class FakeRadar:
         if self.release_error is not None:
             raise self.release_error
         self.releases += 1
+
+    def firmware_version(self):
+        if isinstance(self.version_reply, Exception):
+            raise self.version_reply
+        return self.version_reply
 
     def send_config(self, path: str, lines=None):
         if self.config_errors:

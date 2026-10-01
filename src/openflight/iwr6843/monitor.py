@@ -18,6 +18,7 @@ from openflight.gpio_factory import ensure_lgpio_pin_factory
 from openflight.iwr6843.board_calibration import BoardCalibration
 from openflight.iwr6843.driver import IWR6843Radar, UnsupportedCommand
 from openflight.iwr6843.dump import HEADER, parse_header, payload_nbytes
+from openflight.iwr6843.firmware_version import FirmwareVersion
 from openflight.iwr6843.self_trigger import (
     FIRMWARE_TRIGGER_DEFAULT_BIN,
     FIRMWARE_TRIGGER_DEFAULT_SNR,
@@ -444,6 +445,8 @@ class IWR6843CaptureMonitor:
         self._config_lines: list[str] | None = None
         self._onboard_track_config: str | None = None
         self._restart_hooks: list[Callable[[IWR6843Radar], None]] = []
+        # Read once at start; None when the image predates ``stats version``.
+        self.firmware_version: FirmwareVersion | None = None
 
     def _tee_relative_config_lines(self) -> list[str] | None:
         """The cfg with its windows on the tee, or None to send the file as it is."""
@@ -469,6 +472,21 @@ class IWR6843CaptureMonitor:
     def port(self) -> str:
         """Connected TI serial port."""
         return self.radar.port
+
+    def _log_firmware_version(self) -> None:
+        """Record the flashed image; a failed query never blocks startup."""
+        try:
+            self.firmware_version = self.radar.firmware_version()
+        except RuntimeError as exc:
+            logger.warning("[IWR6843] Could not read firmware version: %s", exc)
+            return
+        if self.firmware_version is None:
+            logger.warning(
+                "[IWR6843] Flashed firmware predates stats version; "
+                "reflash a versioned release from firmware/releases/"
+            )
+        else:
+            logger.info("[IWR6843] Firmware %s", self.firmware_version)
 
     def start(self, *, armed: bool = True, onboard_track_config: str | None = None) -> None:
         """Configure the radar and GPIO, optionally arming trigger capture.
@@ -498,6 +516,7 @@ class IWR6843CaptureMonitor:
                 )
         if self.save_dumps:
             self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._log_firmware_version()
         self._config_lines = config_lines
         self._onboard_track_config = onboard_track_config
         self._sensor_configured = False

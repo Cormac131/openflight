@@ -22,6 +22,11 @@ from typing import Callable
 import serial
 
 from openflight.iwr6843.dump import HEADER, MAGIC, parse_header, payload_nbytes
+from openflight.iwr6843.firmware_version import (
+    FirmwareVersion,
+    find_version_line,
+    parse_version_reply,
+)
 from openflight.iwr6843.shot_result import parse_result_reply
 from openflight.iwr6843.sparse import (
     POWER_MAGIC,
@@ -725,6 +730,23 @@ class IWR6843Radar:
     def perf(self) -> str:
         """``triggerLog perf``: per-stage microseconds and the adaptive window state."""
         return self.cmd("triggerLog perf", 2.0)
+
+    def firmware_version(self) -> FirmwareVersion | None:
+        """Identity of the flashed image (``stats version``), or None when it predates it.
+
+        An image without the sub-mode ignores the argument and answers with
+        its counters, so a completed reply with no ``version=`` line means an
+        unversioned image. Raises RuntimeError when the command fails or the
+        version line is malformed.
+        """
+        reply = self.cmd("stats version", 2.0)
+        self._require_done("stats version", reply)
+        if find_version_line(reply) is None:
+            return None
+        try:
+            return parse_version_reply(reply)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
 
     def stop_sensor(self) -> None:
         """Stop capture and verify the firmware returned to its idle CLI state."""

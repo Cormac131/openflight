@@ -29,6 +29,7 @@ once, then choose a profile by passing its `.cfg` to OpenFlight.
 | Flash SHA-256 | `664b2360dc7d6f8e7300eb53f980faf5294d25d7c1e8c93692f8756a62ea8dde` |
 | Validate on hardware | `uv run python scripts/hardware-test/test_iwr_firmware.py` (see [Firmware Feature Check](../iwr6843/verify.md#firmware-feature-check)) |
 | Dump format | Variable-width, timed complex range-FFT snapshots |
+| Release version | `firmware/VERSION` (semver); the image above predates versioning |
 
 Verify the checked-in image before flashing:
 
@@ -1026,6 +1027,8 @@ matching host-parser change and regression tests in the same commit.
 | `firmware/iwr6843/l3_text.c`, `l3_text.h` | Integer-only fixed-point text for the CLI |
 | `firmware/iwr6843/l3_ball.c`, `l3_ball.h` | Ball placement detector: static background, compact-reflector appearance, confidence (host-testable, no hardware) |
 | `firmware/iwr6843/dump_format.h` | Packed firmware-side wire contract |
+| `firmware/iwr6843/fw_version.h` | Image identity reported by the CLI `stats version` sub-mode |
+| `firmware/VERSION` | Release version (semver); names and stamps each release |
 | `firmware/iwr6843/makefile` | TI mmWave SDK application build and meta-image generation |
 | `firmware/iwr6843/mss.cfg` | SYS/BIOS configuration |
 | `firmware/iwr6843/mss_linker.cmd` | Places the ring and optional scratch buffers in L3 RAM |
@@ -1043,6 +1046,7 @@ matching host-parser change and regression tests in the same commit.
 | `src/openflight/iwr6843/datasets.py` | Labelled calibration dataset schema and loader (`tests/radar/datasets/`) |
 | `src/openflight/environment.py`, `src/openflight/delivery.py` | Air density for the flight model; inferred face, smash and plausibility gates |
 | `tests/radar/recordings/` | Recorded `.l3dump` swings with a `manifest.json` for the replay test |
+| `src/openflight/iwr6843/firmware_version.py` | Release semver and `stats version` reply parsing; `openflight-firmware` CLI lives in `firmware_cli.py` |
 
 ## Where To Build, Flash, And Run
 
@@ -1079,8 +1083,10 @@ Docker runs the same `build-native` recipe under `linux/amd64` and writes the
 release artifact back into the host worktree at:
 
 ```text
-firmware/releases/l3_dump_configurable_capture_20260818.bin
+firmware/releases/openflight_iwr6843_v<VERSION>.bin
 ```
+
+See [Versioning Releases](#versioning-releases) for how `<VERSION>` is set.
 
 Use the UTM workflow below only when Docker emulation is unavailable.
 
@@ -1188,7 +1194,7 @@ The target performs the application build, generates the flashable TI
 meta-image, and copies the production image into `firmware/releases/`:
 
 ```text
-firmware/releases/l3_dump_configurable_capture_20260818.bin
+firmware/releases/openflight_iwr6843_v<VERSION>.bin
 ```
 
 Generated `.xer4f`, `.map`, and intermediate `.bin` files stay under
@@ -1205,6 +1211,38 @@ rsync -av \
   openflight@VM_ADDRESS:~/openflight/firmware/releases/ \
   artifacts/firmware_build/
 ```
+
+## Versioning Releases
+
+Firmware releases use semantic versioning. `firmware/VERSION` holds
+`MAJOR.MINOR.PATCH` and is the single source of truth: the build stamps it into
+the image, names the release file after it, and the flashed board reports it
+through the CLI `stats version` sub-mode.
+
+| Change | Bump |
+|---|---|
+| Breaks the host contract: dump/packet layout, a removed or renamed CLI command, changed `.cfg` semantics | `major` |
+| Adds a CLI command, capture feature, or backwards-compatible field | `minor` |
+| Fixes a bug without changing the host contract | `patch` |
+
+Bump and commit before building, so the stamped commit is the release source
+rather than a `-dirty` tree, then commit the new image:
+
+```bash
+make -C firmware bump-version PART=minor     # or patch / major
+git commit -am "firmware: release v$(cat firmware/VERSION)"
+make -C firmware docker-build                # or build-native
+git add firmware/releases/ && git commit -m "firmware: add v$(cat firmware/VERSION) image"
+```
+
+The build refuses a malformed `VERSION`, and refuses to overwrite a release
+file that already exists, so two different images never share a version. Pass
+`ALLOW_OVERWRITE=1` only to rebuild an unreleased version in place.
+
+Alongside the version, the build stamps the source commit (`git describe
+--always --dirty`, so an image built from uncommitted changes reports
+`-dirty`) and the UTC build time. A bare `make` inside `firmware/iwr6843/`
+reports `0.0.0-dev` and `unknown` instead.
 
 ## Build On Native x86_64 Linux
 
@@ -1313,6 +1351,24 @@ The flasher follows TI application note
 [SWRA627, IWR6843 Bootloader Flow](https://www.ti.com/lit/an/swra627/swra627.pdf).
 
 ## Verify The Installed Firmware
+
+Ask the board which image it is running (functional mode, OpenFlight stopped):
+
+```bash
+uv run openflight-firmware query              # auto-detects the CLI port
+uv run openflight-firmware query --port /dev/ttyUSB0
+```
+
+```text
+Flashed firmware: 1.0.0 (git b6f4c36d2286, hybrid-cadence, built 2026-09-30T15:37:51Z)
+```
+
+The same line comes from typing `stats version` at the `l3dump:/>` prompt, and the
+CLI banner shows the version and commit at boot. OpenFlight also logs it at
+startup (`[IWR6843] Firmware 1.0.0 ...`). An image built before versioning
+ignores the argument and prints its counters instead; the query reports it as
+unversioned and OpenFlight logs a warning but still starts. `version` is a
+sub-mode of `stats` because the CLI table is at the SDK's `CLI_MAX_CMD`.
 
 Run OpenFlight with the matching config as described in the
 [Operator Guide](../iwr6843/verify.md#start-openflight). With `--debug`, a
@@ -1435,6 +1491,8 @@ Also check:
 | Server rejects `captureFormat`, `iq8Scale`, or `phaseCaptureCfg` | Older firmware is flashed | Flash `l3_dump_configurable_capture_20260818.bin`, reset in functional mode, and retry |
 | Dump length differs from the selected profile | Wrong config, interrupted UART transfer, or stale process | Verify firmware SHA-256, use Enhanced/UARTA, stop serial owners, reset, and retry |
 | Dense profile reports sustained `hwa_missed`, `iq8_overrun`, or `iq8_edma_err` | The requested cadence exceeds processing time or EDMA packing failed | Return to the wide profile and inspect `stats`; do not trust descriptor cadence from a missed-frame run |
+| `openflight-firmware query` reports an unversioned image | The flashed image predates `stats version` | Build and flash a versioned release |
+| Build stops with `... already exists` | `firmware/VERSION` was not bumped since the last release | `make -C firmware bump-version PART=patch`, then rebuild |
 | First run works but restart hangs | Retired v1 image or incomplete shutdown | Flash the current release image and reset in functional mode |
 
 ## Historical Context

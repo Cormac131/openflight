@@ -195,6 +195,9 @@ class ConfigRadar:
     def __init__(self):
         self.sent = []
 
+    def firmware_version(self):
+        return None
+
     def send_config(self, path, lines=None):
         self.sent.append((path, lines))
 

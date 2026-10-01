@@ -13,7 +13,18 @@ FIRMWARE_DIR ?= iwr6843
 REPO_ROOT := $(abspath $(CURDIR)/..)
 DOCKER_IMAGE ?= openflight-iwr-sdk:latest
 RELEASE_DIR ?= releases
-RELEASE_NAME ?= l3_dump_configurable_capture_20260818.bin
+# Release version: firmware/VERSION holds MAJOR.MINOR.PATCH and is the single
+# source of truth. It is stamped into the image, names the release file, and is
+# reported by the firmware CLI "stats version". Bump it with bump-version.
+FW_VERSION := $(strip $(shell cat VERSION 2>/dev/null))
+RELEASE_NAME ?= openflight_iwr6843_v$(FW_VERSION).bin
+# Set ALLOW_OVERWRITE=1 to rebuild a release that already exists.
+ALLOW_OVERWRITE ?= 0
+PART ?= patch
+# Commit and build time, also reported by "version". docker-build computes
+# these on the host, where git can see the checkout.
+FW_GIT ?= $(shell git -C "$(REPO_ROOT)" describe --always --dirty --abbrev=12 2>/dev/null || echo unknown)
+FW_BUILT ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 SDK_INSTALLER := $(INSTALLER_DIR)/mmwave_sdk_03_06_02_00-LTS-Linux-x86-Install.bin
 R4F_INSTALLER := $(INSTALLER_DIR)/ti_cgt_tms470_20.2.7.LTS_linux-x64_installer.bin
@@ -51,7 +62,7 @@ REQUIRED_INSTALLERS := \
 	sysconfig-1.10.0_2163-setup.run \
 	xdctools_3_61_00_16_core_linux.zip
 
-.PHONY: help check-host check-tools check-installers install-ti-deps-native install-ti-tools-native probe-installers-native fetch-installers build-native docker-image docker-build docker-shell clean
+.PHONY: help check-version bump-version check-host check-tools check-installers install-ti-deps-native install-ti-tools-native probe-installers-native fetch-installers build-native docker-image docker-build docker-shell clean
 
 help:
 	@echo "IWR6843 production firmware helpers"
@@ -65,11 +76,35 @@ help:
 	@echo "  probe-installers-native Verify the downloaded installer executables"
 	@echo "  install-ti-tools-native Install TI SDK/toolchain under TI_ROOT"
 	@echo "  build-native            Build the configurable IQ16/IQ8 production firmware"
+	@echo "  check-version           Validate firmware/VERSION and the release name"
+	@echo "  bump-version PART=...   Bump firmware/VERSION (patch, minor or major)"
 	@echo ""
 	@echo "  docker-image            Build the x86_64 build container (needs TI installers)"
 	@echo "  docker-build            Build the configurable firmware inside the container"
 	@echo "  docker-shell            Interactive shell in the build container"
 	@echo "  clean                   Remove generated TI build outputs"
+
+# Refuses a malformed VERSION, and refuses to overwrite a release that already
+# exists: every shipped image must carry a version no other image has.
+check-version:
+	@set -eu; \
+	if ! printf '%s\n' "$(FW_VERSION)" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$$'; then \
+		echo "ERROR: firmware/VERSION must be MAJOR.MINOR.PATCH, got '$(FW_VERSION)'."; \
+		exit 1; \
+	fi; \
+	if [ -e "$(RELEASE_DIR)/$(RELEASE_NAME)" ] && [ "$(ALLOW_OVERWRITE)" != "1" ]; then \
+		echo "ERROR: $(RELEASE_DIR)/$(RELEASE_NAME) already exists."; \
+		echo "       Bump the version first: make -C firmware bump-version PART=patch"; \
+		echo "       (or rebuild it in place with ALLOW_OVERWRITE=1)."; \
+		exit 1; \
+	fi; \
+	echo "firmware version $(FW_VERSION) -> $(RELEASE_DIR)/$(RELEASE_NAME)"
+
+bump-version:
+	@case "$(PART)" in major|minor|patch) ;; \
+		*) echo "ERROR: PART must be major, minor or patch, got '$(PART)'."; exit 1;; \
+	esac
+	cd "$(REPO_ROOT)" && uv run openflight-firmware bump "$(PART)"
 
 check-host:
 	@set -eu; \
@@ -147,12 +182,13 @@ check-tools:
 	fi; \
 	echo "build environment OK: $$(uname -s) $$(uname -m), TI_ROOT=$(TI_ROOT)"
 
-build-native: check-tools
+build-native: check-version check-tools
 	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" cleanApp
-	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" bin L3_VARIANT_DEFS="--define=N_TX=3 --define=ENABLE_HWA_SMOKE=1 --define=SNAPSHOT_DUMP=1 --define=HWA_CHAINED_SNAPSHOT_RING=1 --define=HYBRID_CADENCE_CAPTURE=1 --define=L3_RING_IQ8=1 --define=L3_IQ8_EDMA_PACK=1"
+	$(BUILD_ENV) $(MAKE) -C "$(FIRMWARE_DIR)" bin L3_FW_VERSION="$(FW_VERSION)" L3_FW_GIT="$(FW_GIT)" L3_FW_BUILT="$(FW_BUILT)" L3_VARIANT_DEFS="--define=N_TX=3 --define=ENABLE_HWA_SMOKE=1 --define=SNAPSHOT_DUMP=1 --define=HWA_CHAINED_SNAPSHOT_RING=1 --define=HYBRID_CADENCE_CAPTURE=1 --define=L3_RING_IQ8=1 --define=L3_IQ8_EDMA_PACK=1"
 	mkdir -p "$(RELEASE_DIR)"
 	cp "$(FIRMWARE_DIR)/l3_dump.bin" "$(RELEASE_DIR)/$(RELEASE_NAME)"
 	sha256sum "$(RELEASE_DIR)/$(RELEASE_NAME)"
+	@echo "firmware version stamp: version=$(FW_VERSION) git=$(FW_GIT) built=$(FW_BUILT)"
 
 # --- Containerised build (works from macOS / arm64) --------------------------
 #
@@ -213,7 +249,7 @@ fetch-installers:
 docker-image: check-installers
 	docker build --platform linux/amd64 -t "$(DOCKER_IMAGE)" .
 
-docker-build:
+docker-build: check-version
 	@if ! docker image inspect "$(DOCKER_IMAGE)" >/dev/null 2>&1; then \
 		echo "ERROR: container image '$(DOCKER_IMAGE)' does not exist."; \
 		echo "       Build it once with: make -C firmware docker-image"; \
@@ -223,7 +259,8 @@ docker-build:
 	fi
 	docker run --rm --platform linux/amd64 \
 		-v "$(REPO_ROOT):/work" -w /work \
-		"$(DOCKER_IMAGE)" make -C firmware build-native RELEASE_NAME="$(RELEASE_NAME)"
+		"$(DOCKER_IMAGE)" make -C firmware build-native RELEASE_NAME="$(RELEASE_NAME)" \
+		ALLOW_OVERWRITE="$(ALLOW_OVERWRITE)" FW_GIT="$(FW_GIT)" FW_BUILT="$(FW_BUILT)"
 
 
 docker-shell:
