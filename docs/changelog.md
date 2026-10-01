@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Spin feasibility: the rotation-rate scan and label-tracked spin probe.**
+  `scripts/analysis/spin_probe.py --labels` follows the ball along the
+  dump's reviewed label file (it recedes 2-3 bins a frame, so the fixed-bin
+  probe lost it), reports the micro-Doppler spread at the ball in every
+  frame, and scans the ball's detrended echo power over every loop for a
+  once-per-revolution line, with `--reference-rpm` for a launch monitor's
+  number. The scan states its window, revolutions, resolution and floor: a
+  spin is reported only when the window holds 1.5 revolutions (about
+  2000-2500 rpm for the 35-47 ms the ball is in view), and a best fit on
+  the floor is never a reading. On the 34 recorded swings (plain balls, no
+  reference) it claims no line, and the ball is only 3-9 dB over its
+  window's median, so a marked-ball recording with a reference spin is the
+  next step. Detection thresholds are placeholders and say so.
+  `L3_RETAIN_SPIN` now also tags the confirmed flight frames, and
+  `spinFrames` defaults to 16 (was 4) and is capped at 32. The tag only
+  labels frames; nothing retained changes. Needs a firmware rebuild for the
+  new tag.
 - **IWR6843 detect pipeline made cheaper per frame, with the same answers.**
   The ball detector scans every eighth frame instead of every second, its
   counts and learning rates rescaled to the same times, and estimates the

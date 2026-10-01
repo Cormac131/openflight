@@ -57,7 +57,7 @@ def window(lib, c, s, retain=16, process=(PROCESS_START, PROCESS_BINS)) -> fw.Re
 def test_defaults_are_valid_and_the_checker_rejects_nonsense(lib):
     c = cfg(lib)
     assert (c.enabled, c.approachBins, c.approachMarginBins, c.impactBiasBins) == (1, 12, 3, 4)
-    assert (c.ballSearchLeadBins, c.ballFollowLeadBins, c.spinFrames) == (2, 4, 4)
+    assert (c.ballSearchLeadBins, c.ballFollowLeadBins, c.spinFrames) == (2, 4, 16)
     assert lib.l3_retain_cfg_check(ctypes.byref(c)) == 0
     assert lib.l3_retain_cfg_check(ctypes.byref(cfg(lib, approachBins=0))) == -1
     assert lib.l3_retain_cfg_check(ctypes.byref(cfg(lib, approachBins=65))) == -1
@@ -104,7 +104,7 @@ def test_impact_frames_sit_on_the_ball_biased_toward_the_arriving_club(lib):
     assert w.start == centred - 4
     later = window(
         lib,
-        cfg(lib),
+        cfg(lib, spinFrames=4),
         state(shotState="impact", ballLocked=1, ballBin=49.0, postFrame=1, postIndex=6),
         retain=24,
         process=(32, 53),
@@ -115,7 +115,7 @@ def test_impact_frames_sit_on_the_ball_biased_toward_the_arriving_club(lib):
 def test_ball_search_starts_just_short_of_the_origin_and_follow_runs_ahead(lib):
     search = window(
         lib,
-        cfg(lib),
+        cfg(lib, spinFrames=4),
         state(shotState="ball_track", ballLocked=1, ballBin=49.0, postFrame=1, postIndex=5),
         retain=16,
         process=(32, 53),
@@ -124,7 +124,7 @@ def test_ball_search_starts_just_short_of_the_origin_and_follow_runs_ahead(lib):
     assert search.priority == PRIO["impact"]
     follow = window(
         lib,
-        cfg(lib),
+        cfg(lib, spinFrames=4),
         state(
             shotState="ball_track",
             ballLocked=1,
@@ -143,6 +143,36 @@ def test_ball_search_starts_just_short_of_the_origin_and_follow_runs_ahead(lib):
         and follow.priority == PRIO["ball"]
     )
     assert follow.start + follow.bins > 66 + 8, "most of the window lies ahead of the flight"
+
+
+def test_confirmed_flight_frames_inside_the_spin_window_are_tagged_spin(lib):
+    """The spin research needs the flight frames most of all: a confirmed ball
+    frame keeps its follow window but carries the spin tag until spinFrames."""
+    flight = dict(
+        shotState="ball_track",
+        ballLocked=1,
+        ballBin=49.0,
+        postFrame=1,
+        ballTrackConfirmed=1,
+        ballTrackBin=66.4,
+    )
+    inside = window(lib, cfg(lib), state(postIndex=15, **flight), retain=16, process=(47, 53))
+    assert inside.priority == PRIO["spin"] and inside.why == WHY["ballfollow"]
+    assert inside.start == 66 - 4, "the tag never moves the window"
+    after = window(lib, cfg(lib), state(postIndex=16, **flight), retain=16, process=(47, 53))
+    assert after.priority == PRIO["ball"] and after.why == WHY["ballfollow"]
+    off = window(
+        lib, cfg(lib, spinFrames=0), state(postIndex=0, **flight), retain=16, process=(47, 53)
+    )
+    assert off.priority == PRIO["ball"], "spinFrames 0 turns the tag off"
+
+
+def test_the_default_spin_window_covers_the_balls_time_in_view(lib):
+    """About 35 ms for a ball to cross the 53-bin region: 16 frames is 32 ms at
+    2 ms frames and 48 ms at 3 ms; the checker still caps it at 32."""
+    assert cfg(lib).spinFrames * 2 >= 30
+    assert lib.l3_retain_cfg_check(ctypes.byref(cfg(lib, spinFrames=32))) == 0
+    assert lib.l3_retain_cfg_check(ctypes.byref(cfg(lib, spinFrames=33))) == -1
 
 
 def test_windows_never_leave_the_processing_region(lib):

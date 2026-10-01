@@ -34,7 +34,7 @@ enum {
     L3_RETAIN_TRACK,        /* the club approaching */
     L3_RETAIN_BALL,         /* the ball in flight */
     L3_RETAIN_IMPACT,       /* the club at the ball, before and after t0 */
-    L3_RETAIN_SPIN,         /* the first flight frames, kept for the spin research */
+    L3_RETAIN_SPIN,         /* the first post frames, flight included: the spin research */
     L3_RETAIN_PRIORITY_COUNT
 };
 
@@ -65,7 +65,7 @@ typedef struct {
     uint8_t impactBiasBins;     /* impact windows sit this many bins short of the ball */
     uint8_t ballSearchLeadBins; /* ball search windows start this many bins short of the origin */
     uint8_t ballFollowLeadBins; /* confirmed flight windows start this far behind the prediction */
-    uint8_t spinFrames;         /* first post-impact frames tagged L3_RETAIN_SPIN */
+    uint8_t spinFrames;         /* first post-impact frames tagged L3_RETAIN_SPIN (<= 32) */
 } l3_retain_cfg_t;
 
 /* What the policy needs to know about the coming frame. Bins are global. */
