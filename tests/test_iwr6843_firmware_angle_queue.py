@@ -341,7 +341,7 @@ def test_a_fire_freezes_first_then_drains_the_angles_before_the_shot_freezes():
         "gHwaFreezeRequested = 1U;",
         r'l3_queueNotice("Triggered\n");',
         "l3_angleQueueDrain();",
-        "(void)l3_track_delivery(&gClubTrack, 8U, &gDelivery);\n    }",
+        "(void)l3_track_delivery_filtered(&gClubTrack, 8U, &gDelivery);",
         "l3_shotObserve(teeBin, fired, impactUs);",
     ]
     positions = [trigger.index(marker) for marker in order]
