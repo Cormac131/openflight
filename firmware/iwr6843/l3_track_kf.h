@@ -57,9 +57,9 @@ uint32_t l3_track_kf_work_bytes(void);
  * UNFILTERED on failure). Returns the accepted count, 0 on failure. */
 uint32_t l3_track_kf_run(const l3_track_kf_cfg_t *cfg, l3_club_track_t *track,
                          l3_track_kf_work_t *work, l3_track_kf_result_t *out);
-/* l3_track_delivery over the reconstruction: each point's filteredPosition,
- * with its angles counted only when the filter accepted them. A point left
- * unfiltered reads exactly as l3_track_delivery reads it. */
+/* l3_track_delivery over the reconstruction: each reconstructed point's
+ * filteredPosition, with its measured angle flags; a point left unfiltered
+ * reads exactly as l3_track_delivery reads it. */
 uint32_t l3_track_delivery_filtered(const l3_club_track_t *track, uint32_t maxPoints,
                                     l3_delivery_t *out);
 const char *l3_track_kf_why_name(uint8_t why);

@@ -66,7 +66,7 @@ class Club:
         for index, p in enumerate(self.truth):
             self.measure(index, p)
 
-    def measure(self, index, golf, *, az_err=0.0, el_err=0.0, range_err=0.0, confidence=1.0):
+    def measure(self, index, golf, *, az_err=0.0, el_err=0.0, range_err=0.0, confidence=1.0, flags=BOTH):
         radar = fw.Vec3()
         self.lib.l3_frames_golf_to_radar(
             ctypes.byref(self.track.cfg.cal), ctypes.byref(fw.Vec3(*golf)), ctypes.byref(radar)
@@ -80,7 +80,7 @@ class Club:
             self.track.points[slot].rangeM = sph.rangeM + range_err
         assert (
             self.lib.l3_track_set_point_angles(
-                ctypes.byref(self.track), index, sph.azimuthRad + az_err, sph.elevationRad + el_err, BOTH, confidence
+                ctypes.byref(self.track), index, sph.azimuthRad + az_err, sph.elevationRad + el_err, flags, confidence
             )
             == 1
         )
@@ -252,3 +252,53 @@ def test_an_unfiltered_track_delivers_exactly_as_before(lib):
     lib.l3_track_delivery(ctypes.byref(club.track), 8, ctypes.byref(raw))
     lib.l3_track_delivery_filtered(ctypes.byref(club.track), 8, ctypes.byref(filtered))
     assert bytes(raw) == bytes(filtered)
+
+
+def test_a_gated_point_still_counts_in_the_filtered_delivery(lib):
+    club = Club(lib)
+    club.measure(5, club.truth[5], az_err=60.0 * DEG, el_err=60.0 * DEG)
+    club.run()
+    assert club.point(5).filterAccepted == 0
+    out = fw.Delivery()
+    lib.l3_track_delivery_filtered(ctypes.byref(club.track), 8, ctypes.byref(out))
+    assert out.points == 8 and out.pathValid
+
+
+def _filtered_at_5(lib, confidence, err_deg, **kf):
+    club = Club(lib, **kf)
+    club.measure(5, club.truth[5], az_err=err_deg * DEG, el_err=err_deg * DEG, confidence=confidence)
+    club.run()
+    return club
+
+
+def test_a_low_confidence_angle_counts_for_less(lib):
+    high = _filtered_at_5(lib, 1.0, 30.0)
+    low = _filtered_at_5(lib, 0.1, 30.0)
+    assert low.errors("filteredPosition")[5] < high.errors("filteredPosition")[5]
+
+
+def test_confidence_below_the_floor_uses_the_floor(lib):
+    floor = _filtered_at_5(lib, 0.05, 30.0)
+    below = _filtered_at_5(lib, 0.01, 30.0)
+    assert bytes(floor.point(5).filteredPosition) == bytes(below.point(5).filteredPosition)
+
+
+def test_a_failed_smoother_solve_unfilters(lib):
+    club = Club(lib, accelSigmaMps2=0.0, initVelocitySigmaMps=0.0)
+    accepted, out = club.run()
+    assert accepted == 0 and out.why == WHY["diverged"]
+    for index in range(10):
+        point = club.point(index)
+        assert point.filterHypothesis == HYP["unfiltered"]
+        f = point.filteredPosition
+        assert all(math.isfinite(c) for c in (f.x, f.y, f.z))
+
+
+def test_a_point_with_one_angle_updates_on_range_only(lib):
+    club = Club(lib)
+    club.measure(4, club.truth[4], flags=fw.ANGLE_AZIMUTH)
+    club.run()
+    point = club.point(4)
+    assert point.filterAccepted == 0 and point.filterHypothesis == HYP["none"]
+    f = point.filteredPosition
+    assert math.hypot(f.x, f.y, f.z) == pytest.approx(point.rangeM, abs=0.02)

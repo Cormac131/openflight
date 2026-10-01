@@ -349,7 +349,7 @@ uint32_t l3_track_kf_run(const l3_track_kf_cfg_t *cfg, l3_club_track_t *track,
             out->accepted += (uint32_t)used;
         }
     }
-    /* RTS, positions only: x_k += P_k F' Pp_{k+1}^-1 (xs_{k+1} - xp_{k+1}). */
+    /* RTS over the full state (only the smoothed covariance is skipped): x_k += P_k F' Pp_{k+1}^-1 (xs_{k+1} - xp_{k+1}). */
     for (k = n - 1U; k-- > 0U;) {
         float d[N];
         float y[N];
@@ -399,9 +399,6 @@ static int32_t l3_track_filtered_at(const void *ctx, uint32_t index, l3_track_po
     }
     if (out->filterHypothesis != L3_FILTER_HYP_UNFILTERED) {
         out->position = out->filteredPosition;
-        if (!out->filterAccepted) {
-            out->anglesValid = 0U;
-        }
     }
     return 1;
 }
