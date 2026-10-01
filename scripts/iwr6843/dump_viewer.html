@@ -518,7 +518,9 @@ function renderTraj(el) {
   traces.push({ type: "scatter3d", mode: "markers+text", name: "radar", x: [0], y: [0], z: [0], text: ["radar"], textposition: "top center", marker: { size: 5, color: "#ffffff", symbol: "diamond" } });
   const hover = (p) => `frame ${p.frame} · ${(p.timestamp_us / 1000).toFixed(1)} ms<br>bin ${p.range_bin.toFixed(2)} · v ${p.doppler_mps.toFixed(1)} m/s`
     + `<br>angles ${p.angles_valid ? "valid" : "boresight"} · conf ${(p.angle_confidence ?? 0).toFixed(2)}`
-    + `<br>fit ${p.filter_hypothesis ?? "unfiltered"}${p.filter_accepted ? "" : " · angles not used"}`;
+    + (p.filter_hypothesis
+      ? `<br>fit ${p.filter_hypothesis}${p.filter_hypothesis !== "unfiltered" && p.filter_accepted === false ? " · angles not used" : ""}`
+      : "");
   // Raw: each point's own angles. A rejected angle is hollow, a floor reflection a diamond.
   const raw = (list, name, color) => {
     if (!list || !list.length) return;

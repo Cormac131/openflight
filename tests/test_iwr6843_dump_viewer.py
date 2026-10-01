@@ -957,3 +957,10 @@ def test_shot_points_carry_their_reconstruction_to_the_page():
         assert {"filtered_position", "filter_accepted", "filter_hypothesis", "angle_confidence"} <= set(point)
         assert point["filter_hypothesis"] in fw.FILTER_HYP_NAMES
     assert "angle_why" in firmware["launch"]
+
+
+def test_the_hover_only_reports_a_fit_for_reconstructed_points():
+    html = _page()
+    body = html[html.index("function renderTraj(") : html.index("// ---------- annotate")]
+    assert "p.filter_accepted === false" in body
+    assert 'p.filter_hypothesis ?? "unfiltered"' not in body
