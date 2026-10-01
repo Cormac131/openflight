@@ -60,6 +60,7 @@
 #include "l3_angle.h"
 #include "l3_ball_track.h"
 #include "l3_club_track.h"
+#include "l3_track_kf.h"
 #include "l3_adaptive.h"
 #include "l3_band.h"
 #include "l3_impact.h"
@@ -448,6 +449,9 @@ static l3_ball_angle_clock_t gBallAngleClock;
 static l3_impact_cfg_t   gImpactCfg;
 static uint8_t           gImpactCfgSet;
 static l3_delivery_t     gDelivery;        /* the newest frame's delivery fit */
+/* The club reconstruction's scratch (l3_track_kf.h), ~11 KB: static, used
+ * once per shot at the fire. */
+static l3_track_kf_work_t gClubKfWork;
 static l3_vec3_t         gBallPosition;    /* destination in the golf frame */
 /* The tee band (l3_band.h) and the impact from the tracks either side of it
  * (l3_impact_fit.h), as firmware_replay runs them. bandBins 0 (the default)
@@ -3761,6 +3765,11 @@ static void l3_considerBallTrack(uint32_t slot)
         (void)l3_shot_update(&gShot, &in, frameIndex);
     }
     if (gShot.state == L3_SHOT_RESULT && !gShotResultReady) {
+        uint32_t reconstructTicks = Cycleprofiler_getTimeStamp();
+
+        /* Once per shot: the ball's direction from the tee (l3_ball_fit.h). */
+        (void)l3_ball_track_reconstruct(&gBallTrack, &gLaunch);
+        l3_profileStage(L3_PROF_RECONSTRUCT, reconstructTicks);
         l3_impactFitRun();
         l3_result_build(&gShot, &gBallTrack, &gLaunch, &gImpactFit, ++gShotId, gTrigDestBall,
                         &gShotResult);
@@ -4108,9 +4117,17 @@ static void l3_considerSelfTrigger(uint32_t slot)
         /* The notice first: the host's S! waits on it, the debug line does not. */
         l3_queueNotice("Triggered\n");
         /* Then every pending club angle, so the shot freezes them with the
-         * trajectory, and the delivery again from them. */
+         * trajectory; the club reconstructed from them once (l3_track_kf.h),
+         * and the delivery again from that. */
         l3_angleQueueDrain();
-        (void)l3_track_delivery(&gClubTrack, 8U, &gDelivery);
+        {
+            uint32_t reconstructTicks = Cycleprofiler_getTimeStamp();
+            l3_track_kf_result_t kfResult;
+
+            (void)l3_track_kf_run(&gClubTrack.cfg.kf, &gClubTrack, &gClubKfWork, &kfResult);
+            (void)l3_track_delivery_filtered(&gClubTrack, 8U, &gDelivery);
+            l3_profileStage(L3_PROF_RECONSTRUCT, reconstructTicks);
+        }
     }
     l3_shotObserve(teeBin, fired, impactUs);
     if (left && gBallTrack.armed) {

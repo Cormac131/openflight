@@ -228,6 +228,7 @@ PROFILE_STAGE_NAMES = (
     "impact",
     "balldetect",
     "balltrack",
+    "reconstruct",
     "dspwait",
 )
 

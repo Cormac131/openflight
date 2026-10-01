@@ -3,7 +3,8 @@
  * Before anything moves to the HWA or the DSP, the MSS must know what each
  * stage costs on real frames: the vertical residual, the trigger update,
  * target extraction, the club and ball track updates, angle estimation, the
- * impact test and the ball detector; and, inside the residual, how long the
+ * impact test and the ball detector; the once-per-shot reconstruction (the club
+ * filter at the fire, the ball fit at RESULT) as "reconstruct"; and, inside the residual, how long the
  * MSS waited on the DSS to score (dspwait). l3_dump.c wraps each with a cycle
  * counter read (Cycleprofiler_getTimeStamp) and adds the difference here;
  * "triggerLog perf" prints count, last, mean and maximum per stage in
@@ -24,6 +25,7 @@ enum {
     L3_PROF_IMPACT,
     L3_PROF_BALL_DETECT,
     L3_PROF_BALL_TRACK,
+    L3_PROF_RECONSTRUCT,  /* once per shot: the club EKF at the fire, the ball fit at RESULT */
     L3_PROF_DSP_WAIT,     /* the MSS blocked on the DSS's answer (l3_detect_core.h) */
     L3_PROF_STAGE_COUNT
 };
