@@ -79,7 +79,7 @@ def test_split_frame_prefers_the_recorded_freeze(ev):
 
 
 def _outcome(ev, club, ball, present):
-    return ev.Outcome("x.l3dump", club, ball, present, None, 40.0)
+    return ev.Outcome("x.l3dump", club, ball, present, present, None, 40.0)
 
 
 def test_summarize_counts_every_category(ev):
@@ -93,6 +93,11 @@ def test_summarize_counts_every_category(ev):
         "club": {"club": 1, "stuck": 1, "few": 1},
         "ball": {"ok": 1, "wrong": 1, "none": 1},
         "ball_present": 2,
+        "ball_present_strict": 2,
+        "ball_by_presence": {
+            "present": {"ok": 1, "wrong": 1, "none": 0},
+            "absent": {"ok": 0, "wrong": 0, "none": 1},
+        },
     }
 
 
@@ -233,7 +238,7 @@ def test_the_cli_passes_the_ball_search_through(ev, monkeypatch, tmp_path):
 
     def fake_evaluate(case, *, lib=None, ball_hypotheses=None, **_tuning):
         seen.append(ball_hypotheses)
-        return ev.Outcome("x", "club", "ok", True, 40.0, 40.0)
+        return ev.Outcome("x", "club", "ok", True, True, 40.0, 40.0)
 
     monkeypatch.setattr(ev, "evaluate", fake_evaluate)
     assert ev.main([str(tmp_path), "--ball-hypotheses", "on"]) == 0
@@ -257,7 +262,7 @@ def args_for(ev, *extra):
         impact=False,
     ):
         seen.update(tuning=tuning, from_club=fast_ball_from_club)
-        return ev.Outcome("x", "club", "ok", True, 40.0, 40.0)
+        return ev.Outcome("x", "club", "ok", True, True, 40.0, 40.0)
 
     return seen, fake_evaluate
 
@@ -327,7 +332,10 @@ def test_band_bins_reaches_the_replay_config_only_when_given(ev, monkeypatch, tm
 
     def fake_replay(data, config, lib=None):
         configs.append(config)
-        return SimpleNamespace(config=config, frames=[], points=[], fired_frame=None, launch=None)
+        return SimpleNamespace(
+            config=config, frames=[], points=[], fired_frame=None, launch=None,
+            frozen_impact_timestamp_us=None,
+        )
 
     monkeypatch.setattr(ev.fr, "replay_dump", fake_replay)
     path = tmp_path / "x.l3dump"
@@ -342,7 +350,8 @@ def test_band_bins_reaches_the_replay_config_only_when_given(ev, monkeypatch, tm
 
 def test_evaluate_attaches_the_impact_outcome_only_when_asked(ev, monkeypatch, tmp_path):
     result = SimpleNamespace(
-        config=ev.fr.ReplayConfig(tee_bin=29), frames=[], points=[], fired_frame=None, launch=None
+        config=ev.fr.ReplayConfig(tee_bin=29), frames=[], points=[], fired_frame=None, launch=None,
+        frozen_impact_timestamp_us=None,
     )
     monkeypatch.setattr(ev.fr, "replay_dump", lambda data, config, lib=None: result)
     marker = object()
@@ -362,7 +371,7 @@ def test_the_cli_passes_band_bins_and_impact_through(ev, monkeypatch, tmp_path, 
     def fake_evaluate(case, *, band_bins=None, impact=False, **_rest):
         seen.append((band_bins, impact))
         return ev.Outcome(
-            "x", "club", "ok", True, 40.0, 40.0, impact=impact_outcome if impact else None
+            "x", "club", "ok", True, True, 40.0, 40.0, impact=impact_outcome if impact else None
         )
 
     impact_outcome = impact
@@ -375,3 +384,105 @@ def test_the_cli_passes_band_bins_and_impact_through(ev, monkeypatch, tmp_path, 
     assert seen == [(None, False), (6.0, True)]
     written = json.loads(out.read_text(encoding="utf-8"))
     assert written["impact"] == ev.impact_eval.summarize_impact([impact])
+
+
+STEP = 40.0 * 0.003 / BIN_M  # bins per 3 ms frame at 40 m/s
+
+
+def chain(frames_ms, start_bin=50.0, speed=40.0):
+    """One target per listed frame (3 ms apart) on a 40 m/s line from start_bin at 0 ms."""
+    return [
+        frame_of(k, k * 3000, [start_bin + speed * (k * 0.003) / BIN_M]) for k in frames_ms
+    ]
+
+
+def test_gap_tolerant_ball_present_bridges_an_impact_gap(ev):
+    frames = chain([1, 5, 6])  # frames 2-4 missing: 9 ms gap
+    assert ev.ball_present(frames, 40.0, BIN_M) is False  # strict: consecutive only
+    assert ev.ball_present(frames, 40.0, BIN_M, max_gap_us=18_000) is True
+
+
+def test_gap_tolerant_ball_present_refuses_a_gap_longer_than_allowed(ev):
+    frames = chain([1, 9, 10])  # 24 ms gap
+    assert ev.ball_present(frames, 40.0, BIN_M, max_gap_us=18_000) is False
+
+
+def test_a_stationary_pair_is_not_a_ball_with_gaps_allowed(ev):
+    frames = [frame_of(k, k * 3000, [50.0, 53.0]) for k in range(1, 8)]
+    assert ev.ball_present(frames, 40.0, BIN_M, max_gap_us=18_000) is False
+
+
+def test_the_anchor_requires_the_chain_to_back_project_to_the_tee(ev):
+    frames = chain([4, 5, 6], start_bin=50.0)  # passes bin 50 at t = 0
+    assert ev.ball_present(frames, 40.0, BIN_M, max_gap_us=18_000, anchor=(50.0, 0, 15_000))
+    # The same chain judged against an impact 30 ms earlier does not back-project.
+    assert not ev.ball_present(
+        frames, 40.0, BIN_M, max_gap_us=18_000, anchor=(50.0, -30_000, 15_000)
+    )
+
+
+def test_ball_present_with_gaps_and_no_targets(ev):
+    assert ev.ball_present([], 40.0, BIN_M, max_gap_us=18_000) is False
+    assert ev.ball_present([frame_of(1, 3000, [])], 40.0, BIN_M, max_gap_us=18_000) is False
+
+
+def outcome(ev, ball, present, strict=None):
+    return ev.Outcome(
+        name="x", club="club", ball=ball, ball_present=present,
+        ball_present_strict=present if strict is None else strict, launch_mps=None, ops_mps=40.0,
+    )
+
+
+def test_summarize_splits_the_ball_verdicts_by_presence(ev):
+    outs = [
+        outcome(ev, "ok", True), outcome(ev, "none", True),
+        outcome(ev, "wrong", False, strict=False), outcome(ev, "none", False),
+    ]
+    s = ev.summarize(outs)
+    assert s["ball_by_presence"] == {
+        "present": {"ok": 1, "wrong": 0, "none": 1},
+        "absent": {"ok": 0, "wrong": 1, "none": 1},
+    }
+    assert s["ball_present"] == 2 and s["ball_present_strict"] == 2
+
+
+def split(present_ok, absent_none, absent_wrong, club=55):
+    return {
+        "captures": 93,
+        "club": {"club": club, "stuck": 0, "few": 0},
+        "ball_by_presence": {
+            "present": {"ok": present_ok, "wrong": 0, "none": 0},
+            "absent": {"ok": 0, "wrong": absent_wrong, "none": absent_none},
+        },
+    }
+
+
+def test_accept_split_passes_only_a_strict_improvement(ev):
+    base = split(present_ok=10, absent_none=5, absent_wrong=60)
+    assert ev.accept_split(split(11, 6, 59), base) == []
+    problems = ev.accept_split(split(10, 5, 60, club=54), base)
+    assert len(problems) == 4  # ok not higher, none not higher, wrong not lower, club below 55
+
+
+def test_a_reviewed_label_overrides_the_heuristic(ev, tmp_path, monkeypatch):
+    labels = SimpleNamespace(reviewed=True, ball=(1, 2, 3))
+    monkeypatch.setattr(ev, "load_labels", lambda _path: labels)
+    assert ev.labelled_presence(tmp_path / "x.l3dump") is True
+    labels.ball = ()
+    assert ev.labelled_presence(tmp_path / "x.l3dump") is False
+
+
+def test_an_unreviewed_or_broken_label_falls_back_to_the_heuristic(
+    ev, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        ev, "load_labels", lambda _path: SimpleNamespace(reviewed=False, ball=(1, 2, 3))
+    )
+    assert ev.labelled_presence(tmp_path / "x.l3dump") is None
+
+    def broken(_path):
+        raise ev.LabelError("bad file")
+
+    monkeypatch.setattr(ev, "load_labels", broken)
+    assert ev.labelled_presence(tmp_path / "x.l3dump") is None
+    assert "bad file" in capsys.readouterr().err

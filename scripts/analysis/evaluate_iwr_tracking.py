@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -49,6 +50,7 @@ from openflight.iwr6843.dump_viewer import (
     session_context,
     tee_bin_for,
 )
+from openflight.iwr6843.labels import LabelError, load_labels
 from openflight.iwr6843.shot import CLUB_MIN_BALL_MS, club_class
 
 MPH_TO_MPS = 0.44704
@@ -57,6 +59,10 @@ CLUB_MIN_STEP_BINS = 0.5
 CLUB_POINTS = 5
 CHAIN_RATE_BOUNDS = (0.7, 1.1)
 CHAIN_MIN_POINTS = 3
+# The label's own gap and back-projection allowances (spec E1): the tracker's
+# impact-region coast and the gate anchor's tolerance.
+GAP_MAX_US = 18_000
+ANCHOR_TOL_US = 15_000
 
 
 @dataclass(frozen=True)
@@ -77,6 +83,7 @@ class Outcome:
     club: str  # "club", "stuck" or "few"
     ball: str  # "ok", "wrong" or "none"
     ball_present: bool
+    ball_present_strict: bool
     launch_mps: float | None
     ops_mps: float
     launch_hla_deg: float | None = None
@@ -101,27 +108,76 @@ def ball_verdict(
     return "ok" if abs(launch_mps - ops_mps) <= tolerance * ops_mps else "wrong"
 
 
-def ball_present(frames: Sequence, ops_mps: float, bin_m: float) -> bool:
-    """A chain of targets across consecutive frames moving at the OPS speed."""
+def ball_present(
+    frames: Sequence,
+    ops_mps: float,
+    bin_m: float,
+    *,
+    max_gap_us: int | None = None,
+    anchor: tuple[float, int, int] | None = None,
+) -> bool:
+    """A chain of at least CHAIN_MIN_POINTS targets moving at the OPS speed.
+
+    Each point links to one earlier point at a rate within CHAIN_RATE_BOUNDS of
+    OPS: with max_gap_us None only a point in the immediately preceding frame
+    (the strict label), else any point up to max_gap_us earlier. With anchor
+    (tee bin, impact us, tolerance us) the line through the chain's first and
+    newest points must also pass the tee within the tolerance of the impact."""
     lo, hi = (bound * ops_mps for bound in CHAIN_RATE_BOUNDS)
-    previous: list[tuple[float, int]] = []  # (range bin, chain length) in the last frame
-    last_frame = last_us = None
+    # (frame, us, bin, chain length, first us, first bin) per target seen so far
+    nodes: list[tuple[int, int, float, int, int, float]] = []
     for frame in frames:
-        current: list[tuple[float, int]] = []
-        consecutive = last_frame is not None and frame.frame == last_frame + 1
-        dt_s = (frame.timestamp_us - last_us) * 1e-6 if consecutive else 0.0
+        current = []
         for target in frame.targets:
-            length = 1
-            if consecutive and dt_s > 0.0:
-                for range_bin, chain in previous:
-                    rate = (target.range_bin - range_bin) * bin_m / dt_s
-                    if lo <= rate <= hi:
-                        length = max(length, chain + 1)
-            if length >= CHAIN_MIN_POINTS:
+            best = (1, frame.timestamp_us, target.range_bin)
+            for n_frame, n_us, n_bin, n_len, n_first_us, n_first_bin in nodes:
+                dt_us = frame.timestamp_us - n_us
+                if max_gap_us is None:
+                    if n_frame != frame.frame - 1 or dt_us <= 0:
+                        continue
+                elif not 0 < dt_us <= max_gap_us:
+                    continue
+                rate = (target.range_bin - n_bin) * bin_m / (dt_us * 1e-6)
+                if lo <= rate <= hi and n_len + 1 > best[0]:
+                    best = (n_len + 1, n_first_us, n_first_bin)
+            length, first_us, first_bin = best
+            if length >= CHAIN_MIN_POINTS and _back_projects(
+                anchor, first_us, first_bin, frame.timestamp_us, target.range_bin, bin_m
+            ):
                 return True
-            current.append((target.range_bin, length))
-        previous, last_frame, last_us = current, frame.frame, frame.timestamp_us
+            current.append(
+                (frame.frame, frame.timestamp_us, target.range_bin, length, first_us, first_bin)
+            )
+        nodes.extend(current)
+        if max_gap_us is not None:
+            nodes = [n for n in nodes if frame.timestamp_us - n[1] <= max_gap_us]
     return False
+
+
+def _back_projects(anchor, first_us, first_bin, last_us, last_bin, bin_m) -> bool:
+    """True without an anchor; else whether the line through the two points
+    passes the tee bin within the anchor's tolerance of its impact time."""
+    if anchor is None:
+        return True
+    tee_bin, impact_us, tol_us = anchor
+    rate_bins_per_us = (last_bin - first_bin) / (last_us - first_us)
+    if rate_bins_per_us <= 0.0:
+        return False
+    cross_us = first_us - (first_bin - tee_bin) / rate_bins_per_us
+    return abs(cross_us - impact_us) <= tol_us
+
+
+def labelled_presence(path: Path) -> bool | None:
+    """A reviewed label's answer (a ball with at least CHAIN_MIN_POINTS points),
+    None without a reviewed label or when the label file cannot be read."""
+    try:
+        labels = load_labels(path)
+    except LabelError as error:
+        print(f"{path.name}: label ignored: {error}", file=sys.stderr)
+        return None
+    if labels is None or not labels.reviewed:
+        return None
+    return len(labels.ball) >= CHAIN_MIN_POINTS
 
 
 def split_frame(result) -> int | None:
@@ -201,11 +257,23 @@ def evaluate(
     split = split_frame(result)
     post = [f for f in result.frames if split is not None and f.frame >= split]
     launch = None if result.launch is None else float(result.launch.speed_mps)
+    tee_bin = float(config.dest_bin if config.dest_bin is not None else config.tee_bin)
+    impact_us = result.frozen_impact_timestamp_us
+    if impact_us is None and post:
+        impact_us = post[0].timestamp_us
+    anchor = None if impact_us is None else (tee_bin, int(impact_us), ANCHOR_TOL_US)
+    labelled = labelled_presence(case.path)
+    present = (
+        labelled
+        if labelled is not None
+        else ball_present(post, case.ops_mps, bin_width_m(), max_gap_us=GAP_MAX_US, anchor=anchor)
+    )
     return Outcome(
         name=case.path.name,
         club=club_verdict(result.points, split),
         ball=ball_verdict(launch, case.ops_mps),
-        ball_present=ball_present(post, case.ops_mps, bin_width_m()),
+        ball_present=present,
+        ball_present_strict=ball_present(post, case.ops_mps, bin_width_m()),
         launch_mps=launch,
         ops_mps=case.ops_mps,
         launch_hla_deg=None if result.launch is None else result.launch.hla_deg,
@@ -220,11 +288,21 @@ def summarize(outcomes: Iterable[Outcome]) -> dict:
     def count(field: str, values: tuple[str, ...]) -> dict[str, int]:
         return {v: sum(1 for o in outcomes if getattr(o, field) == v) for v in values}
 
+    verdicts = ("ok", "wrong", "none")
+
+    def by(present: bool) -> dict[str, int]:
+        return {
+            v: sum(1 for o in outcomes if o.ball_present == present and o.ball == v)
+            for v in verdicts
+        }
+
     return {
         "captures": len(outcomes),
         "club": count("club", ("club", "stuck", "few")),
-        "ball": count("ball", ("ok", "wrong", "none")),
+        "ball": count("ball", verdicts),
         "ball_present": sum(1 for o in outcomes if o.ball_present),
+        "ball_present_strict": sum(1 for o in outcomes if o.ball_present_strict),
+        "ball_by_presence": {"present": by(True), "absent": by(False)},
     }
 
 
@@ -244,6 +322,29 @@ def compare(summary: dict, baseline: dict, *, allow_more_none: int = 0) -> list[
             f"no launch: {summary['ball']['none']} > baseline {baseline['ball']['none']}"
             f" + {allow_more_none}"
         )
+    return problems
+
+
+CLUB_AT_IMPACT_FLOOR = 55
+
+
+def accept_split(summary: dict, baseline: dict) -> list[str]:
+    """Spec E2, against legacy re-run under the same label: what keeps the
+    hypotheses from becoming the default, one line each (empty: accepted)."""
+    now, base = summary["ball_by_presence"], baseline["ball_by_presence"]
+    problems = []
+    if now["present"]["ok"] <= base["present"]["ok"]:
+        problems.append(f"ball-present ok {now['present']['ok']} not above {base['present']['ok']}")
+    if now["absent"]["none"] <= base["absent"]["none"]:
+        problems.append(
+            f"ball-absent none {now['absent']['none']} not above {base['absent']['none']}"
+        )
+    if now["absent"]["wrong"] >= base["absent"]["wrong"]:
+        problems.append(
+            f"ball-absent wrong {now['absent']['wrong']} not below {base['absent']['wrong']}"
+        )
+    if summary["club"]["club"] < CLUB_AT_IMPACT_FLOOR:
+        problems.append(f"club at impact {summary['club']['club']} < {CLUB_AT_IMPACT_FLOOR}")
     return problems
 
 
@@ -271,6 +372,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("roots", nargs="+", type=Path, help="Folders searched for .l3dump files")
     parser.add_argument("--json", type=Path, help="Write the summary and every outcome here")
     parser.add_argument("--compare", type=Path, help="A baseline written by --json")
+    parser.add_argument("--accept", type=Path, help="Judge against a legacy baseline by spec E2")
     parser.add_argument("--allow-more-none", type=int, default=0)
     parser.add_argument(
         "--ball-hypotheses",
@@ -327,6 +429,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         written["impact"] = impact
     if args.json is not None:
         args.json.write_text(json.dumps(written, indent=2) + "\n", encoding="utf-8")
+    if args.accept is not None:
+        baseline = json.loads(args.accept.read_text(encoding="utf-8"))["summary"]
+        problems = accept_split(summary, baseline)
+        for line in problems:
+            print(f"NOT ACCEPTED: {line}")
+        if problems:
+            return 1
     if args.compare is not None:
         baseline = json.loads(args.compare.read_text(encoding="utf-8"))["summary"]
         problems = compare(summary, baseline, allow_more_none=args.allow_more_none)
