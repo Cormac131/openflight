@@ -239,6 +239,26 @@ Each kept post frame (`l3_considerBallTrack`):
 - **Hypotheses** (`l3_ball_hyp.c`, off by default: `L3_BALL_HYPOTHESES=0`)
   for the ball found rather than assumed; the joint club/ball search
   (`l3_joint_search.c`) is host-only, run by the replay.
+- **Ball fit** (`l3_ball_fit.c`): at RESULT the ball's direction is fitted
+  from the departing track's points, anchored at the tee (the ball track
+  origin's slant range and bearing at `teeBallHeightM - radarHeightM`), with
+  every point scored against the nearer of the direct path and the floor
+  reflection. It reports HLA and VLA with a reason (`l3_ball_fit_why_name`).
+  An uncertainty gate (finite-difference Hessian of the cost, covariance
+  scaled by observed rms squared over `angleSigma` squared, limit
+  `maxAngleSigmaRad` 3 deg) turns an ill-conditioned direction into an
+  invalid result ("uncertain") rather than a confident wrong one. It runs
+  once at RESULT, in the profile stage `reconstruct`.
+- **Club filter** (`l3_track_kf.c`): an extended Kalman filter over the
+  club's range and angles with a Rauch-Tung-Striebel smoother, plus a
+  filtered delivery (`l3_track_delivery_filtered`). It is host-only: the
+  replay runs it once at the end of a shot so the dump viewer can draw the
+  club's reconstructed points beside the raw angle points. The board does
+  not run it and the club's frozen delivery stays unfiltered, because the
+  filtered delivery regressed club speed and path on a recording and on
+  synthetic swings (about five approach points cannot pin the direction at
+  a 15 deg angle sigma). The library function is host-tested for when it is
+  tuned on labelled captures.
 - **Shot machine** (`l3_shot.c`) → on RESULT: **impact fit**
   (`l3_impact_fit.c`: impact from the club-in, club-out and ball-out tracks
   either side of the band), **launch** (`l3_launch.c`: the ball's fitted
@@ -367,6 +387,8 @@ source-structure tests.
 | `l3_joint_search.c` | Joint club/ball path search after impact — **host-only** (replay), not in the board build |
 | `l3_impact_fit.c` | Impact from the tracks either side of the band |
 | `l3_launch.c` | Launch from the ball's departure |
+| `l3_ball_fit.c` | Tee-anchored ball direction (HLA/VLA) with an uncertainty gate; board, at RESULT |
+| `l3_track_kf.c` | Club EKF + RTS smoother and filtered delivery; host/viewer only |
 | `l3_result.c` | Shot result packet with confidences |
 | `l3_profile.c`, `l3_timing.c` | Per-stage costs; latency and throughput |
 | `l3_detect_core.c` | Which core scores; fallback and latch; verify comparison bookkeeping |

@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **IWR6843 trajectory reconstruction.** The ball's direction is now fitted
+  on the board at RESULT from the departing track, anchored at the tee, and
+  reported with a reason; an uncertainty gate withholds HLA/VLA when the
+  per-point angle scatter leaves the direction ill-determined (with real
+  scatter of about 12 deg elevation and 27 deg azimuth most recorded ball
+  angles read "uncertain"; the published LCMF launch angle is unaffected).
+  A host-only club EKF and smoother reconstructs the club's points for the
+  dump viewer, which draws the raw angle points and the reconstruction
+  together; the club's frozen delivery stays unfiltered. A baseline of
+  scatter and angle reasons over the recordings is in
+  `docs/superpowers/specs/2026-10-01-trajectory-reconstruction-baseline.json`
+  (`scripts/analysis/evaluate_trajectory_reconstruction.py`). Needs a
+  firmware rebuild and reflash; the board image was not built on this host.
 - **IWR6843 detect pipeline made cheaper per frame, with the same answers.**
   The ball detector scans every eighth frame instead of every second, its
   counts and learning rates rescaled to the same times, and estimates the

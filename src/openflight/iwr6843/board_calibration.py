@@ -47,8 +47,8 @@ class BoardCalibration:  # pylint: disable=too-many-instance-attributes
             pitch_deg=math.degrees(cal.tilt_rad),
             yaw_deg=0.0,
             roll_deg=0.0,
-            # Always 0: the firmware subtracts azimuthOffsetRad in both l3_angle.c and
-            # l3_frames.c, so a non-zero value would be applied twice (tracked separately).
+            # Always 0: the firmware subtracts azimuthOffsetRad once, in l3_angle.c
+            # (l3_frames.c no longer applies it), so a non-zero value here is applied once.
             az_offset_rad=0.0,
             el_offset_deg=0.0,
             range_bias_m=float(cal.range_bias_m),

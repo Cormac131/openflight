@@ -247,6 +247,90 @@ the new per-point fields for both tracks and the new launch fields.
 Board: an acceptance run's timing lines for both fits are recorded against the
 budgets.
 
+## Deviations during planning (2026-10-01)
+
+1. The club EKF has no range-rate measurement: `radialVelocityMps` is derived from the same ranges.
+2. Club `accelSigmaMps2` defaults to 1500 (centripetal on a ~1.1 m arc at ~40 m/s), not 300.
+3. The angle update is two sequential scalar updates behind a joint 2-dof chi-square gate; the RTS
+   smoother solves a 6x6 Cholesky per step and keeps no smoothed covariance.
+4. The new constants are replay tunables (`tunables.py`); no new board `trackCfg` verbs.
+5. An invalid ball fit leaves every point `unfiltered` (filteredPosition = position); the viewer
+   draws no fitted line for it.
+6. During the fit every point scores the nearer of direct and reflection; `imageSepMinRad` only
+   labels `ambiguous`.
+7. Per-point confidence, hypothesis and accept flag are in the 3D hover, not the frame inspector.
+8. The replay also reconstructs both tracks at the end for the viewer. The board reconstructs only
+   the ball, at RESULT; it does not reconstruct the club at all (see Task 7 below).
+9. The tee anchor takes the ball track origin's slant range and bearing, at teeBallHeightM - radarHeightM.
+
+### Deviations during implementation (2026-10-01)
+
+- **Task 3, ball fit uncertainty gate.** At the measured per-point scatter the plan's fit reported
+  "valid" on 167 of 200 synthetic shots with a median error of 22 deg, because the radar looks down
+  the flight line and the direction is geometrically diluted. The fit gained an uncertainty gate: a
+  finite-difference Hessian of the cost at the optimum gives a covariance, scaled by the observed
+  rms squared over `angleSigma` squared (no floor at 1: with a floor, noise-free and 1 deg shots
+  reported about 15 deg sigma and nothing was ever valid). `hlaSigmaRad`/`vlaSigmaRad` are reported,
+  the new `maxAngleSigmaRad` (default 3 deg) rejects wide directions, and a new reason "uncertain"
+  was added. Measured on 200 synthetic shots (HLA 2, VLA 14): 1 deg per-point noise gives 200/200
+  valid with error p50 1.59 deg, p90 2.8 deg, max 4.4 deg; 3 deg gives 1 valid; 6 deg and 12 deg
+  give 0 valid and 0 confidently wrong. Consequence: with real per-point scatter (about 12 deg
+  elevation, 27 deg azimuth) the on-board ball HLA/VLA will mostly be reported invalid ("uncertain");
+  the published LCMF launch angle is unaffected. The fit config is also guarded (`minAccepted` at
+  least 3, `gridLevels` clamped 1..4, the forward square-root argument floored at 0), and the
+  pure-noise test asserts only that no direction is reported, with a separate deterministic case for
+  the "scatter" reason.
+- **Task 4.** Removing `lateFrom` from the launch struct meant the two `gLaunch.lateFrom` writes in
+  `l3_dump.c` and the late-window board-wiring test went in Task 4, not Task 6, so the tree compiles
+  at every commit. The VLA read-back test landed in Task 7 for the same reason (it needs
+  `angle_why`). The synthetic ball-tracker scene puts the tee at antenna height
+  (`teeBallHeightM = radarHeightM = 0.152`): geometry, not a tolerance.
+- **Task 5, club filter.** The smoothed-versus-raw bound is 0.65, not 0.5 (measured 0.56: smoothed
+  0.125 m against raw 0.224 m, insensitive to `accelSigma` 400-1500). The chi-square gate at
+  `angleSigma` 15 deg only rejects angle jumps beyond about 50 deg per axis (the test uses 60 deg on
+  both axes); smaller outliers are down-weighted, not rejected, and tightening needs a lower
+  `angleSigma` or `chi2Gate` from real club scatter. The filtered delivery keeps every reconstructed
+  point with its raw `anglesValid`, because a gated point's smoothed position is still range-updated
+  and neighbour-supported and dropping it can push the window under three points; the delivery fit's
+  `maxAngleResidualM` still guards the direction. Measured on synthetic swings (seed 11, 20 swings),
+  path RMS error was 18.85 deg raw and 14.30 deg filtered.
+- **Task 6, board wiring.** The board image was not built: this Windows host has no make, gcc or TI
+  toolchain, so the .bss fit of the club work area is unverified. That area (about 10.9 KB) was placed
+  in HS-RAM (`L3_HSRAM_DIAG`), since DATA_RAM is full and the link fails rather than overwrites if
+  it does not fit; it is fully initialised on each run, so the non-zeroed section is safe. (Task 7
+  then removed the club work area from the board altogether.)
+- **Task 7, the club stays unfiltered on the board.** The club's frozen delivery stays unfiltered
+  (`l3_track_delivery`) on the board and in the replay. The filtered delivery regressed a recording's
+  club speed from 32 to 44 m/s (outside the manifest's 22..40) and a synthetic club path from 3.0 to
+  1.1 deg: with about five approach points and a 15 deg angle sigma the filter cannot pin the
+  direction and pulls toward its prior. So the board does not run the club KF at the fire, and the
+  profile stage "reconstruct" covers the ball fit only. `l3_track_delivery_filtered` remains as a
+  host-tested library function, and the replay reconstructs the club once at the end of a shot for the
+  viewer only. The ball consumers do switch to the fitted points; the club's option 3A is overridden.
+  Restoring the filter on board is two calls at the fire once it is tuned on labelled captures.
+
+## Results on the recordings (2026-10-01)
+
+`scripts/analysis/evaluate_trajectory_reconstruction.py` over `tests/radar/recordings` (41 shots; the
+full JSON, with per-shot rows, is `2026-10-01-trajectory-reconstruction-baseline.json`). There are no
+angle labels, so this measures stability, not accuracy.
+
+| Track | Shots compared | Median scatter, raw points | Median scatter, reconstructed |
+|---|---|---|---|
+| Ball | 1 | 0.169 m | 1.3e-8 m |
+| Club | 34 | 0.362 m | 0.0050 m |
+
+Read the ball figure with care: the ball's reconstructed points are on a straight line by construction,
+so their scatter about a line is about zero whenever the fit is valid; it is compared on only 1 shot
+because the fit was valid on only 1 of 41. The club figure is the smoother's effect on the host/viewer
+reconstruction only; the board's club delivery is unfiltered.
+
+Ball `angle_why` counts over the 41 shots: uncertain 18, grid_edge 12, few_angles 6, scatter 2,
+no_launch 2, ok 1. Most shots end "uncertain" or "grid_edge": the real per-point angle scatter leaves
+the direction ill-determined, which the uncertainty gate reports instead of a confident wrong answer.
+This is a finding, not a retune: the ball fit's per-point sigma and gate limit are to be revisited
+against labelled captures.
+
 ## Open questions (resolved during implementation, not blocking)
 
 - A single ball `angleSigmaRad`, or separate azimuth and elevation values (27

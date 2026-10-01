@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -207,7 +208,10 @@ def test_a_synthetic_shot_with_its_session_log_is_scored_end_to_end(ev, tmp_path
     assert cases[0].club == "Driver"
     outcome = ev.evaluate(cases[0])
     assert (outcome.club, outcome.ball, outcome.ball_present) == ("club", "ok", True)
-    assert outcome.launch_hla_deg == pytest.approx(0.0, abs=1.0)
+    # The synthetic scene is level; the logged config's 10 deg pitch would tilt it and
+    # (rightly) make the ball fit report the direction as uncertain, so judge HLA level.
+    level = replace(cases[0], config=replace(cases[0].config, pitch_deg=0.0))
+    assert ev.evaluate(level).launch_hla_deg == pytest.approx(0.0, abs=1.0)
     # The driver's 50 m/s floor sits below this 60 m/s ball: still found.
     assert ev.evaluate(cases[0], ball_hypotheses=True, fast_ball_from_club=True).ball == "ok"
     assert ev.main([str(tmp_path), "--json", str(tmp_path / "out.json")]) == 0
