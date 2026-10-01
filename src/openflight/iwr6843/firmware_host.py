@@ -44,6 +44,7 @@ HOST_SOURCES = (
     "l3_scan.c",
     "l3_shot.c",
     "l3_ball_track.c",
+    "l3_ball_fit.c",
     "l3_result.c",
     "l3_profile.c",
     "l3_adaptive.c",
@@ -1637,6 +1638,47 @@ class AdaptiveWindows(ctypes.Structure):
     ]
 
 
+# l3_ball_fit.h
+BALL_FIT_WHY_NAMES = ("none", "ok", "few_angles", "scatter", "grid_edge", "no_tee")
+
+
+class BallFitCfg(ctypes.Structure):
+    """``l3_ball_fit_cfg_t``."""
+
+    _fields_ = [
+        ("angleSigmaRad", ctypes.c_float),
+        ("gateK", ctypes.c_float),
+        ("huberK", ctypes.c_float),
+        ("minAccepted", ctypes.c_uint32),
+        ("maxRmsRad", ctypes.c_float),
+        ("imageSepMinRad", ctypes.c_float),
+        ("radarHeightM", ctypes.c_float),
+        ("teeBallHeightM", ctypes.c_float),
+        ("hlaMinRad", ctypes.c_float),
+        ("hlaMaxRad", ctypes.c_float),
+        ("vlaMinRad", ctypes.c_float),
+        ("vlaMaxRad", ctypes.c_float),
+        ("gridSteps", ctypes.c_uint32),
+        ("gridLevels", ctypes.c_uint32),
+    ]
+
+
+class BallFit(ctypes.Structure):
+    """``l3_ball_fit_t``."""
+
+    _fields_ = [
+        ("hlaRad", ctypes.c_float),
+        ("vlaRad", ctypes.c_float),
+        ("rmsRad", ctypes.c_float),
+        ("tee", Vec3),
+        ("used", ctypes.c_uint32),
+        ("accepted", ctypes.c_uint32),
+        ("evaluations", ctypes.c_uint32),
+        ("valid", ctypes.c_uint8),
+        ("why", ctypes.c_uint8),
+    ]
+
+
 _U32 = ctypes.c_uint32
 _F32 = ctypes.c_float
 _P = ctypes.POINTER
@@ -1945,6 +1987,12 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     ),
     "l3_ball_hyps_struct_bytes": ([], _U32),
     "l3_ball_hyps_classify": ([_P(BallHyps), _P(BallHypVerdict)], None),
+    # l3_ball_fit.h
+    "l3_ball_fit_cfg_defaults": ([_P(BallFitCfg)], None),
+    "l3_ball_fit_max_evaluations": ([_P(BallFitCfg)], _U32),
+    "l3_ball_fit_direction": ([_F32, _F32, _P(Vec3)], None),
+    "l3_ball_fit_run": ([_P(BallFitCfg), _P(Vec3), _P(ClubTrack), _P(BallFit)], _U32),
+    "l3_ball_fit_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_ball_track_cfg_defaults": ([_P(BallTrackCfg)], None),
     "l3_ball_track_init": ([_P(BallTrack), _P(BallTrackCfg)], None),
     "l3_ball_track_reset": ([_P(BallTrack)], None),
