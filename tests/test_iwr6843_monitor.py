@@ -956,11 +956,14 @@ def test_tee_global_bin_is_the_absolute_fft_bin_inside_the_first_window(tmp_path
 
 
 def test_self_trigger_bin_is_two_short_of_the_ball_for_a_face_tape(tmp_path):
-    """Stock tee 1.575 m from the front → array 1.875 m → ball bin 40 → watch 38."""
+    """Stock tee 1.575 m from the front → array 1.605 m (30 mm behind the face)
+    → ball bin 34 → watch 32."""
+    from openflight.iwr6843.calibration import ARRAY_DEPTH_M
     from openflight.iwr6843.monitor import self_trigger_bin
 
     path = _cfg(tmp_path, "phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1")
-    assert self_trigger_bin(1.575, path) == 38
+    assert ARRAY_DEPTH_M == pytest.approx(0.030)
+    assert self_trigger_bin(1.575, path) == 32
 
 
 @pytest.mark.parametrize("tee_m", [0.5, 4.0])

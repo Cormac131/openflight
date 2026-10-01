@@ -1265,9 +1265,8 @@ def test_an_early_fire_does_not_make_the_frames_before_post_from_frame_post_impa
     ]
 
 
-# The kiosk's self-trigger as it runs on the board: the tee bin two short of
-# the stock ball, the default snr and tee band. The club track's range-only
-# impact fires it.
+# These 2026-08-24 recordings were armed at bin 38 (the old 0.30 m enclosure
+# depth). The club track's range-only impact fires the self-trigger.
 _KIOSK_TRIGGER = dict(
     tee_bin=38,
     snr=FIRMWARE_TRIGGER_DEFAULT_SNR,

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **IWR6843 enclosure depth is 30 mm, not 0.30 m.** `ARRAY_DEPTH_M` is added to a tape reading from the enclosure front. 0.30 m put the tee about six bins too far: a 1.7 m setting watched 2.0 m. The stock self-trigger bin is now 32 (was 38).
+
 ### Added
 - **IWR6843 trajectory reconstruction.** The ball's direction is now fitted
   on the board at RESULT from the departing track, anchored at the tee, and

@@ -568,8 +568,8 @@ class TestIWR6843ShotIntegration:
 
         assert "freeze_delay_s" not in captured
         # The monitor places the impact and ball windows on the tee, from the
-        # antenna: the tape reading is from the enclosure face, the array 0.30 m behind it.
-        assert captured["tee_range_m"] == pytest.approx(1.875)
+        # antenna: the tape reading is from the enclosure face, the array 30 mm behind it.
+        assert captured["tee_range_m"] == pytest.approx(1.605)
         assert captured["armed"] is False
         assert server_module.iwr6843_runtime.tdm_sign_policy == "positive"
         assert server_module.iwr6843_runtime_config["tdm_sign_policy"] == "positive"
@@ -585,7 +585,7 @@ class TestIWR6843ShotIntegration:
         captured = self._init_capturing_monitor_kwargs(monkeypatch, tmp_path)
 
         assert captured["tee_range_m"] == pytest.approx(1.575 + ARRAY_DEPTH_M)
-        assert server_module.iwr6843_runtime.calibration.tee_range_m == pytest.approx(1.875)
+        assert server_module.iwr6843_runtime.calibration.tee_range_m == pytest.approx(1.605)
         config = server_module.iwr6843_runtime_config
         assert config["tee_slant_range_m"] == 1.575
         assert config["array_depth_m"] == ARRAY_DEPTH_M
@@ -5526,20 +5526,20 @@ class TestSelfTriggerCli:
             server_module._self_trigger_config(_self_trigger_args(**{flag: value}))
 
     def test_switch_alone_watches_two_bins_short_of_the_ball_at_snr_1(self):
-        """A tee measured 1.575 m from the enclosure face is 1.875 m from the
-        antenna array (0.30 m behind the face): bin 40. The trigger watches two
+        """A tee measured 1.575 m from the enclosure face is 1.605 m from the
+        antenna array (30 mm behind the face): bin 34. The trigger watches two
         bins short of it, where the club reaches the ball as it is struck."""
         config = server_module._self_trigger_config(_self_trigger_args(iwr6843_self_trigger=True))
 
-        assert (config.tee_bin, config.snr) == (38, 1.0)
-        assert config.command == "triggerCfg 38 1.0 1"
+        assert (config.tee_bin, config.snr) == (32, 1.0)
+        assert config.command == "triggerCfg 32 1.0 1"
 
     @pytest.mark.parametrize(
         ("tee_m", "expected_bin"),
         [
-            (1.575, 38),  # the default setup
-            (1.524, 37),  # 2026-08-24: ball rested at bins 39-41
-            (2.200, 51),  # 2026-09-19: ball rested at bins 52-55
+            (1.575, 32),  # the default setup
+            (1.524, 31),
+            (2.200, 46),
         ],
     )
     def test_default_bin_follows_the_tee_distance_from_the_enclosure_face(
