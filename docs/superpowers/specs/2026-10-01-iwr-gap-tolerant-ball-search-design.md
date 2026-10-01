@@ -53,37 +53,41 @@ New in this spec:
 ### Forward search (`l3_ball_hyp.c`)
 
 - **G1 Corridor gate (switchable).** With `corridorGate` on, a target may start or extend a
-  hypothesis only if its implied launch velocity
-  `v_i = (r_i − r_anchor) / (t_i − t_anchor)` lies in
-  `[minDepartureMps − ε_i, maxSpeedMps + ε_i]`, `ε_i = (anchorRangeTolM + maxSpeedMps·anchorTolS) / Δt_i`.
-  Skipped while `Δt_i` is under `framePeriodUs`. This replaces the spawn band's far edge
-  (`spawnBeyondBins` is removed). Off: today's spawn band with its far edge kept, so the gate's
-  effect is measured alone.
+  hypothesis only if some impact time within the anchor's tolerance and some speed in
+  `[minDepartureMps, maxSpeedMps]` explain it:
+  `r − r_anchor ∈ [minDepartureMps·(Δt − tol) − anchorRangeTolM, maxSpeedMps·(Δt + tol) + anchorRangeTolM]`,
+  `Δt = t − anchorUs`, `tol = anchorTolUs`. The lower edge is negative (no constraint) until
+  `Δt > tol`, then rises with time, so a return that stays put is refused once enough time has
+  passed. Off: today's spawn band, far edge `spawnBeyondM` included, so the gate's effect is
+  measured alone (`spawnBeyondM` is used only with the gate off).
 - **G2 Stalled hypotheses drop.** A hypothesis with ≥ 3 points whose fitted rate is under
   `minDepartureMps` is dropped and its slot freed (counted in `dropped`).
 - **G3 Impact-region coast.** A hypothesis whose newest point is short of
-  `anchor + farWindowM` may coast `impactCoastUs` (default 18 000 µs); beyond it, `coastUs`
+  `anchor + impactRegionM` (default 0.5 m) may coast `impactCoastUs` (default 18 000 µs); beyond it, `coastUs`
   (default 6 000 µs, today's two frames at 3 ms). Both replace the frame-counted `maxMisses`. The
   association gate keeps widening by `gateMps · Δt`.
-- **G4 Deceleration reject.** At classification (≥ `classifyPoints`, so ≥ 4 points), fit the
-  older and newer halves (≥ 2 points each; the odd point goes to the newer half); if the rate
-  drops by more than `maxDecelMps2 · Δt_mid + 2·σ_Δ` the hypothesis does not qualify. `Δt_mid` is
-  the time between the halves' mean times; `σ_Δ` combines each half's rate uncertainty from a
-  fixed range noise of `maxResidualBins · binWidthM` (not the half's own residual, which is zero
-  for two points). With few points σ_Δ is large and the test is weak by construction; it bites on
-  longer tracks. 0 disables.
+- **G4 Deceleration reject.** At classification (≥ `classifyPoints` points), fit the older and
+  newer halves (≥ 2 points each; the odd point goes to the newer half); if the rate drops by more
+  than `maxDecelMps2 · Δt_mid + 2·σ_Δ` (default `maxDecelMps2` 200 m/s²) the hypothesis does not
+  qualify. `Δt_mid` is the time between the halves' mean times; `σ_Δ` combines the halves' slope
+  uncertainties `rangeNoiseM / sqrt(Σ(t − t̄)²)` with a fixed `rangeNoiseM` (default 0.012 m,
+  about a quarter bin). With 4 points over 6 ms the test cannot fire (σ_Δ ≈ 12 m/s); with 6
+  points at 3 ms a 35 → 20 m/s mix is rejected. Its reach therefore depends on `classifyPoints`,
+  which the ablation varies. 0 disables.
 - **G5 Metric configuration.** `gateBins → gateM`, `spawnBehindBins → spawnBehindM`,
-  `farWindowBins → farWindowM`, `maxMisses → coastUs`; converted to bins once in
+  `spawnBeyondBins → spawnBeyondM`, `farWindowBins → farWindowM`, `maxMisses → coastUs`; converted to bins once in
   `l3_ball_hyps_init` from `binWidthM`. Points stay in bins internally (targets arrive in bins).
   No setting assumes a frame period.
 
 ### Anchor and score
 
-- **A1 Anchor apart from acceptance.** `l3_ball_hyps_arm` / `l3_ball_track_arm` take an anchor
-  (`anchorBin`, `anchorUs`, `anchorTolUs`) and `acceptFromBin`. The anchor is the tee's sub-bin
-  range; `acceptFromBin` is the band's far edge when valid, else `anchorBin + farWindowM`
-  (whichever is further). No point short of `acceptFromBin` joins a hypothesis or is recovered.
-  The ball track's launch origin is the anchor.
+- **A1 Anchor apart from acceptance.** A new `l3_ball_anchor_t` (`l3_ball_anchor.c`) carries
+  `anchorBin` (the tee bin), `acceptFromBin` (the band's far edge when valid, else the tee bin:
+  today's arm bin), `gateUs` (today's arm time), `anchorUs`, `anchorTolUs`, `anchorSigmaUs` and
+  `source`. `l3_ball_hyps_arm` and `l3_ball_track_arm` take it. The hypotheses back-project to
+  `anchorBin` at `anchorUs`; their spawn band and far window are measured from `acceptFromBin`
+  as they were from the arm bin. The **legacy acquisition is unchanged**: it keeps
+  `acceptFromBin` as its origin and `gateUs` as its impact time, so its baseline holds.
 - **A2 Club-predicted impact time.** At arm, `l3_impact_fit_track(L3_FIT_CLUB_IN)` over the club
   track's newest points against the tee range. `why == OK` and `sigmaUs ≤ anchorMaxSigmaUs`
   (default 3 000): `anchorUs` is its time, `anchorTolUs = max(3σ, 2 000)`. Otherwise the gate /
@@ -116,8 +120,14 @@ New in this spec:
   order, refit; keep the merge only if the residual stays within `maxResidualBins`, otherwise
   adopt the hypothesis points alone. Seed the core in time order as today. Recovered points carry
   no angles (`anglesValid = 0`).
-- **B3 Visibility.** The verdict gains `recovered`; `l3_ball_track_format_status` prints it; the
-  replay output marks recovered points so the viewer can draw them apart.
+- **B3 Visibility.** The verdict gains `recovered` and `recoveredMask` (bit k: frame
+  `recoveredFirstFrame + k`); `l3_ball_track_format_status` prints the count; `ReplayResult`
+  gains `recovered_frames`. Drawing them in the viewer is a follow-up.
+- **B4 Lives in the ball track.** The history is a member of `l3_ball_track_t` and is fed by
+  `l3_ball_track_update_joint` itself, so the board and the replay call nothing new (R7 holds by
+  construction). With `historySnr < snr` the caller extracts at the lower threshold
+  (`l3_ball_track_extract_snr`) and the track passes only targets with `snr >= snr` to the
+  searches.
 
 ### Evaluation (`scripts/analysis/evaluate_iwr_tracking.py`)
 
@@ -137,7 +147,8 @@ New in this spec:
   line reaches that range within ±2 frame periods of the time its speed predicts. A report column
   only; no firmware code knows the net.
 - **E4 Ablation.** `BallTuning` and the CLI expose `--corridor-gate on|off`,
-  `--impact-coast-ms`, `--max-decel`, `--recover on|off`, `--recover-gate-m`, `--history-snr`;
+  `--impact-coast-ms`, `--max-decel`, `--classify-points`, `--recover on|off`, `--recover-gate-m`,
+  `--history-snr`, and `--far-window-m` (replacing `--far-window-bins`);
   the Results section reports each change's effect alone and together.
 
 ### Parity and rollout
