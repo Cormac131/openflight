@@ -93,9 +93,11 @@ static int32_t l3_kf_measure(const float x[N], float z[3], float H[3][N])
     return 1;
 }
 
-/* x, P forward by dt: F = [I dt*I; 0 I], white-acceleration Q per axis. */
+/* x, P forward by dt: F = [I dt*I; 0 I], white-acceleration Q per axis.
+ * The 2D arrays stay unqualified: TI armcl rejects float (*)[N] passed as
+ * const float (*)[N]. */
 static void l3_kf_predict(const l3_track_kf_cfg_t *cfg, float dt, const float x[N],
-                          const float P[N][N], float xo[N], float Po[N][N])
+                          float P[N][N], float xo[N], float Po[N][N])
 {
     float q = cfg->accelSigmaMps2 * cfg->accelSigmaMps2;
     float dt2 = dt * dt;
@@ -160,7 +162,7 @@ static int32_t l3_kf_update1(float x[N], float P[N][N], const float H[N], float 
 
 /* The angle pair's chi-square nu' S^-1 nu, S = H P H' + var I (2x2). -1 when
  * S is singular. */
-static float l3_kf_angle_chi2(const float P[N][N], float H[3][N], const float nu[2],
+static float l3_kf_angle_chi2(float P[N][N], float H[3][N], const float nu[2],
                               float var)
 {
     float PH1[N];
@@ -193,7 +195,7 @@ static float l3_kf_angle_chi2(const float P[N][N], float H[3][N], const float nu
 }
 
 /* A y = b for symmetric positive-definite A by Cholesky; 0 when A is not. */
-static int32_t l3_kf_solve(const float A[N][N], const float b[N], float y[N])
+static int32_t l3_kf_solve(float A[N][N], const float b[N], float y[N])
 {
     float L[N][N];
     float t[N];
