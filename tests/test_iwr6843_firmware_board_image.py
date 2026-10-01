@@ -105,6 +105,8 @@ def test_the_board_ball_track_drops_exactly_the_hypotheses(host, board):
     assert host_bytes == ctypes.sizeof(fw.BallTrack)
     saved = ctypes.sizeof(fw.BallHyps) + ctypes.sizeof(fw.BallHypVerdict)
     saved += ctypes.sizeof(fw.BallHypsCfg)  # the track's copy of its cfg
+    saved += ctypes.sizeof(fw.BallHistory)  # L3_BALL_RECOVER
+    saved += ctypes.sizeof(fw.BallRecoverCfg) + 8  # recover, historySnr
     assert board.l3_ball_track_struct_bytes() == host_bytes - saved
 
 

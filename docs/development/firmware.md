@@ -1433,6 +1433,7 @@ board image compiles some features out through `L3_FEATURE_DEFS` in
 | Switch | Board | Host | What it drops |
 |---|---|---|---|
 | `L3_BALL_HYPOTHESES` | `0` | `1` | The ball-hypothesis search. It is off at run time until the recorded captures justify it (~1.6 KB). |
+| `L3_BALL_RECOVER` | `0` | `1` | The post-impact target history and the backward recovery of the frames an adopted ball hypothesis missed. Needs `L3_BALL_HYPOTHESES` (~2.6 KB). |
 | `L3_TRIG_LOG_DEPTH` | `48U` | `128U` | Older trigger flight-recorder records (~2.2 KB) |
 | `L3_TRIG_TRACE_DEPTH` | `24U` | `64U` | Older trigger raw-input trace entries (~1.3 KB) |
 

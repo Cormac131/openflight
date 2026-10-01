@@ -1328,6 +1328,9 @@ class BallTrackCfg(ctypes.Structure):
         ("anchorMaxSigmaUs", ctypes.c_float),
         ("fit", BallFitCfg),
         ("hyps", BallHypsCfg),
+        ("recover", ctypes.c_uint32),
+        ("historySnr", ctypes.c_float),
+        ("rec", BallRecoverCfg),
     ]
 
 
@@ -1349,6 +1352,7 @@ class BallTrack(ctypes.Structure):
         ("counters", ctypes.c_uint32 * len(BALL_TRACK_WHY_NAMES)),
         ("hyps", BallHyps),
         ("verdict", BallHypVerdict),
+        ("history", BallHistory),
     ]
 
 
@@ -1974,6 +1978,7 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
         [_P(BallTrack), _P(TargetObs), _U32, _U32, _U32, _U32],
         ctypes.c_int32,
     ),
+    "l3_ball_track_extract_snr": ([_P(BallTrackCfg), _F32], _F32),
     "l3_ball_track_struct_bytes": ([], _U32),
     "l3_ball_track_set_angles": (
         [_P(BallTrack), _F32, _F32, ctypes.c_uint8, _F32],

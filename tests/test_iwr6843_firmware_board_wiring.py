@@ -311,6 +311,9 @@ def test_ball_snr_is_a_track_cfg_sub_mode():
 def test_ball_extraction_uses_the_configured_ball_snr_else_the_default():
     ball_track = body("l3_considerBallTrack")
     assert "params.snr = (gBallSnr > 0.0F) ? gBallSnr : gBallTrackCfg.snr;" in ball_track
+    # ... lowered to the history's snr with recovery on (the replay's same call).
+    lowered = "params.snr = l3_ball_track_extract_snr(&gBallTrack.cfg, params.snr);"
+    assert ball_track.index(lowered) > ball_track.index("params.snr = (gBallSnr")
 
 
 def test_ball_angles_take_the_ball_tracks_rate_for_the_tdm_branch():

@@ -600,6 +600,7 @@ class ReplayResult:
     # the dump said (retention report / window change) or it fell back to all.
     ball_track_frames: int = 0
     ball_track_frames_known: bool = False
+    recovered_frames: tuple[int, ...] = ()  # frames the backward pass added at adoption
 
     @property
     def retain_windows(self) -> list[RetainSummary]:
@@ -680,6 +681,16 @@ def _delivery_summary(delivery: fw.Delivery) -> DeliverySummary | None:
             float(delivery.velocity.y),
             float(delivery.velocity.z),
         ),
+    )
+
+
+def recovered_frames(verdict: fw.BallHypVerdict) -> tuple[int, ...]:
+    """The frames the backward pass added at adoption: bit k of recoveredMask
+    is frame recoveredFirstFrame + k."""
+    return tuple(
+        int(verdict.recoveredFirstFrame) + bit
+        for bit in range(32)
+        if verdict.recoveredMask >> bit & 1
     )
 
 
@@ -1460,6 +1471,7 @@ def replay_dump(
         frozen_impact_timestamp_us=frozen_impact_us,
         ball_track_frames=int(shot_cfg.ballTrackFrames),
         ball_track_frames_known=known_post is not None,
+        recovered_frames=recovered_frames(ball_track.verdict),
         speed_mps=club_speed,
         fit_slope_bins_per_s=club_slope,
         fit_residual_bins=club_residual,
@@ -1889,7 +1901,12 @@ def _replay_post_frame(  # pylint: disable=too-many-arguments,too-many-locals
     through the scene the ball leaves (the ball's claim and rate, the band it
     coasts across), angles for the ball point, the launch fit and the shot
     machine's post-impact transitions."""
-    ball_params = fw.ObsParams(params.stat, ball_track.cfg.snr, params.loopPeriodS, params.subBin)
+    ball_params = fw.ObsParams(
+        params.stat,
+        lib.l3_ball_track_extract_snr(ctypes.byref(ball_track.cfg), ball_track.cfg.snr),
+        params.loopPeriodS,
+        params.subBin,
+    )
     if scan_cfg is not None and frozen_floor is not None and band.valid:
         found, count, floor = _scan_post_impact(
             lib,

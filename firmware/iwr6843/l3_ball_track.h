@@ -26,6 +26,7 @@
 
 #include "l3_club_track.h"
 #include "l3_ball_hyp.h"
+#include "l3_ball_recover.h"
 #include "l3_frames.h"
 #include "l3_ball_anchor.h"
 #include "l3_ball_fit.h"
@@ -60,6 +61,15 @@ typedef struct {
     l3_ball_fit_cfg_t fit;
 #if L3_BALL_HYPOTHESES
     l3_ball_hyps_cfg_t hyps;      /* binWidthM and velocitySpanMps come from core */
+#endif
+#if L3_BALL_RECOVER
+    /* Recover the frames the adopted hypothesis missed from the post-impact
+     * history (l3_ball_recover.h). historySnr under snr (0: the same) lets the
+     * history hold weaker returns than the searches see. */
+    uint32_t recover;
+    float    historySnr;
+    l3_ball_recover_cfg_t rec;    /* binWidthM and velocitySpanMps come from core;
+                                   * maxResidualBins and dopplerToleranceMps from hyps */
 #endif
 } l3_ball_track_cfg_t;
 
@@ -96,6 +106,14 @@ typedef struct {
     l3_ball_hyps_t hyps;
     l3_ball_hyp_verdict_t verdict; /* the last classification; index -1 before one */
 #endif
+#if L3_BALL_RECOVER
+    /* Every searching frame's targets since arming (reset with the arming, so
+     * no frame of a previous shot is ever recovered). Adoption merges the
+     * adopted hypothesis's points with the ones recovered here; recovered
+     * points carry no angles and no clubStat (the history does not keep the
+     * club's stat). */
+    l3_ball_history_t history;
+#endif
 } l3_ball_track_t;
 
 void l3_ball_track_cfg_defaults(l3_ball_track_cfg_t *cfg);
@@ -131,6 +149,9 @@ int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targ
 int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t *targets,
                                    uint32_t n, uint32_t frame, uint32_t timestampUs,
                                    uint32_t clubIndex);
+/* The extraction threshold for the post window: searchSnr, or the history's
+ * lower historySnr with recovery on. */
+float l3_ball_track_extract_snr(const l3_ball_track_cfg_t *cfg, float searchSnr);
 /* sizeof(l3_ball_track_t), for the ctypes mirror's layout check. */
 uint32_t l3_ball_track_struct_bytes(void);
 /* Angles for the point the last update appended; see l3_track_set_angles. */

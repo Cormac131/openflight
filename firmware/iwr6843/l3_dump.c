@@ -3659,8 +3659,10 @@ static void l3_considerBallTrack(uint32_t slot)
     gTrigBusy = 1U;
     ticks = Cycleprofiler_getTimeStamp();
     params.stat = gTrigCfg.stat;
-    /* A departing ball is a weaker return than a club: its own snr. */
+    /* A departing ball is a weaker return than a club: its own snr, and with
+     * recovery on the history's lower one (l3_ball_track_extract_snr). */
     params.snr = (gBallSnr > 0.0F) ? gBallSnr : gBallTrackCfg.snr;
+    params.snr = l3_ball_track_extract_snr(&gBallTrack.cfg, params.snr);
     params.loopPeriodS = gTrigLoopPeriodS;
     params.subBin = gObsSubBin;
     if (gImpactFitCfg.bandBins > 0.0F && gBand.valid) {

@@ -458,6 +458,8 @@ def test_post_impact_frames_go_to_the_ball_tracker_and_the_launch_is_recovered(l
     bins = [p.range_bin for p in result.ball_points]
     assert all(b > a for a, b in zip(bins, bins[1:])), "the ball only ever departs"
     assert "balltrack armed=1 confirmed=1" in result.ball_status
+    # The legacy search (useHypotheses 0) never recovers frames.
+    assert result.recovered_frames == () and result.ball_status.endswith(" rec=0")
 
 
 def test_the_shot_machine_walks_the_whole_sequence_on_the_replay(lib, whole_shot):
@@ -1409,3 +1411,27 @@ def test_the_launch_line_says_why_the_angles_are_missing():
     )
     line = fr._launch_line(SimpleNamespace(launch=launch))
     assert "why=uncertain angles=5" in line
+
+
+
+def test_recovered_frames_decode_the_verdict_mask():
+    verdict = fw.BallHypVerdict(recovered=3, recoveredFirstFrame=12, recoveredMask=0b1011)
+    assert fr.recovered_frames(verdict) == (12, 13, 15)
+    assert fr.recovered_frames(fw.BallHypVerdict()) == ()
+    top = fw.BallHypVerdict(recovered=1, recoveredFirstFrame=5, recoveredMask=1 << 31)
+    assert fr.recovered_frames(top) == (36,)
+
+
+def test_the_hypothesis_replay_reports_its_recovery(lib, whole_shot):
+    """The synthetic shot's search misses no frame: nothing is recovered, and
+    the report, the status line and the verdict agree."""
+    config = ReplayConfig(
+        tee_bin=TEE_BIN,
+        ball_hypotheses=True,
+        overrides={"ball.fit.teeBallHeightM": 0.152, "ball.fit.radarHeightM": 0.152},
+    )
+    result = replay_dump(whole_shot, config, lib=lib)
+    verdict = result.ball_track.verdict
+    assert result.ball_track.confirmed and verdict.index >= 0
+    assert result.recovered_frames == fr.recovered_frames(verdict) == ()
+    assert result.ball_status.endswith(f" rec={verdict.recovered}")

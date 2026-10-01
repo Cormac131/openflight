@@ -916,3 +916,176 @@ def test_a_launch_call_after_reconstruct_resets_the_angles(lib):
     lib.l3_ball_track_launch(ctypes.byref(ball.track), ctypes.byref(launch))
     assert not launch.hlaValid and not launch.vlaValid
     assert launch.angleWhy == 0 and launch.anglesAccepted == 0
+
+
+# --- recovery at adoption (l3_ball_recover.c) ---------------------------------
+
+
+def joint(ball, scene):
+    frames = scene.build()
+    for f in frames:
+        arr = (fw.TargetObs * max(1, len(f.targets)))(*f.targets)
+        ball.lib.l3_ball_track_update_joint(
+            ctypes.byref(ball.track), arr, len(f.targets), f.frame, f.timestamp_us, fw.TRACK_NO_TARGET
+        )
+    return frames
+
+
+def lone_ball(frames):
+    """A ball from the origin with no club return, every frame."""
+    return TwoTracks(
+        origin_bin=ORIGIN_BIN, gate_us=IMPACT_US, frame_us=FRAME_US, frames=frames, club_visible=False
+    )
+
+
+BALL_STEP_BINS = 42.0 * FRAME_US * 1e-6 / BIN_M
+
+
+def stills_then_ball(ball):
+    """Four strong still returns fill every slot in frames 1-3, so the ball's
+    hypothesis only starts at frame 3 (the stills drop as stalled there);
+    frames 1-6, adoption at frame 6 (the ball's fourth point).
+
+    The stills sit 9 bins apart: a one-point hypothesis's window reaches
+    ~7.9 bins out, so each still extends only itself (closer stills would
+    feed each other and never stall)."""
+    lib = ball.lib
+    step = BALL_STEP_BINS
+    for k in range(1, 7):
+        ts = IMPACT_US + k * FRAME_US
+        targets = (
+            [obs(k, ts, ORIGIN_BIN + d, 9000.0, 0.0) for d in (12.0, 21.0, 30.0, 39.0)]
+            if k <= 3
+            else []
+        )
+        targets.append(obs(k, ts, ORIGIN_BIN + step * k, 1500.0, 42.0))
+        arr = (fw.TargetObs * len(targets))(*targets)
+        lib.l3_ball_track_update_joint(
+            ctypes.byref(ball.track), arr, len(targets), k, ts, fw.TRACK_NO_TARGET
+        )
+        assert bool(ball.track.confirmed) == (k == 6)
+
+
+def test_adoption_recovers_the_frames_the_search_missed(lib):
+    """The history still holds the ball's frames 1 and 2: adoption recovers them."""
+    ball = Ball(lib, useHypotheses=1)
+    ball.arm()
+    stills_then_ball(ball)
+    v = ball.track.verdict
+    assert ball.track.confirmed
+    assert (v.recovered, v.recoveredFirstFrame, v.recoveredMask) == (2, 1, 0b11)
+    assert ball.track.core.count == 6  # frames 1-6: two recovered + the four adopted
+    bins = [round(ORIGIN_BIN + BALL_STEP_BINS * k, 3) for k in range(1, 7)]
+    assert core_bins(lib, ball.track) == bins
+
+
+def test_recovery_off_leaves_the_missed_frames_out(lib):
+    ball = Ball(lib, useHypotheses=1, recover=0)
+    ball.arm()
+    stills_then_ball(ball)
+    v = ball.track.verdict
+    assert (v.recovered, v.recoveredFirstFrame, v.recoveredMask) == (0, 0, 0)
+    assert ball.track.core.count == 4  # frames 3-6: the hypothesis's own
+
+
+def test_recovery_off_seeds_only_the_hypothesis_points(lib):
+    ball = Ball(lib, useHypotheses=1, recover=0)
+    ball.arm()
+    joint(ball, lone_ball(8))
+    assert ball.track.confirmed and ball.track.verdict.recovered == 0
+
+
+def test_the_history_is_fed_while_searching(lib):
+    ball = Ball(lib, useHypotheses=1)
+    ball.arm()
+    joint(ball, lone_ball(3))
+    assert ball.track.history.count == 3
+
+
+def test_rearming_empties_the_history(lib):
+    """No frame from a previous shot may ever be recovered."""
+    ball = Ball(lib, useHypotheses=1)
+    ball.arm()
+    joint(ball, lone_ball(3))
+    assert ball.track.history.count == 3
+    ball.arm()
+    assert ball.track.history.count == 0
+
+
+def test_init_starts_with_an_empty_history(lib):
+    ball = Ball(lib, useHypotheses=1)
+    assert (ball.track.history.count, ball.track.history.next) == (0, 0)
+
+
+def test_the_track_recovery_cfg_shares_the_core_and_hypothesis_settings(lib):
+    cfg = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
+    assert (cfg.recover, cfg.historySnr) == (1, 0.0)
+    assert cfg.rec.gateM == pytest.approx(0.028125) and cfg.rec.tieBins == pytest.approx(0.1)
+    cfg.core.binWidthM = 0.05
+    cfg.core.velocitySpanMps = 12.0
+    cfg.hyps.maxResidualBins = 1.5
+    cfg.hyps.dopplerToleranceMps = 3.0
+    track = fw.BallTrack()
+    lib.l3_ball_track_init(ctypes.byref(track), ctypes.byref(cfg))
+    rec = track.cfg.rec
+    assert (rec.binWidthM, rec.velocitySpanMps) == pytest.approx((0.05, 12.0))
+    assert (rec.maxResidualBins, rec.dopplerToleranceMps) == pytest.approx((1.5, 3.0))
+
+
+def test_adoption_keeps_each_points_coherence(lib):
+    ball = Ball(lib, useHypotheses=1)
+    ball.arm()
+    joint(ball, lone_ball(8))
+    assert ball.track.confirmed
+    point = fw.TrackPoint()
+    lib.l3_track_point(ctypes.byref(ball.track.core), 0, ctypes.byref(point))
+    assert point.coherence == pytest.approx(0.9)  # obs() coherence, not 1.0
+
+
+def test_the_status_reports_the_recovered_frames(lib):
+    ball = Ball(lib, useHypotheses=1)
+    ball.arm()
+    status = fw.c_text(lib.l3_ball_track_format_status, ctypes.byref(ball.track))
+    assert status.endswith(" lost=0 rec=0")
+
+
+def test_extract_snr_is_the_lower_history_threshold_only_with_recovery(lib):
+    cfg = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
+    assert lib.l3_ball_track_extract_snr(ctypes.byref(cfg), 1.0) == 1.0  # historySnr 0: same
+    cfg.historySnr = 0.7
+    assert lib.l3_ball_track_extract_snr(ctypes.byref(cfg), 1.0) == pytest.approx(0.7)
+    cfg.historySnr = 1.5  # above the search's: the search's
+    assert lib.l3_ball_track_extract_snr(ctypes.byref(cfg), 1.0) == 1.0
+    cfg.historySnr = 0.7
+    cfg.recover = 0
+    assert lib.l3_ball_track_extract_snr(ctypes.byref(cfg), 1.0) == 1.0
+
+
+def test_targets_under_the_search_snr_reach_only_the_history(lib):
+    ball = Ball(lib, useHypotheses=1, historySnr=0.5)
+    ball.arm()
+    weak = target(1, ORIGIN_BIN + 3.0)
+    weak.snr = 0.6  # above historySnr, under snr (1.0)
+    arr = (fw.TargetObs * 1)(weak)
+    lib.l3_ball_track_update_joint(
+        ctypes.byref(ball.track), arr, 1, 1, FRAME_US, fw.TRACK_NO_TARGET
+    )
+    assert ball.track.history.count == 1
+    assert not any(ball.track.hyps.hyp[i].active for i in range(fw.BALL_HYP_MAX))
+
+
+def test_the_club_claim_survives_the_snr_filter(lib):
+    """Dropping weak targets shifts the indices: the club's claim must follow
+    its target, or the searches would treat the club as a candidate."""
+    ball = Ball(lib, useHypotheses=1, historySnr=0.5)
+    ball.arm()
+    weak = target(1, ORIGIN_BIN + 2.0)
+    weak.snr = 0.6
+    club = target(1, ORIGIN_BIN + 3.0)
+    arr = (fw.TargetObs * 2)(weak, club)
+    lib.l3_ball_track_update_joint(ctypes.byref(ball.track), arr, 2, 1, FRAME_US, 1)
+    frame = lib.l3_ball_history_at(ctypes.byref(ball.track.history), 0).contents
+    assert frame.clubMask == 0b10  # the history keeps the caller's indices
+    assert not any(ball.track.hyps.hyp[i].active for i in range(fw.BALL_HYP_MAX))
