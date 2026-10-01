@@ -1053,6 +1053,7 @@ def test_the_status_reports_the_recovered_frames(lib):
 def test_extract_snr_is_the_lower_history_threshold_only_with_recovery(lib):
     cfg = fw.BallTrackCfg()
     lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
+    cfg.useHypotheses = 1
     assert lib.l3_ball_track_extract_snr(ctypes.byref(cfg), 1.0) == 1.0  # historySnr 0: same
     cfg.historySnr = 0.7
     assert lib.l3_ball_track_extract_snr(ctypes.byref(cfg), 1.0) == pytest.approx(0.7)
@@ -1089,3 +1090,92 @@ def test_the_club_claim_survives_the_snr_filter(lib):
     frame = lib.l3_ball_history_at(ctypes.byref(ball.track.history), 0).contents
     assert frame.clubMask == 0b10  # the history keeps the caller's indices
     assert not any(ball.track.hyps.hyp[i].active for i in range(fw.BALL_HYP_MAX))
+
+
+def test_the_legacy_extraction_keeps_the_search_snr(lib):
+    """Only the hypothesis search fills the history: the legacy acquisition
+    (useHypotheses 0) extracts at snr whatever historySnr says."""
+    cfg = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
+    cfg.historySnr = 0.5
+    assert cfg.useHypotheses == 0
+    assert lib.l3_ball_track_extract_snr(ctypes.byref(cfg), 1.0) == 1.0
+
+
+def ball_obs(k, *, snr=None):
+    """The 42 m/s ball of stills_then_ball in post frame k; snr overrides obs()'s."""
+    t = obs(k, IMPACT_US + k * FRAME_US, ORIGIN_BIN + BALL_STEP_BINS * k, 1500.0, 42.0)
+    if snr is not None:
+        t.snr = snr
+    return t
+
+
+def joint_frame(ball, k, targets, club_index=fw.TRACK_NO_TARGET) -> int:
+    arr = (fw.TargetObs * max(1, len(targets)))(*targets)
+    return ball.lib.l3_ball_track_update_joint(
+        ctypes.byref(ball.track), arr, len(targets), k, IMPACT_US + k * FRAME_US, club_index
+    )
+
+
+def test_indices_stay_into_the_callers_list_under_the_snr_filter(lib):
+    """A weak return listed first is dropped before the search, but the
+    indices the track reports (each hypothesis's claim, the adopted and the
+    tracked point) are the caller's: the board and the replay take angles
+    and the ball claim from their own lists with them."""
+    ball = Ball(lib, useHypotheses=1, historySnr=0.5)
+    ball.arm()
+    adopted_at = None
+    for k in range(1, 10):
+        weak = obs(k, IMPACT_US + k * FRAME_US, ORIGIN_BIN + 30.0, 9000.0, 0.0)
+        weak.snr = 0.6
+        joint_frame(ball, k, [weak, ball_obs(k)])
+        if not ball.track.confirmed:
+            claims = [
+                ball.track.hyps.hyp[i].lastTargetIndex
+                for i in range(fw.BALL_HYP_MAX)
+                if ball.track.hyps.hyp[i].active
+            ]
+            assert claims == [1], f"frame {k}: {claims}"
+            continue
+        adopted_at = adopted_at or k
+        assert ball.track.lastTargetIndex == 1, f"frame {k} (adopted at {adopted_at})"
+    assert adopted_at is not None and adopted_at < 9, "tracking continued after adoption"
+
+
+def test_the_legacy_acquisition_never_takes_a_return_under_snr(lib):
+    """historySnr is the history's alone: legacy (useHypotheses 0) is unchanged."""
+    weak = Ball(lib, historySnr=0.5)
+    weak.arm()
+    for k in range(1, 7):
+        joint_frame(weak, k, [ball_obs(k, snr=0.6)])
+    assert weak.track.core.count == 0 and not weak.track.confirmed
+    strong = Ball(lib, historySnr=0.5)  # the control: the same ball at snr is a flight
+    strong.arm()
+    for k in range(1, 7):
+        joint_frame(strong, k, [ball_obs(k)])
+    assert strong.track.confirmed
+
+
+def test_a_confirmed_ball_never_appends_a_return_under_snr(lib):
+    ball = Ball(lib, useHypotheses=1, historySnr=0.5)
+    ball.arm()
+    k = 0
+    while not ball.track.confirmed and k < 8:
+        k += 1
+        joint_frame(ball, k, [ball_obs(k)])
+    assert ball.track.confirmed
+    count = ball.track.core.count
+    assert joint_frame(ball, k + 1, [ball_obs(k + 1, snr=0.6)]) == 0
+    assert ball.track.core.count == count
+    assert ball.track.lastTargetIndex == fw.TRACK_NO_TARGET
+    assert joint_frame(ball, k + 2, [ball_obs(k + 2)]) == 1  # at snr it is tracked again
+
+
+def test_the_history_is_not_fed_once_the_ball_is_confirmed(lib):
+    ball = Ball(lib, useHypotheses=1)
+    ball.arm()
+    joint(ball, lone_ball(8))
+    assert ball.track.confirmed
+    held = ball.track.history.count
+    joint_frame(ball, 9, [ball_obs(9)])
+    assert ball.track.history.count == held

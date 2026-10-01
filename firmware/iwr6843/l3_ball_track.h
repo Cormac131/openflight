@@ -150,7 +150,10 @@ int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t
                                    uint32_t n, uint32_t frame, uint32_t timestampUs,
                                    uint32_t clubIndex);
 /* The extraction threshold for the post window: searchSnr, or the history's
- * lower historySnr with recovery on. */
+ * lower historySnr with recovery and the hypothesis search on. Whatever is
+ * extracted, the track itself (legacy, search and confirmed) only uses
+ * targets at snr or above; the weaker ones reach only the history, and the
+ * indices the track reports stay indices into the caller's list. */
 float l3_ball_track_extract_snr(const l3_ball_track_cfg_t *cfg, float searchSnr);
 /* sizeof(l3_ball_track_t), for the ctypes mirror's layout check. */
 uint32_t l3_ball_track_struct_bytes(void);

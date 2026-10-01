@@ -385,7 +385,9 @@ static int32_t l3_ball_track_adopt(l3_ball_track_t *track, uint32_t index)
 }
 #endif /* L3_BALL_HYPOTHESES */
 
-int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t *targets,
+/* l3_ball_track_update_joint over the targets the track may use (the snr
+ * filter already applied); indices it reports are into these targets. */
+static int32_t l3_ball_track_joint(l3_ball_track_t *track, const l3_target_obs_t *targets,
                                    uint32_t n, uint32_t frame, uint32_t timestampUs,
                                    uint32_t clubIndex)
 {
@@ -408,30 +410,6 @@ int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t
     if (track->confirmed) {
         return l3_ball_track_step(track, targets, n, frame, timestampUs, skip);
     }
-#if L3_BALL_RECOVER
-    if (track->cfg.recover) {
-        static l3_target_obs_t searchable[L3_OBS_MAX_TARGETS];
-        uint32_t kept = 0U;
-        uint32_t keptClub = L3_TRACK_NO_TARGET;
-        uint32_t j;
-
-        l3_ball_history_push(&track->history, targets, n, frame, timestampUs, clubIndex);
-        if (track->cfg.historySnr > 0.0F && track->cfg.historySnr < track->cfg.snr) {
-            /* The history holds the weaker returns; the searches see snr. */
-            for (j = 0U; j < n && j < L3_OBS_MAX_TARGETS; j++) {
-                if (targets[j].snr >= track->cfg.snr) {
-                    if (j == clubIndex) {
-                        keptClub = kept;
-                    }
-                    searchable[kept++] = targets[j];
-                }
-            }
-            targets = searchable;
-            n = kept;
-            clubIndex = keptClub;
-        }
-    }
-#endif
     (void)l3_ball_hyps_update(&track->hyps, targets, n, frame, timestampUs, clubIndex);
     l3_ball_hyps_classify(&track->hyps, &track->verdict);
     if (track->verdict.index < 0) {
@@ -444,6 +422,60 @@ int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t
 #endif
 }
 
+#if L3_BALL_RECOVER
+/* An index into the filtered targets back to the caller's list. */
+static uint32_t l3_ball_track_original(const uint32_t *original, uint32_t kept, uint32_t index)
+{
+    return (index < kept) ? original[index] : index;
+}
+#endif
+
+int32_t l3_ball_track_update_joint(l3_ball_track_t *track, const l3_target_obs_t *targets,
+                                   uint32_t n, uint32_t frame, uint32_t timestampUs,
+                                   uint32_t clubIndex)
+{
+#if L3_BALL_RECOVER
+    static l3_target_obs_t usable[L3_OBS_MAX_TARGETS];
+    static uint32_t original[L3_OBS_MAX_TARGETS];  /* usable index -> caller index */
+    uint32_t kept = 0U;
+    uint32_t keptClub = L3_TRACK_NO_TARGET;
+    uint32_t i;
+    int32_t appended;
+
+    if (!track->cfg.recover) {
+        return l3_ball_track_joint(track, targets, n, frame, timestampUs, clubIndex);
+    }
+    if (track->cfg.useHypotheses && track->armed && !track->done && !track->confirmed) {
+        /* Searching: the history keeps the whole frame, weaker returns included. */
+        l3_ball_history_push(&track->history, targets, n, frame, timestampUs, clubIndex);
+    }
+    if (!(track->cfg.historySnr > 0.0F && track->cfg.historySnr < track->cfg.snr)) {
+        return l3_ball_track_joint(track, targets, n, frame, timestampUs, clubIndex);
+    }
+    /* Only the history holds the returns under snr: every branch (legacy,
+     * search, confirmed) sees the caller's targets at snr, and every index it
+     * reports is mapped back into the caller's list. */
+    for (i = 0U; i < n && i < L3_OBS_MAX_TARGETS; i++) {
+        if (targets[i].snr >= track->cfg.snr) {
+            if (i == clubIndex) {
+                keptClub = kept;
+            }
+            original[kept] = i;
+            usable[kept++] = targets[i];
+        }
+    }
+    appended = l3_ball_track_joint(track, usable, kept, frame, timestampUs, keptClub);
+    track->lastTargetIndex = l3_ball_track_original(original, kept, track->lastTargetIndex);
+    for (i = 0U; i < L3_BALL_HYP_MAX; i++) {
+        track->hyps.hyp[i].lastTargetIndex =
+            l3_ball_track_original(original, kept, track->hyps.hyp[i].lastTargetIndex);
+    }
+    return appended;
+#else
+    return l3_ball_track_joint(track, targets, n, frame, timestampUs, clubIndex);
+#endif
+}
+
 int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targets, uint32_t n,
                              uint32_t frame, uint32_t timestampUs)
 {
@@ -453,7 +485,9 @@ int32_t l3_ball_track_update(l3_ball_track_t *track, const l3_target_obs_t *targ
 float l3_ball_track_extract_snr(const l3_ball_track_cfg_t *cfg, float searchSnr)
 {
 #if L3_BALL_RECOVER
-    if (cfg->recover && cfg->historySnr > 0.0F && cfg->historySnr < searchSnr) {
+    /* Only the search fills the history: the legacy acquisition keeps snr. */
+    if (cfg->recover && cfg->useHypotheses && cfg->historySnr > 0.0F &&
+        cfg->historySnr < searchSnr) {
         return cfg->historySnr;
     }
 #else
