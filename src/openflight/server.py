@@ -5115,10 +5115,12 @@ def main():
     parser.add_argument(
         "--iwr6843-ball-detector",
         choices=BALL_DETECTOR_MODES,
-        default="on",
+        default="off",
         help="Firmware ball-placement detector: on locks the ball for the onboard shot "
         "machine and drives the kiosk setup banner; follow also aims the self-trigger at "
-        "the locked ball; off leaves the configured tee bin (default: on)",
+        "the locked ball; off leaves the configured tee bin (default: off). The banner's "
+        "poll holds the radar's serial port about once a second, and a sound-trigger edge "
+        "that arrives meanwhile is dropped",
     )
     parser.add_argument(
         "--iwr6843-setup-poll-s",

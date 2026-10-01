@@ -4889,6 +4889,37 @@ class TestIWR6843BallSnrArgument:
         assert "--iwr6843-ball-snr must be" in capsys.readouterr().err
 
 
+class TestIWR6843BallDetectorDefault:
+    """The ball detector's setup poll is a serial job; while it runs the monitor
+    drops sound-trigger edges, so a once-a-second poll starves the sound path.
+    The detector cannot see a ball under the golfer anyway: off unless asked."""
+
+    class _StopAtInit(Exception):
+        pass
+
+    def _init_kwargs(self, monkeypatch, argv):
+        captured = {}
+
+        def fake_init(**kwargs):
+            captured.update(kwargs)
+            raise self._StopAtInit
+
+        monkeypatch.setattr(server_module, "init_iwr6843", fake_init)
+        monkeypatch.setattr(sys, "argv", ["openflight-server", *argv])
+        with pytest.raises(self._StopAtInit):
+            server_module.main()
+        return captured
+
+    def test_cli_default_is_off(self, monkeypatch):
+        assert self._init_kwargs(monkeypatch, ["--iwr6843"])["ball_detector"] == "off"
+
+    @pytest.mark.parametrize("mode", ["on", "follow"])
+    def test_cli_still_turns_it_on_when_asked(self, monkeypatch, mode):
+        kwargs = self._init_kwargs(monkeypatch, ["--iwr6843", "--iwr6843-ball-detector", mode])
+
+        assert kwargs["ball_detector"] == mode
+
+
 class TestBatteryConfiguration:
     """Battery monitoring is explicitly enabled with a supported provider."""
 

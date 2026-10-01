@@ -908,9 +908,12 @@ ball scan <bin> <n>  static power of n global bins, pre frames averaged
 ball cfg <enable> <follow> [minRatio stableUpdates buildUpdates]
 ```
 
-The server turns the detector on at startup (`--iwr6843-ball-detector on`,
-the default; `follow` also aims the self-trigger at the locked ball, `off`
-keeps the configured tee bin) through the capture worker's job queue, and
+The detector is off by default: each poll holds the serial port, a
+sound-trigger edge that arrives meanwhile is dropped, and with a golfer over
+the ball the detector cannot see it anyway. With `--iwr6843-ball-detector on`
+(`follow` also aims the self-trigger at the locked ball; `off` keeps the
+configured tee bin) the server turns it on at startup through the capture
+worker's job queue, and
 polls `ball status` every `--iwr6843-setup-poll-s` seconds
 (`openflight.iwr6843.setup_poll`). Each poll becomes an `iwr_setup` socket
 event with the detector state, the ball range and the placement advice
