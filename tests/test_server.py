@@ -5500,6 +5500,7 @@ def _self_trigger_args(**overrides):
         "iwr6843_self_trigger": False,
         "iwr6843_self_trigger_bin": None,
         "iwr6843_self_trigger_snr": None,
+        "iwr6843_self_trigger_offset_m": None,
         "iwr6843_tee_m": 1.575,
         "iwr6843_config": "config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg",
         "sound_pre_trigger": None,
@@ -5519,27 +5520,30 @@ class TestSelfTriggerCli:
         [
             ("iwr6843_self_trigger_bin", 14),
             ("iwr6843_self_trigger_snr", 4.0),
+            ("iwr6843_self_trigger_offset_m", 0.1),
         ],
     )
     def test_tuning_without_the_switch_is_refused(self, flag, value):
         with pytest.raises(ValueError, match="requires --iwr6843-self-trigger"):
             server_module._self_trigger_config(_self_trigger_args(**{flag: value}))
 
-    def test_switch_alone_watches_two_bins_short_of_the_ball_at_snr_1(self):
+    def test_switch_alone_watches_past_the_ball_at_snr_1(self):
         """A tee measured 1.575 m from the enclosure face is 1.605 m from the
-        antenna array (30 mm behind the face): bin 34. The trigger watches two
-        bins short of it, where the club reaches the ball as it is struck."""
+        antenna array (30 mm behind the face): bin 34. The trigger's bin is two
+        short of it, moved 0.2 m (4 bins) downrange by default: 36. A swing's
+        line carries through the ball; a backswing or a waggle does not."""
         config = server_module._self_trigger_config(_self_trigger_args(iwr6843_self_trigger=True))
 
-        assert (config.tee_bin, config.snr) == (32, 1.0)
-        assert config.command == "triggerCfg 32 1.0 1"
+        assert (config.tee_bin, config.snr) == (36, 1.0)
+        assert config.command == "triggerCfg 36 1.0 1"
 
     @pytest.mark.parametrize(
         ("tee_m", "expected_bin"),
         [
-            (1.575, 32),  # the default setup
-            (1.524, 31),
-            (2.200, 46),
+            (1.575, 36),  # the default setup
+            (1.524, 35),
+            (1.500, 35),  # ball bin 33: two short (31) plus four
+            (2.200, 50),
         ],
     )
     def test_default_bin_follows_the_tee_distance_from_the_enclosure_face(
@@ -5550,6 +5554,83 @@ class TestSelfTriggerCli:
         )
 
         assert config.tee_bin == expected_bin
+
+    @pytest.mark.parametrize(
+        ("offset_m", "expected_bin"),
+        [
+            (0.0, 32),  # two short of the ball, as before the offset
+            (0.1, 34),  # 2.13 bins -> 2
+            (0.2, 36),
+            (-0.1, 30),
+        ],
+    )
+    def test_offset_moves_the_default_bin_by_whole_bins(self, offset_m, expected_bin):
+        config = server_module._self_trigger_config(
+            _self_trigger_args(iwr6843_self_trigger=True, iwr6843_self_trigger_offset_m=offset_m)
+        )
+
+        assert config.tee_bin == expected_bin
+
+    def test_offset_and_an_explicit_bin_are_refused_together(self):
+        with pytest.raises(
+            ValueError, match="--iwr6843-self-trigger-offset-m.*--iwr6843-self-trigger-bin"
+        ):
+            server_module._self_trigger_config(
+                _self_trigger_args(
+                    iwr6843_self_trigger=True,
+                    iwr6843_self_trigger_bin=34,
+                    iwr6843_self_trigger_offset_m=0.2,
+                )
+            )
+
+    def test_an_explicit_bin_drops_the_default_offset(self):
+        config = server_module._self_trigger_config(
+            _self_trigger_args(iwr6843_self_trigger=True, iwr6843_self_trigger_bin=34)
+        )
+
+        assert config.tee_bin == 34
+
+    @pytest.mark.parametrize("offset_m", [float("nan"), float("inf"), 1.01, -1.01])
+    def test_nonfinite_or_huge_offset_is_refused(self, offset_m):
+        with pytest.raises(ValueError, match="offset"):
+            server_module._self_trigger_config(
+                _self_trigger_args(
+                    iwr6843_self_trigger=True, iwr6843_self_trigger_offset_m=offset_m
+                )
+            )
+
+    def test_offset_past_the_capture_window_is_refused(self):
+        with pytest.raises(ValueError, match="outside the first capture window"):
+            server_module._self_trigger_config(
+                # ball bin 33 - 2 - 21 = bin 10, short of the window's bin 20
+                _self_trigger_args(
+                    iwr6843_self_trigger=True, iwr6843_tee_m=1.5, iwr6843_self_trigger_offset_m=-1.0
+                )
+            )
+
+    def test_cli_parses_the_offset(self, monkeypatch):
+        captured = {}
+
+        def fake_init(**kwargs):
+            captured.update(kwargs)
+            raise SystemExit(99)
+
+        monkeypatch.setattr(server_module, "init_iwr6843", fake_init)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "openflight-server",
+                "--iwr6843",
+                "--iwr6843-self-trigger",
+                "--iwr6843-self-trigger-offset-m",
+                "0.1",
+            ],
+        )
+        with pytest.raises(SystemExit):
+            server_module.main()
+
+        assert captured["self_trigger"].tee_bin == 34
 
     def test_the_tee_is_measured_from_the_face_and_the_array_sits_behind_it(self):
         args = _self_trigger_args(iwr6843_tee_m=1.575)

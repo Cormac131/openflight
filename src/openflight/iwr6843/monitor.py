@@ -232,19 +232,39 @@ SELF_TRIGGER_DEFAULT_BIN = FIRMWARE_TRIGGER_DEFAULT_BIN
 # bin: on 38 labelled swings the ball was best tracked 2 bins short of its rest
 # bin (470/552 ball points) and lost outright from 4-5 bins short.
 SELF_TRIGGER_TEE_LEAD_BINS = 2
+# How far downrange the kiosk moves that bin without --iwr6843-self-trigger-
+# offset-m: 0.2 m, 4 bins, past the ball. On the rig 2026-10-01 (tee set at
+# 1.7 m, hitting from 1.5 m) a swing's line carried through it and backswings
+# and waggles stopped firing. The ball search moves with it (above): on trial.
+SELF_TRIGGER_DEFAULT_OFFSET_M = 0.2
+SELF_TRIGGER_MAX_OFFSET_M = 1.0
 
 
-def self_trigger_bin(tee_from_front_m: float, config_path: str | Path, fft_size: int = 128) -> int:
+def self_trigger_bin(
+    tee_from_front_m: float,
+    config_path: str | Path,
+    fft_size: int = 128,
+    offset_m: float = 0.0,
+) -> int:
     """``triggerCfg`` bin for a tee tape from the enclosure front.
 
-    Adds the array depth, then aims ``SELF_TRIGGER_TEE_LEAD_BINS`` short of the
-    ball — the same default the kiosk uses without ``--iwr6843-self-trigger-bin``.
+    Adds the array depth, aims ``SELF_TRIGGER_TEE_LEAD_BINS`` short of the
+    ball, then moves ``offset_m`` downrange in whole bins (negative: toward
+    the radar). The board's every use of the bin moves with it: the impact,
+    the tee band, the ball search and the retained cells.
     """
     from openflight.iwr6843.calibration import antenna_range_m
 
+    if not math.isfinite(offset_m) or abs(offset_m) > SELF_TRIGGER_MAX_OFFSET_M:
+        raise ValueError(
+            f"self-trigger offset must be within +/-{SELF_TRIGGER_MAX_OFFSET_M:g} m, got {offset_m}"
+        )
     ball = tee_global_bin(antenna_range_m(tee_from_front_m), config_path, fft_size)
-    watched = ball - SELF_TRIGGER_TEE_LEAD_BINS
-    return check_first_window_bin(watched, config_path, f"self-trigger bin {watched}")
+    shift = int(round(offset_m / (RANGE_SPAN_M / fft_size)))
+    watched = ball - SELF_TRIGGER_TEE_LEAD_BINS + shift
+    return check_first_window_bin(
+        watched, config_path, f"self-trigger bin {watched} ({offset_m:+.2f} m offset)"
+    )
 
 
 @dataclass(frozen=True)

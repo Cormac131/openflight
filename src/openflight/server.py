@@ -1120,6 +1120,7 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
     command line cannot silently change which trigger drives the shot.
     """
     from .iwr6843.monitor import (
+        SELF_TRIGGER_DEFAULT_OFFSET_M,
         SELF_TRIGGER_DEFAULT_SNR,
         SelfTriggerConfig,
         check_first_window_bin,
@@ -1131,6 +1132,7 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
         for flag, value in (
             ("--iwr6843-self-trigger-bin", args.iwr6843_self_trigger_bin),
             ("--iwr6843-self-trigger-snr", args.iwr6843_self_trigger_snr),
+            ("--iwr6843-self-trigger-offset-m", args.iwr6843_self_trigger_offset_m),
         )
         if value is not None
     ]
@@ -1138,9 +1140,19 @@ def _self_trigger_config(args) -> "SelfTriggerConfig | None":
         if tuning:
             raise ValueError(f"{', '.join(tuning)} requires --iwr6843-self-trigger")
         return None
+    offset_m = args.iwr6843_self_trigger_offset_m
     bin_index = args.iwr6843_self_trigger_bin
     if bin_index is None:
-        bin_index = self_trigger_bin(args.iwr6843_tee_m, args.iwr6843_config)
+        bin_index = self_trigger_bin(
+            args.iwr6843_tee_m,
+            args.iwr6843_config,
+            offset_m=SELF_TRIGGER_DEFAULT_OFFSET_M if offset_m is None else offset_m,
+        )
+    elif offset_m is not None:
+        raise ValueError(
+            "--iwr6843-self-trigger-offset-m moves the default bin; "
+            "it cannot be combined with --iwr6843-self-trigger-bin"
+        )
     else:
         check_first_window_bin(bin_index, args.iwr6843_config, f"self-trigger bin {bin_index}")
     snr = args.iwr6843_self_trigger_snr
@@ -5086,7 +5098,17 @@ def main():
         type=int,
         default=None,
         help="Global range-FFT bin the trigger watches, inside the cfg's first capture "
-        "window (default: two bins short of the ball, from --iwr6843-tee-m). "
+        "window (default: two bins short of the ball, from --iwr6843-tee-m, moved by "
+        "--iwr6843-self-trigger-offset-m). Requires --iwr6843-self-trigger",
+    )
+    parser.add_argument(
+        "--iwr6843-self-trigger-offset-m",
+        type=float,
+        default=None,
+        help="Move the default trigger bin this far downrange, in whole bins; negative "
+        "moves it toward the radar (default: 0.2, so a swing's line must carry past the "
+        "ball, which backswings and waggles do not). The board's tee band, ball search "
+        "and retained cells move with it. Not with --iwr6843-self-trigger-bin. "
         "Requires --iwr6843-self-trigger",
     )
     parser.add_argument(
