@@ -37,6 +37,7 @@ HOST_SOURCES = (
     "l3_club_track.c",
     "l3_track_kf.c",
     "l3_impact_fit.c",
+    "l3_ball_anchor.c",
     "l3_launch.c",
     "l3_ball_hyp.c",
     "l3_impact.c",
@@ -1101,6 +1102,23 @@ class Shot(ctypes.Structure):
     ]
 
 
+BALL_ANCHOR_SOURCE_NAMES = ("gate", "club")
+
+
+class BallAnchor(ctypes.Structure):
+    """``l3_ball_anchor_t``: where and when the ball was struck."""
+
+    _fields_ = [
+        ("anchorBin", ctypes.c_float),
+        ("acceptFromBin", ctypes.c_float),
+        ("gateUs", ctypes.c_uint32),
+        ("anchorUs", ctypes.c_uint32),
+        ("anchorTolUs", ctypes.c_uint32),
+        ("anchorSigmaUs", ctypes.c_float),
+        ("source", ctypes.c_uint8),
+    ]
+
+
 class BallHypPoint(ctypes.Structure):
     """``l3_ball_hyp_point_t``."""
 
@@ -1747,6 +1765,12 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_impact_format": ([_P(Impact), *_TEXT], ctypes.c_int32),
     # l3_impact_fit.h
     "l3_impact_fit_cfg_defaults": ([_P(ImpactFitCfg)], None),
+    "l3_ball_anchor_make": (
+        [_F32, _F32, _U32, _U32, _P(ImpactFitCfg), _P(ClubTrack), _F32, _P(BallAnchor)],
+        None,
+    ),
+    "l3_ball_anchor_source_name": ([ctypes.c_uint8], ctypes.c_char_p),
+    "l3_ball_anchor_struct_bytes": ([], _U32),
     "l3_impact_fit_reset": ([_P(ImpactFit)], None),
     "l3_fit_list_point": ([ctypes.c_void_p, _U32, _P(TrackPoint)], ctypes.c_int32),
     "l3_fit_span_point": ([ctypes.c_void_p, _U32, _P(TrackPoint)], ctypes.c_int32),
