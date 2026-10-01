@@ -88,6 +88,23 @@ class Outcome:
     ops_mps: float
     launch_hla_deg: float | None = None
     impact: impact_eval.ImpactOutcome | None = None  # with --impact
+    net_reached: bool | None = None  # with --net-range-m
+
+
+NET_FRAMES = 2  # the net diagnostic's allowance either side, in frame periods
+
+
+def net_reached(ball_points, launch_mps, impact_us, tee_m, net_range_m, frame_us) -> bool | None:
+    """Spec E3: whether the confirmed ball reaches the net range within
+    NET_FRAMES frame periods of when its launch speed says it should. None
+    without a launch. A diagnostic only: no firmware code knows the net."""
+    if launch_mps is None or launch_mps <= 0.0:
+        return None
+    due_us = impact_us + (net_range_m - tee_m) / launch_mps * 1e6
+    for p in ball_points:
+        if p.range_m >= net_range_m - 0.5 * bin_width_m():
+            return abs(p.timestamp_us - due_us) <= NET_FRAMES * frame_us
+    return False
 
 
 def club_verdict(points: Sequence, split_frame: int | None) -> str:
@@ -242,6 +259,7 @@ def evaluate(
     fast_ball_from_club: bool = False,
     band_bins: float | None = None,
     impact: bool = False,
+    net_range_m: float | None = None,
 ) -> Outcome:
     """Replay one capture and judge its club and ball tracks (and its impact
     time, when asked). ``band_bins`` None keeps the case's own tee band."""
@@ -268,6 +286,17 @@ def evaluate(
         if labelled is not None
         else ball_present(post, case.ops_mps, bin_width_m(), max_gap_us=GAP_MAX_US, anchor=anchor)
     )
+    net = None
+    if net_range_m is not None and len(post) >= 2:
+        frame_us = int(np.median(np.diff([f.timestamp_us for f in post])))
+        net = net_reached(
+            result.ball_points,
+            launch,
+            int(result.shot.impactTimestampUs),
+            tee_bin * bin_width_m(),
+            net_range_m,
+            frame_us,
+        )
     return Outcome(
         name=case.path.name,
         club=club_verdict(result.points, split),
@@ -278,6 +307,7 @@ def evaluate(
         ops_mps=case.ops_mps,
         launch_hla_deg=None if result.launch is None else result.launch.hla_deg,
         impact=impact_eval.impact_outcome(case.path.name, result) if impact else None,
+        net_reached=net,
     )
 
 
@@ -296,7 +326,10 @@ def summarize(outcomes: Iterable[Outcome]) -> dict:
             for v in verdicts
         }
 
+    nets = [o.net_reached for o in outcomes if o.net_reached is not None]
+    extra = {"net_reached": sum(1 for o in outcomes if o.net_reached)} if nets else {}
     return {
+        **extra,
         "captures": len(outcomes),
         "club": count("club", ("club", "stuck", "few")),
         "ball": count("ball", verdicts),
@@ -347,6 +380,11 @@ def accept_split(summary: dict, baseline: dict) -> list[str]:
     return problems
 
 
+def on_off(value: str | None) -> bool | None:
+    """A CLI on/off switch as a bool; None when not given."""
+    return None if value is None else value == "on"
+
+
 def parse_tuning(args: argparse.Namespace) -> fr.BallTuning | None:
     """The command line's ball-rule overrides; None when none is given."""
     fast = args.fast_ball
@@ -362,6 +400,13 @@ def parse_tuning(args: argparse.Namespace) -> fr.BallTuning | None:
         fast_support_fraction=args.fast_support,
         min_departure_mps=args.min_departure_mps,
         far_window_m=args.far_window_m,
+        corridor_gate=on_off(args.corridor_gate),
+        impact_coast_ms=args.impact_coast_ms,
+        max_decel_mps2=args.max_decel,
+        classify_points=args.classify_points,
+        recover=on_off(args.recover),
+        recover_gate_m=args.recover_gate_m,
+        history_snr=args.history_snr,
     )
     return None if tuning == fr.BallTuning() else tuning
 
@@ -390,7 +435,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--min-departure-mps", type=float, help="Hard speed floor for the ball (both searches)"
     )
     parser.add_argument(
-        "--far-window-m", type=float, help="Hypothesis points only this many metres beyond the accept bin"
+        "--far-window-m",
+        type=float,
+        help="Hypothesis points only this many metres beyond the accept bin",
+    )
+    parser.add_argument(
+        "--corridor-gate", choices=("on", "off"), help="Hypothesis corridor gate on or off"
+    )
+    parser.add_argument(
+        "--impact-coast-ms", type=float, help="How long the impact region may coast, in ms"
+    )
+    parser.add_argument(
+        "--max-decel", type=float, help="Deceleration ceiling for hypothesis tracks, m/s^2"
+    )
+    parser.add_argument(
+        "--classify-points", type=int, help="Points a hypothesis needs before it is classified"
+    )
+    parser.add_argument("--recover", choices=("on", "off"), help="Ball track recovery on or off")
+    parser.add_argument("--recover-gate-m", type=float, help="Recovery gate half-width in metres")
+    parser.add_argument(
+        "--history-snr", type=float, help="SNR for the history targets (0: same as snr)"
+    )
+    parser.add_argument(
+        "--net-range-m",
+        type=float,
+        help="Report whether the ball track reaches this range on time (diagnostic)",
     )
     parser.add_argument(
         "--band-bins",
@@ -415,6 +484,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             fast_ball_from_club=from_club,
             band_bins=args.band_bins,
             impact=args.impact,
+            net_range_m=args.net_range_m,
         )
         for case in iter_cases(args.roots)
     ]

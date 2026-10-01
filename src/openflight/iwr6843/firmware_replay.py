@@ -269,18 +269,40 @@ class BallTuning:
     fast_support_fraction: float | None = None
     min_departure_mps: float | None = None
     far_window_m: float | None = None
+    corridor_gate: bool | None = None
+    impact_coast_ms: float | None = None
+    max_decel_mps2: float | None = None
+    classify_points: int | None = None
+    recover: bool | None = None
+    recover_gate_m: float | None = None
+    history_snr: float | None = None
 
     def apply(self, cfg: fw.BallTrackCfg) -> None:
         """Write the set overrides into a ball-track configuration."""
+        hyps = cfg.hyps
         if self.fast_ball_mps is not None:
-            cfg.hyps.fastBallMps = self.fast_ball_mps
+            hyps.fastBallMps = self.fast_ball_mps
         if self.fast_support_fraction is not None:
-            cfg.hyps.fastSupportFraction = self.fast_support_fraction
+            hyps.fastSupportFraction = self.fast_support_fraction
         if self.min_departure_mps is not None:
             cfg.minDepartureMps = self.min_departure_mps
-            cfg.hyps.minDepartureMps = self.min_departure_mps
+            hyps.minDepartureMps = self.min_departure_mps
         if self.far_window_m is not None:
-            cfg.hyps.farWindowM = self.far_window_m
+            hyps.farWindowM = self.far_window_m
+        if self.corridor_gate is not None:
+            hyps.corridorGate = 1 if self.corridor_gate else 0
+        if self.impact_coast_ms is not None:
+            hyps.impactCoastUs = round(self.impact_coast_ms * 1000)
+        if self.max_decel_mps2 is not None:
+            hyps.maxDecelMps2 = self.max_decel_mps2
+        if self.classify_points is not None:
+            hyps.classifyPoints = self.classify_points
+        if self.recover is not None:
+            cfg.recover = 1 if self.recover else 0
+        if self.recover_gate_m is not None:
+            cfg.rec.gateM = self.recover_gate_m
+        if self.history_snr is not None:
+            cfg.historySnr = self.history_snr
 
 
 @dataclass(frozen=True)

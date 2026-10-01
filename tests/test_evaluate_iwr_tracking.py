@@ -260,6 +260,7 @@ def args_for(ev, *extra):
         fast_ball_from_club,
         band_bins=None,
         impact=False,
+        net_range_m=None,
     ):
         seen.update(tuning=tuning, from_club=fast_ball_from_club)
         return ev.Outcome("x", "club", "ok", True, True, 40.0, 40.0)
@@ -289,6 +290,20 @@ def test_the_cli_passes_the_pi_detector_rules_through(ev, monkeypatch, tmp_path)
         "15",
         "--far-window-m",
         "0.14",
+        "--corridor-gate",
+        "off",
+        "--impact-coast-ms",
+        "24",
+        "--max-decel",
+        "150",
+        "--classify-points",
+        "6",
+        "--recover",
+        "off",
+        "--recover-gate-m",
+        "0.05",
+        "--history-snr",
+        "0.7",
     ]
     assert ev.main(argv) == 0
     assert seen["tuning"] == ev.fr.BallTuning(
@@ -296,10 +311,31 @@ def test_the_cli_passes_the_pi_detector_rules_through(ev, monkeypatch, tmp_path)
         fast_support_fraction=0.5,
         min_departure_mps=15.0,
         far_window_m=0.14,
+        corridor_gate=False,
+        impact_coast_ms=24.0,
+        max_decel_mps2=150.0,
+        classify_points=6,
+        recover=False,
+        recover_gate_m=0.05,
+        history_snr=0.7,
     )
+    assert ev.main([str(tmp_path), "--corridor-gate", "on", "--recover", "on"]) == 0
+    assert (seen["tuning"].corridor_gate, seen["tuning"].recover) == (True, True)
     assert seen["from_club"] is False
     assert ev.main([str(tmp_path), "--fast-ball", "club"]) == 0
     assert seen == {"tuning": None, "from_club": True}
+
+
+def pts(*rows):
+    return [SimpleNamespace(timestamp_us=us, range_m=m) for us, m in rows]
+
+
+def test_net_reached_when_the_track_arrives_on_time(ev):
+    # tee 2.0 m, net 4.5 m, 50 m/s from impact 0: due at 50 ms; 3 ms frames, +-6 ms
+    assert ev.net_reached(pts((47_000, 4.40), (50_000, 4.50)), 50.0, 0, 2.0, 4.5, 3000) is True
+    assert ev.net_reached(pts((60_000, 4.50)), 50.0, 0, 2.0, 4.5, 3000) is False
+    assert ev.net_reached(pts((30_000, 3.5)), 50.0, 0, 2.0, 4.5, 3000) is False  # never got there
+    assert ev.net_reached([], None, 0, 2.0, 4.5, 3000) is None  # no launch
 
 
 def test_a_bad_fast_ball_value_is_refused(ev, tmp_path):
@@ -333,7 +369,11 @@ def test_band_bins_reaches_the_replay_config_only_when_given(ev, monkeypatch, tm
     def fake_replay(data, config, lib=None):
         configs.append(config)
         return SimpleNamespace(
-            config=config, frames=[], points=[], fired_frame=None, launch=None,
+            config=config,
+            frames=[],
+            points=[],
+            fired_frame=None,
+            launch=None,
             frozen_impact_timestamp_us=None,
         )
 
@@ -350,7 +390,11 @@ def test_band_bins_reaches_the_replay_config_only_when_given(ev, monkeypatch, tm
 
 def test_evaluate_attaches_the_impact_outcome_only_when_asked(ev, monkeypatch, tmp_path):
     result = SimpleNamespace(
-        config=ev.fr.ReplayConfig(tee_bin=29), frames=[], points=[], fired_frame=None, launch=None,
+        config=ev.fr.ReplayConfig(tee_bin=29),
+        frames=[],
+        points=[],
+        fired_frame=None,
+        launch=None,
         frozen_impact_timestamp_us=None,
     )
     monkeypatch.setattr(ev.fr, "replay_dump", lambda data, config, lib=None: result)
@@ -391,9 +435,7 @@ STEP = 40.0 * 0.003 / BIN_M  # bins per 3 ms frame at 40 m/s
 
 def chain(frames_ms, start_bin=50.0, speed=40.0):
     """One target per listed frame (3 ms apart) on a 40 m/s line from start_bin at 0 ms."""
-    return [
-        frame_of(k, k * 3000, [start_bin + speed * (k * 0.003) / BIN_M]) for k in frames_ms
-    ]
+    return [frame_of(k, k * 3000, [start_bin + speed * (k * 0.003) / BIN_M]) for k in frames_ms]
 
 
 def test_gap_tolerant_ball_present_bridges_an_impact_gap(ev):
@@ -428,15 +470,22 @@ def test_ball_present_with_gaps_and_no_targets(ev):
 
 def outcome(ev, ball, present, strict=None):
     return ev.Outcome(
-        name="x", club="club", ball=ball, ball_present=present,
-        ball_present_strict=present if strict is None else strict, launch_mps=None, ops_mps=40.0,
+        name="x",
+        club="club",
+        ball=ball,
+        ball_present=present,
+        ball_present_strict=present if strict is None else strict,
+        launch_mps=None,
+        ops_mps=40.0,
     )
 
 
 def test_summarize_splits_the_ball_verdicts_by_presence(ev):
     outs = [
-        outcome(ev, "ok", True), outcome(ev, "none", True),
-        outcome(ev, "wrong", False, strict=False), outcome(ev, "none", False),
+        outcome(ev, "ok", True),
+        outcome(ev, "none", True),
+        outcome(ev, "wrong", False, strict=False),
+        outcome(ev, "none", False),
     ]
     s = ev.summarize(outs)
     assert s["ball_by_presence"] == {

@@ -682,6 +682,29 @@ def test_ball_tuning_writes_only_what_it_sets(lib):
     assert tuned.useHypotheses == default.useHypotheses
 
 
+def test_ball_tuning_writes_every_new_switch(lib):
+    cfg = fw.BallTrackCfg()
+    lib.l3_ball_track_cfg_defaults(ctypes.byref(cfg))
+    BallTuning(
+        corridor_gate=False,
+        impact_coast_ms=24.0,
+        max_decel_mps2=0.0,
+        classify_points=6,
+        recover=False,
+        recover_gate_m=0.05,
+        history_snr=0.7,
+        far_window_m=0.1,
+    ).apply(cfg)
+    assert (
+        cfg.hyps.corridorGate,
+        cfg.hyps.impactCoastUs,
+        cfg.hyps.maxDecelMps2,
+        cfg.hyps.classifyPoints,
+    ) == (0, 24_000, 0.0, 6)
+    assert (cfg.recover, cfg.historySnr) == (0, pytest.approx(0.7))
+    assert cfg.rec.gateM == pytest.approx(0.05) and cfg.hyps.farWindowM == pytest.approx(0.1)
+
+
 def test_empty_ball_tuning_leaves_the_replay_alone(lib, whole_shot):
     plain = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
     tuned = replay_dump(
@@ -1176,7 +1199,9 @@ def test_replay_without_element_calibration_is_identity(lib):
     assert [cal.correctionRe[i] for i in range(8)] == [1.0] * 8
 
 
-@pytest.mark.parametrize("phases, gains", [((0.1,) * 7, (1.0,) * 8), ((0.1,) * 8, (1.0,) * 8 + (1.0,))])
+@pytest.mark.parametrize(
+    "phases, gains", [((0.1,) * 7, (1.0,) * 8), ((0.1,) * 8, (1.0,) * 8 + (1.0,))]
+)
 def test_element_calibration_needs_eight_of_each(phases, gains):
     raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
     with pytest.raises(ValueError, match="8 element"):
@@ -1198,7 +1223,9 @@ def test_replay_ball_angles_use_the_track_rate(lib, monkeypatch):
 
 
 def test_replay_track_rate_picks_the_branch_and_the_measured_phase_stays_the_rotor(lib):
-    raw = synth_shot_dump(ball_speed_ms=60.0, vla_deg=12.0, hla_deg=0.0, tee_range_m=TEE_RANGE_M, n_frames=24)
+    raw = synth_shot_dump(
+        ball_speed_ms=60.0, vla_deg=12.0, hla_deg=0.0, tee_range_m=TEE_RANGE_M, n_frames=24
+    )
     meta, cube = parse_dump(raw)
     n_tx = int(meta["n_tx"])
     chirp_period_s = 45e-6
@@ -1411,7 +1438,6 @@ def test_the_launch_line_says_why_the_angles_are_missing():
     )
     line = fr._launch_line(SimpleNamespace(launch=launch))
     assert "why=uncertain angles=5" in line
-
 
 
 def test_recovered_frames_decode_the_verdict_mask():
