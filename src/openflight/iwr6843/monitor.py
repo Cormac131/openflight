@@ -217,9 +217,10 @@ def _pause(seconds: float) -> None:
     time.sleep(seconds)
 
 
-# Default RF profile for the kiosk and live IWR scripts: adaptive16 keeps the
-# wide 53-bin IQ16 processing windows and retains a 141 ms movie (24/7/16).
-DEFAULT_IWR6843_CONFIG = "config/iwr6843_l3dump_adaptive_47f3ms_53bin_a16.cfg"
+# Default RF profile for the kiosk and live IWR scripts: the wide 53-bin IQ16
+# profile at 2 ms frames with a Hann range window, the one the self-trigger
+# was proven on at the rig (2026-10-01).
+DEFAULT_IWR6843_CONFIG = "config/iwr6843_l3dump_wide_24f2ms_53bin_iq16_window_hann.cfg"
 # A return short of the tee counts as a club target at this multiple of the
 # firmware's running noise floor. The board's triggerLog trace shows the snr
 # real swings and idle frames reach; tune from that.

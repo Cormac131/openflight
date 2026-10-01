@@ -61,7 +61,7 @@ The supported angle radar.
 | --- | --- | --- |
 | `--iwr6843` | flag | Enable TI IWR6843 L3 capture and LCMF-v1 vertical launch angle |
 | `--iwr6843-port` | — | TI serial port (auto-detect by default) |
-| `--iwr6843-config` | default `config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg` | TI RF config matching the flashed L3 firmware |
+| `--iwr6843-config` | default `config/iwr6843_l3dump_wide_24f2ms_53bin_iq16_window_hann.cfg` | TI RF config matching the flashed L3 firmware |
 | `--iwr6843-cal` | default `config/iwr6843_calibration_reference.json` | TI complex array/range calibration JSON |
 | `--iwr6843-trigger-pin` | int; default `17` | BCM GPIO receiving the shared sound-trigger edge (default: 17) |
 | `--iwr6843-tee-m` | float; default `1.575` | Distance in metres from the enclosure front to the centre of the ball, not the golfer's feet (horizontal is fine: the ball's height barely changes it). The array sits 30 mm behind the front and that is added internally (default: 1.575) |

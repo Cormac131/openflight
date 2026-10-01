@@ -5078,7 +5078,7 @@ def main():
         "--iwr6843-config",
         default=DEFAULT_IWR6843_CONFIG,
         help="TI RF config matching the flashed L3 firmware "
-        "(default: adaptive16 47x3 ms; fall back with "
+        "(default: wide IQ16, 24 frames at 2 ms, Hann window; fall back with "
         "--iwr6843-config config/iwr6843_l3dump_wide_24f3ms_53bin_iq16.cfg)",
     )
     parser.add_argument(

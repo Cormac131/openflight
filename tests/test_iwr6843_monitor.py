@@ -31,11 +31,15 @@ from openflight.iwr6843.monitor import (
 from openflight.iwr6843.sparse import SparseCapture
 
 
-def test_default_iwr6843_config_is_adaptive16():
+def test_default_iwr6843_config_is_the_2ms_hann_wide_iq16():
     path = Path(DEFAULT_IWR6843_CONFIG)
-    assert path.name == "iwr6843_l3dump_adaptive_47f3ms_53bin_a16.cfg"
+    assert path.name == "iwr6843_l3dump_wide_24f2ms_53bin_iq16_window_hann.cfg"
     text = path.read_text(encoding="utf-8")
-    assert "captureFormat adaptive16" in text
+    assert "captureFormat iq16" in text
+    assert "captureCfg window hann" in text
+    assert "frameCfg 0 2 12 0 2 1 0" in text  # 2 ms frames
+    # The self-trigger's default bins sit in its first capture window.
+    tee_global_bin(1.605, path)
 
 
 # A capture running and the self-trigger not latched: nothing to rearm.
