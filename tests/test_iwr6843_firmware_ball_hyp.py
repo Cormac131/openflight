@@ -75,11 +75,8 @@ def truth(frames):
 def test_defaults(lib):
     cfg = fw.BallHypsCfg()
     lib.l3_ball_hyps_cfg_defaults(ctypes.byref(cfg))
-    assert (cfg.spawnBehindBins, cfg.spawnBeyondBins, cfg.gateBins, cfg.gateMps) == (
-        1.0,
-        10.0,
-        1.5,
-        8.0,
+    assert (cfg.spawnBehindM, cfg.spawnBeyondM, cfg.gateM, cfg.gateMps) == pytest.approx(
+        (0.046875, 0.46875, 0.0703125, 8.0)
     )
     assert (cfg.maxMisses, cfg.classifyPoints) == (2, 4)
     assert (cfg.minDepartureMps, cfg.maxSpeedMps) == (10.0, 100.0)
@@ -191,6 +188,41 @@ def test_set_angles_marks_the_newest_point_this_frame_only(lib):
     assert lib.l3_ball_hyps_set_angles(ctypes.byref(hyps), fw.BALL_HYP_MAX, 0.3, 0.3, both, 1.0) == 0
 
 
+def test_metric_settings_become_bins_at_init(lib):
+    hyps = make_hyps(
+        lib, gateM=3 * BIN_M, spawnBehindM=2 * BIN_M, farWindowM=4 * BIN_M, spawnBeyondM=8 * BIN_M
+    )
+    assert (
+        hyps.gateBins,
+        hyps.spawnBehindBins,
+        hyps.farWindowBins,
+        hyps.spawnBeyondBins,
+    ) == pytest.approx((3.0, 2.0, 4.0, 8.0))
+
+
+def test_a_point_keeps_its_targets_coherence(lib):
+    hyps = make_hyps(lib)
+    arm(lib, hyps)
+    t = obs(1, 0, 47.0, 900.0, 5.0)
+    t.coherence = 0.42
+    feed(lib, hyps, 1, 0, [t])
+    (hyp,) = active(hyps)
+    assert hyp.points[0].coherence == pytest.approx(0.42)
+
+
+def test_the_points_fit_matches_the_hypothesis_fit(lib):
+    hyps, _ = run(lib, TwoTracks(frames=4))
+    (hyp,) = active(hyps)
+    via_hyp = [ctypes.c_float() for _ in range(3)]
+    via_points = [ctypes.c_float() for _ in range(3)]
+    assert lib.l3_ball_hyp_fit(ctypes.byref(hyp), 0, *(ctypes.byref(v) for v in via_hyp))
+    assert lib.l3_ball_points_fit(
+        hyp.points, hyp.count, 0, *(ctypes.byref(v) for v in via_points)
+    )
+    assert [v.value for v in via_points] == [v.value for v in via_hyp]
+    assert not lib.l3_ball_points_fit(hyp.points, 1, 0, *(ctypes.byref(v) for v in via_points))
+
+
 def test_the_fit_reads_the_rate_and_the_range_at_a_reference_time(lib):
     hyps, _ = run(lib, TwoTracks(frames=4))
     (hyp,) = active(hyps)
@@ -286,7 +318,7 @@ def test_a_late_gate_still_finds_a_fast_ball(lib, frame_us, late_frames):
 def test_the_pi_detector_rules_are_off_by_default(lib):
     cfg = fw.BallHypsCfg()
     lib.l3_ball_hyps_cfg_defaults(ctypes.byref(cfg))
-    assert (cfg.fastBallMps, cfg.farWindowBins) == (0.0, 0.0)
+    assert (cfg.fastBallMps, cfg.farWindowM) == (0.0, 0.0)
     assert cfg.fastSupportFraction == pytest.approx(0.55)
 
 
@@ -368,7 +400,7 @@ def test_the_far_window_keeps_near_returns_out_of_the_search(lib):
     scene = TwoTracks(frames=8, club_visible=False, extras=[(47.5, 20000.0, 0.8)])
     hyps, frames = run(lib, scene)
     assert any(h.points[0].rangeBin == pytest.approx(47.5) for h in active(hyps))
-    hyps, frames = run(lib, scene, farWindowBins=3.0)
+    hyps, frames = run(lib, scene, farWindowM=3.0 * BIN_M)
     for hyp in active(hyps):
         assert min(bins(hyp)) >= 46.0 + 3.0
     v = verdict(lib, hyps)

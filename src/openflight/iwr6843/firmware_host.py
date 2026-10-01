@@ -1129,6 +1129,7 @@ class BallHypPoint(ctypes.Structure):
         ("dopplerAliasMps", ctypes.c_float),
         ("stat", ctypes.c_float),
         ("clubStat", ctypes.c_float),
+        ("coherence", ctypes.c_float),
         ("azimuthRad", ctypes.c_float),
         ("elevationRad", ctypes.c_float),
         ("anglesValid", ctypes.c_uint8),
@@ -1155,9 +1156,9 @@ class BallHypsCfg(ctypes.Structure):
     _fields_ = [
         ("binWidthM", ctypes.c_float),
         ("velocitySpanMps", ctypes.c_float),
-        ("spawnBehindBins", ctypes.c_float),
-        ("spawnBeyondBins", ctypes.c_float),
-        ("gateBins", ctypes.c_float),
+        ("spawnBehindM", ctypes.c_float),
+        ("spawnBeyondM", ctypes.c_float),
+        ("gateM", ctypes.c_float),
         ("gateMps", ctypes.c_float),
         ("maxMisses", ctypes.c_uint32),
         ("classifyPoints", ctypes.c_uint32),
@@ -1167,7 +1168,7 @@ class BallHypsCfg(ctypes.Structure):
         ("dopplerToleranceMps", ctypes.c_float),
         ("fastBallMps", ctypes.c_float),
         ("fastSupportFraction", ctypes.c_float),
-        ("farWindowBins", ctypes.c_float),
+        ("farWindowM", ctypes.c_float),
     ]
 
 
@@ -1194,6 +1195,10 @@ class BallHyps(ctypes.Structure):
         ("cfg", BallHypsCfg),
         ("armed", ctypes.c_uint8),
         ("anchor", BallAnchor),
+        ("spawnBehindBins", ctypes.c_float),
+        ("spawnBeyondBins", ctypes.c_float),
+        ("gateBins", ctypes.c_float),
+        ("farWindowBins", ctypes.c_float),
         ("nextId", ctypes.c_uint32),
         ("spawned", ctypes.c_uint32),
         ("dropped", ctypes.c_uint32),
@@ -1822,6 +1827,17 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_ball_hyps_update": ([_P(BallHyps), _P(TargetObs), _U32, _U32, _U32, _U32], _U32),
     "l3_ball_hyp_fit": (
         [_P(BallHyp), _U32, _P(ctypes.c_float), _P(ctypes.c_float), _P(ctypes.c_float)],
+        ctypes.c_int32,
+    ),
+    "l3_ball_points_fit": (
+        [
+            _P(BallHypPoint),
+            _U32,
+            _U32,
+            _P(ctypes.c_float),
+            _P(ctypes.c_float),
+            _P(ctypes.c_float),
+        ],
         ctypes.c_int32,
     ),
     "l3_ball_hyps_set_angles": (

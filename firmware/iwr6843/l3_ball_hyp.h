@@ -40,6 +40,7 @@ typedef struct {
     float    dopplerAliasMps;
     float    stat;
     float    clubStat;            /* the club's claimed return that frame, 0 without one */
+    float    coherence;           /* the target's lag-1 coherence */
     float    azimuthRad;
     float    elevationRad;
     uint8_t  anglesValid;         /* L3_OBS_ANGLE_* bits */
@@ -58,10 +59,11 @@ typedef struct {
 typedef struct {
     float    binWidthM;           /* l3_ball_track_init copies these two from its core */
     float    velocitySpanMps;
-    float    spawnBehindBins;     /* a hypothesis starts from origin - this ... */
-    float    spawnBeyondBins;     /* ... to origin + this, + maxSpeedMps x the time
-                                   * since the gate (a late gate finds the ball out) */
-    float    gateBins;            /* association half-width at zero elapsed time ... */
+    float    spawnBehindM;        /* a hypothesis starts from origin - this ... */
+    float    spawnBeyondM;        /* ... to origin + this, + maxSpeedMps x the time
+                                   * since the gate (a late gate finds the ball out);
+                                   * used only with corridorGate off */
+    float    gateM;               /* association half-width at zero elapsed time ... */
     float    gateMps;             /* ... growing by this speed uncertainty over the gap */
     uint32_t maxMisses;           /* coasted frames before a hypothesis is dropped */
     uint32_t classifyPoints;      /* points before a hypothesis may be the ball */
@@ -78,10 +80,10 @@ typedef struct {
      * that fast. 0 turns the rule off. */
     float    fastBallMps;
     float    fastSupportFraction;
-    /* Far window: targets short of origin + farWindowBins are the club's, the
+    /* Far window: targets short of origin + farWindowM (metres) are the club's, the
      * impact echo's or the golfer's and never become hypothesis points, so the
      * ball is taken only once it is clear of the merged bins. 0 turns it off. */
-    float    farWindowBins;
+    float    farWindowM;
 } l3_ball_hyps_cfg_t;
 
 typedef struct {
@@ -101,6 +103,11 @@ typedef struct {
     l3_ball_hyps_cfg_t cfg;
     uint8_t  armed;
     l3_ball_anchor_t anchor;      /* where and when the ball was struck; acceptFromBin is the old origin */
+    /* cfg's metric settings in bins, from binWidthM at init */
+    float    spawnBehindBins;
+    float    spawnBeyondBins;
+    float    gateBins;
+    float    farWindowBins;
     uint32_t nextId;
     uint32_t spawned;
     uint32_t dropped;             /* coasted out or evicted */
@@ -122,6 +129,9 @@ uint32_t l3_ball_hyps_update(l3_ball_hyps_t *hyps, const l3_target_obs_t *target
  * no spread in time. */
 int32_t l3_ball_hyp_fit(const l3_ball_hyp_t *hyp, uint32_t referenceUs, float *rateBinsPerS,
                         float *binAtReference, float *residualBins);
+/* l3_ball_hyp_fit over any time-ordered point array. */
+int32_t l3_ball_points_fit(const l3_ball_hyp_point_t *points, uint32_t count, uint32_t referenceUs,
+                           float *rateBinsPerS, float *binAtReference, float *residualBins);
 /* Angles for the point hypothesis `index` appended this frame. Returns 0 when
  * it appended nothing this frame or the index is out of range. */
 int32_t l3_ball_hyps_set_angles(l3_ball_hyps_t *hyps, uint32_t index, float azimuthRad,

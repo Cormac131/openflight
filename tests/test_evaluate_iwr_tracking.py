@@ -287,15 +287,15 @@ def test_the_cli_passes_the_pi_detector_rules_through(ev, monkeypatch, tmp_path)
         "0.5",
         "--min-departure-mps",
         "15",
-        "--far-window-bins",
-        "3",
+        "--far-window-m",
+        "0.14",
     ]
     assert ev.main(argv) == 0
     assert seen["tuning"] == ev.fr.BallTuning(
         fast_ball_mps=34.0,
         fast_support_fraction=0.5,
         min_departure_mps=15.0,
-        far_window_bins=3.0,
+        far_window_m=0.14,
     )
     assert seen["from_club"] is False
     assert ev.main([str(tmp_path), "--fast-ball", "club"]) == 0
@@ -321,9 +321,9 @@ def test_the_club_floor_fills_in_the_runs_tuning(ev, tmp_path):
     assert ev.tuning_for(case, None, fast_ball_from_club=True) == ev.fr.BallTuning(
         fast_ball_mps=50.0
     )
-    kept = ev.fr.BallTuning(far_window_bins=3.0, fast_ball_mps=20.0)
+    kept = ev.fr.BallTuning(far_window_m=0.14, fast_ball_mps=20.0)
     assert ev.tuning_for(case, kept, fast_ball_from_club=True) == ev.fr.BallTuning(
-        far_window_bins=3.0, fast_ball_mps=50.0
+        far_window_m=0.14, fast_ball_mps=50.0
     )
 
 

@@ -10,9 +10,9 @@ void l3_ball_hyps_cfg_defaults(l3_ball_hyps_cfg_t *cfg)
     memset(cfg, 0, sizeof(*cfg));
     cfg->binWidthM = 6.0F / 128.0F;
     cfg->velocitySpanMps = 2.0F * L3_OBS_WAVELENGTH_M / (4.0F * 135.0e-6F);
-    cfg->spawnBehindBins = 1.0F;      /* the ball starts at the origin ... */
-    cfg->spawnBeyondBins = 10.0F;     /* ... and is first seen within ~3 frames of it */
-    cfg->gateBins = 1.5F;
+    cfg->spawnBehindM = cfg->binWidthM;          /* the ball starts at the origin ... */
+    cfg->spawnBeyondM = 10.0F * cfg->binWidthM;  /* ... and is first seen within ~3 frames of it */
+    cfg->gateM = 1.5F * cfg->binWidthM;
     cfg->gateMps = 8.0F;              /* drag and fit error, per second of prediction */
     cfg->maxMisses = 2U;
     cfg->classifyPoints = 4U;
@@ -22,7 +22,7 @@ void l3_ball_hyps_cfg_defaults(l3_ball_hyps_cfg_t *cfg)
     cfg->dopplerToleranceMps = 2.5F;
     cfg->fastBallMps = 0.0F;          /* off until the recorded captures say otherwise */
     cfg->fastSupportFraction = 0.55F; /* the Pi detector's FAST_SUPPORT_FRAC */
-    cfg->farWindowBins = 0.0F;        /* off until the recorded captures say otherwise */
+    cfg->farWindowM = 0.0F;           /* off until the recorded captures say otherwise */
 }
 
 static void l3_ball_hyps_clear(l3_ball_hyps_t *hyps)
@@ -40,8 +40,14 @@ static void l3_ball_hyps_clear(l3_ball_hyps_t *hyps)
 
 void l3_ball_hyps_init(l3_ball_hyps_t *hyps, const l3_ball_hyps_cfg_t *cfg)
 {
+    float binsPerM = (cfg->binWidthM > 0.0F) ? 1.0F / cfg->binWidthM : 0.0F;
+
     memset(hyps, 0, sizeof(*hyps));
     hyps->cfg = *cfg;
+    hyps->spawnBehindBins = cfg->spawnBehindM * binsPerM;
+    hyps->spawnBeyondBins = cfg->spawnBeyondM * binsPerM;
+    hyps->gateBins = cfg->gateM * binsPerM;
+    hyps->farWindowBins = cfg->farWindowM * binsPerM;
     l3_ball_hyps_clear(hyps);
 }
 
@@ -58,8 +64,8 @@ static float l3_ball_hyps_seconds(uint32_t later, uint32_t earlier)
     return (float)(int32_t)(later - earlier) * 1.0e-6F;
 }
 
-int32_t l3_ball_hyp_fit(const l3_ball_hyp_t *hyp, uint32_t referenceUs, float *rateBinsPerS,
-                        float *binAtReference, float *residualBins)
+int32_t l3_ball_points_fit(const l3_ball_hyp_point_t *points, uint32_t count, uint32_t referenceUs,
+                           float *rateBinsPerS, float *binAtReference, float *residualBins)
 {
     float meanT = 0.0F;
     float meanR = 0.0F;
@@ -70,44 +76,52 @@ int32_t l3_ball_hyp_fit(const l3_ball_hyp_t *hyp, uint32_t referenceUs, float *r
     float intercept;
     uint32_t i;
 
-    if (hyp->count < 2U) {
+    if (count < 2U) {
         return 0;
     }
-    for (i = 0U; i < hyp->count; i++) {
-        meanT += l3_ball_hyps_seconds(hyp->points[i].timestampUs, referenceUs);
-        meanR += hyp->points[i].rangeBin;
+    for (i = 0U; i < count; i++) {
+        meanT += l3_ball_hyps_seconds(points[i].timestampUs, referenceUs);
+        meanR += points[i].rangeBin;
     }
-    meanT /= (float)hyp->count;
-    meanR /= (float)hyp->count;
-    for (i = 0U; i < hyp->count; i++) {
-        float dt = l3_ball_hyps_seconds(hyp->points[i].timestampUs, referenceUs) - meanT;
+    meanT /= (float)count;
+    meanR /= (float)count;
+    for (i = 0U; i < count; i++) {
+        float dt = l3_ball_hyps_seconds(points[i].timestampUs, referenceUs) - meanT;
 
         sumTT += dt * dt;
-        sumTR += dt * (hyp->points[i].rangeBin - meanR);
+        sumTR += dt * (points[i].rangeBin - meanR);
     }
     if (!(sumTT > 0.0F)) {
         return 0;
     }
     slope = sumTR / sumTT;
     intercept = meanR - slope * meanT;
-    for (i = 0U; i < hyp->count; i++) {
-        float t = l3_ball_hyps_seconds(hyp->points[i].timestampUs, referenceUs);
-        float error = hyp->points[i].rangeBin - (intercept + slope * t);
+    for (i = 0U; i < count; i++) {
+        float t = l3_ball_hyps_seconds(points[i].timestampUs, referenceUs);
+        float error = points[i].rangeBin - (intercept + slope * t);
 
         sse += error * error;
     }
     *rateBinsPerS = slope;
     *binAtReference = intercept;
-    *residualBins = sqrtf(sse / (float)hyp->count);
+    *residualBins = sqrtf(sse / (float)count);
     return 1;
+}
+
+int32_t l3_ball_hyp_fit(const l3_ball_hyp_t *hyp, uint32_t referenceUs, float *rateBinsPerS,
+                        float *binAtReference, float *residualBins)
+{
+    return l3_ball_points_fit(hyp->points, hyp->count, referenceUs, rateBinsPerS, binAtReference,
+                              residualBins);
 }
 
 /* Where a hypothesis can be at timestampUs: [lo, hi] around a centre. One
  * point: leaving at anything from minDepartureMps to maxSpeedMps. More: its
  * fitted line, with a gate that widens with the time predicted over. */
-static void l3_ball_hyps_window(const l3_ball_hyps_cfg_t *cfg, const l3_ball_hyp_t *hyp,
+static void l3_ball_hyps_window(const l3_ball_hyps_t *hyps, const l3_ball_hyp_t *hyp,
                                 uint32_t timestampUs, float *lo, float *hi, float *centre)
 {
+    const l3_ball_hyps_cfg_t *cfg = &hyps->cfg;
     const l3_ball_hyp_point_t *last = &hyp->points[hyp->count - 1U];
     float dtS = l3_ball_hyps_seconds(timestampUs, last->timestampUs);
     float binsPerM = (cfg->binWidthM > 0.0F) ? 1.0F / cfg->binWidthM : 0.0F;
@@ -119,15 +133,15 @@ static void l3_ball_hyps_window(const l3_ball_hyps_cfg_t *cfg, const l3_ball_hyp
         dtS = 0.0F;
     }
     if (l3_ball_hyp_fit(hyp, last->timestampUs, &rate, &atLast, &residual)) {
-        float spread = cfg->gateBins + cfg->gateMps * binsPerM * dtS;
+        float spread = hyps->gateBins + cfg->gateMps * binsPerM * dtS;
 
         *centre = atLast + rate * dtS;
         *lo = *centre - spread;
         *hi = *centre + spread;
         return;
     }
-    *lo = last->rangeBin + cfg->minDepartureMps * binsPerM * dtS - cfg->gateBins;
-    *hi = last->rangeBin + cfg->maxSpeedMps * binsPerM * dtS + cfg->gateBins;
+    *lo = last->rangeBin + cfg->minDepartureMps * binsPerM * dtS - hyps->gateBins;
+    *hi = last->rangeBin + cfg->maxSpeedMps * binsPerM * dtS + hyps->gateBins;
     *centre = 0.5F * (*lo + *hi);
 }
 
@@ -152,6 +166,7 @@ static void l3_ball_hyps_append(l3_ball_hyp_t *hyp, const l3_target_obs_t *targe
     point->dopplerAliasMps = target->dopplerAliasMps;
     point->stat = target->stat;
     point->clubStat = clubStat;
+    point->coherence = target->coherence;
     hyp->misses = 0U;
     hyp->lastTargetIndex = index;
 }
@@ -214,16 +229,16 @@ uint32_t l3_ball_hyps_update(l3_ball_hyps_t *hyps, const l3_target_obs_t *target
     if (clubIndex < n) {
         taken[clubIndex] = 1U;  /* the club's return is never a ball point */
     }
-    if (cfg->farWindowBins > 0.0F) {
+    if (hyps->farWindowBins > 0.0F) {
         for (j = 0U; j < n; j++) {
-            if (targets[j].rangeBin < hyps->anchor.acceptFromBin + cfg->farWindowBins) {
+            if (targets[j].rangeBin < hyps->anchor.acceptFromBin + hyps->farWindowBins) {
                 taken[j] = 1U;  /* short of the far window: never a ball point */
             }
         }
     }
     for (i = 0U; i < L3_BALL_HYP_MAX; i++) {
         if (hyps->hyp[i].active) {
-            l3_ball_hyps_window(cfg, &hyps->hyp[i], timestampUs, &lo[i], &hi[i], &centre[i]);
+            l3_ball_hyps_window(hyps, &hyps->hyp[i], timestampUs, &lo[i], &hi[i], &centre[i]);
         }
     }
     /* Joint assignment: the cheapest (hypothesis, target) pair first, each
@@ -280,7 +295,7 @@ uint32_t l3_ball_hyps_update(l3_ball_hyps_t *hyps, const l3_target_obs_t *target
      * gate that fired late finds the ball already out, and it must still be
      * able to start. */
     sinceGateS = l3_ball_hyps_seconds(timestampUs, hyps->anchor.anchorUs);
-    spawnHi = hyps->anchor.acceptFromBin + cfg->spawnBeyondBins +
+    spawnHi = hyps->anchor.acceptFromBin + hyps->spawnBeyondBins +
               ((sinceGateS > 0.0F && cfg->binWidthM > 0.0F)
                    ? cfg->maxSpeedMps / cfg->binWidthM * sinceGateS
                    : 0.0F);
@@ -289,7 +304,7 @@ uint32_t l3_ball_hyps_update(l3_ball_hyps_t *hyps, const l3_target_obs_t *target
         l3_ball_hyp_t *hyp;
         int32_t slot;
 
-        if (taken[j] || range < hyps->anchor.acceptFromBin - cfg->spawnBehindBins || range > spawnHi) {
+        if (taken[j] || range < hyps->anchor.acceptFromBin - hyps->spawnBehindBins || range > spawnHi) {
             continue;
         }
         slot = l3_ball_hyps_slot(hyps);

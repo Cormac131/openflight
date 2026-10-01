@@ -671,12 +671,12 @@ def test_ball_tuning_writes_only_what_it_sets(lib):
         fast_ball_mps=34.0,
         fast_support_fraction=0.5,
         min_departure_mps=18.0,
-        far_window_bins=3.0,
+        far_window_m=0.140625,
     ).apply(tuned)
     assert (tuned.hyps.fastBallMps, tuned.hyps.fastSupportFraction) == (34.0, 0.5)
     # One floor, both searches: the legacy acquisition and the hypotheses.
     assert (tuned.minDepartureMps, tuned.hyps.minDepartureMps) == (18.0, 18.0)
-    assert tuned.hyps.farWindowBins == 3.0
+    assert tuned.hyps.farWindowM == 0.140625
     assert tuned.useHypotheses == default.useHypotheses
 
 
@@ -691,7 +691,7 @@ def test_empty_ball_tuning_leaves_the_replay_alone(lib, whole_shot):
 
 def test_ball_tuning_reaches_the_replayed_launch(lib, whole_shot):
     """The synthetic ball flies clean: every switch on still finds it."""
-    tuning = BallTuning(fast_ball_mps=30.0, far_window_bins=2.0)
+    tuning = BallTuning(fast_ball_mps=30.0, far_window_m=0.09375)
     result = replay_dump(
         whole_shot,
         ReplayConfig(tee_bin=TEE_BIN, ball_hypotheses=True, ball_tuning=tuning),

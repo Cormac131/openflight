@@ -21,7 +21,7 @@ report. Over those captures it counts:
 The Pi detector's ball rules can be switched on for a run (all off by default,
 as the firmware ships): ``--fast-ball`` (m/s, or ``club`` for the session's
 club-class floor, ``shot.CLUB_MIN_BALL_MS``) with ``--fast-support``,
-``--min-departure-mps`` and ``--far-window-bins``. The launch's horizontal
+``--min-departure-mps`` and ``--far-window-m``. The launch's horizontal
 angle is recorded per capture so runs can be compared.
 
 ``--impact`` adds the impact-time evaluation (``impact_eval``): the firmware's
@@ -361,7 +361,7 @@ def parse_tuning(args: argparse.Namespace) -> fr.BallTuning | None:
         fast_ball_mps=fast_mps,
         fast_support_fraction=args.fast_support,
         min_departure_mps=args.min_departure_mps,
-        far_window_bins=args.far_window_bins,
+        far_window_m=args.far_window_m,
     )
     return None if tuning == fr.BallTuning() else tuning
 
@@ -390,7 +390,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--min-departure-mps", type=float, help="Hard speed floor for the ball (both searches)"
     )
     parser.add_argument(
-        "--far-window-bins", type=float, help="Hypothesis points only this far beyond the tee"
+        "--far-window-m", type=float, help="Hypothesis points only this many metres beyond the accept bin"
     )
     parser.add_argument(
         "--band-bins",

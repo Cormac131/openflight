@@ -262,13 +262,13 @@ class BallTuning:
     ``fast_ball_mps`` / ``fast_support_fraction`` are its fastest-credible
     selection among the hypotheses, ``min_departure_mps`` its hard speed floor
     (set on both the legacy acquisition and the hypotheses) and
-    ``far_window_bins`` its separate far range window.
+    ``far_window_m`` its separate far range window.
     """
 
     fast_ball_mps: float | None = None
     fast_support_fraction: float | None = None
     min_departure_mps: float | None = None
-    far_window_bins: float | None = None
+    far_window_m: float | None = None
 
     def apply(self, cfg: fw.BallTrackCfg) -> None:
         """Write the set overrides into a ball-track configuration."""
@@ -279,8 +279,8 @@ class BallTuning:
         if self.min_departure_mps is not None:
             cfg.minDepartureMps = self.min_departure_mps
             cfg.hyps.minDepartureMps = self.min_departure_mps
-        if self.far_window_bins is not None:
-            cfg.hyps.farWindowBins = self.far_window_bins
+        if self.far_window_m is not None:
+            cfg.hyps.farWindowM = self.far_window_m
 
 
 @dataclass(frozen=True)
