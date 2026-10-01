@@ -136,11 +136,12 @@ New in this spec:
   definition stays as `ball_present_strict`. Hand labels (`2026-09-29-track-labels-design.md`)
   override the heuristic where a capture has them. Measured and committed, with a re-run legacy
   baseline, **before** any tracker change.
-- **E2 Split acceptance (replaces R8 for `useHypotheses`).** On the same 93 captures and the repo
+- **E2 Split acceptance (replaces R8 for `useHypotheses`).** On the same captures as the legacy
+  baseline (the evaluation corpus is `OF Sessions`, 125 captures; see Results) and the repo
   recordings, against legacy re-run under E1:
   ball-present `ok` (within 15 % of OPS) higher than legacy's;
   ball-absent `none` higher and `wrong` lower than legacy's;
-  club at impact ≥ 55/93;
+  club at impact not below legacy's on the same captures;
   every repo recording's manifest expectation holds.
   `summarize` / `--compare` report the split.
 - **E3 Net diagnostic.** Optional `--net-range-m`: for each `ok` capture, whether the confirmed

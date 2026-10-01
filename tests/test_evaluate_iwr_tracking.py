@@ -103,7 +103,7 @@ def test_summarize_counts_every_category(ev):
 
 def test_compare_names_each_regression(ev):
     base = {
-        "captures": 93,
+        "captures": 125,
         "club": {"club": 55, "stuck": 32, "few": 6},
         "ball": {"ok": 15, "wrong": 70, "none": 8},
         "ball_present": 23,
@@ -446,9 +446,9 @@ def test_summarize_splits_the_ball_verdicts_by_presence(ev):
     assert s["ball_present"] == 2 and s["ball_present_strict"] == 2
 
 
-def split(present_ok, absent_none, absent_wrong, club=55):
+def split(present_ok, absent_none, absent_wrong, club=72):
     return {
-        "captures": 93,
+        "captures": 125,
         "club": {"club": club, "stuck": 0, "few": 0},
         "ball_by_presence": {
             "present": {"ok": present_ok, "wrong": 0, "none": 0},
