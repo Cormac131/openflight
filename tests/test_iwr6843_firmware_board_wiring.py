@@ -86,9 +86,30 @@ def test_pre_impact_club_targets_come_from_the_club_span_short_of_a_valid_band()
     assert "l3_verticalResidual(" not in helper
     extract = helper.index("found = l3_obs_extract(params, frameIndex, frameUs, club->first,")
     assert "&obs[club->first - windowFirst], club->count," in helper[extract:]
-    keep = helper.index("return gBand.valid ? l3_band_keep_short(&gBand, targets, found) : found;")
-    assert extract < keep
+    keep = helper.index("found = l3_band_keep_short(&gBand, targets, found);")
+    clutter = helper.index(
+        "return l3_band_clutter_filter(&gBandNoise, gImpactFitCfg.clutterSigmas, targets, found);"
+    )
+    assert extract < keep < clutter
     assert "l3_band_filter" not in helper, "before impact: short of the band, not merely outside"
+
+
+def test_the_dump_carries_the_clutter_map_after_the_temperature_report():
+    """Version 10 (dump_format.h, dump.py): the map follows the temperature
+    report, header then means, spreads and update counts, only with one."""
+    match = re.search(r"int32_t l3_cli_dump\([^)]*\)\s*\{(.*?)\n\}", SOURCE, re.S)
+    assert match, "l3_cli_dump (a CLI handler, not static)"
+    dump = match.group(1)
+    version = dump.index("h.version = L3_DUMP_VERSION_CLUTTER;")
+    temperature = dump.index(
+        "UART_writePolling(gDataUart, (uint8_t *)&tempReport, sizeof(tempReport));"
+    )
+    header = dump.index("UART_writePolling(gDataUart, (uint8_t *)&clutter, sizeof(clutter));")
+    avg = dump.index("(uint8_t *)gBandNoise.avg, mapBins * sizeof(float));")
+    dev = dump.index("(uint8_t *)gBandNoise.dev, mapBins * sizeof(float));")
+    seen = dump.index("(uint8_t *)gBandNoise.seen, mapBins);")
+    assert version < temperature < header < avg < dev < seen
+    assert "L3_DUMP_VERSION_CAPTURE_TEMPERATURE" not in dump
 
 
 def test_club_track_reads_the_helper_and_the_trigger_keeps_its_region():
@@ -479,4 +500,46 @@ def test_per_frame_launch_stops_once_the_result_is_ready():
     )
     assert ball_track.index("l3_ball_track_launch(") < ball_track.index(
         "l3_ball_track_reconstruct("
+
+    )
+
+
+# --- the range window (l3_window.h, "captureCfg window") ------------------------
+
+
+def test_the_window_ram_is_loaded_after_the_hwa_reset_and_before_the_paramsets():
+    reset = SOURCE.index("errCode = HWA_reset(gHwaHandle);")
+    load = SOURCE.index("errCode = HWA_configRam(gHwaHandle, HWA_RAM_TYPE_WINDOW_RAM,")
+    ping = SOURCE.index("errCode = l3_configHwaProcessParam(L3_HWA_PARAM_FFT_PING,")
+    pong = SOURCE.index("errCode = l3_configHwaProcessParam(L3_HWA_PARAM_FFT_PONG,")
+    assert reset < load < ping < pong
+    between = SOURCE[reset:load]
+    assert "if (gRangeWindow == L3_RANGE_WINDOW_HANN) {" in between
+    assert "l3_window_hann_q17(gRangeWindowCoeffs, N_SAMPLES);" in between
+    assert "coeffs * (uint32_t)sizeof(int32_t), 0U);" in SOURCE[load : load + 200]
+
+
+def test_the_live_paramsets_window_only_when_asked():
+    process = body("l3_configHwaProcessParam")
+    assert "fftMode.windowEn = (gRangeWindow != L3_RANGE_WINDOW_NONE)" in process
+    assert "fftMode.winSymm = (gRangeWindow != L3_RANGE_WINDOW_NONE)" in process
+    assert "? HWA_FFT_WINDOW_SYMMETRIC" in process
+    assert "fftMode.windowStart = 0U;" in process
+    assert "static uint8_t             gRangeWindow = L3_RANGE_WINDOW_NONE;" in SOURCE
+
+
+def test_captureCfg_window_sets_it_while_stopped():
+    window = body("l3_cli_captureCfgWindow")
+    assert window.index("if (gCaptureActive) {") < window.index("gRangeWindow = window;")
+    assert "l3_window_parse(argv[2], &window) != 0" in window
+    dispatch = body("l3_cli_captureCfg")
+    assert 'strcmp(argv[1], "window") == 0' in dispatch
+
+
+def test_the_dump_says_which_window_it_was_recorded_with():
+    match = re.search(r"int32_t l3_cli_dump\([^)]*\)\s*\{(.*?)\n\}", SOURCE, re.S)
+    dump = match.group(1)
+    assert "clutter.rangeWindow = gRangeWindow;" in dump
+    assert dump.index("clutter.rangeWindow = gRangeWindow;") < dump.index(
+        "UART_writePolling(gDataUart, (uint8_t *)&clutter, sizeof(clutter));"
     )

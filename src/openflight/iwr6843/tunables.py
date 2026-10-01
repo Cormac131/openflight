@@ -52,6 +52,11 @@ TUNABLES: tuple[Tunable, ...] = (
     _t("club", "kf.rangeSigmaM", "float", 0.005, 0.1, 0.005),
     _t("club", "kf.angleSigmaRad", "float", 0.02, 0.6, 0.02),
     _t("club", "kf.chi2Gate", "float", 2.0, 20.0, 1.0),
+    _t("club", "acquireMinStepBins", "float", 0.25, 2.0, 0.25),
+    _t("club", "acquireMaxStepBins", "float", 0.0, 6.0, 0.5),  # 0: single-frame acquisition
+    _t("club", "acquireDopplerTolMps", "float", 1.0, 9.0, 1.0),  # 9: any (half the alias span)
+    _t("club", "acquireMinConfidence", "float", 0.0, 0.4, 0.05),
+    _t("club", "acquireExpectedStepBins", "float", 1.0, 3.5, 0.25),
     _t("ball", "minDepartureMps", "float", 5.0, 25.0, 2.5),
     _t("ball", "originGateBins", "float", 2.0, 16.0, 2.0),
     _t("ball", "minDepartureBins", "float", 0.5, 3.0, 0.5),
@@ -77,6 +82,7 @@ TUNABLES: tuple[Tunable, ...] = (
     _t("fit", "fitPoints", "int", 3, 8, 1),
     _t("fit", "minPoints", "int", 2, 5, 1),
     _t("fit", "ballMinMps", "float", 5.0, 30.0, 2.5),
+    _t("fit", "clutterSigmas", "float", 0.0, 8.0, 0.5),  # 0: no clutter filter
 )
 BY_NAME: dict[str, Tunable] = {t.name: t for t in TUNABLES}
 

@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 
 from openflight.iwr6843 import firmware_host as fw, tunables
-from openflight.iwr6843.dump import is_range_snapshot, parse_dump
+from openflight.iwr6843.dump import clutter_map_struct, is_range_snapshot, parse_dump
 from openflight.iwr6843.self_trigger import BALL_SNR_MAX, check_ball_snr
 from openflight.iwr6843.tracking import RANGE_SPAN_M, same_tx_loop_period_s
 
@@ -40,8 +40,6 @@ DEFAULT_SNR = 6.0
 # The ball tracker's extraction snr then (l3_ball_track_cfg_defaults' old 3);
 # the board's default is now self_trigger.FIRMWARE_BALL_DEFAULT_SNR.
 DEFAULT_BALL_SNR = 3.0
-# The host-only joint search's own extraction snr, not the trigger's.
-JOINT_SEARCH_SNR = 6.0
 DEFAULT_FFT_SIZE = 128
 # The lag-1 Doppler readout aliases at wavelength / (4 T); at 135 us that
 # is about +/- 9 m/s, so a clubhead reads as a speed uniformly over the span.
@@ -324,10 +322,6 @@ class ReplayConfig:
     ball_hypotheses: bool | None = None
     # The Pi detector's rules as ball-track overrides; None keeps the defaults.
     ball_tuning: BallTuning | None = None
-    # Run the joint club/ball path search (l3_joint_search) in parallel with
-    # the legacy ball tracker, host-only.  Results are included in the
-    # ReplayResult as joint_ball_points and joint_club_points.
-    joint_search: bool = False
     # The tee band's total width in bins (l3_band.h): placed on the noisiest
     # idle bins near the destination (l3_band_place) and frozen while a club
     # track is active; targets inside it are dropped before any tracker sees
@@ -589,11 +583,6 @@ class ReplayResult:
     impact: fw.Impact = field(repr=False)
     shot: fw.Shot = field(repr=False)
     ball_track: fw.BallTrack = field(repr=False)
-    # Joint search results (populated only when config.joint_search is True)
-    joint_ball_points: list[PointSummary] = field(default_factory=list)
-    joint_club_points: list[PointSummary] = field(default_factory=list)
-    joint_counters: dict[str, int] = field(default_factory=dict)
-    joint_confirmed: bool = False
     band: tuple[float, float] | None = None  # as last placed
     # The noise map (l3_band_noise_t averages) the band was last placed from,
     # and the first frame the band froze on an acquired club (None: never).
@@ -985,6 +974,11 @@ def replay_dump(
     band = fw.Band()
     noise = fw.BandNoise()
     lib.l3_band_noise_reset(ctypes.byref(noise))
+    if "clutter_map" in meta:
+        # The board's map as it stood at the dump (version 10): the capture
+        # alone has too few idle frames to learn it. The replay feeds it on as
+        # the board did, so the ring's idle frames count twice (at 1/16).
+        noise = clutter_map_struct(meta["clutter_map"])
     band_frozen = False
     band_frozen_frame: int | None = None
     # The impact fit, run once when the shot first reaches RESULT (as the
@@ -1031,18 +1025,6 @@ def replay_dump(
     map_cursor = ctypes.c_uint32(0)
     # The fallback's median beyond the band: the post window's frozen floor.
     leave_floor = ctypes.c_float(0.0)
-    # Joint search (host-only, optional)
-    joint: fw.Joint | None = None
-    joint_targets = (fw.TargetObs * fw.OBS_MAX_TARGETS)()
-    joint_floor = ctypes.c_float(0.0)
-    if config.joint_search:
-        joint_cfg_s = fw.JointCfg()
-        lib.l3_joint_cfg_defaults(ctypes.byref(joint_cfg_s))
-        joint_cfg_s.binWidthM = bin_width_m
-        joint_cfg_s.velocitySpanMps = track_cfg.velocitySpanMps
-        joint_cfg_s.cal = cal
-        joint = fw.Joint()
-        lib.l3_joint_init(ctypes.byref(joint), ctypes.byref(joint_cfg_s))
     # The destination's direction: the locked ball's static return, else boresight.
     ball_azimuth = 0.0
     ball_elevation = 0.0
@@ -1138,8 +1120,6 @@ def replay_dump(
                 ctypes.byref(ball_position),
                 timestamp_us,
             )
-            if joint is not None:
-                _joint_arm_from_track(lib, joint, track, timestamp_us)
             forced_in = fw.ShotInput()
             forced_in.ballLocked = 1 if config.dest_bin is not None else 0
             forced_in.ballPosition = ball_position
@@ -1195,21 +1175,6 @@ def replay_dump(
                     destination * bin_width_m,
                     config.dest_bin is None,
                     fit,
-                )
-            if joint is not None:
-                _joint_post_frame(
-                    lib,
-                    joint,
-                    cube,
-                    frame,
-                    timestamp_us,
-                    window_start,
-                    window_bins,
-                    n_tx,
-                    params,
-                    joint_floor,
-                    joint_targets,
-                    band,
                 )
             continue
         in_window = lib.l3_trig_region(
@@ -1272,6 +1237,8 @@ def replay_dump(
                 leave=leave,
                 leave_track=track,
                 leave_floor=leave_floor,
+                clutter=noise,
+                clutter_sigmas=fit_cfg.clutterSigmas,
             )
             found = scan.found
             first_bin, scored_region = scan.region.first, scan.region.count
@@ -1413,8 +1380,6 @@ def replay_dump(
                 ctypes.byref(ball_position),
                 shot_in.impactTimestampUs,
             )
-            if joint is not None:
-                _joint_arm_from_track(lib, joint, track, shot_in.impactTimestampUs)
         if fired and left and ball_track.armed:
             # l3_considerSelfTrigger: the fallback's late fire (the club's rule
             # may have fired too) seeds the flight with the ball's two points.
@@ -1449,10 +1414,7 @@ def replay_dump(
 
     if retain_cfg is not None:
         frames = _attach_retention(frames, retain_windows)
-    if joint is not None:
-        lib.l3_joint_finish(ctypes.byref(joint))
     club_speed, club_slope, club_residual = club_at_impact or _club_fit(lib, track)
-    joint_ball_pts, joint_club_pts = _joint_collect_points(joint) if joint is not None else ([], [])
     impact_declared = fw.SHOT_STATE_NAMES[shot.state] not in PRE_IMPACT_SHOT_STATES
     if not impact_declared:
         frozen_impact_us = None
@@ -1486,14 +1448,6 @@ def replay_dump(
         shot_status=fw.c_text(lib.l3_shot_format, ctypes.byref(shot), cap=240),
         ball_status=fw.c_text(lib.l3_ball_track_format_status, ctypes.byref(ball_track), cap=240),
         track_counters={name: int(track.counters[i]) for i, name in enumerate(fw.TRACK_WHY_NAMES)},
-        joint_ball_points=joint_ball_pts,
-        joint_club_points=joint_club_pts,
-        joint_counters=(
-            {name: int(joint.counters[i]) for i, name in enumerate(fw.JOINT_CNT_NAMES)}
-            if joint is not None
-            else {}
-        ),
-        joint_confirmed=bool(joint.ballConfirmed) if joint is not None else False,
         band=(float(band.loBin), float(band.hiBin)) if band.valid else None,
         band_noise=tuple(float(v) for v in noise.avg[: noise.count]),
         band_frozen_frame=band_frozen_frame,
@@ -1644,6 +1598,8 @@ def _scan_pre_impact(  # pylint: disable=too-many-arguments,too-many-locals
     leave: fw.Leave,
     leave_track: fw.ClubTrack,
     leave_floor: ctypes.c_float,
+    clutter: fw.BandNoise,
+    clutter_sigmas: float,
 ) -> _PreScan:
     """l3_preImpactClubTargets with the band on: the scan plan (l3_scan_pre)
     scores the trigger region clipped to short of the band, the club's
@@ -1723,6 +1679,8 @@ def _scan_pre_impact(  # pylint: disable=too-many-arguments,too-many-locals
             fw.OBS_MAX_TARGETS,
         )
         found = lib.l3_band_keep_short(ctypes.byref(band), targets, found)
+        # The scene at address is not the club (l3_band_clutter_filter).
+        found = lib.l3_band_clutter_filter(ctypes.byref(clutter), clutter_sigmas, targets, found)
     map_spans = tuple(span for span in (club, leave_span, chunk) if span.count > 0)
     return _PreScan(found, region_span, map_spans, window_obs, window_count, scored)
 
@@ -1795,83 +1753,6 @@ def _ball_arm_bin(band: fw.Band, destination: int) -> float:
     """Where the ball tracker is armed (as l3_ballArmBin): the band's far edge
     as it stands, else the destination."""
     return float(band.hiBin) if band.valid else float(destination)
-
-
-def _joint_arm_from_track(lib, joint: fw.Joint, track: fw.ClubTrack, timestamp_us: int) -> None:
-    """Arm the joint search from the current club track at the moment of impact."""
-    if joint.seedValid or track.count == 0:
-        return
-    newest = fw.TrackPoint()
-    lib.l3_track_point(ctypes.byref(track), track.count - 1, ctypes.byref(newest))
-    speed_mps, _slope, _residual = _club_fit(lib, track)
-    kin = fw.JointKin()
-    kin.rangeBin = newest.rangeBin
-    kin.speedMps = speed_mps
-    kin.timestampUs = timestamp_us
-    lib.l3_joint_arm(ctypes.byref(joint), ctypes.byref(kin), timestamp_us)
-
-
-def _joint_post_frame(  # pylint: disable=too-many-arguments
-    lib,
-    joint: fw.Joint,
-    cube,
-    frame: int,
-    timestamp_us: int,
-    window_start: int,
-    window_bins: int,
-    n_tx: int,
-    params: fw.ObsParams,
-    joint_floor: ctypes.c_float,
-    joint_targets: ctypes.Array,
-    band: fw.Band,
-) -> None:
-    """Feed one post-impact frame to the joint search."""
-    joint_params = fw.ObsParams(params.stat, JOINT_SEARCH_SNR, params.loopPeriodS, params.subBin)
-    found, _, _, _ = _banded_window_targets(
-        lib,
-        cube,
-        frame,
-        timestamp_us,
-        window_start,
-        window_bins,
-        n_tx,
-        joint_params,
-        band,
-        joint_targets,
-        running_floor=joint_floor,
-    )
-    lib.l3_joint_update(ctypes.byref(joint), frame, timestamp_us, joint_targets, found)
-
-
-def _joint_collect_points(joint: fw.Joint) -> tuple[list[PointSummary], list[PointSummary]]:
-    """Read all finalized club and ball points from the joint search output."""
-    ball_pts: list[PointSummary] = []
-    club_pts: list[PointSummary] = []
-    for i in range(int(joint.ballCount)):
-        pt = joint.ballPoints[i]
-        ball_pts.append(
-            PointSummary(
-                frame=0,
-                timestamp_us=int(pt.timestampUs),
-                range_bin=float(pt.rangeBin),
-                range_m=float(pt.rangeBin) * float(joint.cfg.binWidthM),
-                doppler_mps=float(pt.speedMps),
-                confidence=0.0,
-            )
-        )
-    for i in range(int(joint.clubCount)):
-        pt = joint.clubPoints[i]
-        club_pts.append(
-            PointSummary(
-                frame=0,
-                timestamp_us=int(pt.timestampUs),
-                range_bin=float(pt.rangeBin),
-                range_m=float(pt.rangeBin) * float(joint.cfg.binWidthM),
-                doppler_mps=float(pt.speedMps),
-                confidence=0.0,
-            )
-        )
-    return ball_pts, club_pts
 
 
 def _club_fit(lib, track: fw.ClubTrack) -> tuple[float, float, float]:
@@ -2520,7 +2401,6 @@ __all__ = [
     "BALL_SNR_MAX",
     "DEFAULT_BALL_SNR",
     "DEFAULT_SNR",
-    "JOINT_SEARCH_SNR",
     "EXPECT_KEY",
     "FALLBACK_FRAME_PERIOD_US",
     "AngleSummary",

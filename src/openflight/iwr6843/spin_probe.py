@@ -6,13 +6,22 @@ from the roadmap are instrumented:
 
 1. Micro-Doppler. A translating ball gives one Doppler tone; a rotating one
    adds structure around it, because scatterers on the surface approach and
-   recede at up to omega * R (about 2 m/s at 3000 rpm). Over a burst of
+   recede at up to omega * R (about 6.7 m/s at 3000 rpm). Over a burst of
    loops at the ball's range bin the bulk phase progression is measured
    (lag-1, as the firmware does), removed, and the residual spectrum over
    the loops examined: its spectral spread (second moment) and the share of
    power off the bulk tone are the candidate observables.
 2. Phase and amplitude structure across the virtual antennas and time, kept
    as the per-channel residual series for offline inspection.
+3. Rotation rate. An asymmetric or marked ball swings its echo once per
+   revolution. ``track_from_points`` takes the ball's range bin frame by
+   frame from a reviewed label file or the firmware tracker (it recedes 2-3
+   bins per frame, so a fixed bin loses it), and ``rotation_spectrum`` fits
+   a sinusoid to the detrended echo power over every loop of every tracked
+   frame. The window the ball spends in view
+   (about 30-40 ms) bounds what this can see: a spin is only reported when
+   the window holds at least 1.5 revolutions, so a driver's 2500 rpm in a
+   30 ms window is reported as below the floor rather than guessed.
 
 ``ball_roi`` cuts the region of interest (frames x loops x tx x rx x a few
 bins around the tracked ball) out of a dump so it can be stored on its own
@@ -23,13 +32,18 @@ and high-spin balls have been recorded; it says so in its output.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import numpy as np
 
 from openflight.iwr6843.dump import parse_dump
-from openflight.iwr6843.firmware_replay import frame_window, vertical_tx_indices
-from openflight.iwr6843.tracking import RANGE_SPAN_M, same_tx_loop_period_s
+from openflight.iwr6843.firmware_replay import (
+    frame_timestamps_us,
+    frame_window,
+    vertical_tx_indices,
+)
+from openflight.iwr6843.tracking import CHIRP_PERIOD_S, RANGE_SPAN_M, same_tx_loop_period_s
 
 WAVELENGTH_M = 0.00484
 BALL_RADIUS_M = 0.02135
@@ -42,6 +56,21 @@ BALL_RADIUS_M = 0.02135
 SPREAD_STATIONARY_CELLS = 1.0
 SPREAD_LOW_SPIN_CELLS = 2.5
 THRESHOLDS_STATUS = "placeholder thresholds; record stationary, low-spin and high-spin balls"
+
+RANGE_BIN_M = RANGE_SPAN_M / 128  # every cfg's 128-point range FFT over a 6 m span
+
+# Rotation line: a spin is only claimed when the window holds this many
+# revolutions (fewer cannot be told apart from the range falloff trend).
+ROTATION_MIN_REVOLUTIONS = 1.5
+# Placeholder detection threshold on the best sinusoid: the share of the
+# detrended log-power variance it explains. The 34 labelled swings in
+# tests/radar/recordings (plain balls, no reference spin) reach 0.36 off the
+# floor, so a claim needs more than that. A best sinusoid on the floor
+# itself is never a detection: that is a line below the floor (or a range
+# trend the quadratic does not hold) leaking up, not a measurement. Stated
+# in the report until marked balls have been recorded with a reference.
+ROTATION_MIN_FRACTION = 0.45
+ROTATION_STATUS = "placeholder detection thresholds; record marked balls with a reference"
 
 
 @dataclass(frozen=True)
@@ -285,17 +314,239 @@ def format_comparison(
     return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class BallTrack:
+    """The ball's range bin frame by frame, timed at the middle of each burst."""
+
+    frames: tuple[int, ...]
+    bins: tuple[float, ...]  # global, interpolated
+    times_s: tuple[float, ...]  # mid-burst, from the dump's frame clock
+    radial_mps: float  # least-squares slope of range over time: unaliased
+
+    @property
+    def span_s(self) -> float:
+        return self.times_s[-1] - self.times_s[0]
+
+
+def _mti_cube(frame_cube: np.ndarray, n_tx: int) -> np.ndarray:
+    """[chirps, rx, bins] -> [loops, tx, rx, bins] with each bin's loop mean
+    removed, so static clutter cancels and the moving ball stays."""
+    chirps, n_rx, bins = frame_cube.shape
+    loops = chirps // n_tx
+    block = frame_cube[: loops * n_tx].reshape(loops, n_tx, n_rx, bins)
+    return block - block.mean(axis=0, keepdims=True)
+
+
+def track_from_points(raw: bytes, points: Iterable[tuple[int, float]]) -> BallTrack:
+    """A ball track from (frame, global range bin) points: a reviewed label
+    file's ball, or the firmware ball tracker's points from a replay.
+
+    The spin probe does not find the ball itself: on recorded swings the ball
+    is 5-10 dB over the window's median while the golfer and club, a few bins
+    away, are 15-25 dB over it, and a peak follower jumps onto them.
+    """
+    meta, cube = parse_dump(raw)
+    stamps_us = frame_timestamps_us(meta)
+    half_burst_s = 0.5 * cube.shape[1] * CHIRP_PERIOD_S
+    ordered = sorted((int(frame), float(b)) for frame, b in points)
+    for frame, _ in ordered:
+        if not 0 <= frame < cube.shape[0]:
+            raise ValueError(f"frame {frame} is not in this {cube.shape[0]}-frame dump")
+    if len({frame for frame, _ in ordered}) != len(ordered):
+        raise ValueError("a ball track has one point per frame")
+    if len(ordered) < 2:
+        raise ValueError(f"{len(ordered)} ball point(s); a speed needs two frames")
+    frames = tuple(frame for frame, _ in ordered)
+    bins = tuple(b for _, b in ordered)
+    times = tuple(stamps_us[frame] * 1e-6 + half_burst_s for frame in frames)
+    slope = float(np.polyfit(np.asarray(times), np.asarray(bins), 1)[0])
+    return BallTrack(frames, bins, times, slope * RANGE_BIN_M)
+
+
+def follow_rois(raw: bytes, track: BallTrack, *, half_width: int = 2) -> list[BallRoi]:
+    """One single-frame ROI per tracked frame, centred on the ball's bin. A
+    frame whose window does not hold the whole ROI is left out (the ball at
+    the window's edge); compare the count with the track's."""
+    meta = parse_dump(raw)[0]
+    rois = []
+    for frame, b in zip(track.frames, track.bins):
+        centre = int(round(b))
+        start, count = frame_window(meta, frame)
+        if start <= centre - half_width and centre + half_width < start + count:
+            rois.append(ball_roi(raw, frames=[frame], center_bin=centre, half_width=half_width))
+    return rois
+
+
+@dataclass(frozen=True)
+class RotationSpectrum:
+    """The once-per-revolution line in the ball's echo power over the followed frames."""
+
+    freqs_hz: np.ndarray  # scanned, from the floor up
+    fraction: np.ndarray  # detrended log-power variance each sinusoid explains, 0..1
+    peak_hz: float
+    peak_fraction: float
+    peak_to_median: float  # reported, not gated: the floor edge inflates it
+    span_s: float  # first to last power sample
+    samples: int
+    at_floor: bool  # the best sinusoid is the lowest scanned frequency
+    detected: bool
+    status: str = ROTATION_STATUS
+
+    @property
+    def peak_rpm(self) -> float:
+        return 60.0 * self.peak_hz
+
+    @property
+    def floor_hz(self) -> float:
+        return ROTATION_MIN_REVOLUTIONS / self.span_s
+
+    @property
+    def floor_rpm(self) -> float:
+        return 60.0 * self.floor_hz
+
+    @property
+    def resolution_rpm(self) -> float:
+        """One Fourier cell of the window; a peak is located finer than this at good SNR."""
+        return 60.0 / self.span_s
+
+    @property
+    def rotations(self) -> float:
+        return self.peak_hz * self.span_s
+
+
+def _echo_power_series(
+    raw: bytes, track: BallTrack, half_width: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """(times, power) per loop: MTI power summed over every channel and the
+    bins around the ball. Summing power over the bins (not the complex values)
+    keeps the series flat while the ball walks across them inside a burst."""
+    meta, cube = parse_dump(raw)
+    n_tx = int(meta["n_tx"])
+    loop_s = same_tx_loop_period_s(n_tx)
+    half_burst_s = 0.5 * cube.shape[1] * CHIRP_PERIOD_S
+    times: list[np.ndarray] = []
+    powers: list[np.ndarray] = []
+    for frame, b, t_mid in zip(track.frames, track.bins, track.times_s):
+        window_start, count = frame_window(meta, frame)
+        centre = int(round(b)) - window_start
+        lo, hi = max(0, centre - half_width), min(count, centre + half_width + 1)
+        block = _mti_cube(cube[frame, ..., :count], n_tx)[..., lo:hi]
+        powers.append((np.abs(block) ** 2).sum(axis=(1, 2, 3)))
+        times.append(t_mid - half_burst_s + loop_s * np.arange(block.shape[0]))
+    return np.concatenate(times), np.concatenate(powers)
+
+
+def rotation_spectrum(
+    raw: bytes,
+    track: BallTrack,
+    *,
+    half_width: int = 3,
+    f_min_hz: float = 15.0,
+    f_max_hz: float = 250.0,
+    oversample: int = 10,
+) -> RotationSpectrum:
+    """Scan for a sinusoid in the ball's detrended log echo power.
+
+    The range falloff (and any slow aspect change) is a quadratic in time on
+    the log power; each candidate frequency is scored by the variance a
+    sinusoid explains beyond that quadratic, both fitted together. The scan
+    starts at the larger of ``f_min_hz`` and the 1.5-revolution floor of the
+    window. A mark seen twice per revolution (a stripe) reads at twice the
+    spin; the report says so.
+    """
+    if not 0.0 < f_min_hz < f_max_hz:
+        raise ValueError(f"band {f_min_hz}..{f_max_hz} Hz is empty")
+    times, power = _echo_power_series(raw, track, half_width)
+    t = times - times.mean()
+    span = float(times[-1] - times[0])
+    y = np.log(np.maximum(power, np.finfo(float).tiny))
+    trend = np.vander(t, 3)
+    base = y - trend @ np.linalg.lstsq(trend, y, rcond=None)[0]
+    total = float(base @ base)
+    lo = max(f_min_hz, ROTATION_MIN_REVOLUTIONS / span)
+    freqs = np.arange(lo, f_max_hz, 1.0 / (oversample * span)) if lo < f_max_hz else np.empty(0)
+    fraction = np.zeros(freqs.size)
+    for index, f in enumerate(freqs):
+        design = np.column_stack((trend, np.cos(2.0 * np.pi * f * t), np.sin(2.0 * np.pi * f * t)))
+        resid = y - design @ np.linalg.lstsq(design, y, rcond=None)[0]
+        fraction[index] = 1.0 - float(resid @ resid) / total if total > 0.0 else 0.0
+    if freqs.size == 0:
+        return RotationSpectrum(freqs, fraction, 0.0, 0.0, 0.0, span, int(t.size), False, False)
+    peak = int(np.argmax(fraction))
+    peak_hz = float(freqs[peak])
+    if 0 < peak < freqs.size - 1:
+        a, b, c = fraction[peak - 1], fraction[peak], fraction[peak + 1]
+        denom = a - 2.0 * b + c
+        if denom < 0.0:
+            peak_hz += 0.5 * float(a - c) / float(denom) * float(freqs[1] - freqs[0])
+    median = float(np.median(fraction))
+    peak_fraction = float(fraction[peak])
+    ratio = peak_fraction / median if median > 0.0 else float("inf")
+    at_floor = peak == 0
+    detected = peak_fraction >= ROTATION_MIN_FRACTION and not at_floor
+    return RotationSpectrum(
+        freqs, fraction, peak_hz, peak_fraction, ratio, span, int(t.size), at_floor, detected
+    )
+
+
+def format_track(track: BallTrack) -> str:
+    return (
+        f"ball track: {len(track.frames)} frames {track.frames[0]}-{track.frames[-1]}, "
+        f"bins {track.bins[0]:.1f} -> {track.bins[-1]:.1f}, radial {track.radial_mps:.1f} m/s "
+        f"over {1000.0 * track.span_s:.1f} ms"
+    )
+
+
+def format_rotation_report(result: RotationSpectrum, *, reference_rpm: float | None = None) -> str:
+    if result.detected:
+        verdict = f"line at {result.peak_rpm:.0f} rpm"
+    elif not result.freqs_hz.size:
+        verdict = "no line (the whole band is below the floor)"
+    elif result.at_floor:
+        verdict = "no line (the best fit sits on the floor: a line below the floor leaks up)"
+    else:
+        verdict = f"no line (best {result.peak_rpm:.0f} rpm)"
+    lines = [
+        f"spin rotation: {verdict}, explains {100 * result.peak_fraction:.0f}% of the detrended "
+        f"power, {result.peak_to_median:.1f}x the scan median",
+        f"  window {1000.0 * result.span_s:.1f} ms, {result.samples} samples, "
+        f"{result.rotations:.1f} revolutions at the peak, "
+        f"resolution {result.resolution_rpm:.0f} rpm, "
+        f"floor {result.floor_rpm:.0f} rpm (slower spin is not observable in this window)",
+        "  a mark seen twice per revolution (a stripe) reads at twice the spin",
+        f"  {result.status}",
+    ]
+    if reference_rpm is not None:
+        if reference_rpm < result.floor_rpm:
+            lines.append(f"  reference {reference_rpm:.0f} rpm is below the floor of this window")
+        elif result.detected:
+            error = result.peak_rpm - reference_rpm
+            half = result.peak_rpm / 2.0 - reference_rpm
+            lines.append(
+                f"  reference {reference_rpm:.0f} rpm: error {error:+.0f} rpm "
+                f"(half the line: {half:+.0f} rpm)"
+            )
+        else:
+            lines.append(f"  reference {reference_rpm:.0f} rpm: no line to compare")
+    return "\n".join(lines)
+
+
 def bin_of_range(range_m: float, fft_size: int = 128) -> int:
     return int(range_m / (RANGE_SPAN_M / fft_size))
 
 
 __all__ = [
     "BALL_RADIUS_M",
+    "RANGE_BIN_M",
+    "ROTATION_MIN_REVOLUTIONS",
+    "ROTATION_STATUS",
     "SPREAD_LOW_SPIN_CELLS",
     "SPREAD_STATIONARY_CELLS",
     "THRESHOLDS_STATUS",
     "WAVELENGTH_M",
     "BallRoi",
+    "BallTrack",
+    "RotationSpectrum",
     "MicroDoppler",
     "PathDifference",
     "SpinSignature",
@@ -303,8 +554,13 @@ __all__ = [
     "bin_of_range",
     "classify_signature",
     "compare_paths",
+    "follow_rois",
     "format_comparison",
     "format_report",
+    "format_rotation_report",
+    "format_track",
     "micro_doppler",
+    "rotation_spectrum",
+    "track_from_points",
     "surface_speed_mps",
 ]

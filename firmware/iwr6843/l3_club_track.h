@@ -54,6 +54,10 @@
  * a track the band hid) is tentative: the next associated point must lie at
  * least this far downrange of it, or the point is withdrawn. */
 #define L3_TRACK_TENTATIVE_ADVANCE_BINS 1.0F
+/* Candidate approaches (acquireMaxStepBins > 0): how many are held, and the
+ * most frames between a candidate and the point that confirms it. */
+#define L3_TRACK_CANDIDATES 4U
+#define L3_TRACK_CANDIDATE_MAX_GAP_FRAMES 2U
 
 /* What reconstruction (l3_ball_fit.h, l3_track_kf.h) made of a point. */
 enum {
@@ -150,6 +154,24 @@ typedef struct {
      * following skip it (association keeps the track's own bin, which the
      * same-bin rules handle); 0 disables. */
     uint32_t standingFrames;
+    /* Acquisition by candidate approach. The golfer's body, in the bins short
+     * of the ball, returns far stronger than the club and reads as a slow
+     * mover, so the most confident target of one frame is often the body. A
+     * target at least acquireMinConfidence becomes a candidate; a track starts
+     * only when a later target (within L3_TRACK_CANDIDATE_MAX_GAP_FRAMES)
+     * steps on from it by acquireMinStepBins..acquireMaxStepBins a frame with
+     * an aliased Doppler within acquireDopplerTolMps of it. The body never
+     * steps. acquireMaxStepBins 0 (the default) acquires the best target of
+     * one frame, as before; 4.5 is a 70 m/s club's step. Off because on the
+     * labelled swings it also confirmed hops between still returns. As
+     * before (minConfidence, the mover preference). */
+    float    acquireMinStepBins;
+    float    acquireMaxStepBins;
+    float    acquireDopplerTolMps;
+    float    acquireMinConfidence;
+    /* Of several confirming pairs, the one whose step per frame is nearest this
+     * (with association's Doppler, quality and strength terms). */
+    float    acquireExpectedStepBins;
     /* The club reconstruction (l3_track_kf.h). The ball's core carries it too,
      * unused: the ball has its own fit (l3_ball_fit.h). */
     l3_track_kf_cfg_t kf;
@@ -238,6 +260,14 @@ typedef struct {
     /* Per global bin: consecutive frames a target has stood within one bin of
      * it (see standingFrames). Kept across releases and resets. */
     uint8_t  standHold[L3_TRACK_GLOBAL_BINS];
+    /* Candidate approaches awaiting a confirming step (acquireMaxStepBins). */
+    uint32_t candidateCount;
+    l3_target_obs_t candidates[L3_TRACK_CANDIDATES];
+    /* The last update's targets' bins and frame: a confirming step must land
+     * where no other return stood the frame before. */
+    uint32_t prevFrame;
+    uint32_t prevCount;
+    float    prevBins[L3_OBS_MAX_TARGETS];
 } l3_club_track_t;
 
 void l3_track_cfg_defaults(l3_track_cfg_t *cfg);
@@ -346,13 +376,13 @@ uint32_t l3_track_delivery_range(const l3_club_track_t *track, uint32_t first, u
 /* "delivery points=8 az=8 el=8 speed=22.40 radial=22.00 path=2.10 attack=-3.40
  *  residual=0.012 conf=0.81 valid=spa" */
 /* The 3D fit of points [first, last) read through pointAt: what
- * l3_track_delivery_range does for a track, for any point list (the joint
- * search's ball path). Returns the points used, 0 below three. */
+ * l3_track_delivery_range does for a track, for any point list. Returns the
+ * points used, 0 below three. */
 uint32_t l3_delivery_fit(l3_point_at_fn pointAt, const void *ctx, uint32_t first, uint32_t last,
                          uint32_t fullPoints, float binWidthM, float maxAngleResidualM,
                          l3_delivery_t *out);
-/* Append a point made elsewhere (the joint search's written-out club point):
- * located with this track's calibration, lastBin and lastFrame updated. */
+/* Append a point made elsewhere: located with this track's calibration,
+ * lastBin and lastFrame updated. */
 void l3_track_append_point(l3_club_track_t *track, const l3_track_point_t *point);
 int32_t l3_track_format_delivery(const l3_delivery_t *delivery, char *out, uint32_t cap);
 /* Least-squares fit of rangeBin against time over the newest maxPoints

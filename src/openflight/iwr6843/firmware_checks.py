@@ -601,6 +601,12 @@ CAPTURE_CFG_CASES: tuple[tuple[str, bool], ...] = (
     ("captureCfg 100 53 32 53 47 8", False),
     ("captureCfg 20 53 32 53 47 64", False),
     ("captureCfg 20 53 32 53 47 8 17", False),
+    # The range window (l3_cli_captureCfgWindow); the last line puts the board
+    # back to rectangular for the checks that follow.
+    ("captureCfg window hann", True),
+    ("captureCfg window blackman", False),
+    ("captureCfg window", False),
+    ("captureCfg window none", True),
 )
 PHASE_CAPTURE_CFG_CASES: tuple[tuple[str, bool], ...] = (
     ("phaseCaptureCfg 20 53 9 32 53 7 47 53 47 8 1", True),

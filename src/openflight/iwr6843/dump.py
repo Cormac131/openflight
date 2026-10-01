@@ -23,6 +23,12 @@ Fixed-width version 5 and configurable-capture version 7 append a temperature
 report. The older variable-width v5/v6 formats remain parseable without one.
 Sample format 5 keeps the version 6 timed descriptors but stores each
 frame as int8 I/Q plus a uint16 frame scale.
+Version 10 is version 7 plus the board's clutter map (l3_band_noise_t: the
+mean, spread and history per bin learned on frames with no club track) as it
+stood at the dump, after the temperature report: a capture has too few idle
+frames for a replay to learn the map itself. It also says which range window
+the HWA applied (l3_window.h), so rectangular and Hann captures of one session
+can be told apart.
 """
 
 from __future__ import annotations
@@ -31,12 +37,18 @@ import struct
 
 import numpy as np
 
+from openflight.iwr6843 import firmware_host as fw
 from openflight.iwr6843.music import est_music_fbss, steer
 
 MAGIC = b"ILD1"
 HEADER = struct.Struct("<4sHHHBBHBBHH")
 TEMP_REPORT = struct.Struct("<Ihhhhhhhhhh")
-MAX_SUPPORTED_DUMP_VERSION = 9
+MAX_SUPPORTED_DUMP_VERSION = 10
+DUMP_VERSION_CLUTTER = 10
+# u16 first bin, u16 count, u32 updates, u8 range window, 3 reserved; then
+# count f32 means, count f32 spreads, count u8 update counts
+# (L3_DUMP_VERSION_CLUTTER, dump_format.h).
+CLUTTER_REPORT = struct.Struct("<HHIB3x")
 RETENTION_REPORT = struct.Struct("<HHHH")
 RETENTION_REASONS = ("complete", "track_lost", "ambiguous", "range_edge", "short_history")
 # TI mmWaveLink rlRfTempData_t temperature fields are signed, 1 LSB = 1 deg C.
@@ -74,7 +86,74 @@ _TIMED_SAMPLE_FORMATS = (
 
 def _has_temperature_extension(version: int, sample_fmt: int) -> bool:
     """Identify schemas that append the temperature report after the header."""
-    return version in (7, 9) or (version == 5 and sample_fmt not in _VARIABLE_SAMPLE_FORMATS)
+    return version in (7, 9, DUMP_VERSION_CLUTTER) or (
+        version == 5 and sample_fmt not in _VARIABLE_SAMPLE_FORMATS
+    )
+
+
+def _pack_clutter_map(clutter_map: dict, range_window: str) -> bytes:
+    if range_window not in fw.RANGE_WINDOW_NAMES:
+        raise ValueError(f"unknown range window {range_window!r}; known {fw.RANGE_WINDOW_NAMES}")
+    count = int(clutter_map["count"])
+    if not 0 <= count <= fw.BAND_NOISE_BINS:
+        raise ValueError(
+            f"clutter map of {count} bins; the board keeps at most {fw.BAND_NOISE_BINS}"
+        )
+    columns = ("avg", "dev", "seen")
+    if any(len(clutter_map[key]) != count for key in columns):
+        raise ValueError("clutter map columns must each hold count values")
+    return (
+        CLUTTER_REPORT.pack(
+            int(clutter_map["first_bin"]),
+            count,
+            int(clutter_map["updates"]),
+            fw.RANGE_WINDOW_NAMES.index(range_window),
+        )
+        + np.asarray(clutter_map["avg"], dtype="<f4").tobytes()
+        + np.asarray(clutter_map["dev"], dtype="<f4").tobytes()
+        + np.asarray(clutter_map["seen"], dtype="u1").tobytes()
+    )
+
+
+def _parse_clutter_map(raw: bytes, offset: int) -> tuple[dict, str, int]:
+    """The clutter map extension at ``offset``: the map, the range window's
+    name and the extension's size."""
+    if len(raw) < offset + CLUTTER_REPORT.size:
+        raise ValueError("short clutter map extension")
+    first_bin, count, updates, window = CLUTTER_REPORT.unpack_from(raw, offset)
+    if window >= len(fw.RANGE_WINDOW_NAMES):
+        raise ValueError(f"unknown range window {window}")
+    if count > fw.BAND_NOISE_BINS:
+        raise ValueError(f"invalid clutter map of {count} bins")
+    size = CLUTTER_REPORT.size + count * (4 + 4 + 1)
+    if len(raw) < offset + size:
+        raise ValueError("short clutter map extension")
+    at = offset + CLUTTER_REPORT.size
+    avg = np.frombuffer(raw, dtype="<f4", offset=at, count=count)
+    dev = np.frombuffer(raw, dtype="<f4", offset=at + 4 * count, count=count)
+    seen = np.frombuffer(raw, dtype="u1", offset=at + 8 * count, count=count)
+    clutter_map = {
+        "first_bin": first_bin,
+        "count": count,
+        "updates": updates,
+        "avg": tuple(float(v) for v in avg),
+        "dev": tuple(float(v) for v in dev),
+        "seen": tuple(int(v) for v in seen),
+    }
+    return clutter_map, fw.RANGE_WINDOW_NAMES[window], size
+
+
+def clutter_map_struct(clutter_map: dict) -> fw.BandNoise:
+    """A dump's clutter map as the board's ``l3_band_noise_t``."""
+    noise = fw.BandNoise()
+    noise.firstBin = int(clutter_map["first_bin"])
+    noise.count = int(clutter_map["count"])
+    noise.updates = int(clutter_map["updates"])
+    for k in range(noise.count):
+        noise.avg[k] = clutter_map["avg"][k]
+        noise.dev[k] = clutter_map["dev"][k]
+        noise.seen[k] = clutter_map["seen"][k]
+    return noise
 
 
 def pack_dump(
@@ -91,6 +170,8 @@ def pack_dump(
     frame_time_offsets_us: tuple[int, ...] | list[int] | None = None,
     temperature_report: dict[str, int] | None = None,
     retention: dict | None = None,
+    clutter_map: dict | None = None,
+    range_window: str | None = None,
 ) -> bytes:
     """Complex cube [n_frames, chirps_per_frame, n_rx, n_samples] -> dump bytes.
 
@@ -132,6 +213,14 @@ def pack_dump(
         )
     elif retention is not None:
         raise ValueError("retention metadata requires version 8 or 9")
+    if version == DUMP_VERSION_CLUTTER:
+        if clutter_map is None:
+            raise ValueError("dump version 10 requires a clutter map")
+        temp_prefix += _pack_clutter_map(clutter_map, range_window or "none")
+    elif clutter_map is not None:
+        raise ValueError(f"a clutter map requires dump version {DUMP_VERSION_CLUTTER}")
+    elif range_window is not None:
+        raise ValueError(f"the range window is recorded from dump version {DUMP_VERSION_CLUTTER}")
     frame_prefix = b""
     if sample_fmt in (
         SAMPLE_RANGE_FFT_IQ16_WINDOWED,
@@ -270,6 +359,11 @@ def parse_header(raw: bytes) -> dict:
             raise ValueError("complete adaptive capture has missing frames")
         retention = dict(reason=RETENTION_REASONS[reason], pre_frames=pre, planned_frames=planned)
         header_nbytes += RETENTION_REPORT.size
+    clutter_map = None
+    range_window = None
+    if ver == DUMP_VERSION_CLUTTER:
+        clutter_map, range_window, clutter_nbytes = _parse_clutter_map(raw, header_nbytes)
+        header_nbytes += clutter_nbytes
     range_metadata_nbytes = (
         TIMED_FRAME_DESCRIPTOR.size * nf + (2 * nf)
         if fmt == SAMPLE_RANGE_FFT_IQ8_VARIABLE_TIMED
@@ -297,6 +391,8 @@ def parse_header(raw: bytes) -> dict:
         header_nbytes=header_nbytes,
         temperature_report=temperature_report,
         **({"retention": retention} if retention is not None else {}),
+        **({"clutter_map": clutter_map} if clutter_map is not None else {}),
+        **({"range_window": range_window} if range_window is not None else {}),
     )
 
 
@@ -446,6 +542,8 @@ def select_tdm_loops(raw: bytes, *, start: int, count: int) -> bytes:
         frame_time_offsets_us=meta.get("frame_time_offsets_us"),
         temperature_report=meta.get("temperature_report"),
         retention=meta.get("retention"),
+        clutter_map=meta.get("clutter_map"),
+        range_window=meta.get("range_window"),
     )
 
 
@@ -500,6 +598,8 @@ def project_tx_pair(raw: bytes, tx_indices: tuple[int, int] = (0, 1)) -> bytes:
         frame_time_offsets_us=meta.get("frame_time_offsets_us"),
         temperature_report=meta.get("temperature_report"),
         retention=meta.get("retention"),
+        clutter_map=meta.get("clutter_map"),
+        range_window=meta.get("range_window"),
     )
 
 

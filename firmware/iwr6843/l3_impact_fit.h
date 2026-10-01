@@ -57,6 +57,10 @@ typedef struct {
     float    minSigmaUs;        /* ... on at least this sigma */
     float    maxSigmaUs;        /* a looser estimate is uncertain; 0 disables */
     float    bandSearchBins;    /* the band may slide this far off the tee bin */
+    /* Before impact, drop a club target that does not beat its bin's clutter
+     * (the band's noise map, learned with no club track) by this many
+     * spreads (l3_band_clutter_filter); 0 turns it off. */
+    float    clutterSigmas;
 } l3_impact_fit_cfg_t;
 
 typedef struct {

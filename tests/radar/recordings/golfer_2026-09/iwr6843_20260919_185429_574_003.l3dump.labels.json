@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "dump": "iwr6843_20260919_185429_574_003.l3dump",
+  "dump_sha256": "482136604961ad3b5fec36a0b9ba9c55ed9e569f0d9e611ced1b632db5930d7a",
+  "reviewed": true,
+  "ball": {
+    "points": [
+      {
+        "frame": 9,
+        "range_bin": 54.8
+      },
+      {
+        "frame": 10,
+        "range_bin": 56.2
+      },
+      {
+        "frame": 11,
+        "range_bin": 57.7
+      },
+      {
+        "frame": 12,
+        "range_bin": 59.2
+      },
+      {
+        "frame": 13,
+        "range_bin": 60.5
+      },
+      {
+        "frame": 14,
+        "range_bin": 62.2
+      },
+      {
+        "frame": 15,
+        "range_bin": 63.8
+      },
+      {
+        "frame": 16,
+        "range_bin": 65.5
+      },
+      {
+        "frame": 17,
+        "range_bin": 67.0
+      },
+      {
+        "frame": 18,
+        "range_bin": 68.5
+      },
+      {
+        "frame": 19,
+        "range_bin": 69.9
+      },
+      {
+        "frame": 20,
+        "range_bin": 71.4
+      },
+      {
+        "frame": 21,
+        "range_bin": 73.1
+      },
+      {
+        "frame": 22,
+        "range_bin": 74.8
+      },
+      {
+        "frame": 23,
+        "range_bin": 76.5
+      }
+    ]
+  },
+  "club": {
+    "points": [
+      {
+        "frame": 0,
+        "range_bin": 37.985557556152344
+      },
+      {
+        "frame": 1,
+        "range_bin": 39.58659744262695
+      },
+      {
+        "frame": 2,
+        "range_bin": 41.4
+      },
+      {
+        "frame": 3,
+        "range_bin": 43.4
+      },
+      {
+        "frame": 4,
+        "range_bin": 45.1
+      },
+      {
+        "frame": 5,
+        "range_bin": 46.8
+      },
+      {
+        "frame": 11,
+        "range_bin": 55.0
+      },
+      {
+        "frame": 12,
+        "range_bin": 56.3
+      },
+      {
+        "frame": 14,
+        "range_bin": 59.1
+      },
+      {
+        "frame": 15,
+        "range_bin": 60.1
+      },
+      {
+        "frame": 16,
+        "range_bin": 61.1
+      }
+    ]
+  },
+  "tolerances": {
+    "range_bins": 1.0,
+    "min_coverage": 0.8,
+    "doppler_mps": null
+  },
+  "notes": ""
+}

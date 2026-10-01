@@ -227,45 +227,6 @@ def test_a_synthetic_shot_with_its_session_log_is_scored_end_to_end(ev, tmp_path
     assert written["outcomes"][0]["impact"]["name"] == dump.name
 
 
-def test_joint_launch_mps_averages_the_confirmed_points_after_the_first(ev):
-    """The first ball point is the from-rest touch, excluded from the average,
-    matching l3_joint_launch's own definition in the firmware."""
-    result = SimpleNamespace(
-        joint_confirmed=True,
-        joint_ball_points=[
-            SimpleNamespace(doppler_mps=0.0),
-            SimpleNamespace(doppler_mps=44.0),
-            SimpleNamespace(doppler_mps=46.0),
-        ],
-    )
-    assert ev.joint_launch_mps(result) == pytest.approx(45.0)
-
-
-def test_joint_launch_mps_is_none_without_confirmation_or_enough_points(ev):
-    unconfirmed = SimpleNamespace(
-        joint_confirmed=False, joint_ball_points=[SimpleNamespace(doppler_mps=44.0)] * 3
-    )
-    assert ev.joint_launch_mps(unconfirmed) is None
-    too_few = SimpleNamespace(
-        joint_confirmed=True, joint_ball_points=[SimpleNamespace(doppler_mps=44.0)]
-    )
-    assert ev.joint_launch_mps(too_few) is None
-
-
-def test_the_cli_passes_the_joint_search_flag_through(ev, monkeypatch, tmp_path):
-    seen = []
-    monkeypatch.setattr(ev, "iter_cases", lambda roots: iter([object()]))
-
-    def fake_evaluate(case, *, lib=None, joint_search=False, **_rest):
-        seen.append(joint_search)
-        return ev.Outcome("x", "club", "ok", True, 40.0, 40.0)
-
-    monkeypatch.setattr(ev, "evaluate", fake_evaluate)
-    assert ev.main([str(tmp_path), "--joint-search"]) == 0
-    assert ev.main([str(tmp_path)]) == 0
-    assert seen == [True, False]
-
-
 def test_the_cli_passes_the_ball_search_through(ev, monkeypatch, tmp_path):
     seen = []
     monkeypatch.setattr(ev, "iter_cases", lambda roots: iter([object()]))
@@ -292,7 +253,6 @@ def args_for(ev, *extra):
         ball_hypotheses=None,
         tuning=None,
         fast_ball_from_club,
-        joint_search=False,
         band_bins=None,
         impact=False,
     ):

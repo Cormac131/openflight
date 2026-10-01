@@ -14,7 +14,7 @@ void l3_retain_cfg_defaults(l3_retain_cfg_t *cfg)
     cfg->impactBiasBins = 4U;       /* the club arrives from the near side */
     cfg->ballSearchLeadBins = 2U;   /* the impact echo sits at the origin */
     cfg->ballFollowLeadBins = 4U;   /* the flight moves away: more window ahead */
-    cfg->spinFrames = 4U;
+    cfg->spinFrames = 16U;          /* the ball crosses the 53-bin region in ~35 ms */
 }
 
 int32_t l3_retain_cfg_check(const l3_retain_cfg_t *cfg)
@@ -23,7 +23,8 @@ int32_t l3_retain_cfg_check(const l3_retain_cfg_t *cfg)
         return -1;
     }
     if (cfg->approachMarginBins > 32U || cfg->impactBiasBins > 32U ||
-        cfg->ballSearchLeadBins > 32U || cfg->ballFollowLeadBins > 32U) {
+        cfg->ballSearchLeadBins > 32U || cfg->ballFollowLeadBins > 32U ||
+        cfg->spinFrames > 32U) {
         return -1;
     }
     return 0;
@@ -118,7 +119,10 @@ void l3_retain_window(const l3_retain_cfg_t *cfg, const l3_retain_state_t *state
             out->priority = L3_RETAIN_IMPACT;
             out->why = L3_RETAIN_WHY_BALL_SEARCH;
         }
-        if (state->postIndex < cfg->spinFrames && out->priority != L3_RETAIN_BALL) {
+        /* The tag only labels the frame for the spin research (the budget
+         * spends by phase, not by tag) and never moves the window; why keeps
+         * the rule that placed it, the confirmed flight frames included. */
+        if (state->postIndex < cfg->spinFrames) {
             out->priority = L3_RETAIN_SPIN;
         }
         out->start = l3_retain_clip(start, processStart, processBins, retainBins);

@@ -29,6 +29,7 @@ once, then choose a profile by passing its `.cfg` to OpenFlight.
 | Flash SHA-256 | `664b2360dc7d6f8e7300eb53f980faf5294d25d7c1e8c93692f8756a62ea8dde` |
 | Validate on hardware | `uv run python scripts/hardware-test/test_iwr_firmware.py` (see [Firmware Feature Check](../iwr6843/verify.md#firmware-feature-check)) |
 | Dump format | Variable-width, timed complex range-FFT snapshots |
+| Release version | `firmware/VERSION` (semver); the image above predates versioning |
 
 Verify the checked-in image before flashing:
 
@@ -508,7 +509,10 @@ biased toward the arriving club for the impact frames, from the origin
 outward while the departing ball is sought, and ahead of the prediction
 once the flight is confirmed. Every frame gets a retention priority (low,
 track, ball, impact, spin) and a reason, and `l3_frame_desc_t` records
-what each stored frame is. `l3_retain_budget` spends L3 in priority order:
+what each stored frame is. The spin tag marks the first `spinFrames` post
+frames (default 16, about the ball's 35-47 ms in view; `captureCfg
+retainPolicy` sets it, at most 32), the confirmed flight frames included;
+it only labels a frame and never moves its window. `l3_retain_budget` spends L3 in priority order:
 every impact frame first, then the first ball frames, then the last club
 frames; when the request does not fit it cuts the oldest club history
 before the flight's tail and never the impact.
@@ -733,7 +737,10 @@ been run. The angle estimator wants a corner reflector at 0, +/-10 and
 reference monitor over 30 to 50 shots per club (`tests/radar/datasets/`).
 The spin probe's thresholds are
 placeholders until stationary, low-spin and high-spin balls have been
-recorded. Loop counts are chosen from
+recorded. On the 34 labelled swings in `tests/radar/recordings` the ball
+stands only 3-9 dB over its window's median, so the micro-Doppler spread
+there (1.1-2.5 cells, every ball "low-spin") is noise-dominated; the
+rotation scan claims no line on any of them. Loop counts are chosen from
 `scripts/analysis/evaluate_iwr_profiles.py` on real captures, not from
 frame rate; nothing moves to the HWA or DSP before `triggerLog perf` has
 numbers.
@@ -759,7 +766,7 @@ numbers.
 | 18 IQ16 vs IQ8 replay tool | done | `ab_iq16_iq8.py` |
 | 19 selectable capture format | done (`iq8`, `iq16`, `compact16`, `adaptive16`) | `captureFormat` |
 | 20-21 memory budget and retention priorities | done | `l3_retain_budget`, `L3_RETAIN_*` |
-| 22-23 spin IQ16 retention and probe | retention priority and the IQ16-vs-IQ8 probe done; a spinning-ball recording is needed | `scripts/analysis/spin_probe.py --iq8` |
+| 22-23 spin IQ16 retention and probe | retention priority, the IQ16-vs-IQ8 probe and the label-tracked rotation scan done; a marked-ball recording with a reference spin is needed | `scripts/analysis/spin_probe.py --iq8`, `--labels` |
 | 24-26 firmware spin, spin axis, face angle | not started: no evidence yet that the observable exists in these captures | — |
 | 27 OPS validation | done | `ops_compare`, `scripts/analysis/ops_validation.py` |
 | 28 reference validation | loop ready; needs the labelled dataset | `scripts/analysis/reference_validation.py` |
@@ -802,9 +809,16 @@ change what comes next.
    the R4F.
 8. **Spin and face** (phases 22-26): record stationary, low-spin and
    high-spin balls on the adaptive profile (the first post frames are
-   tagged `L3_RETAIN_SPIN`), run `spin_probe.py --iq8` on each; a firmware
-   estimator is written only if the spread separates the three, and a face
-   angle only if the club's own signature does, never as launch minus path.
+   tagged `L3_RETAIN_SPIN`), first a marked (taped or striped) ball, then
+   plain balls, each with a reference spin. Label the ball in the dump
+   viewer and run `spin_probe.py --labels --reference-rpm <rpm>` on each
+   (and `--iq8` on a fixed bin for the IQ8 question). The rotation scan
+   only reports a spin when the window holds 1.5 revolutions: about
+   2000-2500 rpm for the 35-47 ms the ball is in view, so a driver's spin
+   is at or below the floor while an iron's or a wedge's is not. A
+   firmware estimator is written only if the marked ball gives a line at
+   the reference and the plain balls separate too, and a face angle only
+   if the club's own signature does, never as launch minus path.
 
 ### End-state architecture
 
@@ -1028,6 +1042,8 @@ matching host-parser change and regression tests in the same commit.
 | `firmware/iwr6843/l3_text.c`, `l3_text.h` | Integer-only fixed-point text for the CLI |
 | `firmware/iwr6843/l3_ball.c`, `l3_ball.h` | Ball placement detector: static background, compact-reflector appearance, confidence (host-testable, no hardware) |
 | `firmware/iwr6843/dump_format.h` | Packed firmware-side wire contract |
+| `firmware/iwr6843/fw_version.h` | Image identity reported by the CLI `stats version` sub-mode |
+| `firmware/VERSION` | Release version (semver); names and stamps each release |
 | `firmware/iwr6843/makefile` | TI mmWave SDK application build and meta-image generation |
 | `firmware/iwr6843/mss.cfg` | SYS/BIOS configuration |
 | `firmware/iwr6843/mss_linker.cmd` | Places the ring and optional scratch buffers in L3 RAM |
@@ -1041,10 +1057,11 @@ matching host-parser change and regression tests in the same commit.
 | `src/openflight/iwr6843/firmware_host.py` | Host build of the pure-C modules and their ctypes mirrors |
 | `src/openflight/iwr6843/firmware_replay.py` | Replays recorded captures through the compiled trigger, trackers, impact detector and shot machine |
 | `src/openflight/iwr6843/shot_result.py` | Parses the firmware's result packet into labelled measurements |
-| `src/openflight/iwr6843/spin_probe.py` | Experimental spin observable: ball ROI, micro-Doppler spread |
+| `src/openflight/iwr6843/spin_probe.py` | Experimental spin observable: ball ROI, micro-Doppler spread, rotation-rate scan along a labelled ball track |
 | `src/openflight/iwr6843/datasets.py` | Labelled calibration dataset schema and loader (`tests/radar/datasets/`) |
 | `src/openflight/environment.py`, `src/openflight/delivery.py` | Air density for the flight model; inferred face, smash and plausibility gates |
 | `tests/radar/recordings/` | Recorded `.l3dump` swings with a `manifest.json` for the replay test |
+| `src/openflight/iwr6843/firmware_version.py` | Release semver and `stats version` reply parsing; `openflight-firmware` CLI lives in `firmware_cli.py` |
 
 ## Where To Build, Flash, And Run
 
@@ -1081,8 +1098,10 @@ Docker runs the same `build-native` recipe under `linux/amd64` and writes the
 release artifact back into the host worktree at:
 
 ```text
-firmware/releases/l3_dump_configurable_capture_20260818.bin
+firmware/releases/openflight_iwr6843_v<VERSION>.bin
 ```
+
+See [Versioning Releases](#versioning-releases) for how `<VERSION>` is set.
 
 Use the UTM workflow below only when Docker emulation is unavailable.
 
@@ -1190,7 +1209,7 @@ The target performs the application build, generates the flashable TI
 meta-image, and copies the production image into `firmware/releases/`:
 
 ```text
-firmware/releases/l3_dump_configurable_capture_20260818.bin
+firmware/releases/openflight_iwr6843_v<VERSION>.bin
 ```
 
 Generated `.xer4f`, `.map`, and intermediate `.bin` files stay under
@@ -1207,6 +1226,38 @@ rsync -av \
   openflight@VM_ADDRESS:~/openflight/firmware/releases/ \
   artifacts/firmware_build/
 ```
+
+## Versioning Releases
+
+Firmware releases use semantic versioning. `firmware/VERSION` holds
+`MAJOR.MINOR.PATCH` and is the single source of truth: the build stamps it into
+the image, names the release file after it, and the flashed board reports it
+through the CLI `stats version` sub-mode.
+
+| Change | Bump |
+|---|---|
+| Breaks the host contract: dump/packet layout, a removed or renamed CLI command, changed `.cfg` semantics | `major` |
+| Adds a CLI command, capture feature, or backwards-compatible field | `minor` |
+| Fixes a bug without changing the host contract | `patch` |
+
+Bump and commit before building, so the stamped commit is the release source
+rather than a `-dirty` tree, then commit the new image:
+
+```bash
+make -C firmware bump-version PART=minor     # or patch / major
+git commit -am "firmware: release v$(cat firmware/VERSION)"
+make -C firmware docker-build                # or build-native
+git add firmware/releases/ && git commit -m "firmware: add v$(cat firmware/VERSION) image"
+```
+
+The build refuses a malformed `VERSION`, and refuses to overwrite a release
+file that already exists, so two different images never share a version. Pass
+`ALLOW_OVERWRITE=1` only to rebuild an unreleased version in place.
+
+Alongside the version, the build stamps the source commit (`git describe
+--always --dirty`, so an image built from uncommitted changes reports
+`-dirty`) and the UTC build time. A bare `make` inside `firmware/iwr6843/`
+reports `0.0.0-dev` and `unknown` instead.
 
 ## Build On Native x86_64 Linux
 
@@ -1315,6 +1366,24 @@ The flasher follows TI application note
 [SWRA627, IWR6843 Bootloader Flow](https://www.ti.com/lit/an/swra627/swra627.pdf).
 
 ## Verify The Installed Firmware
+
+Ask the board which image it is running (functional mode, OpenFlight stopped):
+
+```bash
+uv run openflight-firmware query              # auto-detects the CLI port
+uv run openflight-firmware query --port /dev/ttyUSB0
+```
+
+```text
+Flashed firmware: 1.0.0 (git b6f4c36d2286, hybrid-cadence, built 2026-09-30T15:37:51Z)
+```
+
+The same line comes from typing `stats version` at the `l3dump:/>` prompt, and the
+CLI banner shows the version and commit at boot. OpenFlight also logs it at
+startup (`[IWR6843] Firmware 1.0.0 ...`). An image built before versioning
+ignores the argument and prints its counters instead; the query reports it as
+unversioned and OpenFlight logs a warning but still starts. `version` is a
+sub-mode of `stats` because the CLI table is at the SDK's `CLI_MAX_CMD`.
 
 Run OpenFlight with the matching config as described in the
 [Operator Guide](../iwr6843/verify.md#start-openflight). With `--debug`, a
@@ -1437,6 +1506,8 @@ Also check:
 | Server rejects `captureFormat`, `iq8Scale`, or `phaseCaptureCfg` | Older firmware is flashed | Flash `l3_dump_configurable_capture_20260818.bin`, reset in functional mode, and retry |
 | Dump length differs from the selected profile | Wrong config, interrupted UART transfer, or stale process | Verify firmware SHA-256, use Enhanced/UARTA, stop serial owners, reset, and retry |
 | Dense profile reports sustained `hwa_missed`, `iq8_overrun`, or `iq8_edma_err` | The requested cadence exceeds processing time or EDMA packing failed | Return to the wide profile and inspect `stats`; do not trust descriptor cadence from a missed-frame run |
+| `openflight-firmware query` reports an unversioned image | The flashed image predates `stats version` | Build and flash a versioned release |
+| Build stops with `... already exists` | `firmware/VERSION` was not bumped since the last release | `make -C firmware bump-version PART=patch`, then rebuild |
 | First run works but restart hangs | Retired v1 image or incomplete shutdown | Flash the current release image and reset in functional mode |
 
 ## Historical Context

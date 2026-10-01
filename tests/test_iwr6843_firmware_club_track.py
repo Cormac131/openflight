@@ -696,7 +696,7 @@ def test_strength_term_prefers_high_snr_target(lib):
     for frame, bin_ in enumerate([30.0, 31.0], start=1):
         tr.update(frame, [target(frame, bin_)])
     # Frame 3: two equidistant targets differ only in SNR (and energy as tracer)
-    weak = target(3, 32.0, snr=5.0, energy=100.0)    # strengthMisfit = 1/5  = 0.20
+    weak = target(3, 32.0, snr=5.0, energy=100.0)  # strengthMisfit = 1/5  = 0.20
     strong = target(3, 32.0, snr=50.0, energy=9999.0)  # strengthMisfit = 1/50 = 0.02
     assert tr.update(3, [weak, strong]) is True
     # The stronger MTI return wins (lower score)
@@ -971,7 +971,9 @@ def test_follow_allows_the_clubs_doppler_to_fall_but_barely_to_rise(lib):
     _approach_then_follow(tr, doppler=8.5)
     assert _follow(tr, 5, [target(5, 40.0, doppler=-7.3)]) is False  # wraps to a rise of 2.5
     assert _follow(tr, 6, [target(6, 40.0, doppler=6.2)]) is True  # a fall of 2.3: slowing
-    assert _follow(tr, 7, [target(7, 41.0, doppler=7.4)]) is True  # a rise of 1.2 is measurement noise
+    assert (
+        _follow(tr, 7, [target(7, 41.0, doppler=7.4)]) is True
+    )  # a rise of 1.2 is measurement noise
     assert _follow(tr, 8, [target(8, 42.0, doppler=9.0)]) is False  # a rise of 1.6 is not
 
 
@@ -1144,3 +1146,178 @@ def test_track_cfg_defaults_fill_the_reconstruction_constants(lib):
     assert cfg.kf.chi2Gate == pytest.approx(9.21)
     assert cfg.kf.initPositionSigmaM == pytest.approx(0.5)
     assert cfg.kf.initVelocitySigmaMps == pytest.approx(50.0)
+
+
+# --- candidate approaches (acquisition past the golfer) -----------------------
+#
+# The golfer's body sits in the bins short of the ball, returns far stronger
+# than the club (snr 100-870 against 10-96 on the 2026-09-19 captures) and
+# reads as a slow mover, so single-frame acquisition took it. The club's
+# approach advances ~2 bins a frame (0.8-3.6 on the labels); the body stays
+# put. Acquisition now holds candidates and starts a track only on one whose
+# next point makes an approach step. The club's aliased Doppler is too
+# unsteady frame to frame (median change 2.3 m/s, a tenth 7-8) to gate on; it
+# only ranks the pairs. Off by default (see l3_track_cfg_defaults): these
+# tests turn it on at a 70 m/s club's step.
+
+CANDIDATES = {"acquireMaxStepBins": 4.5}
+
+CLUB_DOPPLER = -8.6  # an approaching club, aliased near the span's edge
+
+
+def body(frame: int, range_bin: float = 45.0) -> Target:
+    """The golfer: strong, confident, a slow mover, in one place."""
+    return target(frame, range_bin, confidence=0.95, doppler=3.0, energy=90000.0, snr=300.0)
+
+
+def weak_club(frame: int, range_bin: float, doppler: float = CLUB_DOPPLER) -> Target:
+    return target(frame, range_bin, confidence=0.1, doppler=doppler, energy=800.0, snr=1.5)
+
+
+def test_candidate_defaults_describe_the_labelled_approaches(lib):
+    tr = Tracker(lib, **CANDIDATES)
+    assert tr.cfg.acquireMinStepBins == pytest.approx(0.75)
+    assert Tracker(lib).cfg.acquireMaxStepBins == 0.0, "off by default"
+    assert tr.cfg.acquireExpectedStepBins == pytest.approx(2.0)
+    assert tr.cfg.acquireDopplerTolMps >= 0.5 * tr.cfg.velocitySpanMps, "no Doppler gate"
+    assert tr.cfg.acquireMinConfidence == pytest.approx(0.0)
+
+
+def test_a_weak_club_stepping_in_is_acquired_over_the_stronger_golfer(lib):
+    tr = Tracker(lib, **CANDIDATES)
+    assert tr.update(1, [body(1), weak_club(1, 30.0)]) is False
+    assert tr.track.active == 0, "one frame cannot tell a club from the body"
+    assert tr.update(2, [body(2, 45.2), weak_club(2, 32.3)]) is True
+    assert tr.why() == "acquired"
+    assert [p.rangeBin for p in tr.points()] == [pytest.approx(30.0), pytest.approx(32.3)]
+    assert tr.track.velocityBinsPerFrame == pytest.approx(2.3)
+    assert tr.track.lastTargetIndex == 1, "this frame's club target was appended"
+    assert tr.update(3, [body(3, 45.1), weak_club(3, 34.6)]) is True
+    assert tr.why() == "associated"
+
+
+def test_the_golfer_standing_in_place_never_starts_a_track(lib):
+    tr = Tracker(lib, **CANDIDATES)
+    for frame, b in enumerate([45.0, 45.3, 44.9, 45.2, 45.4, 45.0], start=1):
+        assert tr.update(frame, [body(frame, b)]) is False
+    assert tr.track.active == 0
+    assert tr.track.counters[WHY.index("acquired")] == 0
+
+
+def test_a_doppler_gate_when_set_refuses_a_step_that_reads_another_velocity(lib):
+    tr = Tracker(lib, **CANDIDATES, acquireDopplerTolMps=3.0)
+    tr.update(1, [weak_club(1, 30.0)])
+    assert tr.update(2, [weak_club(2, 32.0, doppler=CLUB_DOPPLER + 6.0)]) is False
+    assert tr.track.active == 0
+
+
+def test_without_a_gate_a_step_with_another_doppler_still_confirms(lib):
+    tr = Tracker(lib, **CANDIDATES)
+    tr.update(1, [weak_club(1, 30.0)])
+    assert tr.update(2, [weak_club(2, 32.0, doppler=CLUB_DOPPLER + 6.0)]) is True
+
+
+def test_the_doppler_agreement_wraps_across_the_alias_span(lib):
+    """-8.8 and +8.8 m/s are 0.3 m/s apart on an alias span of ~17.9 m/s."""
+    tr = Tracker(lib, **CANDIDATES, acquireDopplerTolMps=3.0)
+    span = tr.cfg.velocitySpanMps
+    tr.update(1, [weak_club(1, 30.0, doppler=-0.5 * span + 0.15)])
+    assert tr.update(2, [weak_club(2, 32.0, doppler=0.5 * span - 0.15)]) is True
+
+
+def test_of_two_confirming_steps_the_confident_one_near_the_expected_step_wins(lib):
+    """20260824_120934: from the club at 22.2 a flicker at 25.7 (confidence
+    0.02) with a closer Doppler beat the club at 23.5 (0.96), and the track ran
+    ahead of the club."""
+    tr = Tracker(lib, **CANDIDATES)
+    tr.update(1, [target(1, 22.2, doppler=7.7, confidence=0.92)])
+    club = target(2, 23.9, doppler=-6.0, confidence=0.96, snr=14.0)
+    flicker = target(2, 25.7, doppler=8.5, confidence=0.02, snr=1.1)
+    assert tr.update(2, [flicker, club]) is True
+    assert tr.points()[-1].rangeBin == pytest.approx(23.9)
+    assert tr.track.lastTargetIndex == 1
+
+
+def test_of_two_equal_steps_the_closer_doppler_wins(lib):
+    tr = Tracker(lib, **CANDIDATES)
+    tr.update(1, [weak_club(1, 30.0)])
+    far = weak_club(2, 32.0, doppler=CLUB_DOPPLER + 7.0)
+    near = weak_club(2, 32.0, doppler=CLUB_DOPPLER + 0.5)
+    assert tr.update(2, [far, near]) is True
+    assert tr.track.lastTargetIndex == 1
+
+
+@pytest.mark.parametrize("step", [0.4, 6.0, -2.0])
+def test_only_an_approach_sized_step_forward_confirms(lib, step):
+    tr = Tracker(lib, **CANDIDATES)
+    tr.update(1, [weak_club(1, 30.0)])
+    assert tr.update(2, [weak_club(2, 30.0 + step)]) is False
+    assert tr.track.active == 0
+
+
+def test_a_candidate_confirms_across_one_missed_frame(lib):
+    tr = Tracker(lib, **CANDIDATES)
+    tr.update(1, [weak_club(1, 30.0)])
+    assert tr.update(2, []) is False
+    assert tr.update(3, [weak_club(3, 34.4)]) is True
+    assert tr.track.velocityBinsPerFrame == pytest.approx(2.2)
+    assert [p.frame for p in tr.points()] == [1, 3]
+
+
+def test_a_candidate_two_frames_stale_is_forgotten(lib):
+    tr = Tracker(lib, **CANDIDATES)
+    tr.update(1, [weak_club(1, 30.0)])
+    tr.update(2, [])
+    tr.update(3, [])
+    assert tr.update(4, [weak_club(4, 36.6)]) is False
+
+
+def test_candidates_below_the_candidate_confidence_are_not_held(lib):
+    tr = Tracker(lib, **CANDIDATES, acquireMinConfidence=0.2)
+    tr.update(1, [weak_club(1, 30.0)])
+    assert tr.update(2, [weak_club(2, 32.3)]) is False
+
+
+def test_the_released_return_does_not_come_back_as_a_candidate(lib):
+    """Releasing a stuck track must not re-seed a candidate on that return."""
+    tr = Tracker(lib, approachMaxSameBinPoints=1, standingFrames=0)
+    tr.update(1, [target(1, 40.0)])
+    tr.update(2, [target(2, 40.1)])  # one too many in one bin: released
+    assert tr.track.active == 0
+    tr.track.cfg.acquireMaxStepBins = CANDIDATES["acquireMaxStepBins"]  # its own copy
+    tr.update(3, [target(3, 40.2)])
+    assert tr.update(4, [target(4, 42.3)]) is False
+
+
+def test_confirmation_off_acquires_on_the_first_frame(lib):
+    tr = Tracker(lib)
+    assert tr.update(1, [target(1, 30.0)]) is True
+    assert tr.why() == "acquired"
+
+
+def test_a_hop_between_two_still_returns_is_not_an_approach_step(lib):
+    """20260919_175322 (no swing): still returns at 34.3 and 37.4 on every
+    frame; the step between them confirmed a track that fired. The club steps
+    into a bin nothing held the frame before."""
+    tr = Tracker(lib, **CANDIDATES)
+    for frame in range(1, 6):
+        still = [
+            target(frame, 34.3, doppler=-0.6, confidence=0.88),
+            target(frame, 37.4, doppler=-0.6, confidence=0.88),
+        ]
+        assert tr.update(frame, still) is False
+    assert tr.track.counters[WHY.index("acquired")] == 0
+
+
+def test_the_club_stepping_past_a_still_return_is_still_acquired(lib):
+    tr = Tracker(lib, **CANDIDATES)
+    still = lambda frame: target(frame, 45.0, doppler=-0.6, confidence=0.88)  # noqa: E731
+    tr.update(1, [still(1), weak_club(1, 30.0)])
+    assert tr.update(2, [still(2), weak_club(2, 32.1)]) is True
+
+
+def test_a_slow_club_step_within_its_own_last_bin_still_confirms(lib):
+    """A 0.8-bin step lands within a bin of the club's own last return."""
+    tr = Tracker(lib, **CANDIDATES)
+    tr.update(1, [weak_club(1, 30.0)])
+    assert tr.update(2, [weak_club(2, 30.8)]) is True

@@ -1358,6 +1358,156 @@ class TestIWR6843ShotIntegration:
         assert shot.iwr6843_onboard is None
         assert shot.to_dict()["iwr6843_onboard"] is None
 
+    @staticmethod
+    def _comparison_rows(text):
+        """Comparison block rows keyed by their label column."""
+        lines = text.splitlines()
+        return lines[0], {line[2:15].strip(): line for line in lines[1:]}
+
+    def _comparison_shot(self, **overrides):
+        values = {
+            "ball_speed_mph": 100.0,
+            "club_speed_mph": 80.0,
+            "timestamp": datetime.now(),
+            "club": ClubType.IRON_9,
+            "spin_rpm": 6500.0,
+        }
+        values.update(overrides)
+        return Shot(**values)
+
+    def test_onboard_comparison_prints_every_metric_beside_its_comparator(self):
+        onboard = self._onboard_packet()
+        measurement = SimpleNamespace(angle_deg=13.0, horizontal_deg=-0.5)
+        club_path = SimpleNamespace(path_deg=2.0, candidate_attack_angle_deg=-4.0)
+
+        text = server_module.format_onboard_comparison(
+            self._comparison_shot(), onboard, measurement, club_path
+        )
+        header, rows = self._comparison_rows(text)
+
+        assert "shot 4 v1: valid" in header
+        assert "impact geometry" in header
+        assert "club 7 pts / ball 9 pts" in header
+        assert "ball_locked,impact_geometric" in header
+        assert set(rows) == {
+            "ball speed",
+            "club speed",
+            "launch V",
+            "launch H",
+            "club path",
+            "attack",
+            "spin rate",
+            "spin axis",
+            "impact range",
+            "smash",
+        }
+        # 60 m/s = 134.2 mph against the OPS 100.0 mph
+        assert "134.2 mph" in rows["ball speed"]
+        assert "conf 0.80 MEASURED" in rows["ball speed"]
+        assert "| OPS 100.0 mph  Δ +34.2" in rows["ball speed"]
+        assert "89.5 mph" in rows["club speed"]
+        assert "| OPS 80.0 mph  Δ +9.5" in rows["club speed"]
+        assert "| host 13.0°  Δ +1.5" in rows["launch V"]
+        assert "| host -0.5°  Δ -0.7" in rows["launch H"]
+        assert "| host 2.0°  Δ +0.5" in rows["club path"]
+        assert "| host cand -4.0°  Δ +1.0" in rows["attack"]
+        assert "1.60 m" in rows["impact range"]
+        assert "ESTIMATED" in rows["impact range"]
+        assert "|" not in rows["impact range"], "the OPS and host have no impact range"
+        assert "1.50" in rows["smash"]
+        assert "| OPS 1.25  Δ +0.25" in rows["smash"]
+
+    def test_onboard_comparison_shows_missing_values_without_deltas(self):
+        onboard = self._onboard_packet(verdict="partial", vertical=None, path=None)
+
+        text = server_module.format_onboard_comparison(
+            self._comparison_shot(club_speed_mph=None, spin_rpm=None), onboard, None, None
+        )
+        _, rows = self._comparison_rows(text)
+
+        assert "conf" not in rows["launch V"], "an invalid metric has no confidence to print"
+        assert rows["launch V"].rstrip().endswith("| host -")
+        assert rows["club path"].rstrip().endswith("| host -")
+        assert rows["club speed"].rstrip().endswith("| OPS -")
+        assert rows["spin rate"].rstrip().endswith("| OPS -")
+        assert rows["smash"].rstrip().endswith("| OPS -")
+        for label in ("launch V", "club path", "club speed", "spin rate", "smash"):
+            assert "Δ" not in rows[label]
+        assert "Δ +34.2" in rows["ball speed"], "metrics with both sides still compare"
+
+    def test_onboard_comparison_flags_implausible_values_and_withholds_their_delta(self):
+        from dataclasses import replace
+
+        onboard = self._onboard_packet()
+        metrics = dict(onboard.metrics)
+        metrics["ball_speed"] = replace(metrics["ball_speed"], implausible=True, fallback=True)
+        metrics["club_speed"] = replace(metrics["club_speed"], radial_only=True)
+        onboard = replace(onboard, metrics=metrics)
+
+        text = server_module.format_onboard_comparison(self._comparison_shot(), onboard, None, None)
+        _, rows = self._comparison_rows(text)
+
+        assert "[IMPLAUSIBLE,fallback]" in rows["ball speed"]
+        assert "Δ" not in rows["ball speed"], "an implausible value is never read as agreement"
+        assert "[radial]" in rows["club speed"]
+        assert "Δ +9.5" in rows["club speed"], "radial-only speeds are still usable"
+
+    def test_onboard_comparison_uses_host_candidate_path_when_none_accepted(self):
+        club_path = SimpleNamespace(path_deg=None, candidate_path_deg=1.0)
+
+        text = server_module.format_onboard_comparison(
+            self._comparison_shot(), self._onboard_packet(), None, club_path
+        )
+        _, rows = self._comparison_rows(text)
+
+        assert "| host cand 1.0°  Δ +1.5" in rows["club path"]
+
+    def test_onboard_comparison_prints_the_v2_impact_fit(self):
+        from dataclasses import replace
+
+        onboard = replace(
+            self._onboard_packet(),
+            version=2,
+            impact_fit={
+                "verdict": "fused",
+                "impact_us": 23100,
+                "spread_us": 180.0,
+                "refined_minus_trigger_us": -420.0,
+                "dropped": "club_out",
+                "no_lock": False,
+                "tracks": {
+                    "club_in": {"why": "ok", "points": 6, "speed_mps": 40.0},
+                    "club_out": {"why": "outlier", "points": 3, "speed_mps": 0.0},
+                    "ball_out": {"why": "ok", "points": 9, "speed_mps": 60.0},
+                },
+            },
+        )
+
+        text = server_module.format_onboard_comparison(self._comparison_shot(), onboard, None, None)
+        header, rows = self._comparison_rows(text)
+
+        assert "v2" in header
+        fit = rows["impact fit"]
+        assert "fused" in fit
+        assert "refined-trigger -420 us" in fit
+        assert "spread 180 us" in fit
+        assert "dropped club_out" in fit
+        assert "no lock" not in fit
+        assert "club_in ok 89.5 mph" in fit
+        assert "club_out outlier;" not in fit and "club_out outlier," in fit
+        assert "ball_out ok 134.2 mph" in fit
+
+    def test_onboard_comparison_is_logged_on_each_onboard_shot(self, monkeypatch, caplog):
+        monkeypatch.setattr(server_module, "iwr6843_onboard_metrics", False)
+        with caplog.at_level("INFO", logger=server_module.logger.name):
+            self._onboard_shot(monkeypatch, self._onboard_packet())
+
+        block = next(
+            r.getMessage() for r in caplog.records if "IWR6843 onboard shot" in r.getMessage()
+        )
+        assert "| OPS 100.0 mph  Δ +34.2" in block
+        assert "impact range" in block
+
     def test_debug_mode_exposes_club_rejection_without_candidate(self, monkeypatch):
         measurement = SimpleNamespace(
             accepted=False,

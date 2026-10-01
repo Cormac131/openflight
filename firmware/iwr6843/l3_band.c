@@ -44,9 +44,58 @@ uint32_t l3_band_keep_short(const l3_band_t *band, l3_target_obs_t *targets, uin
     return l3_band_compact(band, targets, n, l3_band_notShort);
 }
 
+uint32_t l3_band_clutter_filter(const l3_band_noise_t *noise, float sigmas,
+                                l3_target_obs_t *targets, uint32_t n)
+{
+    uint32_t kept = 0U;
+    uint32_t i;
+
+    if (!(sigmas > 0.0F)) {
+        return n;
+    }
+    for (i = 0U; i < n; i++) {
+        uint32_t bin = targets[i].peakBin;
+        uint8_t clutter = 0U;
+
+        if (bin >= noise->firstBin && bin < noise->firstBin + noise->count) {
+            uint32_t k = bin - noise->firstBin;
+
+            clutter = (uint8_t)(noise->seen[k] >= L3_BAND_NOISE_MIN_UPDATES &&
+                                targets[i].stat <= noise->avg[k] + sigmas * noise->dev[k]);
+        }
+        if (!clutter) {
+            if (kept != i) {
+                targets[kept] = targets[i];
+            }
+            kept++;
+        }
+    }
+    return kept;
+}
+
 void l3_band_noise_reset(l3_band_noise_t *noise)
 {
     memset(noise, 0, sizeof(*noise));
+}
+
+/* One value into map bin k: a bin's first value seeds its mean with no
+ * spread; after that both follow at 1 / 2^L3_BAND_NOISE_SHIFT. */
+static void l3_band_noise_feed(l3_band_noise_t *noise, uint32_t k, float value)
+{
+    float step = 1.0F / (float)(1U << L3_BAND_NOISE_SHIFT);
+
+    if (noise->seen[k] == 0U) {
+        noise->avg[k] = value;
+        noise->dev[k] = 0.0F;
+    } else {
+        float deviation = value - noise->avg[k];
+
+        noise->dev[k] += (((deviation < 0.0F) ? -deviation : deviation) - noise->dev[k]) * step;
+        noise->avg[k] += deviation * step;
+    }
+    if (noise->seen[k] < 255U) {
+        noise->seen[k]++;
+    }
 }
 
 void l3_band_noise_update(l3_band_noise_t *noise, uint32_t stat, uint32_t firstBin,
@@ -65,20 +114,9 @@ void l3_band_noise_update(l3_band_noise_t *noise, uint32_t stat, uint32_t firstB
         noise->count = count;
         noise->updates = 0U;
         memset(noise->seen, 0, sizeof(noise->seen));
-        for (i = 0U; i < count; i++) {
-            noise->avg[i] = l3_obs_stat(stat, &obs[i]);
-        }
-    } else {
-        for (i = 0U; i < count; i++) {
-            float value = l3_obs_stat(stat, &obs[i]);
-
-            noise->avg[i] += (value - noise->avg[i]) / (float)(1U << L3_BAND_NOISE_SHIFT);
-        }
     }
     for (i = 0U; i < count; i++) {
-        if (noise->seen[i] < 255U) {
-            noise->seen[i]++;
-        }
+        l3_band_noise_feed(noise, i, l3_obs_stat(stat, &obs[i]));
     }
     noise->updates++;
 }
@@ -102,22 +140,11 @@ void l3_band_noise_update_span(l3_band_noise_t *noise, uint32_t stat, uint32_t w
     }
     for (i = 0U; i < count; i++) {
         uint32_t bin = spanFirst + i;
-        uint32_t k;
-        float value;
 
         if (bin < windowFirst || bin >= windowFirst + windowCount) {
             continue;
         }
-        k = bin - windowFirst;
-        value = l3_obs_stat(stat, &obs[i]);
-        if (noise->seen[k] == 0U) {
-            noise->avg[k] = value;
-        } else {
-            noise->avg[k] += (value - noise->avg[k]) / (float)(1U << L3_BAND_NOISE_SHIFT);
-        }
-        if (noise->seen[k] < 255U) {
-            noise->seen[k]++;
-        }
+        l3_band_noise_feed(noise, bin - windowFirst, l3_obs_stat(stat, &obs[i]));
     }
     noise->updates++;
 }

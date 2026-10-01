@@ -38,7 +38,6 @@ HOST_SOURCES = (
     "l3_track_kf.c",
     "l3_impact_fit.c",
     "l3_launch.c",
-    "l3_joint_search.c",
     "l3_ball_hyp.c",
     "l3_impact.c",
     "l3_leave.c",
@@ -58,6 +57,7 @@ HOST_SOURCES = (
     "l3_dsp_ipc.c",
     "l3_detect_core.c",
     "l3_timing.c",
+    "l3_window.c",
 )
 
 # l3_observation.h
@@ -232,33 +232,22 @@ PROFILE_STAGE_NAMES = (
     "dspwait",
 )
 
+# l3_window.h
+WINDOW_MAX_SAMPLES = 256
+RANGE_WINDOW_NONE = 0
+RANGE_WINDOW_HANN = 1
+RANGE_WINDOW_NAMES = ("none", "hann")
+
 # l3_club_track.h
 TRACK_POINTS = 32
 TRACK_NO_TARGET = 0xFFFFFFFF
+TRACK_CANDIDATES = 4
+TRACK_CANDIDATE_MAX_GAP_FRAMES = 2
 # No approach measured at impact: the fastest club (l3_impact_fit clubMaxMps).
 TRACK_FOLLOW_UNKNOWN_APPROACH_MPS = 70.0
 # A tentative point is confirmed by the next point this far downrange of it.
 TRACK_TENTATIVE_ADVANCE_BINS = 1.0
 TRACK_WHY_NAMES = ("none", "acquired", "associated", "coasted", "dropped", "idle", "released")
-
-# l3_joint_search.h
-JOINT_CLUB_BEAM = 4
-JOINT_BALL_BEAM = 4
-JOINT_BEAM = 8
-JOINT_WINDOW = 8
-JOINT_BALL_POINTS = 8
-JOINT_NONE = 0xFF
-JOINT_UNSTARTED, JOINT_ACTIVE, JOINT_ENDED = 0, 1, 2
-JOINT_USE_NONE, JOINT_USE_CLUB, JOINT_USE_BALL = 0, 1, 2
-JOINT_CNT_NAMES = (
-    "pairings",
-    "confirmed",
-    "forced_out",
-    "skipped",
-    "nonfinite",
-    "angle_est",
-)
-JOINT_N_COUNTERS = len(JOINT_CNT_NAMES)
 
 # l3_ball_hyp.h
 BALL_HYP_MAX = 4
@@ -333,6 +322,7 @@ class BandNoise(ctypes.Structure):
         ("updates", ctypes.c_uint32),
         ("avg", ctypes.c_float * BAND_NOISE_BINS),
         ("seen", ctypes.c_uint8 * BAND_NOISE_BINS),
+        ("dev", ctypes.c_float * BAND_NOISE_BINS),
     ]
 
 
@@ -544,6 +534,11 @@ class TrackCfg(ctypes.Structure):
         ("followDopplerRiseMps", ctypes.c_float),
         ("approachMaxSameBinPoints", ctypes.c_uint32),
         ("standingFrames", ctypes.c_uint32),
+        ("acquireMinStepBins", ctypes.c_float),
+        ("acquireMaxStepBins", ctypes.c_float),
+        ("acquireDopplerTolMps", ctypes.c_float),
+        ("acquireMinConfidence", ctypes.c_float),
+        ("acquireExpectedStepBins", ctypes.c_float),
         ("kf", TrackKfCfg),
     ]
 
@@ -638,6 +633,11 @@ class ClubTrack(ctypes.Structure):
         ("releasedDopplerMps", ctypes.c_float),
         ("held", TrackHeld),
         ("standHold", ctypes.c_uint8 * 128),
+        ("candidateCount", ctypes.c_uint32),
+        ("candidates", TargetObs * TRACK_CANDIDATES),
+        ("prevFrame", ctypes.c_uint32),
+        ("prevCount", ctypes.c_uint32),
+        ("prevBins", ctypes.c_float * OBS_MAX_TARGETS),
     ]
 
 
@@ -1010,6 +1010,7 @@ class ImpactFitCfg(ctypes.Structure):
         ("minSigmaUs", ctypes.c_float),
         ("maxSigmaUs", ctypes.c_float),
         ("bandSearchBins", ctypes.c_float),
+        ("clutterSigmas", ctypes.c_float),
     ]
 
 
@@ -1264,203 +1265,6 @@ class Launch(ctypes.Structure):
         ("vlaValid", ctypes.c_uint8),
         ("anglesAccepted", ctypes.c_uint8),
         ("angleWhy", ctypes.c_uint8),
-    ]
-
-
-class JointCfg(ctypes.Structure):
-    """``l3_joint_cfg_t``."""
-
-    _fields_ = [
-        ("binWidthM", ctypes.c_float),
-        ("velocitySpanMps", ctypes.c_float),
-        ("startBehindBins", ctypes.c_float),
-        ("startBeyondBins", ctypes.c_float),
-        ("ballMinSpeedMps", ctypes.c_float),
-        ("ballMaxSpeedMps", ctypes.c_float),
-        ("ballAccelMps2", ctypes.c_float),
-        ("ballMaxMisses", ctypes.c_uint32),
-        ("ballMinPoints", ctypes.c_uint32),
-        ("clubMinSpeedMps", ctypes.c_float),
-        ("clubMaxSpeedMps", ctypes.c_float),
-        ("clubDecelMps2", ctypes.c_float),
-        ("clubAccelMps2", ctypes.c_float),
-        ("clubMaxMisses", ctypes.c_uint32),
-        ("rangeSigmaBins", ctypes.c_float),
-        ("coastSigmaGrowBins", ctypes.c_float),
-        ("termCap", ctypes.c_float),
-        ("missCost", ctypes.c_float),
-        ("clubStrongerBonus", ctypes.c_float),
-        ("confirmMargin", ctypes.c_float),
-        ("maxOriginCrossMs", ctypes.c_float),
-        ("maxResidualBins", ctypes.c_float),
-        ("cal", RadarCal),
-        ("tangentBonus", ctypes.c_float),
-        ("neutralBonus", ctypes.c_float),
-        ("tangentToleranceRad", ctypes.c_float),
-    ]
-
-
-class JointKin(ctypes.Structure):
-    """``l3_joint_kin_t``: kinematic seed from pre-impact club track."""
-
-    _fields_ = [
-        ("rangeBin", ctypes.c_float),
-        ("speedMps", ctypes.c_float),
-        ("timestampUs", ctypes.c_uint32),
-    ]
-
-
-class JointClubNode(ctypes.Structure):
-    """``l3_joint_club_node_t``: one club-beam explanation (12 bytes)."""
-
-    _fields_ = [
-        ("target", ctypes.c_uint8),
-        ("parent", ctypes.c_uint8),
-        ("misses", ctypes.c_uint8),
-        ("state", ctypes.c_uint8),
-        ("score", ctypes.c_float),
-        ("speedMps", ctypes.c_float),
-    ]
-
-
-class JointBallNode(ctypes.Structure):
-    """``l3_joint_ball_node_t``: one ball-beam explanation (16 bytes)."""
-
-    _fields_ = [
-        ("target", ctypes.c_uint8),
-        ("parent", ctypes.c_uint8),
-        ("misses", ctypes.c_uint8),
-        ("state", ctypes.c_uint8),
-        ("speedKnown", ctypes.c_uint8),
-        ("hits", ctypes.c_uint8),
-        ("_pad", ctypes.c_uint8 * 2),
-        ("score", ctypes.c_float),
-        ("speedMps", ctypes.c_float),
-    ]
-
-
-class JointPoint(ctypes.Structure):
-    """``l3_joint_point_t``: one finished club point."""
-
-    _fields_ = [
-        ("rangeBin", ctypes.c_float),
-        ("speedMps", ctypes.c_float),
-        ("azimuthRad", ctypes.c_float),
-        ("elevationRad", ctypes.c_float),
-        ("timestampUs", ctypes.c_uint32),
-        ("anglesValid", ctypes.c_uint8),
-        ("_pad", ctypes.c_uint8 * 3),
-    ]
-
-
-class JointBallPoint(ctypes.Structure):
-    """``l3_joint_ball_point_t``: one finished ball point."""
-
-    _fields_ = [
-        ("rangeBin", ctypes.c_float),
-        ("speedMps", ctypes.c_float),
-        ("azimuthRad", ctypes.c_float),
-        ("elevationRad", ctypes.c_float),
-        ("timestampUs", ctypes.c_uint32),
-        ("anglesValid", ctypes.c_uint8),
-        ("_pad", ctypes.c_uint8 * 3),
-    ]
-
-
-class JointClubLink(ctypes.Structure):
-    """``l3_joint_club_link_t``: club beam for one window slot."""
-
-    _fields_ = [
-        ("nodes", JointClubNode * JOINT_CLUB_BEAM),
-        ("count", ctypes.c_uint32),
-        ("frame", ctypes.c_uint32),
-        ("timestampUs", ctypes.c_uint32),
-    ]
-
-
-class JointBallLink(ctypes.Structure):
-    """``l3_joint_ball_link_t``: ball beam for one window slot."""
-
-    _fields_ = [
-        ("nodes", JointBallNode * JOINT_BALL_BEAM),
-        ("count", ctypes.c_uint32),
-        ("frame", ctypes.c_uint32),
-        ("timestampUs", ctypes.c_uint32),
-    ]
-
-
-class JointFrameTarget(ctypes.Structure):
-    """``l3_joint_frame_target_t``: compact target copy for the window."""
-
-    _fields_ = [
-        ("rangeBin", ctypes.c_float),
-        ("dopplerAliasMps", ctypes.c_float),
-        ("snr", ctypes.c_float),
-        ("azimuthRad", ctypes.c_float),
-        ("elevationRad", ctypes.c_float),
-        ("anglesValid", ctypes.c_uint8),
-        ("_pad", ctypes.c_uint8 * 3),
-    ]
-
-
-class JointFrame(ctypes.Structure):
-    """``l3_joint_frame_t``: targets stored for one window slot."""
-
-    _fields_ = [
-        ("targets", JointFrameTarget * OBS_MAX_TARGETS),
-        ("count", ctypes.c_uint32),
-        ("timestampUs", ctypes.c_uint32),
-    ]
-
-
-class JointAngleReq(ctypes.Structure):
-    """``l3_joint_angle_req_t``."""
-
-    _fields_ = [
-        ("frameSlot", ctypes.c_uint8),
-        ("targetIdx", ctypes.c_uint8),
-        ("needed", ctypes.c_uint8),
-        ("_pad", ctypes.c_uint8),
-    ]
-
-
-class JointNow(ctypes.Structure):
-    """``l3_joint_now_t``: current best-explanation snapshot."""
-
-    _fields_ = [
-        ("clubBin", ctypes.c_float),
-        ("ballBin", ctypes.c_float),
-        ("clubPredBin", ctypes.c_float),
-        ("ballPredBin", ctypes.c_float),
-        ("bestScore", ctypes.c_float),
-        ("beamSize", ctypes.c_uint32),
-        ("ballConfirmed", ctypes.c_uint8),
-        ("_pad", ctypes.c_uint8 * 3),
-    ]
-
-
-class Joint(ctypes.Structure):
-    """``l3_joint_t``: full joint search state."""
-
-    _fields_ = [
-        ("cfg", JointCfg),
-        ("clubLinks", JointClubLink * JOINT_WINDOW),
-        ("ballLinks", JointBallLink * JOINT_WINDOW),
-        ("frames", JointFrame * JOINT_WINDOW),
-        ("winHead", ctypes.c_uint32),
-        ("winSize", ctypes.c_uint32),
-        ("clubPoints", JointPoint * JOINT_BALL_POINTS),
-        ("clubCount", ctypes.c_uint32),
-        ("ballPoints", JointBallPoint * JOINT_BALL_POINTS),
-        ("ballCount", ctypes.c_uint32),
-        ("ballConfirmed", ctypes.c_uint8),
-        ("_pad", ctypes.c_uint8 * 3),
-        ("confirmFirstBallTarget", ctypes.c_uint32 * 4),
-        ("gateTimestampUs", ctypes.c_uint32),
-        ("seed", JointKin),
-        ("seedValid", ctypes.c_uint8),
-        ("_pad2", ctypes.c_uint8 * 3),
-        ("counters", ctypes.c_uint32 * JOINT_N_COUNTERS),
     ]
 
 
@@ -1785,6 +1589,11 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_band_contains": ([_P(Band), _F32], ctypes.c_int32),
     "l3_band_filter": ([_P(Band), _P(TargetObs), _U32], _U32),
     "l3_band_keep_short": ([_P(Band), _P(TargetObs), _U32], _U32),
+    "l3_band_clutter_filter": ([_P(BandNoise), _F32, _P(TargetObs), _U32], _U32),
+    # l3_window.h
+    "l3_window_hann_q17": ([_P(ctypes.c_int32), _U32], _U32),
+    "l3_window_parse": ([ctypes.c_char_p, _P(ctypes.c_uint8)], ctypes.c_int32),
+    "l3_window_name": ([ctypes.c_uint8], ctypes.c_char_p),
     # l3_iq16_stats.h
     "l3_iq16_channel_stats": (
         [_P(ctypes.c_int16), _U32, _U32, _P(Iq16ChannelStats)],
@@ -1981,21 +1790,6 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_track_kf_run": ([_P(TrackKfCfg), _P(ClubTrack), ctypes.c_void_p, _P(TrackKfResult)], _U32),
     "l3_track_delivery_filtered": ([_P(ClubTrack), _U32, _P(Delivery)], _U32),
     "l3_track_kf_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
-    # l3_joint_search.h
-    "l3_joint_cfg_defaults": ([_P(JointCfg)], None),
-    "l3_joint_init": ([_P(Joint), _P(JointCfg)], None),
-    "l3_joint_reset": ([_P(Joint)], None),
-    "l3_joint_arm": ([_P(Joint), _P(JointKin), _U32], None),
-    "l3_joint_update": ([_P(Joint), _U32, _U32, _P(TargetObs), _U32], ctypes.c_int32),
-    "l3_joint_finish": ([_P(Joint)], None),
-    "l3_joint_angle_requests": ([_P(Joint), _P(JointAngleReq), _U32], _U32),
-    "l3_joint_set_angles": ([_P(Joint), _P(JointAngleReq), _U32], None),
-    "l3_joint_now": ([_P(Joint)], JointNow),
-    "l3_joint_target_use": ([_P(Joint), _U32], _U32),
-    "l3_joint_window_ball": ([_P(Joint), _P(JointBallPoint), _U32], _U32),
-    "l3_joint_ball_point": ([_P(Joint), _U32, _P(JointBallPoint)], ctypes.c_int32),
-    "l3_joint_launch": ([_P(Joint), _P(Delivery), _U32, _P(Launch)], ctypes.c_int32),
-    "l3_joint_struct_bytes": ([], _U32),
     # l3_ball_track.h
     "l3_ball_hyps_cfg_defaults": ([_P(BallHypsCfg)], None),
     "l3_ball_hyps_init": ([_P(BallHyps), _P(BallHypsCfg)], None),

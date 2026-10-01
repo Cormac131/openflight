@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "dump": "iwr6843_20260919_175351_212_012.l3dump",
+  "dump_sha256": "49ff9fbbd76eef2def8d3efc3aacfac9df121e1eff7501cfcf2096d6c9e548be",
+  "reviewed": true,
+  "ball": {
+    "points": []
+  },
+  "club": {
+    "points": []
+  },
+  "tolerances": {
+    "range_bins": 1.0,
+    "min_coverage": 0.8,
+    "doppler_mps": null
+  },
+  "notes": ""
+}

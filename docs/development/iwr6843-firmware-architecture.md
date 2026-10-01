@@ -237,8 +237,7 @@ Each kept post frame (`l3_considerBallTrack`):
   confidence gate; a confident departure displaces an unconfirmed smeared
   first point; its points' angles are estimated inline.
 - **Hypotheses** (`l3_ball_hyp.c`, off by default: `L3_BALL_HYPOTHESES=0`)
-  for the ball found rather than assumed; the joint club/ball search
-  (`l3_joint_search.c`) is host-only, run by the replay.
+  for the ball found rather than assumed.
 - **Ball fit** (`l3_ball_fit.c`): at RESULT the ball's direction is fitted
   from the departing track's points, anchored at the tee (the ball track
   origin's slant range and bearing at `teeBallHeightM - radarHeightM`), with
@@ -384,7 +383,6 @@ source-structure tests.
 | `l3_frames.c` | Radar and golf coordinate frames, the board calibration |
 | `l3_shot.c` | Shot state machine: waiting → ready → club → impact → post → result |
 | `l3_ball_track.c`, `l3_ball_hyp.c` | The ball after impact: track, hypotheses (off by default) |
-| `l3_joint_search.c` | Joint club/ball path search after impact — **host-only** (replay), not in the board build |
 | `l3_impact_fit.c` | Impact from the tracks either side of the band |
 | `l3_launch.c` | Launch from the ball's departure |
 | `l3_ball_fit.c` | Tee-anchored ball direction (HLA/VLA) with an uncertainty gate; board, at RESULT |

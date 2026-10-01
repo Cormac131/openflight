@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "dump": "iwr6843_20260919_191037_862_033.l3dump",
+  "dump_sha256": "0dddac033621fbe72156c6478790866b70ca398572f1870989440c8525952715",
+  "reviewed": true,
+  "ball": {
+    "points": [
+      {
+        "frame": 8,
+        "range_bin": 56.3
+      },
+      {
+        "frame": 9,
+        "range_bin": 59.1
+      },
+      {
+        "frame": 10,
+        "range_bin": 62.3
+      },
+      {
+        "frame": 11,
+        "range_bin": 65.5
+      },
+      {
+        "frame": 12,
+        "range_bin": 68.3
+      },
+      {
+        "frame": 13,
+        "range_bin": 71.4
+      },
+      {
+        "frame": 14,
+        "range_bin": 74.5
+      },
+      {
+        "frame": 15,
+        "range_bin": 77.6
+      },
+      {
+        "frame": 16,
+        "range_bin": 80.7
+      },
+      {
+        "frame": 17,
+        "range_bin": 83.5
+      },
+      {
+        "frame": 18,
+        "range_bin": 86.6
+      },
+      {
+        "frame": 19,
+        "range_bin": 89.8
+      },
+      {
+        "frame": 20,
+        "range_bin": 92.8
+      },
+      {
+        "frame": 21,
+        "range_bin": 95.7
+      },
+      {
+        "frame": 22,
+        "range_bin": 98.8
+      }
+    ]
+  },
+  "club": {
+    "points": [
+      {
+        "frame": 0,
+        "range_bin": 33.9
+      },
+      {
+        "frame": 1,
+        "range_bin": 36.0
+      },
+      {
+        "frame": 2,
+        "range_bin": 38.3
+      },
+      {
+        "frame": 3,
+        "range_bin": 41.0
+      },
+      {
+        "frame": 4,
+        "range_bin": 43.4
+      },
+      {
+        "frame": 11,
+        "range_bin": 56.9
+      },
+      {
+        "frame": 12,
+        "range_bin": 59.2
+      },
+      {
+        "frame": 13,
+        "range_bin": 60.0
+      },
+      {
+        "frame": 14,
+        "range_bin": 61.6
+      },
+      {
+        "frame": 15,
+        "range_bin": 63.0
+      }
+    ]
+  },
+  "tolerances": {
+    "range_bins": 1.0,
+    "min_coverage": 0.8,
+    "doppler_mps": null
+  },
+  "notes": ""
+}

@@ -27,6 +27,9 @@ typedef struct {
     float    avg[L3_BAND_NOISE_BINS];
     uint8_t  seen[L3_BAND_NOISE_BINS]; /* updates per bin, saturating: history for
                                         * l3_band_place when fed span by span */
+    /* EMA (same constant) of |value - avg| against the mean before each
+     * update: how far the bin swings when nothing is swinging a club. */
+    float    dev[L3_BAND_NOISE_BINS];
 } l3_band_noise_t;
 
 void l3_band_noise_reset(l3_band_noise_t *noise);
@@ -50,6 +53,16 @@ void l3_band_noise_update_span(l3_band_noise_t *noise, uint32_t stat, uint32_t w
  * widthBins < 0.5 gives an invalid band. */
 void l3_band_place(const l3_band_noise_t *noise, float centreBin, float searchBins,
                    float widthBins, l3_band_t *out);
+
+/* The clutter map: the noise map is fed only on frames with no club track,
+ * so it holds the scene at address (the golfer's body short of the ball,
+ * still scatterers). Keep the targets, in their order, whose statistic
+ * (target->stat, the map's units) beats their peak bin's mean by more than
+ * sigmas x its spread; a bin outside the map or with fewer than
+ * L3_BAND_NOISE_MIN_UPDATES updates keeps its target. sigmas <= 0 keeps
+ * everything. Returns how many are kept. */
+uint32_t l3_band_clutter_filter(const l3_band_noise_t *noise, float sigmas,
+                                l3_target_obs_t *targets, uint32_t n);
 
 /* 1 when bin lies inside a valid band. */
 int32_t l3_band_contains(const l3_band_t *band, float bin);

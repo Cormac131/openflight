@@ -460,17 +460,6 @@ def test_post_impact_frames_go_to_the_ball_tracker_and_the_launch_is_recovered(l
     assert "balltrack armed=1 confirmed=1" in result.ball_status
 
 
-def test_joint_search_arms_from_the_club_tracks_own_last_point(lib, whole_shot):
-    """Regression: arming once read delivery.rangeBin, a field l3_delivery_t
-    does not have, raising AttributeError as soon as a real (non-empty) club
-    track reached impact with joint_search enabled. The seed must come from
-    the club track's own last point and its range-rate fitted speed."""
-    result = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN, joint_search=True), lib=lib)
-    assert result.fired_frame is not None
-    assert len(result.joint_ball_points) > 0
-    assert len(result.joint_club_points) > 0
-
-
 def test_the_shot_machine_walks_the_whole_sequence_on_the_replay(lib, whole_shot):
     result = replay_dump(whole_shot, ReplayConfig(tee_bin=TEE_BIN), lib=lib)
     states = [f.shot_state for f in result.frames]

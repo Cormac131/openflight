@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "dump": "iwr6843_20260919_185850_541_010.l3dump",
+  "dump_sha256": "d425ccb4ca1aad1055ead9909c1fc557648e460477d7a0b0ecfc7c000e2070c9",
+  "reviewed": true,
+  "ball": {
+    "points": [
+      {
+        "frame": 8,
+        "range_bin": 55.0
+      },
+      {
+        "frame": 9,
+        "range_bin": 56.6
+      },
+      {
+        "frame": 10,
+        "range_bin": 59.0
+      },
+      {
+        "frame": 11,
+        "range_bin": 60.54642105102539
+      },
+      {
+        "frame": 12,
+        "range_bin": 62.150245666503906
+      },
+      {
+        "frame": 13,
+        "range_bin": 64.37752532958984
+      },
+      {
+        "frame": 14,
+        "range_bin": 66.15601348876953
+      },
+      {
+        "frame": 15,
+        "range_bin": 68.143310546875
+      },
+      {
+        "frame": 16,
+        "range_bin": 70.004638671875
+      },
+      {
+        "frame": 17,
+        "range_bin": 71.87753295898438
+      },
+      {
+        "frame": 18,
+        "range_bin": 73.82173919677734
+      },
+      {
+        "frame": 20,
+        "range_bin": 77.69937896728516
+      },
+      {
+        "frame": 21,
+        "range_bin": 79.8
+      },
+      {
+        "frame": 22,
+        "range_bin": 82.2
+      },
+      {
+        "frame": 23,
+        "range_bin": 84.2
+      }
+    ]
+  },
+  "club": {
+    "points": [
+      {
+        "frame": 0,
+        "range_bin": 37.20965576171875
+      },
+      {
+        "frame": 1,
+        "range_bin": 39.02955627441406
+      },
+      {
+        "frame": 2,
+        "range_bin": 42.1541862487793
+      },
+      {
+        "frame": 3,
+        "range_bin": 43.824119567871094
+      },
+      {
+        "frame": 4,
+        "range_bin": 45.30989074707031
+      },
+      {
+        "frame": 8,
+        "range_bin": 54.8
+      },
+      {
+        "frame": 9,
+        "range_bin": 56.9
+      },
+      {
+        "frame": 10,
+        "range_bin": 58.8
+      }
+    ]
+  },
+  "tolerances": {
+    "range_bins": 1.0,
+    "min_coverage": 0.8,
+    "doppler_mps": null
+  },
+  "notes": ""
+}

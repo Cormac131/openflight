@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "dump": "iwr6843_20260919_185633_280_007.l3dump",
+  "dump_sha256": "ff1301da8392c94f1a33ed965de93e1fdaaca71d5d60066fe17cea06d6b03378",
+  "reviewed": true,
+  "ball": {
+    "points": [
+      {
+        "frame": 11,
+        "range_bin": 56.1
+      },
+      {
+        "frame": 12,
+        "range_bin": 57.5
+      },
+      {
+        "frame": 14,
+        "range_bin": 60.9
+      },
+      {
+        "frame": 15,
+        "range_bin": 62.0
+      },
+      {
+        "frame": 16,
+        "range_bin": 63.9
+      },
+      {
+        "frame": 17,
+        "range_bin": 65.5503158569336
+      },
+      {
+        "frame": 18,
+        "range_bin": 67.23103332519531
+      },
+      {
+        "frame": 19,
+        "range_bin": 68.70580291748047
+      },
+      {
+        "frame": 20,
+        "range_bin": 70.4814682006836
+      },
+      {
+        "frame": 21,
+        "range_bin": 72.17501831054688
+      },
+      {
+        "frame": 22,
+        "range_bin": 73.72784423828125
+      },
+      {
+        "frame": 23,
+        "range_bin": 75.45227813720703
+      }
+    ]
+  },
+  "club": {
+    "points": [
+      {
+        "frame": 0,
+        "range_bin": 34.33280944824219
+      },
+      {
+        "frame": 1,
+        "range_bin": 36.548282623291016
+      },
+      {
+        "frame": 2,
+        "range_bin": 38.5085563659668
+      },
+      {
+        "frame": 3,
+        "range_bin": 40.3
+      },
+      {
+        "frame": 4,
+        "range_bin": 42.8
+      },
+      {
+        "frame": 12,
+        "range_bin": 55.0
+      },
+      {
+        "frame": 14,
+        "range_bin": 56.7
+      },
+      {
+        "frame": 15,
+        "range_bin": 58.7
+      },
+      {
+        "frame": 16,
+        "range_bin": 60.3
+      },
+      {
+        "frame": 17,
+        "range_bin": 61.3
+      }
+    ]
+  },
+  "tolerances": {
+    "range_bins": 1.0,
+    "min_coverage": 0.8,
+    "doppler_mps": null
+  },
+  "notes": ""
+}

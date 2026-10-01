@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import functools
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -26,6 +27,10 @@ needs_compiler = pytest.mark.skipif(
 )
 
 _RECORDINGS = ls.reviewed_recordings(fr.RECORDINGS_DIR) if fr.RECORDINGS_DIR.exists() else []
+# 2026-09 home sessions where the golfer's body fills the bins just short of
+# the ball, where the club's approach passes (see its manifest). Kept apart so
+# the main folder's baselines and counts are untouched.
+GOLFER_DIR = fr.RECORDINGS_DIR / "golfer_2026-09"
 _BASELINE = ls.load_baseline(fr.RECORDINGS_DIR) if fr.RECORDINGS_DIR.exists() else {}
 
 
@@ -99,12 +104,20 @@ def _labelled_radial_mps(raw: bytes, labels) -> float:
 
 
 @functools.cache
-def _kiosk_swings() -> tuple[_KioskSwing, ...]:
-    """Every labelled swing replayed at the kiosk's settings. The ball's bin is
-    its first labelled point (the tape a correctly measured tee gives), the
-    launch frame that point's frame."""
+def _reviewed(directory: Path) -> tuple:
+    """A folder's reviewed recordings; the main folder's are loaded once at import."""
+    if directory == fr.RECORDINGS_DIR:
+        return tuple(_RECORDINGS)
+    return tuple(ls.reviewed_recordings(directory)) if directory.exists() else ()
+
+
+@functools.cache
+def _kiosk_swings(directory: Path = fr.RECORDINGS_DIR) -> tuple[_KioskSwing, ...]:
+    """Every labelled swing in ``directory`` replayed at the kiosk's settings.
+    The ball's bin is its first labelled point (the tape a correctly measured
+    tee gives), the launch frame that point's frame."""
     judged = []
-    for path, config, labels in _RECORDINGS:
+    for path, config, labels in _reviewed(directory):
         if not labels.ball:
             continue
         raw = path.read_bytes()
@@ -139,8 +152,8 @@ def _kiosk_swings() -> tuple[_KioskSwing, ...]:
     return tuple(judged)
 
 
-def _kiosk_fire_offsets() -> tuple[tuple[str, int | None], ...]:
-    return tuple((swing.name, swing.offset) for swing in _kiosk_swings())
+def _kiosk_fire_offsets(directory: Path = fr.RECORDINGS_DIR) -> tuple[tuple[str, int | None], ...]:
+    return tuple((swing.name, swing.offset) for swing in _kiosk_swings(directory))
 
 
 @needs_compiler
@@ -295,3 +308,87 @@ def test_the_replays_pre_impact_path_queues_the_club_angle_and_never_estimates_i
     source = inspect.getsource(fr.replay_dump)
     assert "l3_angle_queue_push(" in source
     assert "_estimate_angles(" not in source
+
+
+# --- the golfer in the approach (golfer_2026-09) -------------------------------
+#
+# Found 2026-10-01: at the kiosk's settings the club was lost as it passed the
+# golfer. The trigger's floor (the median of the bins short of the ball) read
+# the body (~80 dB) over the club's approach (71-78 dB against 65 dB of air),
+# and once extracted the club lost its track to the body's far stronger
+# return (snr 100-870 against 10-96). 21 of 37 swings fired within the window
+# and 10 never fired. The gates are the main folder's.
+
+
+def _golfer_swings() -> tuple[_KioskSwing, ...]:
+    swings = _kiosk_swings(GOLFER_DIR)
+    if not swings:
+        pytest.skip(f"no labelled swings under {GOLFER_DIR}")
+    return swings
+
+
+@needs_compiler
+def test_the_kiosk_self_trigger_fires_at_launch_with_the_golfer_in_the_approach():
+    swings = _golfer_swings()
+    near = [
+        s.name for s in swings if s.offset is not None and -EARLY_FRAMES <= s.offset <= LATE_FRAMES
+    ]
+    missed = [(s.name, s.offset) for s in swings if s.name not in near]
+    assert len(near) >= KIOSK_TRIGGER_MIN_SHARE * len(swings), (
+        f"fired from {EARLY_FRAMES} frames before to {LATE_FRAMES} after launch on "
+        f"{len(near)}/{len(swings)}; missed (fire - launch frames): {missed}"
+    )
+
+
+@needs_compiler
+def test_the_swings_past_the_golfer_fire_before_the_ball_is_lost():
+    swings = _golfer_swings()
+    unfired = [s.name for s in swings if s.offset is None]
+    too_late = [
+        (s.name, s.offset) for s in swings if s.offset is not None and s.offset > LATEST_FIRE_FRAMES
+    ]
+    assert len(unfired) <= MAX_UNFIRED and len(too_late) <= MAX_TOO_LATE, (
+        f"never fired: {unfired}; fired more than {LATEST_FIRE_FRAMES} frames after "
+        f"launch: {too_late}"
+    )
+
+
+@needs_compiler
+def test_the_swings_past_the_golfer_report_the_ball_not_the_club():
+    swings = _golfer_swings()
+    wrong = [
+        (s.name, round(s.labelled_mps, 1), round(s.launch_mps, 1))
+        for s in swings
+        if _launch_verdict(s) == "wrong"
+    ]
+    assert len(wrong) <= MAX_WRONG_LAUNCHES, f"launch off the labelled speed: {wrong}"
+
+
+@needs_compiler
+def test_the_swings_past_the_golfer_score_within_the_boards_budget():
+    over = [
+        (s.name, s.pre_scored_max, s.post_scored_max)
+        for s in _golfer_swings()
+        if s.pre_scored_max > PRE_IMPACT_BIN_BUDGET or s.post_scored_max > POST_IMPACT_BIN_BUDGET
+    ]
+    assert over == [], f"bins scored per frame over the budget (dump, pre, post): {over[:5]}"
+
+
+@needs_compiler
+def test_nothing_fires_on_a_capture_labelled_empty():
+    """No swing, only the golfer at address: the kiosk must not fire."""
+    recordings = _reviewed(GOLFER_DIR)
+    swings = [labels for _, _, labels in recordings if labels.ball]
+    empty = [
+        (path, config) for path, config, labels in recordings if not labels.ball and not labels.club
+    ]
+    if not empty or not swings:
+        pytest.skip(f"no empty and labelled captures under {GOLFER_DIR}")
+    # Where the ball sat on the session's swings.
+    ball_bin = int(round(float(np.median([labels.ball[0].range_bin for labels in swings]))))
+    fired = []
+    for path, config in empty:
+        result = fr.replay_dump(path.read_bytes(), _kiosk_config(config, ball_bin))
+        if result.fired_frame is not None:
+            fired.append((path.name, result.fired_frame))
+    assert fired == [], f"fired on captures labelled empty: {fired}"
