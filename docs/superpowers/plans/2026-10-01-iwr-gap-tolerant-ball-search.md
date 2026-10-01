@@ -1290,7 +1290,7 @@ def test_score_terms_are_reported(lib):
 
 
 def test_velocity_consistency_reads_points_beyond_the_tolerance(lib):
-    hyps, _ = run(lib, TwoTracks(frames=8, frame_us=3000))  # 3-24 ms, tolerance 2 ms below
+    """Frames 3-24 ms after an anchor with a 2 ms tolerance: every implied speed counts."""
     hyps2 = make_hyps(lib)
     arm(lib, hyps2, tol_us=2000)
     for f in TwoTracks(frames=8, frame_us=3000).build():
