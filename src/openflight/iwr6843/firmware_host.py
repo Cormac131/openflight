@@ -1173,6 +1173,14 @@ class BallHypsCfg(ctypes.Structure):
         ("farWindowM", ctypes.c_float),
         ("corridorGate", ctypes.c_uint32),
         ("anchorRangeTolM", ctypes.c_float),
+        ("maxDecelMps2", ctypes.c_float),
+        ("rangeNoiseM", ctypes.c_float),
+        ("wBack", ctypes.c_float),
+        ("wVel", ctypes.c_float),
+        ("wResid", ctypes.c_float),
+        ("wDoppler", ctypes.c_float),
+        ("wCoherence", ctypes.c_float),
+        ("wWeaker", ctypes.c_float),
     ]
 
 
@@ -1189,6 +1197,12 @@ class BallHypVerdict(ctypes.Structure):
         ("weakerFraction", ctypes.c_float),
         ("score", ctypes.c_float),
         ("waitingForFast", ctypes.c_uint32),
+        ("velocityConsistency", ctypes.c_float),
+        ("coherence", ctypes.c_float),
+        ("anchorSource", ctypes.c_uint8),
+        ("recovered", ctypes.c_uint32),
+        ("recoveredFirstFrame", ctypes.c_uint32),
+        ("recoveredMask", ctypes.c_uint32),
     ]
 
 

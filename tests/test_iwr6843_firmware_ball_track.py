@@ -635,7 +635,10 @@ def unclaimed(scene):
 @pytest.mark.parametrize("decel", [300.0, 1500.0])
 def test_fastest_credible_keeps_an_unclaimed_follow_through_off_the_ball(lib, decel):
     """20260927_183542_142_009: the club track was inactive after impact, so no
-    claim separated the returns and the search adopted the follow-through."""
+    claim separated the returns and the search adopted the follow-through.
+    The back-projection-first score (A3) now keeps the follow-through off the
+    ball by itself; the old score (residual + Doppler + weaker only, no
+    deceleration reject) still adopts it."""
     scene = TwoTracks(frames=10, club_decel_mps2=decel, club_stat=1400.0)
 
     def launch_speed(**hyps):
@@ -653,7 +656,10 @@ def test_fastest_credible_keeps_an_unclaimed_follow_through_off_the_ball(lib, de
             )
         return launch_of(lib, track)[1].speedMps
 
-    assert launch_speed() < 30.0, "without the rule the follow-through is the ball"
+    assert launch_speed() == pytest.approx(42.0, rel=0.1), "the A3 score takes the ball"
+    assert (
+        launch_speed(wBack=0.0, wVel=0.0, wCoherence=0.0, maxDecelMps2=0.0) < 30.0
+    ), "the old score takes the follow-through"
     assert launch_speed(fastBallMps=30.0) == pytest.approx(42.0, rel=0.1)
 
 

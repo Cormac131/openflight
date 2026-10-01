@@ -503,3 +503,101 @@ def test_the_search_back_projects_to_the_tee_not_the_accept_bin(lib):
     assert abs(v.originOffsetUs) < 300.0
     assert min(bins(hyps.hyp[v.index])) >= scene.origin_bin + 3.0 - 1.0  # spawnBehind
 
+
+
+DEFAULT_WEIGHTS = {
+    "wBack": 3.0,
+    "wVel": 2.0,
+    "wResid": 1.0,
+    "wDoppler": 1.0,
+    "wCoherence": 0.5,
+    "wWeaker": 0.5,
+}
+TERMS = {
+    "wBack": lambda v: 1 - abs(v.originOffsetUs) / 15_000,
+    "wVel": lambda v: v.velocityConsistency,
+    "wResid": lambda v: 1 - v.residualBins / 1.0,
+    "wDoppler": lambda v: v.dopplerAgreement,
+    "wCoherence": lambda v: v.coherence,
+    "wWeaker": lambda v: v.weakerFraction,
+}
+
+
+def mix(lib, fast=35.0, slow=20.0, points=6, frame_us=3000, **overrides):
+    """One line that leaves at `fast` and continues at `slow`: two objects."""
+    hyps = make_hyps(lib, classifyPoints=points, corridorGate=0, **overrides)
+    arm(lib, hyps, tol_us=3000)
+    r, t = 46.0, 0
+    for k in range(1, points + 1):
+        speed = fast if k <= points // 2 else slow
+        t += frame_us
+        r += speed * frame_us * 1e-6 / BIN_M
+        feed(lib, hyps, k, t, [obs(k, t, r, 1500.0, speed)])
+    return hyps
+
+
+def test_a_two_object_mix_is_rejected(lib):
+    assert verdict(lib, mix(lib)).index == -1
+
+
+def test_the_mix_qualifies_with_the_reject_off(lib):
+    assert verdict(lib, mix(lib, maxDecelMps2=0.0)).index >= 0
+
+
+def test_a_drag_only_ball_is_not_rejected(lib):
+    assert verdict(lib, mix(lib, fast=40.0, slow=39.5)).index >= 0
+
+
+def test_an_origin_crossing_far_from_impact_loses_despite_a_better_residual(lib):
+    """Two 42 m/s lines: A left the tee at the anchor (jittered), B left it
+    12 ms later (clean). Both pass the 15 ms gate; A must win on back-projection."""
+    hyps = make_hyps(lib, corridorGate=0)
+    arm(lib, hyps, tol_us=15_000)
+    per_us = 42.0 * 1e-6 / BIN_M
+    jitter = [0.0, 0.3, -0.3, 0.3, -0.3, 0.3]
+    for k in range(1, 7):
+        ts = 12_000 + 2000 * k
+        line_a = obs(k, ts, 46.0 + per_us * ts + jitter[k - 1], 1500.0, 42.0)
+        line_b = obs(k, ts, 46.0 + per_us * (ts - 12_000), 1500.0, 42.0)
+        feed(lib, hyps, k, ts, [line_a, line_b])
+    v = verdict(lib, hyps)
+    assert v.index >= 0
+    assert abs(v.originOffsetUs) < 1500.0  # line A
+
+
+def test_score_terms_are_reported(lib):
+    hyps, _ = run(lib, TwoTracks(frames=6))
+    v = verdict(lib, hyps)
+    # 2 ms frames end 12 ms after the anchor, inside its 15 ms tolerance: no
+    # point's implied speed is trusted, so the term is the neutral 0.5.
+    assert v.velocityConsistency == 0.5
+    assert v.coherence == pytest.approx(0.9)
+    assert fw.BALL_ANCHOR_SOURCE_NAMES[v.anchorSource] == "gate"
+    expected = (
+        3 * (1 - abs(v.originOffsetUs) / 15_000)
+        + 2 * v.velocityConsistency
+        + (1 - v.residualBins / 1.0)
+        + v.dopplerAgreement
+        + 0.5 * v.coherence
+        + 0.5 * v.weakerFraction
+    )
+    assert v.score == pytest.approx(expected, rel=1e-4)
+
+
+def test_velocity_consistency_reads_points_beyond_the_tolerance(lib):
+    """Frames 3-24 ms after an anchor with a 2 ms tolerance: every implied speed counts."""
+    hyps2 = make_hyps(lib)
+    arm(lib, hyps2, tol_us=2000)
+    for f in TwoTracks(frames=8, frame_us=3000).build():
+        feed(lib, hyps2, f.frame, f.timestamp_us, f.targets, f.club_index)
+    assert verdict(lib, hyps2).velocityConsistency == pytest.approx(1.0, abs=0.02)
+
+
+@pytest.mark.parametrize("weight", ["wBack", "wVel", "wResid", "wDoppler", "wCoherence", "wWeaker"])
+def test_each_weight_scales_only_its_term(lib, weight):
+    base = verdict(lib, run(lib, TwoTracks(frames=6))[0])
+    doubled = verdict(
+        lib, run(lib, TwoTracks(frames=6), **{weight: 2 * DEFAULT_WEIGHTS[weight]})[0]
+    )
+    term = TERMS[weight](base)
+    assert doubled.score - base.score == pytest.approx(DEFAULT_WEIGHTS[weight] * term, abs=1e-4)

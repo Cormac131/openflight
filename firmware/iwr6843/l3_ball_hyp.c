@@ -27,6 +27,14 @@ void l3_ball_hyps_cfg_defaults(l3_ball_hyps_cfg_t *cfg)
     cfg->farWindowM = 0.0F;           /* off until the recorded captures say otherwise */
     cfg->corridorGate = 1U;
     cfg->anchorRangeTolM = 0.1F;
+    cfg->maxDecelMps2 = 200.0F;
+    cfg->rangeNoiseM = 0.012F;
+    cfg->wBack = 3.0F;
+    cfg->wVel = 2.0F;
+    cfg->wResid = 1.0F;
+    cfg->wDoppler = 1.0F;
+    cfg->wCoherence = 0.5F;
+    cfg->wWeaker = 0.5F;
 }
 
 static void l3_ball_hyps_clear(l3_ball_hyps_t *hyps)
@@ -408,6 +416,96 @@ int32_t l3_ball_hyps_set_angles(l3_ball_hyps_t *hyps, uint32_t index, float azim
     return 1;
 }
 
+static float l3_ball_hyps_unit(float x)
+{
+    return (x < 0.0F) ? 0.0F : ((x > 1.0F) ? 1.0F : x);
+}
+
+/* Sum of squared time deviations (s^2) and mean time (s from ref) of a run. */
+static float l3_ball_hyps_timeSpread(const l3_ball_hyp_point_t *p, uint32_t n, uint32_t refUs,
+                                     float *meanS)
+{
+    float mean = 0.0F;
+    float sum = 0.0F;
+    uint32_t k;
+
+    for (k = 0U; k < n; k++) {
+        mean += l3_ball_hyps_seconds(p[k].timestampUs, refUs);
+    }
+    mean /= (float)n;
+    for (k = 0U; k < n; k++) {
+        float d = l3_ball_hyps_seconds(p[k].timestampUs, refUs) - mean;
+
+        sum += d * d;
+    }
+    *meanS = mean;
+    return sum;
+}
+
+/* G4: 1 when the newer half is slower than drag and range noise allow. */
+static int32_t l3_ball_hyps_decelerates(const l3_ball_hyps_cfg_t *cfg, const l3_ball_hyp_t *hyp)
+{
+    uint32_t older = hyp->count / 2U;
+    uint32_t newer = hyp->count - older;
+    uint32_t ref = hyp->points[0].timestampUs;
+    float rateOld;
+    float rateNew;
+    float at;
+    float residual;
+    float meanOld;
+    float meanNew;
+    float spreadOld;
+    float spreadNew;
+    float sigmaDelta;
+
+    if (!(cfg->maxDecelMps2 > 0.0F) || older < 2U) {
+        return 0;
+    }
+    if (!l3_ball_points_fit(&hyp->points[0], older, ref, &rateOld, &at, &residual) ||
+        !l3_ball_points_fit(&hyp->points[older], newer, ref, &rateNew, &at, &residual)) {
+        return 0;
+    }
+    spreadOld = l3_ball_hyps_timeSpread(&hyp->points[0], older, ref, &meanOld);
+    spreadNew = l3_ball_hyps_timeSpread(&hyp->points[older], newer, ref, &meanNew);
+    sigmaDelta = cfg->rangeNoiseM * sqrtf(1.0F / spreadOld + 1.0F / spreadNew);
+    return ((rateOld - rateNew) * cfg->binWidthM >
+            cfg->maxDecelMps2 * (meanNew - meanOld) + 2.0F * sigmaDelta)
+               ? 1
+               : 0;
+}
+
+/* 1 - spread/mean of the implied launch speeds of the points later than the
+ * anchor's tolerance (earlier ones divide by a time the tolerance swamps);
+ * 0.5 with fewer than two such points. */
+static float l3_ball_hyps_velocityConsistency(const l3_ball_hyps_t *hyps, const l3_ball_hyp_t *hyp,
+                                              float rateMps)
+{
+    float v[L3_BALL_HYP_POINTS];
+    float mean = 0.0F;
+    float var = 0.0F;
+    uint32_t n = 0U;
+    uint32_t k;
+
+    for (k = 0U; k < hyp->count; k++) {
+        float dtS = l3_ball_hyps_seconds(hyp->points[k].timestampUs, hyps->anchor.anchorUs);
+
+        if (dtS * 1.0e6F > (float)hyps->anchor.anchorTolUs) {
+            v[n++] = (hyp->points[k].rangeBin - hyps->anchor.anchorBin) * hyps->cfg.binWidthM / dtS;
+        }
+    }
+    if (n < 2U || !(rateMps > 0.0F)) {
+        return 0.5F;
+    }
+    for (k = 0U; k < n; k++) {
+        mean += v[k];
+    }
+    mean /= (float)n;
+    for (k = 0U; k < n; k++) {
+        var += (v[k] - mean) * (v[k] - mean);
+    }
+    return 1.0F - l3_ball_hyps_unit(sqrtf(var / (float)n) / rateMps);
+}
+
 /* Judge one hypothesis as the ball (see l3_ball_hyps_classify). Returns 1
  * and fills out (index included) when it qualifies. */
 static int32_t l3_ball_hyps_judge(const l3_ball_hyps_t *hyps, uint32_t i,
@@ -424,6 +522,8 @@ static int32_t l3_ball_hyps_judge(const l3_ball_hyps_t *hyps, uint32_t i,
     float weaker = 0.0F;
     float withClub = 0.0F;
     float weakerFraction;
+    float coherence = 0.0F;
+    float backTerm;
     uint32_t k;
 
     if (!hyp->active || hyp->count < cfg->classifyPoints) {
@@ -444,9 +544,13 @@ static int32_t l3_ball_hyps_judge(const l3_ball_hyps_t *hyps, uint32_t i,
     if (residual > cfg->maxResidualBins) {
         return 0;
     }
+    if (l3_ball_hyps_decelerates(cfg, hyp)) {
+        return 0;
+    }
     for (k = 0U; k < hyp->count; k++) {
         const l3_ball_hyp_point_t *p = &hyp->points[k];
 
+        coherence += p->coherence;
         if (l3_track_wrapped_diff(rateMps, p->dopplerAliasMps, cfg->velocitySpanMps) <=
             cfg->dopplerToleranceMps) {
             agree += 1.0F;
@@ -467,8 +571,17 @@ static int32_t l3_ball_hyps_judge(const l3_ball_hyps_t *hyps, uint32_t i,
     out->residualBins = residual;
     out->dopplerAgreement = agree / (float)hyp->count;
     out->weakerFraction = weakerFraction;
-    out->score = (1.0F - residual / cfg->maxResidualBins) + out->dopplerAgreement +
-                 0.5F * weakerFraction;
+    out->velocityConsistency = l3_ball_hyps_velocityConsistency(hyps, hyp, rateMps);
+    out->coherence = coherence / (float)hyp->count;
+    out->anchorSource = hyps->anchor.source;
+    backTerm = (hyps->anchor.anchorTolUs > 0U)
+                   ? l3_ball_hyps_unit(1.0F - fabsf(out->originOffsetUs) /
+                                                  (float)hyps->anchor.anchorTolUs)
+                   : 0.0F;
+    out->score = cfg->wBack * backTerm + cfg->wVel * out->velocityConsistency +
+                 cfg->wResid * l3_ball_hyps_unit(1.0F - residual / cfg->maxResidualBins) +
+                 cfg->wDoppler * out->dopplerAgreement + cfg->wCoherence * out->coherence +
+                 cfg->wWeaker * weakerFraction;
     return 1;
 }
 

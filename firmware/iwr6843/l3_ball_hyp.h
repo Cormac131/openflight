@@ -92,6 +92,19 @@ typedef struct {
      * spawnBeyond + maxSpeedMps x elapsed] as before. */
     uint32_t corridorGate;
     float    anchorRangeTolM;
+    /* G4: a hypothesis whose newer half is slower than its older half by
+     * more than maxDecelMps2 x the time between them + 2 sigma (each half's
+     * slope uncertainty from rangeNoiseM) is two objects. 0 disables. */
+    float    maxDecelMps2;
+    float    rangeNoiseM;
+    /* A3 score weights: back-projection, implied-velocity consistency, fit
+     * residual, Doppler agreement, lag-1 coherence, weaker than the club. */
+    float    wBack;
+    float    wVel;
+    float    wResid;
+    float    wDoppler;
+    float    wCoherence;
+    float    wWeaker;
 } l3_ball_hyps_cfg_t;
 
 typedef struct {
@@ -105,6 +118,12 @@ typedef struct {
     float    score;
     uint32_t waitingForFast;      /* 1 when a slow winner is held back for a fast
                                    * hypothesis still gathering points (index -1) */
+    float    velocityConsistency; /* 0..1: the points' implied launch speeds agree */
+    float    coherence;           /* mean lag-1 coherence of its points */
+    uint8_t  anchorSource;        /* L3_BALL_ANCHOR_* the search back-projected to */
+    uint32_t recovered;           /* points the backward pass added at adoption */
+    uint32_t recoveredFirstFrame;
+    uint32_t recoveredMask;       /* bit k: frame recoveredFirstFrame + k was recovered */
 } l3_ball_hyp_verdict_t;
 
 typedef struct {
