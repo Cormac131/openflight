@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [Electron Kiosk Shell](electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
 
 ### Fixed
+- **The "no OPS243 radar found" error no longer suggests a flag the
+  hardware-test scripts do not accept.** The hint named `--radar-port`,
+  which only `start-kiosk.sh` understands; `test_rolling_buffer_persist.py`
+  and friends take `--port`. The message is now tool-neutral. (#270)
 - **A crash-looping boot service no longer kills the desktop kiosk.** Every
   launcher exit ran a `pkill` that matched the Electron binary path, so an
   `openflight.service` that failed at startup (for example because systemd's
