@@ -15,7 +15,7 @@ Thank you for your interest in contributing to OpenFlight! This document provide
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/jewbetcha/openflight.git
+   git clone https://github.com/open-flight/openflight.git
    cd openflight
    ```
 
@@ -107,7 +107,7 @@ uv run pytest tests/ --cov=src/openflight --cov-report=html
 
 ### Reporting Issues
 
-Use the [issue templates](https://github.com/jewbetcha/openflight/issues/new/choose) to file bugs, request features, or get help with hardware setup. Check existing issues before creating new ones.
+Use the [issue templates](https://github.com/open-flight/openflight/issues/new/choose) to file bugs, request features, or get help with hardware setup. Check existing issues before creating new ones.
 
 ### Pull Request Requirements
 
@@ -240,7 +240,7 @@ The `MockLaunchMonitor` class simulates realistic shot data based on TrackMan av
 
 ## Questions?
 
-- Use the [issue templates](https://github.com/jewbetcha/openflight/issues/new/choose) for bugs, features, or hardware help
+- Use the [issue templates](https://github.com/open-flight/openflight/issues/new/choose) for bugs, features, or hardware help
 - Check existing issues before creating new ones
 - Be respectful and constructive in discussions
 
