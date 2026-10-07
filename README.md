@@ -92,7 +92,7 @@ instead; see the operator guide's Option B.
 Flash Raspberry Pi OS (64-bit), plug in the radars, then run the interactive setup:
 
 ```bash
-git clone https://github.com/jewbetcha/openflight.git
+git clone https://github.com/open-flight/openflight.git
 cd openflight
 ./scripts/setup/setup.sh
 ```
