@@ -239,11 +239,11 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
             if python scripts/hardware-test/test_rolling_buffer_persist.py --test; then
                 log "OPS243-A configured ✓"
             else
-                warn "Verification failed. See docs/raspberry-pi-setup.md → Radar Setup."
+                warn "Verification failed. See docs/setup/raspberry-pi.md → Troubleshooting."
             fi
         else
             warn "Radar configuration failed — is the OPS243-A plugged in?"
-            warn "You can re-run this script, or see docs/raspberry-pi-setup.md."
+            warn "You can re-run this script, or see docs/setup/raspberry-pi.md."
         fi
     else
         info "Skipped. Run later with:"
@@ -280,7 +280,7 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
         log "Service installed and enabled ✓ (starts on next boot)"
         info "Manage it with: sudo systemctl {start|stop|status} openflight"
     else
-        info "Skipped. See docs/raspberry-pi-setup.md → Auto-Start on Boot."
+        info "Skipped. See docs/setup/raspberry-pi.md → Auto-Start on Boot."
     fi
 
     # --- Desktop shortcut ---
@@ -327,7 +327,7 @@ if [ "$PLATFORM" == "pi" ] && [ "$DEPS_ONLY" == "false" ] && [ "$INTERACTIVE" ==
         info "Check sync state any time with: openflight-cloud status"
     else
         info "Skipped. Enable later by re-running this script, or see"
-        info "    docs/cloud-sync.md"
+        info "    docs/using/cloud-sync.md"
     fi
 elif [ "$PLATFORM" == "pi" ]; then
     info "Skipping hardware setup ($([ "$INTERACTIVE" == "false" ] && echo "non-interactive" || echo "--deps-only"))."
@@ -356,6 +356,6 @@ echo "    openflight-cloud link                   # pair this Pi with FlightWeb"
 echo "    openflight-cloud status                 # linked? queued? parked?"
 echo "    openflight-cloud push --dry-run         # see exactly what would upload"
 echo ""
-log "For details and troubleshooting, see docs/raspberry-pi-setup.md"
-log "For cloud sync details, see docs/cloud-sync.md"
+log "For details and troubleshooting, see docs/setup/raspberry-pi.md"
+log "For cloud sync details, see docs/using/cloud-sync.md"
 echo ""

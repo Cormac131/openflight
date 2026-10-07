@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [Electron Kiosk Shell](electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
 
 ### Fixed
+- **Stale doc paths from the docs restructure.** The hardware-help issue
+  template and the user-facing messages in `scripts/setup/setup.sh`,
+  `setup_kld7_devices.sh`, `capture_kld7_radc.py`, `replay_spin_dechirp.py`,
+  and `test_yolo_detection.py` still pointed at flat `docs/*.md` files
+  (`raspberry-pi-setup`, `sound-trigger-wiring`, `kld7-troubleshooting`,
+  `cloud-sync`, `spin-dechirp-replay`, `yolo-performance-tuning`) that
+  moved into `docs/setup/`, `docs/build/`, `docs/legacy/`, `docs/using/`,
+  and `docs/development/`.
 - **Repository links point at the `open-flight` GitHub org.** The clone
   commands in README and CONTRIBUTING, the package metadata in
   `pyproject.toml`, the docs site config, the issue templates, and
