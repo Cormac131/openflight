@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [Electron Kiosk Shell](electron-kiosk-shell.md#browser-local-state-breaking-on-first-electron-launch).
 
 ### Fixed
+- **Repository links point at the `open-flight` GitHub org.** The clone
+  commands in README and CONTRIBUTING, the package metadata in
+  `pyproject.toml`, the docs site config, the issue templates, and
+  cross-links throughout `docs/` still used the pre-move
+  `jewbetcha/openflight` URL and relied on GitHub's redirect.
 - **The "no OPS243 radar found" error no longer suggests a flag the
   hardware-test scripts do not accept.** The hint named `--radar-port`,
   which only `start-kiosk.sh` understands; `test_rolling_buffer_persist.py`
@@ -90,7 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   visible. The footer logo opens units, dark/light theme, language, simulator,
   and ball-detection status; a persistent footer power button opens the shutdown
   confirmation. Club (or training implement) selection is a Live header action.
-  See the [UI README](https://github.com/jewbetcha/openflight/blob/main/ui/README.md).
+  See the [UI README](https://github.com/open-flight/openflight/blob/main/ui/README.md).
 - **Kiosk languages.** English, Spanish, French, and Portuguese. Choice is
   stored in `localStorage` (`openflight.locale:v1`).
 - **Dark and light themes.** Toggle in the footer menu; stored as
@@ -413,6 +418,6 @@ Deferred pending a session paired with a reference instrument. See
 - Python API for integration
 - Carry distance estimation based on ball speed
 
-[Unreleased]: https://github.com/jewbetcha/openflight/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/jewbetcha/openflight/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/jewbetcha/openflight/releases/tag/v0.1.0
+[Unreleased]: https://github.com/open-flight/openflight/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/open-flight/openflight/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/open-flight/openflight/releases/tag/v0.1.0

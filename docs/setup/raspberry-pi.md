@@ -57,7 +57,7 @@ Plug in the OPS243-A (and the K-LD7 adapters if you have them), then:
 
 ```bash
 cd ~
-git clone https://github.com/jewbetcha/openflight.git
+git clone https://github.com/open-flight/openflight.git
 cd openflight
 ./scripts/setup/setup.sh
 ```
