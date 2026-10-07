@@ -173,6 +173,15 @@
         <div id="plane" class="plot" style="height:230px"></div>
       </div>
       <div class="card">
+        <div class="card-h"><h3>Down the line</h3><span class="hint">from behind the radar · follows the frame slider and ▶ play</span>
+          <div class="tabs" id="tabsDtl">
+            <button data-t="raw" class="on">Raw (as measured)</button>
+            <button data-t="fitted">Fitted</button>
+          </div>
+        </div>
+        <div id="pdtl" class="plot" style="height:460px"></div>
+      </div>
+      <div class="card">
         <div class="card-h"><h3>Frame inspector</h3>
           <div class="frame-bar" style="flex:1;max-width:640px">
             <button id="prev">◀</button><button id="play">▶ play</button><button id="next">▶</button>
@@ -220,6 +229,7 @@ let files = [], current = null, upload = null, D = null, ctx = null, frame = 0, 
 let filesRoot = "", keepSettings = false;
 let view3d = "mti", viewMap = "mti_db";
 let trajShow = "both";  // the trajectory view: raw angle points, the reconstruction, or both
+let dtlShow = "raw";  // the down-the-line view: each point's measured angles, or the reconstruction
 const base = {};  // per-plot shapes without the frame cursor
 
 const PLOT_CFG = { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d"] };
@@ -558,6 +568,64 @@ function renderTraj(el) {
   }), PLOT_CFG);
 }
 
+// ---------- down the line ----------
+// The golf frame seen from behind the radar, played back to the current frame: each whole
+// track is a faint ghost (it also pins the axes, so playback doesn't rescale), the trail runs
+// up to the cursor and the object in the cursor's frame is the big marker.
+const dtlPos = (p) => (dtlShow === "fitted" && p.filtered_position ? p.filtered_position : p.position);
+function renderDtl() {
+  const el = $("#pdtl"); const F = fw(); const traces = [];
+  const xyz = (list) => ({ x: list.map((p) => dtlPos(p)[0]), y: list.map((p) => dtlPos(p)[1]), z: list.map((p) => dtlPos(p)[2]) });
+  const tee = binM(D.tee_bin);
+  traces.push({ type: "scatter3d", mode: "lines", name: "target line", x: [0, tee * 2], y: [0, 0], z: [0, 0],
+    line: { color: C.muted, width: 2, dash: "dash" }, hoverinfo: "skip" });
+  traces.push({ type: "scatter3d", mode: "markers+text", name: "radar", x: [0], y: [0], z: [0], text: ["radar"], textposition: "top center",
+    marker: { size: 5, color: "#ffffff", symbol: "diamond" }, hoverinfo: "name", showlegend: false });
+  traces.push({ type: "scatter3d", mode: "markers+text", name: "tee", x: [tee], y: [0], z: [0], text: ["tee"], textposition: "top center",
+    marker: { size: 4, color: C.freeze }, hoverinfo: "name", showlegend: false });
+  const tracks = (F ? [[F.points, "club", C.club], [F.ball_points, "ball", C.ball]] : [])
+    .map(([list, name, color]) => [(list || []).filter((p) => dtlPos(p)), name, color]);
+  const all = tracks.flatMap(([placed]) => placed.map(dtlPos));
+  const ext = (i, f, init) => all.reduce((m, q) => f(m, q[i]), init);
+  // Fixed ranges with a floor on each span: one track with no azimuth (y = 0) must not
+  // collapse the scene, and the scene must not rescale as playback reveals points.
+  const xr = [0, Math.max(tee * 1.5, ext(0, Math.max, 0) + 0.3)];
+  const yh = Math.max(0.6, ext(1, (m, v) => Math.max(m, Math.abs(v)), 0) + 0.15);
+  const zr = [Math.min(0, ext(2, Math.min, 0) - 0.05), Math.max(1.0, ext(2, Math.max, 0) + 0.2)];
+  const span = Math.max(xr[1] - xr[0], 2 * yh, zr[1] - zr[0]);
+  let placedAny = false;
+  tracks.forEach(([placed, name, color]) => {
+    if (!placed.length) return;
+    placedAny = true;
+    traces.push(Object.assign({ type: "scatter3d", mode: "lines", name: `${name} (whole)`, opacity: 0.18,
+      line: { color, width: 2 }, hoverinfo: "skip", showlegend: false }, xyz(placed)));
+    const seen = placed.filter((p) => p.frame <= frame);
+    if (!seen.length) return;
+    traces.push(Object.assign({ type: "scatter3d", mode: "lines+markers", name, line: { color, width: 5 },
+      marker: { size: 3, color: seen.map((p) => (p.angles_valid ? color : C.muted)) },
+      text: seen.map((p) => `frame ${p.frame} · ${(p.timestamp_us / 1000).toFixed(1)} ms · v ${p.doppler_mps.toFixed(1)} m/s`),
+      hovertemplate: `${name}<br>%{text}<br>x %{x:.3f} y %{y:.3f} z %{z:.3f} m<extra></extra>` }, xyz(seen)));
+    const now = seen[seen.length - 1];
+    if (now.frame === frame) traces.push(Object.assign({ type: "scatter3d", mode: "markers", name: `${name} now`,
+      marker: { size: 11, color, line: { color: "#ffffff", width: 2 } }, hoverinfo: "skip", showlegend: false }, xyz([now])));
+  });
+  const note = (text, y) => ({ text, showarrow: false, x: 0.01, y, xref: "paper", yref: "paper", xanchor: "left", font: { color: C.muted } });
+  const annotations = [note(`frame ${frame} · ${fmt(T(frame))} ms`, 0.98)];
+  if (!placedAny) annotations.push(Object.assign(note("no track points to place", 0.5), { x: 0.5, xanchor: "center" }));
+  Plotly.react(el, traces, layout({
+    margin: { l: 0, r: 0, t: 0, b: 0 }, legend: { orientation: "h", y: 0 }, annotations, uirevision: "dtl",
+    scene: {
+      xaxis: axis("x downrange (m)", { backgroundcolor: C.bg, range: xr }),
+      // Reversed so +y (right) is on the right when looking downrange from behind.
+      yaxis: axis("y right (m)", { backgroundcolor: C.bg, range: [yh, -yh] }),
+      zaxis: axis("z up (m)", { backgroundcolor: C.bg, range: zr }),
+      aspectmode: "manual",
+      aspectratio: { x: (xr[1] - xr[0]) / span * 2, y: (2 * yh) / span * 2, z: (zr[1] - zr[0]) / span * 2 },
+      camera: { eye: { x: -2.3, y: 0, z: 0.55 }, center: { x: 0, y: 0, z: -0.1 }, up: { x: 0, y: 0, z: 1 }, projection: { type: "perspective" } },
+    },
+  }), PLOT_CFG);
+}
+
 // ---------- annotate ----------
 const ann = { on: false, obj: "ball", labels: null, dirty: false };
 const annPoints = () => ann.labels[ann.obj].points;
@@ -793,7 +861,7 @@ function setFrame(f) {
     const i = p3.data.findIndex((d) => d.name === "frame");
     if (i >= 0) Plotly.restyle(p3, { y: [[t, t]] }, [i]);
   }
-  renderProfile(); renderRangeDoppler(); renderDetails();
+  renderProfile(); renderRangeDoppler(); renderDetails(); renderDtl();
 }
 
 function renderProfile() {
@@ -883,6 +951,10 @@ document.querySelectorAll("#tabs3d button").forEach((b) => (b.onclick = () => {
 document.querySelectorAll("#tabsTraj button").forEach((b) => (b.onclick = () => {
   document.querySelectorAll("#tabsTraj button").forEach((x) => x.classList.toggle("on", x === b));
   trajShow = b.dataset.t; render3d();
+}));
+document.querySelectorAll("#tabsDtl button").forEach((b) => (b.onclick = () => {
+  document.querySelectorAll("#tabsDtl button").forEach((x) => x.classList.toggle("on", x === b));
+  dtlShow = b.dataset.t; renderDtl();
 }));
 document.querySelectorAll("#tabsMap button").forEach((b) => (b.onclick = () => {
   document.querySelectorAll("#tabsMap button").forEach((x) => x.classList.toggle("on", x === b));

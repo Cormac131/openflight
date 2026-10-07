@@ -975,3 +975,30 @@ def test_the_launch_chip_says_why_the_angles_are_missing():
     page = _page()
     assert "F.launch.angle_why" in page and "F.launch.angles_accepted" in page
     assert "angles: " in page
+
+
+def _dtl_body(page: str) -> str:
+    return page[page.index("// ---------- down the line") : page.index("// ---------- annotate")]
+
+
+def test_the_down_the_line_view_plays_back_with_the_frame_cursor():
+    page = _page()
+    assert 'id="pdtl"' in page and 'id="tabsDtl"' in page
+    assert 'let dtlShow = "raw"' in page
+    set_frame = page[page.index("function setFrame(") : page.index("function renderProfile(")]
+    assert "renderDtl()" in set_frame, "the view follows the slider and play"
+    body = _dtl_body(page)
+    assert "p.frame <= frame" in body, "the trail stops at the current frame"
+    assert 'uirevision: "dtl"' in body, "playback keeps the user's camera"
+
+
+def test_the_down_the_line_view_looks_downrange_from_behind_the_radar():
+    body = _dtl_body(_page())
+    assert "eye: { x: -" in body
+    assert "range: [yh, -yh]" in body, "+y (right) is drawn on the right from behind"
+
+
+def test_the_down_the_line_view_skips_unplaced_points_and_falls_back_to_raw():
+    body = _dtl_body(_page())
+    assert 'dtlShow === "fitted" && p.filtered_position ? p.filtered_position : p.position' in body
+    assert ".filter((p) => dtlPos(p))" in body
