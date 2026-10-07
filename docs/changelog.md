@@ -38,6 +38,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **IWR6843 enclosure depth is 30 mm, not 0.30 m.** `ARRAY_DEPTH_M` is added to a tape reading from the enclosure front. 0.30 m put the tee about six bins too far: a 1.7 m setting watched 2.0 m. The stock self-trigger bin is now 32 (was 38).
 
 ### Added
+- **IWR6843 speed cross-check on every shot.** `shot.iwr6843_ops_check` saves
+  the board's ball and club speeds beside the OPS ones in the `shot_detected`
+  entry, as the same record as the `iwr_ops_comparison` log entry. Each speed
+  gets an `agree`, `disagree` or `unchecked` verdict.
+  - **Tolerance.** It scales with the board's confidence: the base percent
+    divided by the confidence, up to a cap (ball 3% to 9%, club 5% to 15%).
+    These are placeholders, to be retuned from `ops_validation.py`.
+  - **Unchecked.** Below confidence 0.3, with an invalid or missing result,
+    or with either speed missing, the verdict is `unchecked`.
+  - **Saved only.** A disagreement never changes the OPS numbers.
+- **Board club speed fills an OPS gap.** When the OPS finds no club peak, the
+  board's usable club speed is used, and smash follows from it. The new
+  `club_speed_source` (`ops` / `iwr6843`) says where a club speed came from;
+  an OPS club speed is never replaced.
 - **IWR6843 trajectory reconstruction.** The ball's direction is now fitted
   on the board at RESULT from the departing track, anchored at the tee, and
   reported with a reason; an uncertainty gate withholds HLA/VLA when the
