@@ -159,9 +159,11 @@ void l3_trig_observe(l3_trig_t *trig, uint32_t frame, uint32_t teeBin, uint32_t 
         count = L3_TRIG_MAX_BINS;
     }
     trig->frames++;
-    /* Adaptive floor, owned by the observation layer: the median of the
-     * region is noise even while the club occupies a few bins of it. */
-    l3_obs_floor_update(&trig->floor, trig->cfg.stat, obs, count, L3_TRIG_FLOOR_SHIFT);
+    /* Adaptive floor, owned by the observation layer: a low quantile of the
+     * region is noise even while the club and the golfer occupy most of it. */
+    l3_obs_floor_step(&trig->floor,
+                      l3_obs_quantile(trig->cfg.stat, obs, count, L3_TRIG_FLOOR_QUANTILE),
+                      L3_TRIG_FLOOR_SHIFT);
     l3_trig_trace(trig, frame, teeBin, firstBin, obs, count);
 }
 

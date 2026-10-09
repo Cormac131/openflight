@@ -38,48 +38,77 @@ float l3_obs_parabolic_offset(float left, float centre, float right)
     return offset;
 }
 
-float l3_obs_median(uint32_t stat, const l3_bin_obs_t *obs, uint32_t count)
+/* Static: the caller's task stack is small and only one task scores frames.
+ * Not reentrant. */
+static float gObsSorted[L3_OBS_MAX_BINS];
+
+/* The statistic over count bins into gObsSorted, ascending; returns the count
+ * kept. Insertion sort: the region is a dozen or so bins, so this is cheaper
+ * than anything cleverer. */
+static uint32_t l3_obs_sort(uint32_t stat, const l3_bin_obs_t *obs, uint32_t count)
 {
-    /* Static: the caller's task stack is small and only one task scores
-     * frames. Not reentrant. Insertion sort: the region is a dozen or so
-     * bins, so this is cheaper than anything cleverer. */
-    static float sorted[L3_OBS_MAX_BINS];
     uint32_t i;
 
-    if (count == 0U) {
-        return 0.0F;
-    }
     if (count > L3_OBS_MAX_BINS) {
         count = L3_OBS_MAX_BINS;
     }
     for (i = 0U; i < count; i++) {
         float value = l3_obs_stat(stat, &obs[i]);
         uint32_t j = i;
-        while (j > 0U && sorted[j - 1U] > value) {
-            sorted[j] = sorted[j - 1U];
+        while (j > 0U && gObsSorted[j - 1U] > value) {
+            gObsSorted[j] = gObsSorted[j - 1U];
             j--;
         }
-        sorted[j] = value;
+        gObsSorted[j] = value;
     }
+    return count;
+}
+
+float l3_obs_median(uint32_t stat, const l3_bin_obs_t *obs, uint32_t count)
+{
+    if (count == 0U) {
+        return 0.0F;
+    }
+    count = l3_obs_sort(stat, obs, count);
     if ((count & 1U) != 0U) {
-        return sorted[count / 2U];
+        return gObsSorted[count / 2U];
     }
-    return 0.5F * (sorted[count / 2U - 1U] + sorted[count / 2U]);
+    return 0.5F * (gObsSorted[count / 2U - 1U] + gObsSorted[count / 2U]);
+}
+
+float l3_obs_quantile(uint32_t stat, const l3_bin_obs_t *obs, uint32_t count, float fraction)
+{
+    uint32_t rank;
+
+    if (count == 0U) {
+        return 0.0F;
+    }
+    count = l3_obs_sort(stat, obs, count);
+    if (!(fraction > 0.0F)) {  /* also NaN */
+        fraction = 0.0F;
+    } else if (fraction > 1.0F) {
+        fraction = 1.0F;
+    }
+    rank = (uint32_t)(fraction * (float)(count - 1U) + 0.5F);
+    return gObsSorted[rank];
+}
+
+void l3_obs_floor_step(float *floor, float sample, uint32_t shift)
+{
+    if (*floor <= 0.0F) {
+        *floor = sample;
+    } else {
+        *floor += (sample - *floor) / (float)(1U << shift);
+    }
+    if (*floor < L3_OBS_FLOOR_MIN) {
+        *floor = L3_OBS_FLOOR_MIN;
+    }
 }
 
 void l3_obs_floor_update(float *floor, uint32_t stat, const l3_bin_obs_t *obs,
                          uint32_t count, uint32_t shift)
 {
-    float median = l3_obs_median(stat, obs, count);
-
-    if (*floor <= 0.0F) {
-        *floor = median;
-    } else {
-        *floor += (median - *floor) / (float)(1U << shift);
-    }
-    if (*floor < L3_OBS_FLOOR_MIN) {
-        *floor = L3_OBS_FLOOR_MIN;
-    }
+    l3_obs_floor_step(floor, l3_obs_median(stat, obs, count), shift);
 }
 
 float l3_obs_velocity(float r1Re, float r1Im, float loopPeriodS)

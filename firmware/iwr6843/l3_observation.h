@@ -97,9 +97,14 @@ float l3_obs_stat(uint32_t stat, const l3_bin_obs_t *obs);
 float l3_obs_parabolic_offset(float left, float centre, float right);
 /* Median of the statistic over count bins (count <= L3_OBS_MAX_BINS). */
 float l3_obs_median(uint32_t stat, const l3_bin_obs_t *obs, uint32_t count);
-/* Adaptive floor: seed from the first median, then floor += (median - floor)
- * / 2^shift, never under L3_OBS_FLOOR_MIN. The median of a region is noise
- * even while a club occupies a few bins of it. */
+/* The statistic's value `fraction` (0..1) of the way up its sorted values
+ * over count bins, nearest rank: 0 the smallest, 1 the largest. */
+float l3_obs_quantile(uint32_t stat, const l3_bin_obs_t *obs, uint32_t count, float fraction);
+/* Adaptive floor step: seed from the first sample, then floor += (sample -
+ * floor) / 2^shift, never under L3_OBS_FLOOR_MIN. */
+void l3_obs_floor_step(float *floor, float sample, uint32_t shift);
+/* l3_obs_floor_step with the region's median. The median of a region is
+ * noise even while a club occupies a few bins of it. */
 void l3_obs_floor_update(float *floor, uint32_t stat, const l3_bin_obs_t *obs,
                          uint32_t count, uint32_t shift);
 /* Lag-1 phase to apparent radial velocity (m/s); 0 without a loop period. */

@@ -38,8 +38,15 @@
 #define L3_TRIG_TRACE_DEPTH       64U
 #endif
 #define L3_TRIG_TRACE_RATIO       2.0F
-/* Noise-floor smoothing: floor += (median - floor) / 2^shift each frame. */
+/* Noise-floor smoothing: floor += (sample - floor) / 2^shift each frame. */
 #define L3_TRIG_FLOOR_SHIFT       3U
+/* The floor's sample is this quantile of the region, not its median: on the
+ * 2026-09-19 captures the golfer's body filled most of the bins short of the
+ * ball, the median read the body (~80 dB) and the club's approach (71-78 dB,
+ * air ~65 dB) was never extracted. */
+#ifndef L3_TRIG_FLOOR_QUANTILE
+#define L3_TRIG_FLOOR_QUANTILE    0.25F
+#endif
 
 /* Defaults for the optional triggerCfg parameters. */
 #define L3_TRIG_DEFAULT_APPROACH_BINS 12U   /* ~0.56 m short of the tee */
