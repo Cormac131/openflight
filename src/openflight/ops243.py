@@ -264,9 +264,9 @@ class OPS243Radar:
             if not ports:
                 raise ConnectionError(
                     "No OPS243 radar found on USB. If it is wired to the Pi GPIO "
-                    "UART (J3 pins 6/7), pass the port explicitly — e.g. "
-                    "--radar-port /dev/ttyAMA0 — since a raw UART has no USB "
-                    "descriptors to auto-detect."
+                    "UART (J3 pins 6/7), pass the serial port explicitly via "
+                    "your command's port option (e.g. /dev/ttyAMA0) — a raw "
+                    "UART has no USB descriptors to auto-detect."
                 )
             self.port = ports[0]
 

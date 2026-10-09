@@ -25,6 +25,13 @@ from flask_cors import CORS
 from flask_socketio import SocketIO
 
 from .ballistics import resolve_launch, simulate
+from .ble.protocol import (
+    build_power_status_event,
+    build_profiles_event,
+    build_session_cleared_event,
+    build_shot_deleted_event,
+    build_shot_processing_event,
+)
 from .clubs import ClubType
 from .clubs.physics import (
     SHOT_SIMULATION_DEFAULTS,
@@ -167,6 +174,15 @@ sim_connectors: List = []
 # ShotNumber field and every shot comes back 501 "Bad format".
 sim_player_state = SimPlayerState(shot_counter=initial_shot_counter())
 
+# Optional Bluetooth Low Energy publisher for the iOS app.
+ble_publisher = None
+
+# One Pi-owned selection is shared by the browser UI and every phone/tablet.
+# Monitors start on driver, and successful changes update this value atomically
+# before being fanned out over all enabled transports.
+active_club = ClubType.DRIVER
+club_selection_lock = threading.Lock()
+
 shutdown_lock = threading.Lock()
 shutdown_cleanup_started = False
 # One active hardware job plus two waiting shots is enough for normal golf
@@ -201,6 +217,10 @@ class _ShotEnrichmentResult:
     iwr6843_ms: float | None = None
     kld7_ms: float | None = None
     camera_capture_ms: float | None = None
+    camera_analysis_ms: float | None = None
+    # Why optional hardware was skipped for this shot (``deadline``,
+    # ``capacity``, ``queue_full``, ``worker_unavailable``); None when it ran.
+    skipped_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -343,7 +363,9 @@ def _shot_finalization_worker_loop() -> None:
                     shot=registered.shot,
                     emit_event=registered.emit_event,
                     initial_ui_ms=registered.initial_ui_ms,
-                    enrichment=_ShotEnrichmentResult(),
+                    enrichment=_ShotEnrichmentResult(
+                        skipped_reason="deadline" if deadline_expired else "capacity"
+                    ),
                 )
             elif pending.shot is not registered.shot:
                 for shot_field in fields(Shot):
@@ -431,6 +453,8 @@ def _cleanup_hardware_for_shutdown() -> bool:
         _run_shutdown_step("battery monitor stop", power_monitor.stop)
     if camera_capture_runtime:
         _run_shutdown_step("camera capture stop", camera_capture_runtime.stop)
+    if ble_publisher:
+        _run_shutdown_step("BLE publisher stop", ble_publisher.stop)
 
     _run_shutdown_step("launch monitor stop", stop_monitor)
 
@@ -968,6 +992,82 @@ def display():
     return send_from_directory(_react_app_dir(), "index.html")
 
 
+def apply_club_selection(payload):
+    """Set the club used to tag and process future shots."""
+    global active_club  # pylint: disable=global-statement
+    if not isinstance(payload, dict):
+        return {"error": "Club selection must be a JSON object"}, 400
+    club_name = payload.get("club")
+    try:
+        club = ClubType(club_name)
+    except (TypeError, ValueError):
+        valid = ", ".join(item.value for item in ClubType if item is not ClubType.UNKNOWN)
+        return {"error": f"Unknown club; choose one of: {valid}"}, 400
+    if club is ClubType.UNKNOWN:
+        return {"error": "Unknown is not a selectable club"}, 400
+
+    with club_selection_lock:
+        # Without a monitor (startup, or tests) the selection is still recorded
+        # and broadcast, as the Socket.IO handler always did; the monitor picks
+        # up later changes once it exists.
+        if monitor is not None:
+            try:
+                monitor.set_club(club)
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.exception("[SERVER] Failed to set club to %s", club.value)
+                return {"error": "OpenFlight could not change the club"}, 500
+        active_club = club
+        response = {"status": "applied", "club": club.value}
+        _broadcast_club_selection(club)
+    logger.info("[SERVER] Club changed to %s", club.value)
+    return response, 200
+
+
+def current_club_selection(_payload=None):
+    """Return the Pi-owned club without changing monitor state."""
+    with club_selection_lock:
+        club_value = active_club.value
+    return {"status": "current", "club": club_value}, 200
+
+
+def _broadcast_club_selection(club: ClubType) -> None:
+    """Fan one authoritative club update out over every active transport."""
+    club_data = {"club": club.value}
+    try:
+        socketio.emit("club_changed", club_data)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[SERVER] Failed to broadcast club over WebSocket", exc_info=True)
+    if ble_publisher is not None:
+        try:
+            ble_publisher.publish_club(club.value)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[SERVER] Failed to broadcast club over BLE", exc_info=True)
+
+
+def dispatch_phone_control_command(command_type, payload):
+    """Route a BLE phone command through the Socket.IO operations.
+
+    Each command calls the same function its Socket.IO counterpart does, so the
+    kiosk and every other client see identical broadcasts.
+
+    BLE has no authentication, so it is read-and-select only: profile add,
+    rename and remove, ``clear_session`` and ``delete_shot`` stay on
+    Socket.IO. Phones still hear about those changes through the
+    ``profiles``, ``session_cleared`` and ``shot_deleted`` events.
+    """
+    handlers = {
+        "set_club": apply_club_selection,
+        "get_club": current_club_selection,
+        "get_profiles": request_profiles,
+        "set_active_profile": apply_active_profile,
+        "get_power_status": current_power_status,
+    }
+    handler = handlers.get(command_type)
+    if handler is None:
+        return {"error": f"Unsupported phone command: {command_type}"}, 400
+    return handler(payload)
+
+
 @app.route("/<path:path>")
 def static_files(path):
     """Serve static files."""
@@ -1002,6 +1102,7 @@ def init_camera_capture(
     lateral_offset_m: float,
     horizontal_offset_deg: float,
     use_gpio_trigger: bool,
+    shot_analysis_enabled: bool = False,
 ) -> bool:
     """Initialize passive high-speed camera capture for offline alignment."""
     global camera_capture_runtime, camera_capture_config  # pylint: disable=global-statement
@@ -1047,6 +1148,7 @@ def init_camera_capture(
         camera_ball_flight_reference_tracker = ReferenceBallTracker()
         camera_capture_config = {
             "enabled": True,
+            "shot_analysis_enabled": shot_analysis_enabled,
             "output_dir": str(Path(output_dir).expanduser()),
             "gpio_pin_bcm": gpio_pin,
             "trigger_source": "gpio" if use_gpio_trigger else "iwr6843_fanout",
@@ -2013,8 +2115,20 @@ def _emit_sim_snapshot() -> None:
 
 
 def _on_power_status(status: PowerStatus) -> None:
-    """Publish one battery reading to connected UI clients."""
-    socketio.emit("power_status", status.to_dict())
+    """Publish one battery reading to connected UI clients and phones."""
+    payload = status.to_dict()
+    socketio.emit("power_status", payload)
+    _publish_phone_event(build_power_status_event(payload))
+
+
+def current_power_status(_payload=None):
+    """Return the latest battery reading, as ``power_status`` carries it."""
+    if power_monitor is None:
+        return {"error": "Battery monitoring is not enabled"}, 409
+    status = power_monitor.status
+    if status is None:
+        return {"error": "No battery reading yet"}, 409
+    return status.to_dict(), 200
 
 
 def _log_power_status(status: PowerStatus) -> None:
@@ -2044,6 +2158,7 @@ def handle_connect():
     _emit_profiles()
     if power_monitor and power_monitor.status:
         socketio.emit("power_status", power_monitor.status.to_dict())
+    socketio.emit("club_changed", {"club": active_club.value})
     if monitor:
         socketio.emit("session_state", _session_state_payload(include_runtime_meta=True))
         socketio.emit("trigger_status", _get_trigger_status())
@@ -2070,14 +2185,7 @@ def handle_get_iwr_setup():
 @socketio.on("set_club")
 def handle_set_club(data):
     """Handle club selection change."""
-    club_name = data.get("club", "driver")
-    try:
-        club = ClubType(club_name)
-        if monitor:
-            monitor.set_club(club)
-        socketio.emit("club_changed", {"club": club.value})
-    except ValueError:
-        pass
+    apply_club_selection(data)
 
 
 def _payload_dict(data) -> dict:
@@ -2091,20 +2199,41 @@ def _emit_profiles() -> None:
     Sent after every mutation, including rejected ones, so a stale client
     self-heals on the next round trip instead of needing an error event.
     """
-    socketio.emit("profiles", get_profile_store().snapshot())
+    snapshot = get_profile_store().snapshot()
+    socketio.emit("profiles", snapshot)
+    _publish_phone_event(build_profiles_event(snapshot))
+
+
+def request_profiles(_payload=None):
+    """Broadcast the roster, as Socket.IO ``get_profiles`` does."""
+    _emit_profiles()
+    return {"status": "sent"}, 200
+
+
+def apply_active_profile(payload=None):
+    """Change which profile shots are attributed to, then broadcast the roster.
+
+    The roster goes out even when the id is unknown, so every client converges
+    on the unchanged selection.
+    """
+    store = get_profile_store()
+    applied = store.set_active(_payload_dict(payload).get("profile_id"))
+    _emit_profiles()
+    if not applied:
+        return {"error": "Unknown profile"}, 404
+    return {"status": "applied", "active_profile_id": store.get_active().id}, 200
 
 
 @socketio.on("get_profiles")
 def handle_get_profiles():
     """Send the roster to a client that asked for it."""
-    _emit_profiles()
+    request_profiles()
 
 
 @socketio.on("set_active_profile")
 def handle_set_active_profile(data=None):
     """Change which profile shots are attributed to."""
-    get_profile_store().set_active(_payload_dict(data).get("profile_id"))
-    _emit_profiles()
+    apply_active_profile(data)
 
 
 @socketio.on("add_profile")
@@ -2196,16 +2325,23 @@ def _clear_profile_rows(profile_id: str) -> None:
         monitor.clear_session()
 
 
-@socketio.on("clear_session")
-def handle_clear_session(data=None):
-    """Clear recorded rows for one profile only."""
-    raw_id = _payload_dict(data).get("profile_id")
+def apply_clear_session(payload=None):
+    """Clear recorded rows for one profile (default: the active one)."""
+    raw_id = _payload_dict(payload).get("profile_id")
     profile_id = str(raw_id).strip() if raw_id else get_profile_store().get_active().id
     _clear_profile_rows(profile_id)
     socketio.emit(
         "session_cleared",
         {"profile_id": profile_id, "shots": _session_shots()},
     )
+    _publish_phone_event(build_session_cleared_event(profile_id))
+    return {"status": "cleared", "profile_id": profile_id}, 200
+
+
+@socketio.on("clear_session")
+def handle_clear_session(data=None):
+    """Clear recorded rows for one profile only."""
+    apply_clear_session(data)
 
 
 @socketio.on("upload_cloud")
@@ -2221,17 +2357,24 @@ def handle_get_session():
         socketio.emit("session_state", _session_state_payload())
 
 
-@socketio.on("delete_shot")
-def handle_delete_shot(data):
-    """Delete one recorded shot or swing-speed rep from the current session."""
-    timestamp = data.get("timestamp") if isinstance(data, dict) else None
+def apply_delete_shot(payload):
+    """Delete one recorded shot or swing-speed rep, keyed by its timestamp."""
+    timestamp = payload.get("timestamp") if isinstance(payload, dict) else None
     deleted = _delete_session_row(timestamp)
 
     if not deleted:
         socketio.emit("delete_shot_error", {"error": "Shot not found"})
-        return
+        return {"error": "Shot not found"}, 404
 
     socketio.emit("session_state", _session_state_payload())
+    _publish_phone_event(build_shot_deleted_event(timestamp))
+    return {"status": "deleted", "timestamp": timestamp}, 200
+
+
+@socketio.on("delete_shot")
+def handle_delete_shot(data):
+    """Delete one recorded shot or swing-speed rep from the current session."""
+    apply_delete_shot(data)
 
 
 @socketio.on("simulate_shot")
@@ -2379,6 +2522,10 @@ def handle_shutdown():
 def on_shot_processing(state: str) -> None:
     """Forward the rolling-buffer processing lifecycle to the UI."""
     socketio.emit("shot_processing", {"state": state})
+    try:
+        _publish_phone_event(build_shot_processing_event(state))
+    except ValueError:
+        logger.warning("[SERVER] Ignoring invalid shot processing state %r", state)
 
 
 def _forward_shot_to_simulators(shot: Shot) -> None:
@@ -2455,8 +2602,9 @@ def _sim_on_status(target: str, event) -> None:
         logger.info("[sim] %s connected (%s:%s)", target, event.host, event.port)
     elif state == "reconnecting":
         logger.info(
-            "[sim] %s reconnecting — attempt %s, retry in %.0fs",
+            "[sim] %s reconnecting — %s; attempt %s, retry in %.0fs",
             target,
+            event.message or "disconnect reason unavailable",
             event.attempt,
             event.next_retry_in_s,
         )
@@ -2491,6 +2639,7 @@ def _sim_on_status(target: str, event) -> None:
 
 def _sim_on_inbound(target: str, event) -> None:
     """Apply an inbound simulator event (player/club update, error, ack)."""
+    global active_club  # pylint: disable=global-statement
     if isinstance(event, PlayerUpdate):
         sim_player_state.apply(event)
         club_value = sim_player_state.club.value
@@ -2504,12 +2653,17 @@ def _sim_on_inbound(target: str, event) -> None:
             sl.log_sim_player(target=target, handed=sim_player_state.handed, club=club_value)
         # The monitor owns current-club state for shot tagging and carry/spin
         # model selection; keep it in sync with the sim's canonical club.
-        if monitor is not None:
-            try:
-                monitor.set_club(sim_player_state.club)
-            except Exception:  # pylint: disable=broad-except
-                logger.exception("[sim] monitor.set_club failed")
-        socketio.emit("club_changed", {"club": club_value})
+        with club_selection_lock:
+            monitor_updated = True
+            if monitor is not None:
+                try:
+                    monitor.set_club(sim_player_state.club)
+                except Exception:  # pylint: disable=broad-except
+                    logger.exception("[sim] monitor.set_club failed")
+                    monitor_updated = False
+            if monitor_updated:
+                active_club = sim_player_state.club
+                _broadcast_club_selection(active_club)
     elif isinstance(event, SimError):
         logger.warning("[sim] ← %s error: %s", target, event.message)
         socketio.emit("sim_status", {"target": target, "state": "error", "message": event.message})
@@ -3166,6 +3320,8 @@ def _fuse_camera_club_delivery(
     shot: Shot,
     camera_capture,
     camera_archive=_CAMERA_ARCHIVE_UNSET,
+    *,
+    reference_ball=None,
 ) -> None:
     """Impact-centered camera + IWR depth club delivery, experimentally."""
     try:
@@ -3225,6 +3381,7 @@ def _fuse_camera_club_delivery(
                                 ),
                                 ops_club_speed_mph=shot.club_speed_mph,
                                 ball_tracker=camera_reference_ball_tracker,
+                                reference_ball=reference_ball,
                             )
             else:
                 fused = ChainedDelivery(status="rejected_missing_camera_frames")
@@ -3264,6 +3421,8 @@ def _fuse_camera_ball_flight(
     shot: Shot,
     camera_capture,
     camera_archive=_CAMERA_ARCHIVE_UNSET,
+    *,
+    reference_ball=None,
 ) -> None:
     """Select experimental camera horizontal while preserving IWR fallback."""
     try:
@@ -3271,6 +3430,7 @@ def _fuse_camera_ball_flight(
             CameraBallEstimate,
             CameraBallGeometry,
             estimate_camera_ball_flight,
+            estimate_horizontal_launch,
             select_camera_assisted_horizontal,
         )
 
@@ -3295,35 +3455,48 @@ def _fuse_camera_ball_flight(
                         estimate = CameraBallEstimate(status="rejected_missing_camera_frames")
                     else:
                         trigger_ns = int(archive["trigger_host_timestamp_ns"])
-                        estimate = estimate_camera_ball_flight(
-                            archive["frames"],
-                            archive["host_timestamp_ns"],
-                            trigger_ns=trigger_ns,
-                            range_evidence=shot.iwr6843_ball_range_evidence,
-                            geometry=CameraBallGeometry(
-                                camera_height_m=float(camera_capture_config["mount_height_m"]),
-                                radar_height_m=calibration.radar_height_m,
-                                tee_range_m=float(calibration.tee_range_m),
-                                ball_height_m=calibration.tee_ball_height_m,
-                                camera_lateral_offset_m=float(
-                                    camera_capture_config.get("lateral_offset_m", 0.0)
-                                ),
-                                horizontal_offset_deg=float(
-                                    camera_capture_config.get("horizontal_offset_deg", 0.0)
-                                ),
-                                roll_correction_deg=float(
-                                    camera_capture_config.get("roll_correction_deg", 0.0)
-                                ),
-                                horizontal_pixel_sign=(
-                                    -1.0 if camera_capture_config.get("mirror_horizontal") else 1.0
-                                ),
-                                image_width_px=int(camera_capture_config["width"]),
-                                image_height_px=int(camera_capture_config["height"]),
+                        geometry = CameraBallGeometry(
+                            camera_height_m=float(camera_capture_config["mount_height_m"]),
+                            radar_height_m=calibration.radar_height_m,
+                            tee_range_m=float(calibration.tee_range_m),
+                            ball_height_m=calibration.tee_ball_height_m,
+                            camera_lateral_offset_m=float(
+                                camera_capture_config.get("lateral_offset_m", 0.0)
                             ),
-                            ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
-                            iwr_vertical_deg=shot.launch_angle_vertical,
-                            ball_tracker=camera_ball_flight_reference_tracker,
+                            horizontal_offset_deg=float(
+                                camera_capture_config.get("horizontal_offset_deg", 0.0)
+                            ),
+                            roll_correction_deg=float(
+                                camera_capture_config.get("roll_correction_deg", 0.0)
+                            ),
+                            horizontal_pixel_sign=(
+                                -1.0 if camera_capture_config.get("mirror_horizontal") else 1.0
+                            ),
+                            image_width_px=int(camera_capture_config["width"]),
+                            image_height_px=int(camera_capture_config["height"]),
                         )
+                        if camera_capture_config.get("shot_analysis_enabled", False):
+                            estimate = estimate_horizontal_launch(
+                                archive["frames"],
+                                archive["host_timestamp_ns"],
+                                trigger_ns=trigger_ns,
+                                geometry=geometry,
+                                ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
+                                vertical_deg=shot.launch_angle_vertical,
+                                vertical_source=shot.launch_angle_vertical_source,
+                                reference_ball=reference_ball,
+                            )
+                        else:
+                            estimate = estimate_camera_ball_flight(
+                                archive["frames"],
+                                archive["host_timestamp_ns"],
+                                trigger_ns=trigger_ns,
+                                range_evidence=shot.iwr6843_ball_range_evidence,
+                                geometry=geometry,
+                                ops_ball_speed_mph=shot.ball_speed_raw_mph or shot.ball_speed_mph,
+                                iwr_vertical_deg=shot.launch_angle_vertical,
+                                ball_tracker=camera_ball_flight_reference_tracker,
+                            )
 
         decision = select_camera_assisted_horizontal(
             estimate,
@@ -3348,7 +3521,7 @@ def _fuse_camera_ball_flight(
             shot.launch_angle_horizontal_source = decision.source
         logger.info(
             "[SERVER] Camera-assisted horizontal: selected=%s camera=%s IWR=%s "
-            "delta=%s status=%s support=%d/27",
+            "delta=%s status=%s support=%d",
             decision.selected_deg,
             decision.camera_horizontal_deg,
             decision.iwr_horizontal_deg,
@@ -3367,8 +3540,9 @@ def _fuse_camera_ball_flight(
         )
 
 
-def _fuse_camera_measurements(shot: Shot, camera_capture) -> None:
+def _fuse_camera_measurements(shot: Shot, camera_capture) -> float:
     """Decode one camera clip and share it across all live estimators."""
+    analysis_started = time.perf_counter()
     captured_auto_exposure = (
         camera_capture.metadata.get("auto_exposure")
         if camera_capture is not None
@@ -3397,10 +3571,41 @@ def _fuse_camera_measurements(shot: Shot, camera_capture) -> None:
         logger.warning(
             "[SERVER] Camera analysis withheld for lighting quality; using radar fallback"
         )
-        return
+        return (time.perf_counter() - analysis_started) * 1000.0
     camera_archive = _load_camera_capture_archive(camera_capture)
-    _fuse_camera_ball_flight(shot, camera_capture, camera_archive)
-    _fuse_camera_club_delivery(shot, camera_capture, camera_archive)
+    reference_ball = None
+    if camera_capture_config.get("shot_analysis_enabled", False) and camera_archive is not None:
+        try:
+            import numpy as np  # noqa: PLC0415  pylint: disable=import-outside-toplevel
+
+            from openflight.camera.club_motion import (  # noqa: PLC0415
+                detect_impact_reference_ball,
+            )
+
+            timestamps = np.asarray(camera_archive["host_timestamp_ns"], dtype=np.int64)
+            trigger_ns = int(camera_archive["trigger_host_timestamp_ns"])
+            trigger_frame = int(np.argmin(np.abs(timestamps - trigger_ns)))
+            reference_ball = detect_impact_reference_ball(
+                camera_archive["frames"],
+                trigger_frame_index=trigger_frame,
+            )
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.warning("[SERVER] Impact-aware reference ball unavailable: %s", error)
+    _fuse_camera_ball_flight(
+        shot,
+        camera_capture,
+        camera_archive,
+        reference_ball=reference_ball,
+    )
+    _fuse_camera_club_delivery(
+        shot,
+        camera_capture,
+        camera_archive,
+        reference_ball=reference_ball,
+    )
+    elapsed_ms = (time.perf_counter() - analysis_started) * 1000.0
+    logger.info("[SERVER] Camera analysis: %.1fms", elapsed_ms)
+    return elapsed_ms
 
 
 def _attach_camera_replay(shot: Shot, camera_capture) -> None:
@@ -3436,6 +3641,7 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     iwr6843_ms = _process_iwr6843_angle(shot)
     kld7_ms = None
     camera_capture_ms = None
+    camera_analysis_ms = None
     # Process K-LD7 angle radars (vertical = launch angle, horizontal = club path)
     try:
         if shot.mode != "mock":
@@ -3698,12 +3904,13 @@ def _enrich_shot_from_optional_hardware(shot: Shot) -> _ShotEnrichmentResult:
     _attach_camera_replay(shot, camera_capture)
 
     if shot.mode != "mock":
-        _fuse_camera_measurements(shot, camera_capture)
+        camera_analysis_ms = _fuse_camera_measurements(shot, camera_capture)
 
     return _ShotEnrichmentResult(
         iwr6843_ms=iwr6843_ms,
         kld7_ms=kld7_ms,
         camera_capture_ms=camera_capture_ms,
+        camera_analysis_ms=camera_analysis_ms,
     )
 
 
@@ -3719,6 +3926,7 @@ def _finalize_shot_detected(
     iwr6843_ms = enrichment.iwr6843_ms
     kld7_ms = enrichment.kld7_ms
     camera_capture_ms = enrichment.camera_capture_ms
+    camera_analysis_ms = enrichment.camera_analysis_ms
 
     # Always emit user-facing launch angles. Radar/camera measurements win;
     # rejected or missing axes fall back to conservative estimates.
@@ -3826,6 +4034,9 @@ def _finalize_shot_detected(
                     "camera_capture": (
                         round(camera_capture_ms, 1) if camera_capture_ms is not None else None
                     ),
+                    "camera_analysis": (
+                        round(camera_analysis_ms, 1) if camera_analysis_ms is not None else None
+                    ),
                 },
             )
     except Exception as e:
@@ -3838,6 +4049,7 @@ def _finalize_shot_detected(
         )
 
     # Emit shot with launch angle data included
+    shot_data = None
     try:
         shot_data = shot_to_dict(shot)
         stats = monitor.get_session_stats() if monitor else {}
@@ -3861,7 +4073,16 @@ def _finalize_shot_detected(
             context={"stage": f"emit_{emit_event}", "ball_speed_mph": shot.ball_speed_mph},
             exc=e,
         )
-        return
+
+    # Phones get the final shot, marked final and carrying the event_id of any
+    # provisional shot published for it. Phone transports are independent of
+    # WebSocket delivery; a stalled client cannot affect recording or the UI.
+    if shot_data is not None:
+        _publish_phone_shot(
+            shot_data,
+            final=True,
+            enrichment=_final_phone_enrichment(emit_event, enrichment),
+        )
 
     # Forward to simulator connectors (optional)
     _forward_shot_to_simulators(shot)
@@ -3973,6 +4194,51 @@ def _queue_ordered_shot_finalization(
         _shot_finalization_condition.notify_all()
 
 
+def _final_phone_enrichment(
+    emit_event: str,
+    enrichment: _ShotEnrichmentResult,
+) -> dict | None:
+    """Describe optional-hardware progress on a final phone shot.
+
+    Only shots that were published provisionally (``emit_event`` is
+    ``shot_update``) carry an ``enrichment`` object; the rest never waited.
+    """
+    if emit_event != "shot_update":
+        return None
+    if enrichment.skipped_reason:
+        return {"status": "skipped", "reason": enrichment.skipped_reason}
+    return {"status": "complete"}
+
+
+def _publish_phone_shot(
+    shot_data: dict,
+    *,
+    final: bool,
+    enrichment: dict | None,
+) -> None:
+    """Hand one shot to the phone transports; never raises."""
+    transports = []
+    if ble_publisher is not None:
+        transports.append(("BLE", ble_publisher))
+    for name, transport in transports:
+        try:
+            transport.publish_shot(shot_data, final=final, enrichment=enrichment)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[SERVER] Failed to queue shot over %s", name, exc_info=True)
+
+
+def _publish_phone_event(event: dict) -> None:
+    """Hand one event to the phone transports; never raises."""
+    transports = []
+    if ble_publisher is not None:
+        transports.append(("BLE", ble_publisher))
+    for name, transport in transports:
+        try:
+            transport.publish_event(event)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[SERVER] Failed to queue event over %s", name, exc_info=True)
+
+
 def _emit_initial_ops_shot(shot: Shot) -> bool:
     """Publish immediately available OPS metrics before slow enrichments."""
     try:
@@ -3991,6 +4257,9 @@ def _emit_initial_ops_shot(shot: Shot) -> bool:
                 "pending": pending,
             },
         )
+        # Phones get the same provisional shot. The final one follows
+        # from _finalize_shot_detected with the same event_id.
+        _publish_phone_shot(shot_data, final=False, enrichment={"status": "pending"})
         return True
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.error("[SERVER] Failed to emit initial OPS shot: %s", error, exc_info=True)
@@ -4157,6 +4426,7 @@ def _handle_shot_detected(shot: Shot) -> None:
             shot,
             emit_event=final_event,
             initial_ui_ms=initial_ui_ms,
+            enrichment=_ShotEnrichmentResult(skipped_reason="queue_full"),
         )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning(
@@ -4170,6 +4440,7 @@ def _handle_shot_detected(shot: Shot) -> None:
             shot,
             emit_event=final_event,
             initial_ui_ms=initial_ui_ms,
+            enrichment=_ShotEnrichmentResult(skipped_reason="worker_unavailable"),
         )
 
 
@@ -4964,6 +5235,14 @@ def main():
         action="store_true",
         help="Enable high-speed camera rolling-buffer capture and replay",
     )
+    parser.add_argument(
+        "--camera-shot-analysis",
+        action="store_true",
+        help=(
+            "Enable camera capture with experimental impact-aware ball and club analysis "
+            "instead of the legacy camera analyzer"
+        ),
+    )
     parser.add_argument("--camera-capture-width", type=int, default=640)
     parser.add_argument("--camera-capture-height", type=int, default=400)
     parser.add_argument("--camera-capture-fps", type=float, default=300.0)
@@ -5058,6 +5337,11 @@ def main():
         "Off by default.",
     )
     _add_ballistics_arguments(parser)
+    parser.add_argument(
+        "--ble",
+        action="store_true",
+        help="Advertise completed shots over Bluetooth LE for the OpenFlight iOS app",
+    )
     parser.add_argument(
         "--trigger",
         choices=["sound", "speed"],
@@ -5430,6 +5714,8 @@ def main():
     )
     args = parser.parse_args()
     _apply_kld7_device_defaults(args)
+    if args.camera_shot_analysis:
+        args.camera_capture = True
 
     # Mount tilt cannot be defaulted safely (a wrong value silently biases the
     # launch angle), so require it whenever the K-LD7 radars are enabled.
@@ -5451,6 +5737,8 @@ def main():
         parser.error("--inclinometer requires --iwr6843")
     if args.iwr6843 and args.mock:
         parser.error("--iwr6843 cannot be used with --mock")
+    if args.camera_shot_analysis and args.mock:
+        parser.error("--camera-shot-analysis cannot be used with --mock")
     if args.camera_capture and args.mock:
         parser.error("--camera-capture cannot be used with --mock")
     # "not >=" also refuses NaN.
@@ -5636,11 +5924,14 @@ def main():
             mirror_horizontal=args.camera_capture_mirror_horizontal,
             scaler_crop=camera_capture_scaler_crop,
             use_gpio_trigger=not args.iwr6843,
+            shot_analysis_enabled=args.camera_shot_analysis,
         ):
             print("Camera capture unavailable - running without high-speed camera capture")
             startup_status.skip("camera", "High-speed camera unavailable; continuing")
         else:
             print(f"Camera capture enabled: {camera_capture_output_dir}")
+            if args.camera_shot_analysis:
+                print("Impact-aware camera shot analysis: ENABLED")
             startup_status.ready("camera", "High-speed camera connected")
 
     if args.iwr6843:
@@ -5801,6 +6092,16 @@ def main():
         start_power_monitor(battery_provider)
         print(f"Battery monitoring: ENABLED ({battery_provider})")
         startup_status.ready("battery", "Power monitor ready")
+
+    global ble_publisher  # pylint: disable=global-statement
+    if args.ble:
+        from .ble import BleShotPublisher  # pylint: disable=import-outside-toplevel
+
+        ble_publisher = BleShotPublisher(
+            command_handler=dispatch_phone_control_command,
+        )
+        ble_publisher.start()
+        print("Bluetooth LE enabled (advertising as OpenFlight)")
 
     # Simulator connectors (off unless --sim). Started after the monitor exists
     # so inbound club updates can call monitor.set_club().

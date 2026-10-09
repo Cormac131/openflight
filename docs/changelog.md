@@ -551,6 +551,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replayed an older host detector on the computed tee bin while the board ran
   the firmware detector on the bin ball-detect observed. It now runs the same
   C detector, armed as the board was, over the frozen ring.
+- **Stale doc paths from the docs restructure.** The hardware-help issue
+  template and the user-facing messages in `scripts/setup/setup.sh`,
+  `setup_kld7_devices.sh`, `capture_kld7_radc.py`, `replay_spin_dechirp.py`,
+  and `test_yolo_detection.py` still pointed at flat `docs/*.md` files
+  (`raspberry-pi-setup`, `sound-trigger-wiring`, `kld7-troubleshooting`,
+  `cloud-sync`, `spin-dechirp-replay`, `yolo-performance-tuning`) that
+  moved into `docs/setup/`, `docs/build/`, `docs/legacy/`, `docs/using/`,
+  and `docs/development/`.
+- **Repository links point at the `open-flight` GitHub org.** The clone
+  commands in README and CONTRIBUTING, the package metadata in
+  `pyproject.toml`, the docs site config, the issue templates, and
+  cross-links throughout `docs/` still used the pre-move
+  `jewbetcha/openflight` URL and relied on GitHub's redirect.
+- **The "no OPS243 radar found" error no longer suggests a flag the
+  hardware-test scripts do not accept.** The hint named `--radar-port`,
+  which only `start-kiosk.sh` understands; `test_rolling_buffer_persist.py`
+  and friends take `--port`. The message is now tool-neutral. (#270)
 - **A crash-looping boot service no longer kills the desktop kiosk.** Every
   launcher exit ran a `pkill` that matched the Electron binary path, so an
   `openflight.service` that failed at startup (for example because systemd's
@@ -582,6 +599,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full horizontal speed, overstating attack angle on any shot with club path.
 
 ### Added
+- **Bluetooth LE connection for phone apps.** `--ble` (with the optional `ble`
+  extra, `bless==0.3.0` on Linux) advertises one GATT service with a shot and a
+  control characteristic, speaking schema version 2; without BlueZ or the
+  extra, `--ble` logs that Bluetooth is unavailable and the server carries on.
+  Shots carry `event_id`, `shot_number`, profile, `carry_range`,
+  `spin_source`, `launch_angle_confidence`, `final` and `enrichment`;
+  hardware-enriched shots arrive twice, provisional then final, with one
+  `event_id`. Phones also get `club_changed`, `profiles`, `power_status`,
+  `shot_processing`, `session_cleared` and `shot_deleted` events, and can
+  `get_club`, `set_club`, `get_profiles`, `set_active_profile` and
+  `get_power_status` through the same server functions Socket.IO uses. BLE is
+  unauthenticated, so it is read-and-select only: clearing sessions, deleting
+  shots and editing profiles stay on the kiosk. Every club change (kiosk,
+  phone, simulator) is broadcast over Socket.IO and BLE. `hello` reports the
+  schema, features and characteristics. New
+  `scripts/setup/configure_bluetooth.sh` (offered by `setup.sh`) sets
+  `Client = false` under `[GATT]` in `/etc/bluetooth/main.conf`, which stops
+  iPhones being asked to pair every 30 s. `start-kiosk.sh --ble` syncs the
+  `ble` extra and `setup.sh` installs it. Tests run the real publisher against
+  a loopback fake of Bless/BlueZ, and `tests/fixtures/ble_goldens/` holds
+  framed hex goldens for client test suites
+  (`scripts/ble/generate_goldens.py`). See
+  [phone app connection](ios-ble.md). Behaviour changes: Socket.IO `set_club`
+  now ignores `unknown` and a missing club (it used to fall back to driver),
+  and a failed Socket.IO shot emit no longer stops BLE and simulator delivery.
 - **Electron kiosk shell.** `scripts/start-kiosk.sh` now opens the UI in a pinned
   Electron window (`electron@44`) instead of whichever system browser happens to
   be installed. Chromium remains a fallback if Electron is not installed (including
@@ -615,7 +657,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   visible. The footer logo opens units, dark/light theme, language, simulator,
   and ball-detection status; a persistent footer power button opens the shutdown
   confirmation. Club (or training implement) selection is a Live header action.
-  See the [UI README](https://github.com/jewbetcha/openflight/blob/main/ui/README.md).
+  See the [UI README](https://github.com/open-flight/openflight/blob/main/ui/README.md).
 - **Kiosk languages.** English, Spanish, French, and Portuguese. Choice is
   stored in `localStorage` (`openflight.locale:v1`).
 - **Dark and light themes.** Toggle in the footer menu; stored as
@@ -938,6 +980,6 @@ Deferred pending a session paired with a reference instrument. See
 - Python API for integration
 - Carry distance estimation based on ball speed
 
-[Unreleased]: https://github.com/jewbetcha/openflight/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/jewbetcha/openflight/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/jewbetcha/openflight/releases/tag/v0.1.0
+[Unreleased]: https://github.com/open-flight/openflight/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/open-flight/openflight/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/open-flight/openflight/releases/tag/v0.1.0
