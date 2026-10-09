@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **IWR6843 azimuth no longer flips at the ball's elevation.** The firmware
+  read azimuth as TX1 against the plain average of the vertical TX pair, which
+  sits 2 wavelengths apart: that average cancels at 14.5 degrees of elevation
+  and flips sign beyond, throwing the azimuth to the other side of boresight.
+  The radar's pitch puts a club or ball on the ground at 2 m right there. The
+  pair is now brought to its midpoint with the measured elevation first. On
+  the labelled swings, club points near impact within 0.3 m of the club's
+  centre line went from 7% to 70%. Needs a firmware rebuild; the azimuth zero
+  offset is still uncalibrated.
+
 ### Changed
 - **The kiosk's IWR6843 launch angles come from the firmware.** Vertical and
   horizontal launch, club path and attack angle are the board's result packet,

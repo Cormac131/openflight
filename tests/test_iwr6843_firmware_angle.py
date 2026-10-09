@@ -53,10 +53,12 @@ def synth_snapshot(
     """Channels of a point target as the firmware would hand them over.
 
     The elevation array in physical order is steer(el) over 8 elements; the
-    logical [txA.rx, txB.rx] vector is that reversed. TX1 carries the azimuth
-    phase -pi sin(az) (doa.tx2_axis_angle_to_phase_rad, negated for the
-    board's TX1-left geometry). Each TX block trails the previous by tau, so
-    the TDM phase 4 pi v tau / lambda multiplies by the TX index.
+    logical [txA.rx, txB.rx] vector is that reversed. TX1 sits on the
+    vertical pair's midpoint, half way between txA.rx and txB.rx (physical
+    element 5 - rx), and carries the azimuth phase -pi sin(az)
+    (doa.tx2_axis_angle_to_phase_rad, negated for the board's TX1-left
+    geometry). Each TX block trails the previous by tau, so the TDM phase
+    4 pi v tau / lambda multiplies by the TX index.
     """
     rng = np.random.default_rng(seed)
     physical = amp * steer(el_deg * DEG, 2 * NRX)
@@ -75,7 +77,8 @@ def synth_snapshot(
             elif tx == tx_b:
                 value = logical[NRX + rx]
             else:
-                value = 0.5 * (logical[rx] + logical[NRX + rx]) * np.exp(1j * az_phase)
+                midpoint = (2 * NRX - 1 - rx) - NRX / 2  # physical, between txA.rx and txB.rx
+                value = amp * np.exp(1j * (math.pi * math.sin(el_deg * DEG) * midpoint + az_phase))
             value = value * np.exp(1j * chirp_phase * tx)
             value = value + noise * (rng.normal() + 1j * rng.normal())
             snap.channel[tx * NRX + rx] = fw.Cpx(float(value.real), float(value.imag))
@@ -113,6 +116,22 @@ def test_reflector_positions_are_recovered_with_the_documented_signs(lib, az_deg
     assert obs.azimuthRad / DEG == pytest.approx(az_deg, abs=0.2)
     assert obs.elevationRad / DEG == pytest.approx(el_deg, abs=0.2)
     assert obs.azimuthCoherence == pytest.approx(1.0, abs=1e-3)
+
+
+@pytest.mark.parametrize("az_deg", [0.0, 10.0, -10.0, 25.0])
+@pytest.mark.parametrize("el_deg", [-14.5, -20.0, 20.0, -30.0, 35.0])
+def test_azimuth_holds_where_the_vertical_pair_would_cancel(lib, az_deg, el_deg):
+    """TX0 and TX2 are 2 wavelengths apart: their plain average shrinks by
+    cos(2 pi sin(el)), vanishes at |el| = 14.5 degrees and flips sign beyond,
+    which threw the azimuth to the other side of boresight. The radar is
+    pitched up 10 degrees and sits low, so a club or ball on the ground at
+    2 m is near -14 degrees: the club's azimuth near impact on the labelled
+    swings read anywhere from -79 to +78 degrees. The pair is brought to its
+    midpoint with the measured elevation before it is averaged."""
+    ok, obs = estimate(lib, synth_snapshot(lib, az_deg=az_deg, el_deg=el_deg))
+    assert ok == 1 and obs.azimuthValid
+    assert obs.azimuthRad / DEG == pytest.approx(az_deg, abs=0.5)
+    assert obs.azimuthCoherence == pytest.approx(1.0, abs=1e-2)
 
 
 def test_a_target_to_the_right_reads_a_negative_tx1_phase_and_positive_azimuth(lib):

@@ -217,6 +217,7 @@ int32_t l3_angle_estimate(const l3_radar_cal_t *cal, const l3_angle_snapshot_t *
     uint32_t tx;
     uint32_t rx;
     uint32_t m;
+    float arrayElevation;
 
     memset(out, 0, sizeof(*out));
     if (ntx < 2U || ntx > L3_ANGLE_MAX_TX || nrx < 2U || nrx > L3_ANGLE_MAX_RX) {
@@ -249,11 +250,20 @@ int32_t l3_angle_estimate(const l3_radar_cal_t *cal, const l3_angle_snapshot_t *
         }
         elements[m] = value;
     }
-    out->elevationRad = l3_angle_bartlett(elements, n, &out->elevationPeakRatio) -
-                        cal->elevationOffsetRad;
+    arrayElevation = l3_angle_bartlett(elements, n, &out->elevationPeakRatio);
+    out->elevationRad = arrayElevation - cal->elevationOffsetRad;
     out->elevationValid = 1U;
-    /* Azimuth: TX1 against the centre of the vertical pair, coherent over RX. */
+    /* Azimuth: TX1 against the centre of the vertical pair, coherent over RX.
+     * txA.rx and txB.rx are nrx elements apart, TX1 half way between: each
+     * is brought to that midpoint with the measured elevation before the two
+     * are averaged. Their plain average shrinks by cos(nrx/2 * pi sin(el)),
+     * which vanishes at |el| = 14.5 degrees and flips sign beyond, throwing
+     * the azimuth to the other side of boresight; the radar's pitch puts a
+     * club or ball on the ground at 2 m near -14 degrees. */
     if (ntx == 3U) {
+        float halfSpan = 0.5F * (float)nrx * L3_ANGLE_PI * sinf(arrayElevation);
+        l3_cpx_t toMidA = l3_angle_phasor(-halfSpan);
+        l3_cpx_t toMidB = l3_angle_phasor(halfSpan);
         l3_cpx_t mean;
         float phase;
         float sine;
@@ -263,10 +273,12 @@ int32_t l3_angle_estimate(const l3_radar_cal_t *cal, const l3_angle_snapshot_t *
         for (rx = 0U; rx < nrx; rx++) {
             l3_cpx_t reference;
             l3_cpx_t product;
+            l3_cpx_t a = l3_angle_mul(corrected[txA * nrx + rx], toMidA);
+            l3_cpx_t b = l3_angle_mul(corrected[txB * nrx + rx], toMidB);
             float magnitude;
 
-            reference.re = 0.5F * (corrected[txA * nrx + rx].re + corrected[txB * nrx + rx].re);
-            reference.im = 0.5F * (corrected[txA * nrx + rx].im + corrected[txB * nrx + rx].im);
+            reference.re = 0.5F * (a.re + b.re);
+            reference.im = 0.5F * (a.im + b.im);
             product = l3_angle_mul(l3_angle_conj(reference), corrected[1U * nrx + rx]);
             magnitude = l3_angle_abs(product);
             if (magnitude > 0.0F) {
