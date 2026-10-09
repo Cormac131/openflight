@@ -3,7 +3,9 @@ replay are told (late-flight spec, 2026-09-29)."""
 
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -30,6 +32,29 @@ def test_from_calibration_maps_tilt_bias_and_elements():
     assert board.range_bias_m == pytest.approx(cal.range_bias_m)
     rebuilt = np.exp(-1j * np.array(board.elem_phase_rad)) / np.array(board.elem_gain)
     assert rebuilt == pytest.approx(cal.elem_correction, rel=1e-9)
+
+
+def test_a_measured_azimuth_offset_reaches_the_board(tmp_path):
+    """The bench azimuth check (azimuth_check.py) writes azimuth_offset_rad
+    into the calibration JSON; without it the offset stays 0."""
+    raw = json.loads(Path(REFERENCE).read_text(encoding="utf-8"))
+    raw["azimuth_offset_rad"] = 0.42
+    path = tmp_path / "cal.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    board = BoardCalibration.from_file(path)
+    assert board.az_offset_rad == pytest.approx(0.42)
+    assert board.cal_args[3] == pytest.approx(0.42)
+    assert board.replay_overrides()["azimuth_offset_rad"] == pytest.approx(0.42)
+
+
+@pytest.mark.parametrize("value", [float("nan"), 4.0, -4.0, "0.1"])
+def test_an_azimuth_offset_that_is_not_a_phase_is_refused(tmp_path, value):
+    raw = json.loads(Path(REFERENCE).read_text(encoding="utf-8"))
+    raw["azimuth_offset_rad"] = value
+    path = tmp_path / "cal.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="azimuth_offset_rad"):
+        BoardCalibration.from_file(path)
 
 
 def test_file_values_round_trip_to_the_json():

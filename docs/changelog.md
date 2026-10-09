@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **IWR6843 azimuth bench check** (`scripts/iwr6843/azimuth_check.py`,
+  [procedure](iwr6843/azimuth-check.md)). A reflector at taped lateral
+  offsets and heights, with an empty capture subtracted, is run through the
+  firmware's own angle code. The check reports the lateral and height error
+  at each position, fits the azimuth zero offset (never calibrated before)
+  and reports how a swept reflector's track points land. `--write-cal` saves
+  the offset as `azimuth_offset_rad` in the calibration JSON, which the
+  board now receives in `trackCfg cal`.
+
 ### Fixed
 - **IWR6843 azimuth no longer flips at the ball's elevation.** The firmware
   read azimuth as TX1 against the plain average of the vertical TX pair, which

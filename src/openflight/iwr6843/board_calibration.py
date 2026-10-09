@@ -19,6 +19,24 @@ logger = logging.getLogger(__name__)
 N_ELEMENTS = 8
 
 
+def _azimuth_offset_rad(meta: dict) -> float:
+    """The calibration JSON's ``azimuth_offset_rad``, 0 when it has none.
+
+    The firmware subtracts it from TX1's phase against the vertical pair
+    (l3_angle.c), so it is a phase: finite and within +/-pi. The bench
+    azimuth check (scripts/iwr6843/azimuth_check.py) measures it.
+    """
+    value = meta.get("azimuth_offset_rad", 0.0)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or abs(value) > math.pi
+    ):
+        raise ValueError(f"azimuth_offset_rad must be a phase within +/-pi, got {value!r}")
+    return float(value)
+
+
 @dataclass(frozen=True)
 class BoardCalibration:  # pylint: disable=too-many-instance-attributes
     """``trackCfg cal`` values in the firmware's units, and the 8 elements."""
@@ -52,9 +70,7 @@ class BoardCalibration:  # pylint: disable=too-many-instance-attributes
             pitch_deg=math.degrees(cal.tilt_rad),
             yaw_deg=0.0,
             roll_deg=0.0,
-            # The firmware applies azimuthOffsetRad once, as a phase, in l3_angle.c; it stays 0
-            # until a board calibration measures it.
-            az_offset_rad=0.0,
+            az_offset_rad=_azimuth_offset_rad(cal.meta),
             el_offset_deg=0.0,
             range_bias_m=float(cal.range_bias_m),
             elem_phase_rad=tuple(float(-np.angle(c)) for c in correction),

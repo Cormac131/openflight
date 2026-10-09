@@ -39,6 +39,7 @@ nav = [
       "iwr6843/verify.md",
       "iwr6843/club-path.md",
       "iwr6843/calibration.md",
+      "iwr6843/azimuth-check.md",
       "iwr6843/troubleshooting.md",
       "iwr6843/low-confidence-recovery.md",
     ] },
