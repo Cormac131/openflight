@@ -1109,6 +1109,17 @@ def _iwr6843_tee_range_m(args) -> float:
     return antenna_range_m(args.iwr6843_tee_m)
 
 
+def _iwr6843_calibration_path(args) -> str:
+    """--iwr6843-cal when given, else this board's measured calibration
+    (~/.config/openflight/iwr6843_calibration.json) when it exists, else the
+    shipped reference."""
+    from .iwr6843.calibration import (  # pylint: disable=import-outside-toplevel
+        resolve_calibration_path,
+    )
+
+    return str(resolve_calibration_path(args.iwr6843_cal))
+
+
 def _self_trigger_config(args) -> "SelfTriggerConfig | None":
     """--iwr6843-self-trigger turns the firmware trigger on; the rest only tunes it.
 
@@ -1267,6 +1278,7 @@ def init_iwr6843(
             )
 
         calibration = Calibration.load(calibration_path)
+        logger.info("[IWR6843] Calibration: %s", calibration_path)
         calibration.tee_range_m = tee_range_m
         calibration.tee_ball_height_m = ball_height_m
         if tilt_deg is not None:
@@ -5153,8 +5165,10 @@ def main():
     )
     parser.add_argument(
         "--iwr6843-cal",
-        default="config/iwr6843_calibration_reference.json",
-        help="TI complex array/range calibration JSON",
+        default=None,
+        help="TI complex array/range calibration JSON (default: this board's, "
+        "~/.config/openflight/iwr6843_calibration.json, when it has been measured; "
+        "else config/iwr6843_calibration_reference.json)",
     )
     parser.add_argument(
         "--iwr6843-self-trigger",
@@ -5647,7 +5661,7 @@ def main():
         if init_iwr6843(
             port=args.iwr6843_port,
             config_path=args.iwr6843_config,
-            calibration_path=args.iwr6843_cal,
+            calibration_path=_iwr6843_calibration_path(args),
             output_dir=iwr_output_dir,
             trigger_pin=args.iwr6843_trigger_pin,
             tee_range_m=args.iwr6843_tee_m,

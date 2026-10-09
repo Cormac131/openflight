@@ -13,9 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   offsets and heights, with an empty capture subtracted, is run through the
   firmware's own angle code. The check reports the lateral and height error
   at each position, fits the azimuth zero offset (never calibrated before)
-  and reports how a swept reflector's track points land. `--write-cal` saves
-  the offset as `azimuth_offset_rad` in the calibration JSON, which the
-  board now receives in `trackCfg cal`.
+  and reports how a swept reflector's track points land. `--save` stores the
+  offset as `azimuth_offset_rad` in this board's calibration,
+  `~/.config/openflight/iwr6843_calibration.json`, which the board now
+  receives in `trackCfg cal`.
+- **This board's IWR6843 calibration loads by default.** The kiosk,
+  `calibrate.py` and the azimuth check use
+  `~/.config/openflight/iwr6843_calibration.json` when it exists, else the
+  shipped reference; `--iwr6843-cal` / `--cal` still override. The kiosk logs
+  which one it loaded.
 
 ### Fixed
 - **IWR6843 azimuth no longer flips at the ball's elevation.** The firmware

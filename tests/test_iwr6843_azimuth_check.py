@@ -18,7 +18,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from openflight.iwr6843 import azimuth_check as ac, firmware_host as fw, firmware_replay as fr
+from openflight.iwr6843 import (
+    azimuth_check as ac,
+    calibration as calibration_module,
+    firmware_host as fw,
+    firmware_replay as fr,
+)
 from openflight.iwr6843.board_calibration import BoardCalibration
 from openflight.iwr6843.music import steer
 from openflight.iwr6843.tracking import CHIRP_PERIOD_S, RANGE_SPAN_M
@@ -384,7 +389,8 @@ def test_without_a_fit_the_report_says_what_it_used(lib):
 
 @pytest.fixture
 def cli(monkeypatch, tmp_path):
-    """scripts/iwr6843/azimuth_check.py with run_check stubbed to a given report."""
+    """scripts/iwr6843/azimuth_check.py with run_check stubbed to a given
+    report and this machine's board calibration file under tmp_path."""
     import importlib.util  # pylint: disable=import-outside-toplevel
 
     spec = importlib.util.spec_from_file_location(
@@ -392,25 +398,60 @@ def cli(monkeypatch, tmp_path):
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    board_path = tmp_path / "config" / "iwr6843_calibration.json"
+    monkeypatch.setattr(module, "BOARD_CAL_PATH", board_path)
+    monkeypatch.setattr(calibration_module, "BOARD_CAL_PATH", board_path)
     manifest = write_manifest(
         tmp_path, [{"file": "a.l3dump", "kind": "static", "lateral_m": 0, "height_m": 0.1}]
     )
+    seen = {}
 
     def run(fit, *extra):
         report = ac.Report(statics=(), fit=fit, applied_offset_rad=0.0, moving=())
-        monkeypatch.setattr(module, "run_check", lambda manifest, board: report)
-        return module.main([str(manifest), "--cal", REFERENCE, *extra])
 
-    return run, tmp_path
+        def fake_run_check(manifest, board):
+            seen["board"] = board
+            return report
+
+        monkeypatch.setattr(module, "run_check", fake_run_check)
+        return module.main([str(manifest), *extra])
+
+    return run, tmp_path, board_path, seen
 
 
-def test_the_cli_writes_the_report_and_a_calibration_with_the_offset(cli):
-    run, tmp_path = cli
-    out = tmp_path / "cal.json"
-    fit = ac.OffsetFit(offset_rad=-0.3, median_abs_error_m=0.02, slope=0.98, captures=5)
-    assert run(fit, "--write-cal", str(out)) == 0
+GOOD_FIT = ac.OffsetFit(offset_rad=-0.3, median_abs_error_m=0.02, slope=0.98, captures=5)
+
+
+def test_save_makes_it_this_boards_calibration(cli):
+    run, tmp_path, board_path, _ = cli
+    assert run(GOOD_FIT, "--save") == 0
     assert json.loads((tmp_path / "azimuth_check_report.json").read_text())["fit"]["slope_ok"]
+    assert BoardCalibration.from_file(board_path).az_offset_rad == pytest.approx(-0.3)
+
+
+def test_save_keeps_the_previous_board_calibration(cli):
+    run, _tmp_path, board_path, _ = cli
+    assert run(GOOD_FIT, "--save") == 0
+    first = board_path.read_text(encoding="utf-8")
+    second = ac.OffsetFit(offset_rad=0.2, median_abs_error_m=0.02, slope=1.0, captures=5)
+    assert run(second, "--save") == 0
+    assert board_path.with_name(board_path.name + ".prev").read_text(encoding="utf-8") == first
+    assert BoardCalibration.from_file(board_path).az_offset_rad == pytest.approx(0.2)
+
+
+def test_save_to_a_path_writes_there_instead(cli):
+    run, tmp_path, board_path, _ = cli
+    out = tmp_path / "elsewhere.json"
+    assert run(GOOD_FIT, "--save", str(out)) == 0
     assert BoardCalibration.from_file(out).az_offset_rad == pytest.approx(-0.3)
+    assert not board_path.exists()
+
+
+def test_the_check_starts_from_this_boards_calibration_once_saved(cli):
+    run, _tmp_path, _board_path, seen = cli
+    assert run(GOOD_FIT, "--save") == 0
+    assert run(None) == 0
+    assert seen["board"].az_offset_rad == pytest.approx(-0.3)
 
 
 @pytest.mark.parametrize(
@@ -418,8 +459,7 @@ def test_the_cli_writes_the_report_and_a_calibration_with_the_offset(cli):
     [None, ac.OffsetFit(offset_rad=0.1, median_abs_error_m=0.3, slope=-0.9, captures=5)],
     ids=["no fit", "wrong sign"],
 )
-def test_the_cli_refuses_to_write_a_calibration_it_cannot_trust(cli, fit):
-    run, tmp_path = cli
-    out = tmp_path / "cal.json"
-    assert run(fit, "--write-cal", str(out)) == 1
-    assert not out.exists()
+def test_the_cli_refuses_to_save_a_calibration_it_cannot_trust(cli, fit):
+    run, _tmp_path, board_path, _ = cli
+    assert run(fit, "--save") == 1
+    assert not board_path.exists()

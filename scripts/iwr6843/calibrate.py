@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from openflight.iwr6843 import Calibration
+from openflight.iwr6843.calibration import resolve_calibration_path
 from openflight.iwr6843.calibration_session import (
     CalibrationSummary,
     JsonlWriter,
@@ -54,8 +55,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--cal",
-        default="config/iwr6843_calibration_reference.json",
-        help="IWR6843 array calibration JSON",
+        default=None,
+        help="IWR6843 array calibration JSON (default: this board's, "
+        "~/.config/openflight/iwr6843_calibration.json, when measured; else the reference)",
     )
     parser.add_argument("--outdir", type=Path, default=None, help="Directory for dumps/logs")
     parser.add_argument("--tee-m", type=float, required=True, help="Radar-to-ball slant range")
@@ -149,7 +151,7 @@ def main() -> int:
     club = parse_club(args.club)
 
     calibration = clone_calibration(
-        Calibration.load(args.cal),
+        Calibration.load(str(resolve_calibration_path(args.cal))),
         tee_range_m=args.tee_m,
         tilt_deg=args.tilt_deg,
         radar_height_m=args.radar_height_m,
@@ -166,7 +168,7 @@ def main() -> int:
             "shots_requested": args.shots,
             "club": club.value,
             "cfg": args.cfg,
-            "cal": args.cal,
+            "cal": str(resolve_calibration_path(args.cal)),
             "tee_m": args.tee_m,
             "net_m": args.net_m,
             "tilt_deg": center_tilt_deg,

@@ -16,10 +16,31 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 
+# The shipped reference: a validated starting point measured on one board.
 DEFAULT_CAL_PATH = "config/iwr6843_calibration_reference.json"
+# This machine's own board, once measured (scripts/iwr6843/azimuth_check.py
+# --save saves it here), beside the other per-machine settings.
+BOARD_CAL_PATH = Path.home() / ".config" / "openflight" / "iwr6843_calibration.json"
+
+
+def resolve_calibration_path(
+    override: str | Path | None = None, *, board_path: Path | None = None
+) -> Path:
+    """The calibration a live run uses: ``override`` when given (an explicit
+    --iwr6843-cal / --cal), else this board's measured calibration
+    (``board_path``, BOARD_CAL_PATH by default) when it exists, else the
+    shipped reference."""
+    if override is not None:
+        return Path(override)
+    board_path = BOARD_CAL_PATH if board_path is None else board_path
+    if board_path.is_file():
+        return board_path
+    return Path(DEFAULT_CAL_PATH)
+
 
 # Mount tilt used when no session log or --iwr6843-tilt-deg supplies one;
 # 0 silently zeros VLA. Round number: per-board cal can override.

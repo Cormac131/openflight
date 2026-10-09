@@ -4866,6 +4866,41 @@ class TestBallisticsConfiguration:
         assert server_module.ballistics_enabled is True
 
 
+class TestIWR6843CalibrationPath:
+    """The kiosk loads this board's measured calibration without being told;
+    --iwr6843-cal overrides it; the reference is the fallback."""
+
+    @staticmethod
+    def _args(cal=None):
+        return argparse.Namespace(iwr6843_cal=cal)
+
+    def test_the_reference_until_the_board_is_measured(self, monkeypatch, tmp_path):
+        from openflight.iwr6843 import calibration as cal_module
+
+        monkeypatch.setattr(cal_module, "BOARD_CAL_PATH", tmp_path / "missing.json")
+        assert server_module._iwr6843_calibration_path(self._args()) == cal_module.DEFAULT_CAL_PATH
+
+    def test_the_measured_board_calibration_by_default(self, monkeypatch, tmp_path):
+        from openflight.iwr6843 import calibration as cal_module
+
+        board = tmp_path / "iwr6843_calibration.json"
+        board.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(cal_module, "BOARD_CAL_PATH", board)
+        assert server_module._iwr6843_calibration_path(self._args()) == str(board)
+
+    def test_an_explicit_calibration_wins(self, monkeypatch, tmp_path):
+        from openflight.iwr6843 import calibration as cal_module
+
+        board = tmp_path / "iwr6843_calibration.json"
+        board.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(cal_module, "BOARD_CAL_PATH", board)
+        assert server_module._iwr6843_calibration_path(self._args("mine.json")) == "mine.json"
+
+    def test_main_passes_the_resolved_path_to_the_radar(self):
+        source = inspect.getsource(server_module.main)
+        assert "calibration_path=_iwr6843_calibration_path(args)" in source
+
+
 class TestIWR6843TeeBandArgument:
     """--iwr6843-tee-band-bins sets the firmware's tee band; 6 bins by default, 0 turns it off."""
 

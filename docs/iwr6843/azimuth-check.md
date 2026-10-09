@@ -108,16 +108,22 @@ How to read it:
 | Static good, moving points spread wide | The motion correction is the problem, not the antenna |
 | Height errors large | Elevation or the radar height in the calibration is off |
 
-To keep the fitted offset, write it into a copy of the calibration and
-point the kiosk at that file:
+To keep the fitted offset, save it as this board's calibration:
 
 ```bash
-uv run python scripts/iwr6843/azimuth_check.py ~/bench/az_20261009/manifest.json \
-  --write-cal config/iwr6843_calibration_board.json
+uv run python scripts/iwr6843/azimuth_check.py ~/bench/az_20261009/manifest.json --save
 ```
 
-Then start the kiosk with `--iwr6843-cal config/iwr6843_calibration_board.json`.
-The check refuses to write when no offset was fitted or the slope says the
+That writes `~/.config/openflight/iwr6843_calibration.json` (the shipped
+reference with the fitted `azimuth_offset_rad` added), keeping any earlier
+one as `iwr6843_calibration.json.prev`. The kiosk, `calibrate.py` and the
+next bench check load it on their own; there is nothing to pass.
+`--iwr6843-cal` (kiosk) and `--cal` (scripts) still override it, and without
+the file they fall back to `config/iwr6843_calibration_reference.json`. The
+kiosk logs which calibration it loaded at startup. `--save PATH` writes
+somewhere else instead.
+
+The check refuses to save when no offset was fitted or the slope says the
 scale or sign is wrong. The board receives the offset as part of
 `trackCfg cal` at every start.
 

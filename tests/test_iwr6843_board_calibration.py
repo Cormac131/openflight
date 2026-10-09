@@ -92,3 +92,36 @@ def test_a_radar_height_outside_the_tunable_bounds_is_skipped_with_a_warning(cap
     with caplog.at_level("WARNING"):
         assert board.tunable_overrides() == {}
     assert "radar height" in caplog.text
+
+
+# --- which calibration a live run uses -------------------------------------------------
+
+
+def test_the_reference_is_used_until_this_board_is_measured(tmp_path):
+    from openflight.iwr6843.calibration import DEFAULT_CAL_PATH, resolve_calibration_path
+
+    board_path = tmp_path / "iwr6843_calibration.json"
+    assert resolve_calibration_path(None, board_path=board_path) == Path(DEFAULT_CAL_PATH)
+
+
+def test_a_measured_board_calibration_is_used_without_naming_it(tmp_path):
+    from openflight.iwr6843.calibration import resolve_calibration_path
+
+    board_path = tmp_path / "iwr6843_calibration.json"
+    board_path.write_text(Path(REFERENCE).read_text(encoding="utf-8"), encoding="utf-8")
+    assert resolve_calibration_path(None, board_path=board_path) == board_path
+
+
+def test_an_explicit_calibration_overrides_the_board_file(tmp_path):
+    from openflight.iwr6843.calibration import resolve_calibration_path
+
+    board_path = tmp_path / "iwr6843_calibration.json"
+    board_path.write_text("{}", encoding="utf-8")
+    chosen = resolve_calibration_path("other.json", board_path=board_path)
+    assert chosen == Path("other.json")
+
+
+def test_the_board_file_lives_with_the_other_machine_settings():
+    from openflight.iwr6843.calibration import BOARD_CAL_PATH
+
+    assert BOARD_CAL_PATH == Path.home() / ".config" / "openflight" / "iwr6843_calibration.json"
