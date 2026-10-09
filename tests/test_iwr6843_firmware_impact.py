@@ -46,11 +46,15 @@ def club_in_estimate(time_us: float, why: str = "ok", speed_mps: float = 30.0) -
     return e
 
 
-def club_state(appended: bool, gap_m: float = 1.0, time_us: int = 0) -> fw.ImpactClub:
+def club_state(
+    appended: bool, gap_m: float = 1.0, time_us: int = 0, released: bool = False
+) -> fw.ImpactClub:
     """This frame's club track as the impact sees it: whether it took a point,
-    its newest point ``gap_m`` short of a ball at BALL_M, and that point's time."""
+    its newest point ``gap_m`` short of a ball at BALL_M, that point's time,
+    and whether the track was released (held one bin too long) this frame."""
     club = fw.ImpactClub()
     club.appended = int(appended)
+    club.released = int(released)
     club.rangeM = BALL_M - gap_m
     club.timeUs = time_us
     club.ballRangeM = BALL_M
@@ -63,8 +67,17 @@ def update(lib, impact, estimate, now_us: int, club: fw.ImpactClub | None = None
     return lib.l3_impact_update_range(ctypes.byref(impact), ref, club_ref, now_us)
 
 
-def test_the_settings_are_the_horizon_the_end_distance_and_the_end_speed():
-    assert [name for name, _type in fw.ImpactCfg._fields_] == ["horizonS", "endM", "endMinMps"]
+def test_the_settings_are_the_horizon_the_end_distance_speed_and_release():
+    assert [name for name, _type in fw.ImpactCfg._fields_] == [
+        "horizonS",
+        "endM",
+        "endMinMps",
+        "endOnRelease",
+    ]
+
+
+def test_a_release_does_not_end_the_approach_by_default(lib):
+    assert range_impact(lib).cfg.endOnRelease == 0
 
 
 def test_the_default_end_distance(lib):
@@ -190,11 +203,19 @@ def test_a_track_that_ends_near_the_ball_fires_dated_to_its_last_point(lib):
     assert impact.offsetS == pytest.approx(-0.003, abs=1e-6)
 
 
-def test_the_end_fires_when_the_track_is_released_and_its_estimate_is_gone(lib):
-    """Released, the track has no points left: no club-in estimate, still the end."""
+def test_the_end_fires_on_a_frame_the_track_coasts_without_its_estimate(lib):
+    """The frame without a point may have no club-in estimate: still the end."""
     impact = range_impact(lib)
     update(lib, impact, club_in_estimate(60_000), 24_000, club_state(True, 0.30, 24_000))
     assert update(lib, impact, None, 27_000, club_state(False)) == 1
+    assert impact.cause == CAUSE["end"]
+
+
+def test_with_end_on_release_a_released_track_ends_the_approach(lib):
+    """Released, the track has no points left: no club-in estimate, still the end."""
+    impact = range_impact(lib, endOnRelease=1)
+    update(lib, impact, club_in_estimate(60_000), 24_000, club_state(True, 0.30, 24_000))
+    assert update(lib, impact, None, 27_000, club_state(False, released=True)) == 1
     assert impact.cause == CAUSE["end"]
 
 
@@ -316,3 +337,29 @@ def test_a_slow_point_after_a_fast_one_disarms_the_end(lib):
     )
     assert impact.endArmed == 0
     assert update(lib, impact, None, 30_000, club_state(False)) == 0
+
+
+# The top of the backswing: down the line the clubhead's range rises as it
+# swings up and over, then holds a bin while it turns. The track takes a second
+# point in one bin and is released as "not the club", which fired the end. At
+# a real impact the club stalls the same way, so the release alone cannot tell
+# them apart; with the release left out, the crossing or the ball leaving fires
+# 7 of the 9 labelled swings that fired on it, 2 frames after launch.
+
+
+def test_a_released_track_does_not_end_the_approach(lib):
+    impact = range_impact(lib)
+    update(lib, impact, club_in_estimate(60_000), 24_000, club_state(True, 0.30, 24_000))
+    assert impact.endArmed == 1
+    assert update(lib, impact, None, 27_000, club_state(False, released=True)) == 0
+    assert impact.fired == 0
+
+
+def test_a_release_disarms_the_end_for_the_frames_after_it(lib):
+    """The approach the release ended cannot fire on a later empty frame."""
+    impact = range_impact(lib)
+    update(lib, impact, club_in_estimate(60_000), 24_000, club_state(True, 0.30, 24_000))
+    update(lib, impact, None, 27_000, club_state(False, released=True))
+    assert impact.endArmed == 0
+    assert update(lib, impact, None, 30_000, club_state(False)) == 0
+    assert impact.fired == 0

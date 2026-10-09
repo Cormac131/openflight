@@ -1369,6 +1369,7 @@ def replay_dump(
         )
         club_now = fw.ImpactClub()
         club_now.appended = 1 if appended else 0
+        club_now.released = 1 if track.why == fw.TRACK_WHY_NAMES.index("released") else 0
         if appended:
             club_now.rangeM = float(newest.rangeM)
             club_now.timeUs = int(newest.timestampUs)

@@ -1311,12 +1311,15 @@ def test_the_self_trigger_fires_around_impact_on_the_2026_08_24_recordings(lib):
 
 
 def test_the_self_trigger_is_the_range_only_impact_unless_the_geometry_is_armed(lib):
-    """The board freezes on the range-only impact, and the shot machine
-    records that source."""
+    """The board freezes on the range-only impact, or on the ball leaving
+    when the club's rule never fires (a release no longer ends the approach:
+    20260824_120707 fires on the ball), and the shot machine records the
+    range source for both."""
     fired = 0
     for path in _kiosk_recordings():
         result = replay_dump(path.read_bytes(), ReplayConfig(**_KIOSK_TRIGGER), lib=lib)
-        assert result.fired_frame == result.range_frame, path.name
+        rules = [f for f in (result.range_frame, result.leave_frame) if f is not None]
+        assert result.fired_frame == (min(rules) if rules else None), path.name
         if result.fired_frame is not None:
             fired += 1
             assert result.shot.impactSource == fw.SHOT_IMPACT_RANGE, path.name

@@ -4154,6 +4154,7 @@ static void l3_considerSelfTrigger(uint32_t slot)
              * merges with the ball's at impact, short of its range. */
             memset(&clubNow, 0, sizeof(clubNow));
             clubNow.ballRangeM = (float)teeBin * gClubTrack.cfg.binWidthM;
+            clubNow.released = (gClubTrack.why == L3_TRACK_WHY_RELEASED) ? 1U : 0U;
             if (appended && gClubTrack.count > 0U &&
                 l3_track_point(&gClubTrack, gClubTrack.count - 1U, &newest)) {
                 clubNow.appended = 1U;
@@ -4697,23 +4698,26 @@ static int32_t l3_cli_trackCfgElem(int32_t argc, char *argv[])
     return 0;
 }
 
-/* "trackCfg impact <horizonS> [endM [endMinMps]]": the range-only impact
- * fires when the club's crossing of the ball's range is within horizonS of
- * the frame's time, or when an approach at least endMinMps, last seen within
- * endM short of the ball, ends (endM 0 turns that off; endMinMps 0 lets any
- * usable approach arm it; left out keeps them). The geometric detector's
+/* "trackCfg impact <horizonS> [endM [endMinMps [endOnRelease]]]": the
+ * range-only impact fires when the club's crossing of the ball's range is
+ * within horizonS of the frame's time, or when an approach at least
+ * endMinMps, last seen within endM short of the ball, ends (endM 0 turns that
+ * off; endMinMps 0 lets any usable approach arm it; endOnRelease 1 lets a
+ * release end it too; left out keeps them). The geometric detector's
  * tolerance, speed, confidence and armed values went with it (2026-09-30),
  * so the old five-value line is refused. */
 static int32_t l3_cli_trackCfgImpact(int32_t argc, char *argv[])
 {
-    float values[3];
+    float values[4];
     uint32_t count = (argc >= 4) ? (uint32_t)(argc - 2) : 1U;
 
-    if (count > 3U || l3_parseFloats(argc, argv, 2, count, values) != 0 ||
+    if (count > 4U || l3_parseFloats(argc, argv, 2, count, values) != 0 ||
         values[0] <= 0.0F ||
         (count >= 2U && (values[1] < 0.0F || values[1] > L3_IMPACT_END_MAX_M)) ||
-        (count == 3U && (values[2] < 0.0F || values[2] > L3_IMPACT_END_MAX_MPS))) {
-        CLI_write("Error: trackCfg impact <horizonS> [endM 0..2 [endMinMps 0..70]]\n");
+        (count >= 3U && (values[2] < 0.0F || values[2] > L3_IMPACT_END_MAX_MPS)) ||
+        (count == 4U && values[3] != 0.0F && values[3] != 1.0F)) {
+        CLI_write("Error: trackCfg impact <horizonS> [endM 0..2 [endMinMps 0..70 "
+                  "[endOnRelease 0|1]]]\n");
         return -1;
     }
     l3_ensureRadarCal();  /* also fills the impact cfg's defaults once */
@@ -4721,8 +4725,11 @@ static int32_t l3_cli_trackCfgImpact(int32_t argc, char *argv[])
     if (count >= 2U) {
         gImpactCfg.endM = values[1];
     }
-    if (count == 3U) {
+    if (count >= 3U) {
         gImpactCfg.endMinMps = values[2];
+    }
+    if (count == 4U) {
+        gImpactCfg.endOnRelease = (values[3] != 0.0F) ? 1U : 0U;
     }
     l3_impact_init(&gRangeImpact, &gImpactCfg);
     CLI_write("Done\n");

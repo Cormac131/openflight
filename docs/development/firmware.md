@@ -140,7 +140,7 @@ triggerLog [trace|track|shot|result|perf|timing|clear]
 trackCfg detectCore [dss|verify]
 trackCfg cal <pitchDeg> <yawDeg> <rollDeg> <azOffsetRad> <elOffsetDeg> <rangeBiasM>
 trackCfg elem <index> <phaseRad> <gain>
-trackCfg impact <horizonS> [endM [endMinMps]]
+trackCfg impact <horizonS> [endM [endMinMps [endOnRelease]]]
 captureCfg adaptive <enabled> <approachBins> <marginBins>
 ```
 
@@ -166,7 +166,16 @@ least `endMinMps` (default 20 m/s; 0 accepts any usable approach): on the
 bench (2026-10) a backswing's downrange crossing, which the club-in fit
 accepts from 17 m/s, armed the end and fired 0.5-0.8 s before impact, while
 every approach that armed it on the labelled swings was 20.6 m/s or faster.
-A point past the ball's range never arms it. `triggerLog track` prints which rule
+A point past the ball's range never arms it.
+
+A release does not end the approach unless `endOnRelease` is 1 (default 0).
+The tracker releases a track that takes a second point in one range bin. Down
+the line the clubhead's range rises as it swings up and over at the top of
+the backswing, then holds a bin while it turns, and that release fired the
+end. The club stalls the same way at a real impact, so the release alone
+cannot tell the two apart: with it left out, the crossing or the ball leaving
+fired 7 of the 9 labelled swings the release had fired, 2 frames after launch,
+and 1 of the 9 went unfired. `triggerLog track` prints which rule
 fired (`cause=crossing` or `cause=end`) and whether the end rule is armed.
 
 When the club is not seen before launch (the early 2026-08-09 captures lose it

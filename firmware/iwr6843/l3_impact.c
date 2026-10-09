@@ -18,6 +18,7 @@ void l3_impact_cfg_defaults(l3_impact_cfg_t *cfg)
     cfg->horizonS = 0.004F;      /* one 3 ms frame plus scheduling slack */
     cfg->endM = 0.40F;           /* ~8.5 bins: the labelled club-to-ball gaps, median 7.4 */
     cfg->endMinMps = 20.0F;      /* over a backswing's ~17 m/s, under the labelled 20.6-62 */
+    cfg->endOnRelease = 0U;      /* the top of the backswing releases the track too */
 }
 
 void l3_impact_init(l3_impact_t *impact, const l3_impact_cfg_t *cfg)
@@ -77,7 +78,11 @@ int32_t l3_impact_update_range(l3_impact_t *impact, const l3_fit_estimate_t *clu
     usable = (clubIn != NULL && clubIn->why == L3_FIT_WHY_OK) ? 1U : 0U;
     if (club != NULL) {
         if (!club->appended) {
-            if (impact->endArmed) {
+            if (club->released && !impact->cfg.endOnRelease) {
+                /* Held one bin too long: the top of the backswing as well as
+                 * the stall at impact. Not the end; nor is a later frame. */
+                impact->endArmed = 0U;
+            } else if (impact->endArmed) {
                 /* The approach ended near the ball: impact, at its last point. */
                 return l3_impact_fire(impact, L3_IMPACT_CAUSE_END, impact->endTimeUs,
                                       (float)(int32_t)(impact->endTimeUs - nowUs) * 1.0e-6F);

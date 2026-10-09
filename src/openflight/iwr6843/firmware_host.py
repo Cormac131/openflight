@@ -670,6 +670,7 @@ class ImpactCfg(ctypes.Structure):
         ("horizonS", ctypes.c_float),
         ("endM", ctypes.c_float),
         ("endMinMps", ctypes.c_float),
+        ("endOnRelease", ctypes.c_uint8),
     ]
 
 
@@ -981,6 +982,7 @@ class ImpactClub(ctypes.Structure):
 
     _fields_ = [
         ("appended", ctypes.c_uint8),
+        ("released", ctypes.c_uint8),
         ("rangeM", ctypes.c_float),
         ("timeUs", ctypes.c_uint32),
         ("ballRangeM", ctypes.c_float),

@@ -19,6 +19,14 @@
  * on the labelled swings was 20.6 m/s or faster. A point past the ball's
  * range never arms it: before impact the club is short of the ball.
  *
+ * A release (the track held one bin too long: l3_club_track.h) does not end
+ * the approach unless endOnRelease is set. Down the line the clubhead's range
+ * rises as it swings up and over at the top of the backswing, then holds a
+ * bin while it turns, and the release that follows fired the end. The club
+ * stalls the same way at a real impact; there the crossing or the ball
+ * leaving (l3_leave.h) fires instead, 2 frames after launch on 7 of the 9
+ * labelled swings the release fired, and 1 of the 9 goes unfired.
+ *
  * A geometric detector once sat beside it, judging the club's 3D line against
  * the ball's position; it was removed on 2026-09-30 with the range gate: the
  * kiosk never armed it and it never fired on the recorded swings. Pure C, no
@@ -35,6 +43,7 @@ typedef struct {
     float horizonS;       /* fire when the crossing is within this of the frame's time */
     float endM;           /* fire when the approach ends within this of the ball; 0 = off */
     float endMinMps;      /* ... at this club-in speed or faster; 0 = any usable */
+    uint8_t endOnRelease; /* 1: a release ends the approach too; 0 (default): it disarms it */
 } l3_impact_cfg_t;
 
 #define L3_IMPACT_END_MAX_M 2.0F     /* "trackCfg impact"'s limit for endM */
@@ -43,6 +52,7 @@ typedef struct {
 /* The club track this frame, as the approach-end rule sees it. */
 typedef struct {
     uint8_t  appended;    /* the track took a point this frame */
+    uint8_t  released;    /* ... or was released this frame (held one bin too long) */
     float    rangeM;      /* its newest point's range (read when appended) */
     uint32_t timeUs;      /* and that point's time */
     float    ballRangeM;  /* the destination's range */
