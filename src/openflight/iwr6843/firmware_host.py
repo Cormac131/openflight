@@ -42,6 +42,7 @@ HOST_SOURCES = (
     "l3_ball_hyp.c",
     "l3_ball_recover.c",
     "l3_impact.c",
+    "l3_zone.c",
     "l3_leave.c",
     "l3_scan.c",
     "l3_shot.c",
@@ -90,6 +91,8 @@ ANGLE_AZIMUTH, ANGLE_ELEVATION = 1, 2
 # l3_impact.h
 IMPACT_WHY_NAMES = ("none", "nodelivery", "pending", "passed", "fired")
 IMPACT_CAUSE_NAMES = ("none", "crossing", "end")
+# l3_zone.h: reason bit i is ZONE_REASON_NAMES[i]; 0 is inside.
+ZONE_REASON_NAMES = ("no_angles", "short", "past", "left", "right", "low", "high")
 LEAVE_CLUB_MIN_POINTS = 2  # l3_leave.h
 LEAVE_WHY_NAMES = ("none", "noclub", "idle", "far", "stood", "started", "slow", "fired")
 
@@ -660,6 +663,22 @@ class FollowCtx(ctypes.Structure):
         ("ballClaimIndex", ctypes.c_uint32),
         ("frameUs", ctypes.c_uint32),
         ("approachKnown", ctypes.c_uint8),
+    ]
+
+
+class ZoneCfg(ctypes.Structure):
+    """``l3_zone_cfg_t``: the corridor around the tee, golf frame."""
+
+    _fields_ = [
+        ("teeForwardM", ctypes.c_float),
+        ("lateralM", ctypes.c_float),
+        ("shortM", ctypes.c_float),
+        ("pastM", ctypes.c_float),
+        ("halfWidthM", ctypes.c_float),
+        ("radarHeightM", ctypes.c_float),
+        ("minHeightM", ctypes.c_float),
+        ("maxHeightM", ctypes.c_float),
+        ("requireAngles", ctypes.c_uint8),
     ]
 
 
@@ -1818,6 +1837,11 @@ _SIGNATURES: dict[str, tuple[list, object]] = {
     "l3_track_speed_mps": ([_P(ClubTrack), _U32], _F32),
     "l3_track_why_name": ([ctypes.c_uint8], ctypes.c_char_p),
     "l3_track_format_status": ([_P(ClubTrack), _U32, *_TEXT], ctypes.c_int32),
+    # l3_zone.h
+    "l3_zone_cfg_defaults": ([_P(ZoneCfg), _F32, _F32], None),
+    "l3_zone_cfg_check": ([_P(ZoneCfg)], ctypes.c_int32),
+    "l3_zone_check": ([_P(ZoneCfg), _P(Vec3), ctypes.c_uint8], _U32),
+    "l3_zone_reason_name": ([_U32], ctypes.c_char_p),
     # l3_impact.h
     "l3_impact_cfg_defaults": ([_P(ImpactCfg)], None),
     "l3_impact_init": ([_P(Impact), _P(ImpactCfg)], None),

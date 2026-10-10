@@ -100,6 +100,16 @@
       <label>band bins <input type="number" id="band_bins" step="0.5" min="0" placeholder="0 = off"></label>
       <label>ball search <select id="ball_hypotheses"><option value="">firmware default</option><option value="true">hypotheses</option><option value="false">legacy</option></select></label>
       <label class="chk"><input type="checkbox" id="stop_at_fire"> stop at fire</label>
+      <label class="chk" title="This board's calibration, as the kiosk loads it (~/.config/openflight, else the reference)"><input type="checkbox" id="board_calibration"> board calibration</label>
+    </div>
+    <div class="row" title="The swing zone around the tee (l3_zone.h); blank keeps the firmware's starting value">
+      <label>zone short (m) <input type="number" id="zone_short_m" step="0.05" min="0" placeholder="1.2"></label>
+      <label>past (m) <input type="number" id="zone_past_m" step="0.05" min="0" placeholder="0.3"></label>
+      <label>half width (m) <input type="number" id="zone_half_width_m" step="0.05" min="0" placeholder="0.3"></label>
+      <label>centre (m) <input type="number" id="zone_lateral_m" step="0.05" placeholder="0"></label>
+      <label>height (m) <input type="number" id="zone_min_height_m" step="0.05" placeholder="-0.1"></label>
+      <label>to <input type="number" id="zone_max_height_m" step="0.05" placeholder="1.2"></label>
+      <label>ball height (m) <input type="number" id="ball_height_m" step="0.005" min="0"></label>
     </div>
     <div class="row"><button id="useFreeze" title="Treat the recorded freeze as impact so the ball tracker runs from it">post = freeze frame</button></div>
 
@@ -211,7 +221,8 @@ const C = {};
   .forEach((k) => (C[k] = css("--" + k)));
 const OPTS = ["tee_bin", "dest_bin", "snr", "ball_snr", "stat", "subbin",
   "post_from_frame", "pitch_deg", "band_bins", "stop_at_fire", "tee_range_m",
-  "ball_hypotheses"];
+  "ball_hypotheses", "board_calibration", "ball_height_m", "zone_short_m", "zone_past_m",
+  "zone_half_width_m", "zone_lateral_m", "zone_min_height_m", "zone_max_height_m"];
 // The form's defaults are ViewerOptions' (GET /api/defaults): one place for them.
 const FORM_DEFAULTS = {};
 async function loadDefaults() {
@@ -568,6 +579,19 @@ function renderTraj(el) {
   }), PLOT_CFG);
 }
 
+// The swing zone (l3_zone.h) as a wireframe box in the golf frame: x along the target line,
+// y right, z up from the antenna, its heights given above the floor.
+function zoneBox(z) {
+  const x0 = z.teeForwardM - z.shortM, x1 = z.teeForwardM + z.pastM;
+  const y0 = z.lateralM - z.halfWidthM, y1 = z.lateralM + z.halfWidthM;
+  const z0 = z.minHeightM - z.radarHeightM, z1 = z.maxHeightM - z.radarHeightM;
+  const c = [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]];
+  const edges = [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]];
+  const pts = edges.flatMap(([a, b]) => [c[a], c[b], [null, null, null]]);
+  return { type: "scatter3d", mode: "lines", name: "swing zone", x: pts.map((p) => p[0]), y: pts.map((p) => p[1]), z: pts.map((p) => p[2]),
+    line: { color: C.target, width: 2 }, hoverinfo: "name" };
+}
+
 // ---------- down the line ----------
 // The golf frame seen from behind the radar, played back to the current frame: each whole
 // track is a faint ghost (it also pins the axes, so playback doesn't rescale), the trail runs
@@ -583,6 +607,11 @@ function renderDtl() {
     marker: { size: 5, color: "#ffffff", symbol: "diamond" }, hoverinfo: "name", showlegend: false });
   traces.push({ type: "scatter3d", mode: "markers+text", name: "tee", x: [tee], y: [0], z: [0], text: ["tee"], textposition: "top center",
     marker: { size: 4, color: C.freeze }, hoverinfo: "name", showlegend: false });
+  const Z = F && F.zone;
+  if (Z) traces.push(zoneBox(Z.cfg));
+  // The zone's verdict per club point, by the point's frame (club points only).
+  const zoneWhy = new Map();
+  if (Z) (F.points || []).forEach((p, i) => zoneWhy.set(p, Z.verdicts[i] || []));
   const tracks = (F ? [[F.points, "club", C.club], [F.ball_points, "ball", C.ball]] : [])
     .map(([list, name, color]) => [(list || []).filter((p) => dtlPos(p)), name, color]);
   const all = tracks.flatMap(([placed]) => placed.map(dtlPos));
@@ -601,9 +630,13 @@ function renderDtl() {
       line: { color, width: 2 }, hoverinfo: "skip", showlegend: false }, xyz(placed)));
     const seen = placed.filter((p) => p.frame <= frame);
     if (!seen.length) return;
+    const why = (p) => zoneWhy.get(p);
     traces.push(Object.assign({ type: "scatter3d", mode: "lines+markers", name, line: { color, width: 5 },
-      marker: { size: 3, color: seen.map((p) => (p.angles_valid ? color : C.muted)) },
-      text: seen.map((p) => `frame ${p.frame} · ${(p.timestamp_us / 1000).toFixed(1)} ms · v ${p.doppler_mps.toFixed(1)} m/s`),
+      marker: { size: seen.map((p) => (why(p) && why(p).length ? 5 : 3)),
+        symbol: seen.map((p) => (why(p) && why(p).length ? "x" : "circle")),
+        color: seen.map((p) => (!p.angles_valid ? C.muted : why(p) && why(p).length ? C.gate : color)) },
+      text: seen.map((p) => `frame ${p.frame} · ${(p.timestamp_us / 1000).toFixed(1)} ms · v ${p.doppler_mps.toFixed(1)} m/s`
+        + (why(p) ? (why(p).length ? ` · outside zone: ${why(p).join(", ")}` : " · inside zone") : "")),
       hovertemplate: `${name}<br>%{text}<br>x %{x:.3f} y %{y:.3f} z %{z:.3f} m<extra></extra>` }, xyz(seen)));
     const now = seen[seen.length - 1];
     if (now.frame === frame) traces.push(Object.assign({ type: "scatter3d", mode: "markers", name: `${name} now`,
@@ -611,6 +644,8 @@ function renderDtl() {
   });
   const note = (text, y) => ({ text, showarrow: false, x: 0.01, y, xref: "paper", yref: "paper", xanchor: "left", font: { color: C.muted } });
   const annotations = [note(`frame ${frame} · ${fmt(T(frame))} ms`, 0.98)];
+  if (Z) annotations.push(note(`zone: ${Z.summary.inside}/${Z.summary.points} club points inside`
+    + (F.calibration ? "" : " · no board calibration"), 0.92));
   if (!placedAny) annotations.push(Object.assign(note("no track points to place", 0.5), { x: 0.5, xanchor: "center" }));
   Plotly.react(el, traces, layout({
     margin: { l: 0, r: 0, t: 0, b: 0 }, legend: { orientation: "h", y: 0 }, annotations, uirevision: "dtl",

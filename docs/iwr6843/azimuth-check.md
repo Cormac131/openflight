@@ -130,3 +130,34 @@ scale or sign is wrong. The board receives the offset as part of
 Commit the bench folder (captures, manifest and report) under
 `tests/radar/recordings/` so the numbers can be replayed after any change to
 the angle code.
+
+## Then: The Swing Zone
+
+The lateral and height errors this check measures set the **swing zone**:
+the corridor around the tee that a club point has to sit in
+(`firmware/iwr6843/l3_zone.c`). It is a box in the golf frame, from
+`short` metres short of the tee to `past` metres beyond it, `half width`
+either side of the target line, between two heights above the floor. Until
+the limits are measured it uses starting values: 1.2 m short, 0.3 m past,
+±0.3 m, -0.1 to 1.2 m. It is not wired into the board's trigger yet; two
+tools show what it would do first.
+
+**Dump viewer.** The down-the-line view draws the zone as a box and marks
+each club point outside it with a cross; hovering says which limit it broke.
+The zone row on the page changes the limits; blank keeps the starting value.
+The viewer uses this board's calibration, as the kiosk does (untick **board
+calibration** to replay with identity elements).
+
+**Zone report.** Every labelled recording through the zone, at the kiosk's
+trigger settings:
+
+```bash
+uv run python scripts/iwr6843/zone_report.py
+uv run python scripts/iwr6843/zone_report.py --half-width-m 0.4 --max-height-m 0.9
+```
+
+It counts three kinds of club-track point: `impact` (on the labelled club
+within 4 frames of launch, which the zone must keep), `club` (earlier in the
+approach) and `stray` (anything else the track took, which it should
+refuse), with the share kept and why the rest were refused. A good zone
+keeps nearly every impact point and few strays.

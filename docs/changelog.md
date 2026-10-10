@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **IWR6843 swing zone, in replay only.** `firmware/iwr6843/l3_zone.c`
+  judges a club point against a corridor around the tee (along the target
+  line, either side of it, between two heights) and names every limit it
+  breaks. The dump viewer draws the zone and marks points outside it, and
+  `scripts/iwr6843/zone_report.py` reports how many labelled impact points it
+  keeps against stray points. The board's trigger does not use it yet; the
+  limits come from the bench azimuth check first. The viewer now replays with
+  this board's calibration by default, as the kiosk runs.
 - **IWR6843 azimuth bench check** (`scripts/iwr6843/azimuth_check.py`,
   [procedure](iwr6843/azimuth-check.md)). A reflector at taped lateral
   offsets and heights, with an empty capture subtracted, is run through the

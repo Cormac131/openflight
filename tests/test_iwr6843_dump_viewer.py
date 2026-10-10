@@ -310,6 +310,66 @@ def test_a_whole_shot_carries_the_gate_the_tracks_and_their_3d_points():
 
 
 @needs_compiler
+def test_every_club_point_carries_its_swing_zone_verdict():
+    raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
+    firmware = dv.analyze_dump(raw, dv.ViewerOptions(tee_bin=TEE_BIN, tee_range_m=TEE_RANGE_M))[
+        "firmware"
+    ]
+    assert firmware["ok"], firmware.get("error")
+    zone = firmware["zone"]
+    assert len(zone["verdicts"]) == len(firmware["points"]) > 0
+    assert zone["summary"]["points"] == len(firmware["points"])
+    assert zone["summary"]["inside"] == sum(not v for v in zone["verdicts"])
+    from openflight.iwr6843 import firmware_host as fw  # pylint: disable=import-outside-toplevel
+
+    known = set(fw.ZONE_REASON_NAMES)
+    assert all(set(v) <= known for v in zone["verdicts"])
+    tee_slant = TEE_BIN * dv.bin_width_m()
+    assert zone["cfg"]["teeForwardM"] == pytest.approx(tee_slant, abs=0.02)
+
+
+@needs_compiler
+def test_the_page_sets_the_zone_and_a_narrow_one_refuses_more(tmp_path):
+    raw = synth_shot_dump(path_deg=3.0, hla_deg=8.0, ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
+    base = dict(tee_bin=TEE_BIN, tee_range_m=TEE_RANGE_M)
+    wide = dv.analyze_dump(raw, dv.ViewerOptions(**base, zone_half_width_m=2.0))["firmware"]
+    narrow = dv.analyze_dump(raw, dv.ViewerOptions(**base, zone_half_width_m=0.0))["firmware"]
+    assert wide["zone"]["cfg"]["halfWidthM"] == pytest.approx(2.0)
+    assert narrow["zone"]["cfg"]["halfWidthM"] == 0.0
+    assert narrow["zone"]["summary"]["inside"] <= wide["zone"]["summary"]["inside"]
+    assert (
+        narrow["zone"]["summary"]["reasons"]["left"] + narrow["zone"]["summary"]["reasons"]["right"]
+        >= wide["zone"]["summary"]["reasons"]["left"] + wide["zone"]["summary"]["reasons"]["right"]
+    )
+
+
+def test_the_viewer_uses_this_boards_calibration_unless_told_not_to(monkeypatch, tmp_path):
+    raw = json.loads(Path("config/iwr6843_calibration_reference.json").read_text(encoding="utf-8"))
+    raw["azimuth_offset_rad"] = 0.3
+    board_file = tmp_path / "iwr6843_calibration.json"
+    board_file.write_text(json.dumps(raw), encoding="utf-8")
+    from openflight.iwr6843 import (
+        calibration as cal_module,  # pylint: disable=import-outside-toplevel
+    )
+
+    monkeypatch.setattr(cal_module, "BOARD_CAL_PATH", board_file)
+    board = dv.board_for(dv.ViewerOptions(pitch_deg=12.0))
+    assert board.az_offset_rad == pytest.approx(0.3) and board.pitch_deg == pytest.approx(12.0)
+    plain = dv.board_for(dv.ViewerOptions(board_calibration=False, pitch_deg=12.0))
+    assert plain.az_offset_rad == 0.0 and plain.elem_gain == (1.0,) * 8
+    assert plain.pitch_deg == pytest.approx(12.0)
+
+
+def test_zone_options_parse_from_the_page():
+    options = dv.ViewerOptions.from_mapping(
+        {"zone_half_width_m": "0.25", "zone_max_height_m": "", "board_calibration": "false"}
+    )
+    assert options.zone_half_width_m == pytest.approx(0.25)
+    assert options.zone_max_height_m is None
+    assert options.board_calibration is False
+
+
+@needs_compiler
 def test_a_whole_shot_carries_the_band_and_the_impact_fit():
     raw = synth_shot_dump(ball_speed_ms=60.0, tee_range_m=TEE_RANGE_M)
     data = dv.analyze_dump(
@@ -940,7 +1000,9 @@ def test_the_trajectory_view_draws_the_reconstruction_and_tolerates_its_absence(
     html = _page()
     body = html[html.index("function renderTraj(") : html.index("// ---------- annotate")]
     assert "filtered_position" in body
-    assert ".filter((p) => p.filtered_position)" in body, "points with no reconstruction are skipped"
+    assert ".filter((p) => p.filtered_position)" in body, (
+        "points with no reconstruction are skipped"
+    )
     assert "filter_hypothesis" in body and "angle_confidence" in body
 
 
@@ -953,7 +1015,12 @@ def test_shot_points_carry_their_reconstruction_to_the_page():
     json.dumps(data, allow_nan=False)
     firmware = data["firmware"]
     for point in firmware["points"] + firmware["ball_points"]:
-        assert {"filtered_position", "filter_accepted", "filter_hypothesis", "angle_confidence"} <= set(point)
+        assert {
+            "filtered_position",
+            "filter_accepted",
+            "filter_hypothesis",
+            "angle_confidence",
+        } <= set(point)
         assert point["filter_hypothesis"] in fw.FILTER_HYP_NAMES
     assert "angle_why" in firmware["launch"]
 
@@ -968,7 +1035,9 @@ def test_the_hover_only_reports_a_fit_for_reconstructed_points():
 def test_a_track_without_a_reconstruction_is_still_drawn_raw():
     page = _page()
     assert 'const alone = trajShow === "raw" || !list.some((p) => p.filtered_position);' in page
-    assert 'if (trajShow !== "fitted" || !(list || []).some((p) => p.filtered_position)) raw(' in page
+    assert (
+        'if (trajShow !== "fitted" || !(list || []).some((p) => p.filtered_position)) raw(' in page
+    )
 
 
 def test_the_launch_chip_says_why_the_angles_are_missing():

@@ -20,15 +20,27 @@ from __future__ import annotations
 import json
 import math
 import re
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
 import numpy as np
 
 from openflight.iwr6843 import firmware_replay as fr, self_trigger as st
-from openflight.iwr6843.calibration import DEFAULT_PITCH_DEG, antenna_range_m
+from openflight.iwr6843.board_calibration import BoardCalibration
+from openflight.iwr6843.calibration import (
+    DEFAULT_PITCH_DEG,
+    antenna_range_m,
+    resolve_calibration_path,
+)
 from openflight.iwr6843.dump import is_range_snapshot, parse_dump, range_data
 from openflight.iwr6843.firmware_host import OBS_WAVELENGTH_M
+from openflight.iwr6843.swing_zone import (
+    SwingZone,
+    check_points,
+    tee_forward_m,
+    zone_cfg_dict,
+    zone_summary,
+)
 from openflight.iwr6843.tracking import RANGE_SPAN_M, same_tx_loop_period_s
 
 _TRIGGER_CFG = re.compile(r"triggerCfg\s+(\d+)\s+([0-9.]+)\s+(\d+)")
@@ -53,6 +65,18 @@ class ViewerOptions:  # pylint: disable=too-many-instance-attributes
     # The tee band's width, placed automatically; 0 turns it off.
     band_bins: float | None = st.TEE_BAND_DEFAULT_BINS
     ball_snr: float | None = st.FIRMWARE_BALL_DEFAULT_SNR  # the ball tracker's (trackCfg ballSnr)
+    # This board's calibration (the kiosk's: ~/.config/openflight, else the
+    # reference) for the elements, azimuth offset, range bias and radar
+    # height, so positions are the board's; pitch_deg above still sets the tilt.
+    board_calibration: bool = True
+    ball_height_m: float = 0.04
+    # The swing zone (l3_zone.h); None keeps the firmware's starting value.
+    zone_short_m: float | None = None
+    zone_past_m: float | None = None
+    zone_half_width_m: float | None = None
+    zone_lateral_m: float | None = None
+    zone_min_height_m: float | None = None
+    zone_max_height_m: float | None = None
 
     @classmethod
     def from_mapping(cls, raw: dict) -> ViewerOptions:
@@ -248,9 +272,45 @@ def _impact_fit_json(result: fr.ReplayResult) -> dict | None:
     return out
 
 
+def board_for(options: ViewerOptions) -> BoardCalibration:
+    """The calibration a run uses: this board's (as the kiosk loads it) or
+    identity elements, with the page's pitch either way."""
+    board = (
+        BoardCalibration.from_file(resolve_calibration_path())
+        if options.board_calibration
+        else BoardCalibration.identity()
+    )
+    return replace(board, pitch_deg=options.pitch_deg)
+
+
+def zone_section(
+    points: list[fr.PointSummary], tee_bin: int, board: BoardCalibration, options: ViewerOptions
+) -> dict:
+    """The swing zone around the tee bin's range and each club point's verdict."""
+    zone = SwingZone(
+        short_m=options.zone_short_m,
+        past_m=options.zone_past_m,
+        half_width_m=options.zone_half_width_m,
+        lateral_m=options.zone_lateral_m,
+        min_height_m=options.zone_min_height_m,
+        max_height_m=options.zone_max_height_m,
+    )
+    lib = fr._default_library()  # pylint: disable=protected-access
+    tee_x = tee_forward_m(tee_bin * bin_width_m(), board.radar_height_m, options.ball_height_m)
+    cfg = zone.cfg(lib, tee_x, board.radar_height_m)
+    verdicts = check_points(lib, cfg, points)
+    return {
+        "cfg": zone_cfg_dict(cfg),
+        "verdicts": [list(v.reasons) for v in verdicts],
+        "summary": zone_summary(verdicts),
+    }
+
+
 def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOptions) -> dict:
     """The compiled firmware's replay, with each frame's watched-stat peak against its threshold."""
+    board = board_for(options)
     config = fr.ReplayConfig(
+        **board.replay_overrides(),
         tee_bin=tee_bin_for(options),
         dest_bin=options.dest_bin,
         snr=options.snr,
@@ -258,7 +318,6 @@ def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOp
         subbin=options.subbin,
         post_from_frame=options.post_from_frame,
         stop_at_fire=options.stop_at_fire,
-        pitch_deg=options.pitch_deg,
         ball_hypotheses=options.ball_hypotheses,
         band_bins=options.band_bins,
         ball_snr=options.ball_snr,
@@ -282,6 +341,8 @@ def firmware_section(raw: bytes, meta: dict, cube: np.ndarray, options: ViewerOp
         "frames": _jsonable(result.frames),
         "watched_peak": watched,
         "points": _jsonable(result.points),
+        "zone": zone_section(list(result.points), config.tee_bin, board, options),
+        "calibration": str(resolve_calibration_path()) if options.board_calibration else None,
         "ball_points": _jsonable(result.ball_points),
         "fired_frame": result.fired_frame,
         "impact_timestamp_us": result.impact_timestamp_us,
